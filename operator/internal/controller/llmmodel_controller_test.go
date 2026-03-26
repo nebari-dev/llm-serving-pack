@@ -51,7 +51,21 @@ var _ = Describe("LLMModel Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: llmv1alpha1.LLMModelSpec{
+						Model: llmv1alpha1.ModelSpec{
+							Name:   "test-model",
+							Source: llmv1alpha1.ModelSourceHuggingFace,
+						},
+						Resources: llmv1alpha1.ResourceSpec{
+							GPU: llmv1alpha1.GPUSpec{
+								Count: 1,
+								Type:  "nvidia",
+							},
+						},
+						Access: llmv1alpha1.AccessSpec{
+							Groups: []string{"test-group"},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
