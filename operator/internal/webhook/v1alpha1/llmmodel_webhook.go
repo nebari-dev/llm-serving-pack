@@ -20,13 +20,17 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
 )
 
 // nolint:unused
@@ -36,11 +40,9 @@ var llmmodellog = logf.Log.WithName("llmmodel-resource")
 // SetupLLMModelWebhookWithManager registers the webhook for LLMModel in the manager.
 func SetupLLMModelWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&llmv1alpha1.LLMModel{}).
-		WithValidator(&LLMModelCustomValidator{}).
+		WithValidator(&LLMModelCustomValidator{Client: mgr.GetClient()}).
 		Complete()
 }
-
-// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 // NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
@@ -53,46 +55,160 @@ func SetupLLMModelWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type LLMModelCustomValidator struct {
-	// TODO(user): Add more fields as needed for validation
+	Client client.Client
 }
 
 var _ webhook.CustomValidator = &LLMModelCustomValidator{}
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type LLMModel.
-func (v *LLMModelCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	llmmodel, ok := obj.(*llmv1alpha1.LLMModel)
 	if !ok {
 		return nil, fmt.Errorf("expected a LLMModel object but got %T", obj)
 	}
 	llmmodellog.Info("Validation for LLMModel upon creation", "name", llmmodel.GetName())
 
-	// TODO(user): fill in your validation logic upon object creation.
+	if err := v.validateNamespaceLabel(ctx, llmmodel.Namespace); err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	subdomain, err := effectiveSubdomain(llmmodel)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := v.validateSubdomainCollision(ctx, subdomain, llmmodel.Namespace, llmmodel.Name); err != nil {
+		return nil, err
+	}
+
+	warnings := emptyDirPreloadWarnings(llmmodel)
+
+	return warnings, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type LLMModel.
-func (v *LLMModelCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	llmmodel, ok := newObj.(*llmv1alpha1.LLMModel)
 	if !ok {
 		return nil, fmt.Errorf("expected a LLMModel object for the newObj but got %T", newObj)
 	}
 	llmmodellog.Info("Validation for LLMModel upon update", "name", llmmodel.GetName())
 
-	// TODO(user): fill in your validation logic upon object update.
+	if err := v.validateNamespaceLabel(ctx, llmmodel.Namespace); err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	subdomain, err := effectiveSubdomain(llmmodel)
+	if err != nil {
+		return nil, err
+	}
+
+	// Exclude the model being updated from the collision check.
+	if err := v.validateSubdomainCollision(ctx, subdomain, llmmodel.Namespace, llmmodel.Name); err != nil {
+		return nil, err
+	}
+
+	warnings := emptyDirPreloadWarnings(llmmodel)
+
+	return warnings, nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type LLMModel.
-func (v *LLMModelCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *LLMModelCustomValidator) ValidateDelete(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
 	llmmodel, ok := obj.(*llmv1alpha1.LLMModel)
 	if !ok {
 		return nil, fmt.Errorf("expected a LLMModel object but got %T", obj)
 	}
 	llmmodellog.Info("Validation for LLMModel upon deletion", "name", llmmodel.GetName())
 
-	// TODO(user): fill in your validation logic upon object deletion.
-
 	return nil, nil
+}
+
+// validateNamespaceLabel checks that the given namespace has the nebari.dev/managed=true label.
+func (v *LLMModelCustomValidator) validateNamespaceLabel(ctx context.Context, namespaceName string) error {
+	var ns corev1.Namespace
+	if err := v.Client.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
+		return fmt.Errorf("failed to get namespace %q: %w", namespaceName, err)
+	}
+
+	if ns.Labels["nebari.dev/managed"] != "true" {
+		return fmt.Errorf(
+			"namespace %q does not have the required label nebari.dev/managed=true; "+
+				"LLMModel resources can only be created in namespaces managed by Nebari",
+			namespaceName,
+		)
+	}
+
+	return nil
+}
+
+// effectiveSubdomain returns the subdomain that will be used for this LLMModel.
+// It uses spec.endpoints.external.subdomain if set, otherwise it slugifies the model name.
+// It also validates that the result does not exceed 63 characters.
+func effectiveSubdomain(llmmodel *llmv1alpha1.LLMModel) (string, error) {
+	subdomain := llmmodel.Spec.Endpoints.External.Subdomain
+	if subdomain == "" {
+		subdomain = reconcilers.Slugify(llmmodel.Name)
+	}
+
+	if len(subdomain) > 63 {
+		return "", fmt.Errorf(
+			"effective subdomain %q is %d characters long; subdomains must be 63 characters or fewer",
+			subdomain, len(subdomain),
+		)
+	}
+
+	return subdomain, nil
+}
+
+// validateSubdomainCollision checks that no other LLMModel across all namespaces
+// uses the same effective subdomain. The model identified by (excludeNamespace, excludeName)
+// is excluded from the check (used for updates).
+func (v *LLMModelCustomValidator) validateSubdomainCollision(
+	ctx context.Context,
+	subdomain, excludeNamespace, excludeName string,
+) error {
+	var modelList llmv1alpha1.LLMModelList
+	if err := v.Client.List(ctx, &modelList); err != nil {
+		return fmt.Errorf("failed to list LLMModels for subdomain collision check: %w", err)
+	}
+
+	for i := range modelList.Items {
+		existing := &modelList.Items[i]
+
+		// Skip the model being created/updated.
+		if existing.Namespace == excludeNamespace && existing.Name == excludeName {
+			continue
+		}
+
+		existingSubdomain, err := effectiveSubdomain(existing)
+		if err != nil {
+			// If an existing model has an invalid subdomain, skip it rather than
+			// blocking new creates.
+			continue
+		}
+
+		if existingSubdomain == subdomain {
+			return fmt.Errorf(
+				"subdomain %q is already in use by LLMModel %s/%s; each model must have a unique subdomain",
+				subdomain, existing.Namespace, existing.Name,
+			)
+		}
+	}
+
+	return nil
+}
+
+// emptyDirPreloadWarnings returns a warning if the model uses emptyDir storage with preload enabled.
+func emptyDirPreloadWarnings(llmmodel *llmv1alpha1.LLMModel) admission.Warnings {
+	if llmmodel.Spec.Model.Storage.Type == llmv1alpha1.StorageTypeEmptyDir &&
+		llmmodel.Spec.Model.Preload != nil &&
+		*llmmodel.Spec.Model.Preload {
+		return admission.Warnings{
+			"storage type is emptyDir with preload=true: every pod restart triggers a re-download of the model, " +
+				"which may cause significant delays and bandwidth usage; consider using a PVC for persistent storage",
+		}
+	}
+
+	return nil
 }
