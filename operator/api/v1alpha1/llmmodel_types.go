@@ -18,8 +18,8 @@ package v1alpha1
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // LLMModelSpec defines the desired state of LLMModel
@@ -143,8 +143,12 @@ type MonitoringSpec struct {
 }
 
 type AccessSpec struct {
-	// groups lists OIDC groups that can access this model
-	Groups []string `json:"groups"`
+	// public makes this model accessible to all authenticated users regardless of group membership
+	// +optional
+	Public *bool `json:"public,omitempty"`
+	// groups lists OIDC groups that can access this model (ignored when public is true)
+	// +optional
+	Groups []string `json:"groups,omitempty"`
 }
 
 type EndpointSpec struct {
@@ -174,12 +178,38 @@ type InternalEndpointSpec struct {
 }
 
 type AdvancedSpec struct {
-	// vllmOverrides are raw overrides merged into the vLLM Deployment spec
+	// vllm provides additional vLLM configuration
 	// +optional
-	VLLMOverrides *apiextensionsv1.JSON `json:"vllmOverrides,omitempty"`
-	// inferencePoolOverrides are raw overrides merged into the InferencePool spec
+	VLLM VLLMAdvancedSpec `json:"vllm,omitempty"`
+	// inferencePool provides additional InferencePool configuration
 	// +optional
-	InferencePoolOverrides *apiextensionsv1.JSON `json:"inferencePoolOverrides,omitempty"`
+	InferencePool InferencePoolAdvancedSpec `json:"inferencePool,omitempty"`
+}
+
+type VLLMAdvancedSpec struct {
+	// extraArgs are additional CLI arguments appended after serving.vllmArgs
+	// +optional
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+	// extraEnv are additional environment variables on the vLLM container
+	// +optional
+	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
+	// tolerations for GPU node scheduling
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+	// nodeSelector for targeting specific node pools
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+	// affinity rules for pod scheduling
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+}
+
+type InferencePoolAdvancedSpec struct {
+	// schedulerConfig provides EPP scheduler plugin configuration
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Schemaless
+	SchedulerConfig *runtime.RawExtension `json:"schedulerConfig,omitempty"`
 }
 
 // LLMModelPhase represents the current lifecycle phase

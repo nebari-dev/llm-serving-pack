@@ -69,3 +69,8 @@ func APIKeyMetadataConfigMapName(modelName string) string {
 func ExternalHostname(subdomain, baseDomain string) string {
 	return subdomain + ".llm." + baseDomain
 }
+
+// InternalHostname returns the internal hostname for a model's endpoint.
+func InternalHostname(subdomain, baseDomain string) string {
+	return subdomain + ".llm-internal." + baseDomain
+}
