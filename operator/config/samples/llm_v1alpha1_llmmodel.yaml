@@ -1,0 +1,9 @@
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: llmmodel-sample
+spec:
+  # TODO(user): Add fields here
