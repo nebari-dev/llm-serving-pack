@@ -268,3 +268,37 @@ func TestExternalHostname(t *testing.T) {
 		})
 	}
 }
+
+func TestInternalHostname(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		subdomain  string
+		baseDomain string
+		expected   string
+	}{
+		{
+			name:       "standard subdomain and base domain",
+			subdomain:  "devstral",
+			baseDomain: "nebari.example.com",
+			expected:   "devstral.llm-internal.nebari.example.com",
+		},
+		{
+			name:       "different model name",
+			subdomain:  "qwen3-235b",
+			baseDomain: "cluster.local",
+			expected:   "qwen3-235b.llm-internal.cluster.local",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := InternalHostname(tt.subdomain, tt.baseDomain)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
