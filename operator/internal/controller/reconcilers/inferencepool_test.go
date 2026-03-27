@@ -1,0 +1,427 @@
+package reconcilers
+
+import (
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+)
+
+func defaultInferencePoolModel(name string) *llmv1alpha1.LLMModel {
+	return &llmv1alpha1.LLMModel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "test-ns",
+		},
+		Spec: llmv1alpha1.LLMModelSpec{
+			Model: llmv1alpha1.ModelSpec{
+				Name:   "mistralai/Mistral-7B-v0.1",
+				Source: llmv1alpha1.ModelSourceHuggingFace,
+			},
+		},
+	}
+}
+
+func defaultInferencePoolConfig() *config.OperatorConfig {
+	return &config.OperatorConfig{
+		BaseDomain:          "example.com",
+		ExternalGatewayName: "external-gw",
+		InternalGatewayName: "internal-gw",
+		OIDCIssuerURL:       "https://oidc.example.com",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.5.1",
+	}
+}
+
+func TestBuildInferencePoolResources(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		model *llmv1alpha1.LLMModel
+		cfg   *config.OperatorConfig
+		check func(t *testing.T, result *InferencePoolResources, err error)
+	}{
+		{
+			name:  "InferencePool: correct apiVersion, kind, name",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				ip := result.InferencePool
+				if ip == nil {
+					t.Fatal("expected InferencePool to be non-nil")
+				}
+				if ip.GetAPIVersion() != "inference.networking.x-k8s.io/v1alpha2" {
+					t.Errorf("expected apiVersion inference.networking.x-k8s.io/v1alpha2, got %q", ip.GetAPIVersion())
+				}
+				if ip.GetKind() != "InferencePool" {
+					t.Errorf("expected kind InferencePool, got %q", ip.GetKind())
+				}
+				if ip.GetName() != "my-model" {
+					t.Errorf("expected name my-model, got %q", ip.GetName())
+				}
+			},
+		},
+		{
+			name:  "InferencePool: targetPortNumber is 8000",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec, ok := result.InferencePool.Object["spec"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected InferencePool spec to be a map")
+				}
+				port, ok := spec["targetPortNumber"]
+				if !ok {
+					t.Fatal("expected targetPortNumber in InferencePool spec")
+				}
+				if port != int64(8000) {
+					t.Errorf("expected targetPortNumber=8000, got %v (%T)", port, port)
+				}
+			},
+		},
+		{
+			name:  "InferencePool: selector matches model pods",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec, ok := result.InferencePool.Object["spec"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected InferencePool spec to be a map")
+				}
+				selector, ok := spec["selector"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected selector in InferencePool spec")
+				}
+				instanceLabel, ok := selector["app.kubernetes.io/instance"]
+				if !ok {
+					t.Fatal("expected app.kubernetes.io/instance in selector")
+				}
+				if instanceLabel != "my-model" {
+					t.Errorf("expected selector app.kubernetes.io/instance=my-model, got %v", instanceLabel)
+				}
+			},
+		},
+		{
+			name:  "InferencePool: labels set to StandardLabels",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				labels := result.InferencePool.GetLabels()
+				if labels["app.kubernetes.io/managed-by"] != "nebari-llm-operator" {
+					t.Errorf("expected managed-by label, got %q", labels["app.kubernetes.io/managed-by"])
+				}
+				if labels["app.kubernetes.io/instance"] != "my-model" {
+					t.Errorf("expected instance label my-model, got %q", labels["app.kubernetes.io/instance"])
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: correct name, image, replicas",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				dep := result.EPPDeployment
+				if dep == nil {
+					t.Fatal("expected EPPDeployment to be non-nil")
+				}
+				if dep.Name != "my-model-epp" {
+					t.Errorf("expected EPP deployment name my-model-epp, got %q", dep.Name)
+				}
+				if dep.Spec.Replicas == nil || *dep.Spec.Replicas != 1 {
+					t.Errorf("expected EPP deployment replicas=1, got %v", dep.Spec.Replicas)
+				}
+				containers := dep.Spec.Template.Spec.Containers
+				if len(containers) != 1 {
+					t.Fatalf("expected 1 container, got %d", len(containers))
+				}
+				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.1-rc.1" {
+					t.Errorf("expected EPP image, got %q", containers[0].Image)
+				}
+				if containers[0].Name != "epp" {
+					t.Errorf("expected container name epp, got %q", containers[0].Name)
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: container ports 9002 and 9090",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				ports := result.EPPDeployment.Spec.Template.Spec.Containers[0].Ports
+				foundGRPC := false
+				foundMetrics := false
+				for _, p := range ports {
+					if p.ContainerPort == 9002 && p.Name == "grpc" {
+						foundGRPC = true
+					}
+					if p.ContainerPort == 9090 && p.Name == "metrics" {
+						foundMetrics = true
+					}
+				}
+				if !foundGRPC {
+					t.Error("expected container port 9002 named grpc")
+				}
+				if !foundMetrics {
+					t.Error("expected container port 9090 named metrics")
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: args include poolName and poolNamespace",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				args := result.EPPDeployment.Spec.Template.Spec.Containers[0].Args
+				assertArgValue(t, args, "--poolName", "my-model")
+				assertArgValue(t, args, "--poolNamespace", "test-ns")
+				assertArgValue(t, args, "--grpcPort", "9002")
+				assertArgValue(t, args, "--metricsPort", "9090")
+			},
+		},
+		{
+			name:  "EPP Deployment: has resource requests and limits",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				resources := result.EPPDeployment.Spec.Template.Spec.Containers[0].Resources
+				if resources.Requests == nil {
+					t.Fatal("expected resource requests to be set")
+				}
+				if resources.Limits == nil {
+					t.Fatal("expected resource limits to be set")
+				}
+				cpuReq, ok := resources.Requests["cpu"]
+				if !ok {
+					t.Error("expected cpu in resource requests")
+				} else if cpuReq.String() != "100m" {
+					t.Errorf("expected cpu request 100m, got %s", cpuReq.String())
+				}
+				memReq, ok := resources.Requests["memory"]
+				if !ok {
+					t.Error("expected memory in resource requests")
+				} else if memReq.String() != "256Mi" {
+					t.Errorf("expected memory request 256Mi, got %s", memReq.String())
+				}
+				cpuLim, ok := resources.Limits["cpu"]
+				if !ok {
+					t.Error("expected cpu in resource limits")
+				} else if cpuLim.String() != "500m" {
+					t.Errorf("expected cpu limit 500m, got %s", cpuLim.String())
+				}
+				memLim, ok := resources.Limits["memory"]
+				if !ok {
+					t.Error("expected memory in resource limits")
+				} else if memLim.String() != "512Mi" {
+					t.Errorf("expected memory limit 512Mi, got %s", memLim.String())
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: labels include app.kubernetes.io/name: epp",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				labels := result.EPPDeployment.Labels
+				if labels["app.kubernetes.io/name"] != "epp" {
+					t.Errorf("expected app.kubernetes.io/name=epp, got %q", labels["app.kubernetes.io/name"])
+				}
+				// Also check pod template labels
+				podLabels := result.EPPDeployment.Spec.Template.Labels
+				if podLabels["app.kubernetes.io/name"] != "epp" {
+					t.Errorf("expected pod template app.kubernetes.io/name=epp, got %q", podLabels["app.kubernetes.io/name"])
+				}
+			},
+		},
+		{
+			name:  "EPP Service: ports 9002 and 9090",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				svc := result.EPPService
+				if svc == nil {
+					t.Fatal("expected EPPService to be non-nil")
+				}
+				if svc.Name != "my-model-epp" {
+					t.Errorf("expected service name my-model-epp, got %q", svc.Name)
+				}
+				foundGRPC := false
+				foundMetrics := false
+				for _, p := range svc.Spec.Ports {
+					if p.Port == 9002 && p.Name == "grpc" {
+						foundGRPC = true
+					}
+					if p.Port == 9090 && p.Name == "metrics" {
+						foundMetrics = true
+					}
+				}
+				if !foundGRPC {
+					t.Error("expected service port 9002 named grpc")
+				}
+				if !foundMetrics {
+					t.Error("expected service port 9090 named metrics")
+				}
+			},
+		},
+		{
+			name:  "EPP ServiceAccount: correct name",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				sa := result.EPPServiceAccount
+				if sa == nil {
+					t.Fatal("expected EPPServiceAccount to be non-nil")
+				}
+				if sa.Name != "my-model-epp" {
+					t.Errorf("expected service account name my-model-epp, got %q", sa.Name)
+				}
+			},
+		},
+		{
+			name:  "EPP Role: correct permissions for InferencePool, pods, endpoints, services",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				role := result.EPPRole
+				if role == nil {
+					t.Fatal("expected EPPRole to be non-nil")
+				}
+				if role.Name != "my-model-epp" {
+					t.Errorf("expected role name my-model-epp, got %q", role.Name)
+				}
+
+				// Check InferencePool rule
+				foundIPRule := false
+				foundPodsRule := false
+				foundEndpointsRule := false
+				for _, rule := range role.Rules {
+					for _, apiGroup := range rule.APIGroups {
+						if apiGroup == "inference.networking.x-k8s.io" {
+							for _, resource := range rule.Resources {
+								if resource == "inferencepools" {
+									foundIPRule = true
+									// Check verbs
+									assertContainsVerbs(t, rule.Verbs, []string{"get", "list", "watch"})
+								}
+							}
+						}
+						if apiGroup == "" {
+							for _, resource := range rule.Resources {
+								if resource == "pods" {
+									foundPodsRule = true
+									assertContainsVerbs(t, rule.Verbs, []string{"get", "list", "watch"})
+								}
+								if resource == "endpoints" || resource == "services" {
+									foundEndpointsRule = true
+								}
+							}
+						}
+					}
+				}
+				if !foundIPRule {
+					t.Error("expected rule for inference.networking.x-k8s.io/inferencepools")
+				}
+				if !foundPodsRule {
+					t.Error("expected rule for pods")
+				}
+				if !foundEndpointsRule {
+					t.Error("expected rule for endpoints/services")
+				}
+			},
+		},
+		{
+			name:  "EPP RoleBinding: links Role to ServiceAccount",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				rb := result.EPPRoleBinding
+				if rb == nil {
+					t.Fatal("expected EPPRoleBinding to be non-nil")
+				}
+				if rb.Name != "my-model-epp" {
+					t.Errorf("expected role binding name my-model-epp, got %q", rb.Name)
+				}
+				if rb.RoleRef.Name != "my-model-epp" {
+					t.Errorf("expected roleRef name my-model-epp, got %q", rb.RoleRef.Name)
+				}
+				if rb.RoleRef.Kind != "Role" {
+					t.Errorf("expected roleRef kind Role, got %q", rb.RoleRef.Kind)
+				}
+				if len(rb.Subjects) != 1 {
+					t.Fatalf("expected 1 subject, got %d", len(rb.Subjects))
+				}
+				if rb.Subjects[0].Name != "my-model-epp" {
+					t.Errorf("expected subject name my-model-epp, got %q", rb.Subjects[0].Name)
+				}
+				if rb.Subjects[0].Kind != "ServiceAccount" {
+					t.Errorf("expected subject kind ServiceAccount, got %q", rb.Subjects[0].Kind)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := BuildInferencePoolResources(tt.model, tt.cfg)
+			tt.check(t, result, err)
+		})
+	}
+}
+
+// assertContainsVerbs checks that all expectedVerbs are present in verbs.
+func assertContainsVerbs(t *testing.T, verbs []string, expectedVerbs []string) {
+	t.Helper()
+	for _, expected := range expectedVerbs {
+		found := false
+		for _, v := range verbs {
+			if v == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected verb %q in verbs %v", expected, verbs)
+		}
+	}
+}
