@@ -27,33 +27,23 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 	result := &RoutingResources{}
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
-		subdomain := model.Spec.Endpoints.External.Subdomain
-		if subdomain == "" {
-			subdomain = Slugify(model.Name)
-		}
 		result.ExternalRoute = buildAIGatewayRoute(
 			model.Name+"-external",
 			model.Namespace,
 			StandardLabels(model),
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
-			ExternalHostname(subdomain, cfg.BaseDomain),
 			model.Name,
 		)
 	}
 
 	if boolOrDefault(model.Spec.Endpoints.Internal.Enabled, true) {
-		subdomain := model.Spec.Endpoints.External.Subdomain
-		if subdomain == "" {
-			subdomain = Slugify(model.Name)
-		}
 		result.InternalRoute = buildAIGatewayRoute(
 			model.Name+"-internal",
 			model.Namespace,
 			StandardLabels(model),
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
-			InternalHostname(subdomain, cfg.BaseDomain),
 			model.Name,
 		)
 	}
@@ -65,7 +55,6 @@ func buildAIGatewayRoute(
 	name, namespace string,
 	labels map[string]string,
 	gatewayName, gatewayNS string,
-	hostname string,
 	poolName string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
@@ -84,9 +73,9 @@ func buildAIGatewayRoute(
 						"namespace": gatewayNS,
 					},
 				},
-				"hostnames": []interface{}{
-					hostname,
-				},
+				// Note: AIGatewayRoute does not support hostnames directly.
+				// Hostname-based routing will be addressed in a future version
+				// via Gateway listener configuration or EnvoyPatchPolicy.
 				"rules": []interface{}{
 					map[string]interface{}{
 						"backendRefs": []interface{}{

@@ -294,24 +294,8 @@ func TestBuildAuthResources(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:  "External SecurityPolicy: sanitize true and forwardClientIDHeader X-Client-ID",
-			model: defaultAuthModel("my-model"),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
-				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
-				if apiKeyAuth["sanitize"] != true {
-					t.Errorf("expected sanitize true, got %v", apiKeyAuth["sanitize"])
-				}
-				if apiKeyAuth["forwardClientIDHeader"] != "X-Client-ID" {
-					t.Errorf("expected forwardClientIDHeader X-Client-ID, got %q", apiKeyAuth["forwardClientIDHeader"])
-				}
-			},
-		},
+		// NOTE: sanitize and forwardClientIDHeader are Envoy Gateway v1.7+ features.
+		// Tests for these fields will be added when minimum EG version is bumped.
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
 			model: defaultAuthModel("my-model"),

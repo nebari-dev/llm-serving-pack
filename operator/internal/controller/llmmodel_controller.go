@@ -89,10 +89,9 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.Update(ctx, model); err != nil {
 			return ctrl.Result{}, fmt.Errorf("adding finalizer: %w", err)
 		}
-		// Re-fetch after update to avoid stale resource version
-		if err := r.Get(ctx, req.NamespacedName, model); err != nil {
-			return ctrl.Result{}, client.IgnoreNotFound(err)
-		}
+		// Requeue immediately - the finalizer update changes the resourceVersion,
+		// and continuing with the stale object causes status update conflicts.
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// 4. Set phase to Pending if empty
@@ -100,6 +99,7 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		model.Status.Phase = llmv1alpha1.PhasePending
 		if err := r.Status().Update(ctx, model); err != nil {
 			log.Error(err, "failed to update status phase to Pending")
+			return ctrl.Result{Requeue: true}, nil
 		}
 	}
 
@@ -158,9 +158,9 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// 10. Check deployment readiness to determine phase
 	phase := r.determinePhase(ctx, model)
 	if phase == llmv1alpha1.PhaseDownloading || phase == llmv1alpha1.PhaseStarting {
-		model.Status.Phase = phase
-		if err := r.Status().Update(ctx, model); err != nil {
-			log.Error(err, "failed to update status phase", "phase", phase)
+		// Update status with phase and replica counts even during intermediate phases
+		if err := r.updateStatus(ctx, log, model, phase); err != nil {
+			log.Error(err, "failed to update status during intermediate phase", "phase", phase)
 		}
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}

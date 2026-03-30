@@ -139,8 +139,9 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 							},
 						},
 					},
-					"sanitize":              true,
-					"forwardClientIDHeader": "X-Client-ID",
+					// TODO: Add sanitize:true and forwardClientIDHeader when minimum
+					// Envoy Gateway version is bumped to v1.7+ (these fields are not
+					// in v1.3 SecurityPolicy CRD)
 				},
 			},
 		},

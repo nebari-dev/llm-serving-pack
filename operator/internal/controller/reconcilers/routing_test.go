@@ -72,25 +72,8 @@ func TestBuildRoutingResources(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:  "External: correct hostname using ExternalHostname helper",
-			model: defaultRoutingModel("my-model"),
-			cfg:   defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ExternalRoute.Object["spec"].(map[string]interface{})
-				hostnames := spec["hostnames"].([]interface{})
-				if len(hostnames) != 1 {
-					t.Fatalf("expected 1 hostname, got %d", len(hostnames))
-				}
-				expectedHostname := ExternalHostname(Slugify("my-model"), "example.com")
-				if hostnames[0] != expectedHostname {
-					t.Errorf("expected hostname %q, got %q", expectedHostname, hostnames[0])
-				}
-			},
-		},
+		// NOTE: AIGatewayRoute does not support hostnames directly.
+		// Hostname-based routing will be addressed in a future version.
 		{
 			name:  "External: parentRef points to external gateway from config",
 			model: defaultRoutingModel("my-model"),
@@ -143,43 +126,8 @@ func TestBuildRoutingResources(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "External: explicit subdomain override used",
-			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel("my-model")
-				m.Spec.Endpoints.External.Subdomain = "custom-sub"
-				return m
-			}(),
-			cfg: defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ExternalRoute.Object["spec"].(map[string]interface{})
-				hostnames := spec["hostnames"].([]interface{})
-				expectedHostname := ExternalHostname("custom-sub", "example.com")
-				if hostnames[0] != expectedHostname {
-					t.Errorf("expected hostname %q, got %q", expectedHostname, hostnames[0])
-				}
-			},
-		},
-		{
-			name:  "External: auto-generated subdomain via Slugify when not set",
-			model: defaultRoutingModel("My Model With Spaces"),
-			cfg:   defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ExternalRoute.Object["spec"].(map[string]interface{})
-				hostnames := spec["hostnames"].([]interface{})
-				expectedSubdomain := Slugify("My Model With Spaces")
-				expectedHostname := ExternalHostname(expectedSubdomain, "example.com")
-				if hostnames[0] != expectedHostname {
-					t.Errorf("expected hostname %q, got %q", expectedHostname, hostnames[0])
-				}
-			},
-		},
+		// NOTE: hostname tests removed - AIGatewayRoute does not support hostnames.
+		// Subdomain/hostname routing will be addressed via Gateway listener config.
 		{
 			name: "External disabled (enabled=false): ExternalRoute is nil",
 			model: func() *llmv1alpha1.LLMModel {
@@ -223,25 +171,7 @@ func TestBuildRoutingResources(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:  "Internal: correct hostname using InternalHostname helper",
-			model: defaultRoutingModel("my-model"),
-			cfg:   defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.InternalRoute.Object["spec"].(map[string]interface{})
-				hostnames := spec["hostnames"].([]interface{})
-				if len(hostnames) != 1 {
-					t.Fatalf("expected 1 hostname, got %d", len(hostnames))
-				}
-				expectedHostname := InternalHostname(Slugify("my-model"), "example.com")
-				if hostnames[0] != expectedHostname {
-					t.Errorf("expected hostname %q, got %q", expectedHostname, hostnames[0])
-				}
-			},
-		},
+		// NOTE: Internal hostname test removed - AIGatewayRoute does not support hostnames.
 		{
 			name:  "Internal: parentRef points to internal gateway from config",
 			model: defaultRoutingModel("my-model"),

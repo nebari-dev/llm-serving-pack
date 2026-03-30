@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -96,6 +97,25 @@ func reconcileRequest(name, namespace string) reconcile.Request {
 	}
 }
 
+// reconcileUntilStable calls Reconcile repeatedly until it returns no requeue
+// or a RequeueAfter (which indicates the controller is waiting for async work).
+// This handles the multi-pass reconciliation needed when the finalizer add
+// causes an immediate requeue.
+func reconcileUntilStable(r *LLMModelReconciler, ctx context.Context, req reconcile.Request) error {
+	for i := 0; i < 10; i++ {
+		result, err := r.Reconcile(ctx, req)
+		if err != nil {
+			return err
+		}
+		// RequeueAfter means the controller is waiting for async work (download, startup)
+		// Requeue:true means the controller has more work to do immediately
+		if !result.Requeue {
+			return nil
+		}
+	}
+	return fmt.Errorf("reconciliation did not stabilize after 10 iterations")
+}
+
 var _ = Describe("LLMModel Controller", func() {
 	const testNamespace = "default"
 
@@ -122,7 +142,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying finalizer was added")
@@ -158,7 +178,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying Deployment was created")
@@ -198,7 +218,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying NetworkPolicy was created")
@@ -231,7 +251,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			apiKeysNS := testConfig().APIKeysNamespace
@@ -268,7 +288,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("first reconcile (creates resources and adds finalizer)")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			apiKeysNS := testConfig().APIKeysNamespace
@@ -286,7 +306,7 @@ var _ = Describe("LLMModel Controller", func() {
 			Expect(k8sClient.Delete(ctx, fetched)).To(Succeed())
 
 			By("reconciling the deletion")
-			_, err = r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying cross-namespace Secret was deleted")
@@ -331,7 +351,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("first reconcile")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("capturing the initial deployment UID")
@@ -348,7 +368,7 @@ var _ = Describe("LLMModel Controller", func() {
 			Expect(k8sClient.Update(ctx, fetched)).To(Succeed())
 
 			By("reconciling after breaking change")
-			_, err = r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying the Deployment was deleted (not yet recreated)")
@@ -364,7 +384,7 @@ var _ = Describe("LLMModel Controller", func() {
 			}
 
 			By("reconciling again to recreate the Deployment")
-			_, err = r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying the new Deployment has a different hash")
@@ -400,7 +420,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying Deployment still exists")
@@ -437,7 +457,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling three times")
 			for i := 0; i < 3; i++ {
-				_, err := r.Reconcile(ctx, reconcileRequest(modelName, testNamespace))
+				err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
 				Expect(err).NotTo(HaveOccurred(), "reconcile %d should not error", i+1)
 			}
 
