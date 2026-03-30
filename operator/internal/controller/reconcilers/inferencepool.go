@@ -61,14 +61,22 @@ func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *
 				"labels": labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
-				"targetPortNumber": int64(8000),
-				"selector": map[string]interface{}{
-					"app.kubernetes.io/instance": model.Name,
+				"targetPorts": []interface{}{
+					map[string]interface{}{
+						"number": int64(8000),
+					},
 				},
-				"extensionRef": map[string]interface{}{
-					"name":       model.Name + "-epp",
-					"kind":       "Service",
-					"portNumber": int64(9002),
+				"selector": map[string]interface{}{
+					"matchLabels": map[string]interface{}{
+						"app.kubernetes.io/instance": model.Name,
+					},
+				},
+				"endpointPickerRef": map[string]interface{}{
+					"name": model.Name + "-epp",
+					"kind": "Service",
+					"port": map[string]interface{}{
+						"number": int64(9002),
+					},
 				},
 			},
 		},

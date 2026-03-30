@@ -78,17 +78,18 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				if !ok {
 					t.Fatal("expected InferencePool spec to be a map")
 				}
-				port, ok := spec["targetPortNumber"]
-				if !ok {
-					t.Fatal("expected targetPortNumber in InferencePool spec")
+				targetPorts, ok := spec["targetPorts"].([]interface{})
+				if !ok || len(targetPorts) == 0 {
+					t.Fatal("expected targetPorts in InferencePool spec")
 				}
-				if port != int64(8000) {
-					t.Errorf("expected targetPortNumber=8000, got %v (%T)", port, port)
+				portEntry := targetPorts[0].(map[string]interface{})
+				if portEntry["number"] != int64(8000) {
+					t.Errorf("expected targetPorts[0].number=8000, got %v", portEntry["number"])
 				}
 			},
 		},
 		{
-			name:  "InferencePool: extensionRef points to EPP service",
+			name:  "InferencePool: endpointPickerRef points to EPP service",
 			model: defaultInferencePoolModel("my-model"),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
@@ -99,18 +100,19 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				if !ok {
 					t.Fatal("expected InferencePool spec to be a map")
 				}
-				extRef, ok := spec["extensionRef"].(map[string]interface{})
+				epRef, ok := spec["endpointPickerRef"].(map[string]interface{})
 				if !ok {
-					t.Fatal("expected extensionRef in InferencePool spec")
+					t.Fatal("expected endpointPickerRef in InferencePool spec")
 				}
-				if extRef["name"] != "my-model-epp" {
-					t.Errorf("expected extensionRef.name=my-model-epp, got %v", extRef["name"])
+				if epRef["name"] != "my-model-epp" {
+					t.Errorf("expected endpointPickerRef.name=my-model-epp, got %v", epRef["name"])
 				}
-				if extRef["kind"] != "Service" {
-					t.Errorf("expected extensionRef.kind=Service, got %v", extRef["kind"])
+				if epRef["kind"] != "Service" {
+					t.Errorf("expected endpointPickerRef.kind=Service, got %v", epRef["kind"])
 				}
-				if extRef["portNumber"] != int64(9002) {
-					t.Errorf("expected extensionRef.portNumber=9002, got %v", extRef["portNumber"])
+				port := epRef["port"].(map[string]interface{})
+				if port["number"] != int64(9002) {
+					t.Errorf("expected port.number=9002, got %v", port["number"])
 				}
 			},
 		},
@@ -130,12 +132,16 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				if !ok {
 					t.Fatal("expected selector in InferencePool spec")
 				}
-				instanceLabel, ok := selector["app.kubernetes.io/instance"]
+				matchLabels, ok := selector["matchLabels"].(map[string]interface{})
 				if !ok {
-					t.Fatal("expected app.kubernetes.io/instance in selector")
+					t.Fatal("expected matchLabels in selector")
+				}
+				instanceLabel, ok := matchLabels["app.kubernetes.io/instance"]
+				if !ok {
+					t.Fatal("expected app.kubernetes.io/instance in matchLabels")
 				}
 				if instanceLabel != "my-model" {
-					t.Errorf("expected selector app.kubernetes.io/instance=my-model, got %v", instanceLabel)
+					t.Errorf("expected matchLabels app.kubernetes.io/instance=my-model, got %v", instanceLabel)
 				}
 			},
 		},
