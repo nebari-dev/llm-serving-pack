@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller"
 	webhookv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -179,9 +180,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	operatorCfg, err := config.LoadFromEnv()
+	if err != nil {
+		setupLog.Error(err, "unable to load operator config")
+		os.Exit(1)
+	}
+
 	if err := (&controller.LLMModelReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Config: operatorCfg,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "LLMModel")
 		os.Exit(1)
