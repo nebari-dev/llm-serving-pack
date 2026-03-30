@@ -55,8 +55,8 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				if ip == nil {
 					t.Fatal("expected InferencePool to be non-nil")
 				}
-				if ip.GetAPIVersion() != "inference.networking.x-k8s.io/v1alpha2" {
-					t.Errorf("expected apiVersion inference.networking.x-k8s.io/v1alpha2, got %q", ip.GetAPIVersion())
+				if ip.GetAPIVersion() != "inference.networking.k8s.io/v1" {
+					t.Errorf("expected apiVersion inference.networking.k8s.io/v1, got %q", ip.GetAPIVersion())
 				}
 				if ip.GetKind() != "InferencePool" {
 					t.Errorf("expected kind InferencePool, got %q", ip.GetKind())
@@ -84,6 +84,33 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				}
 				if port != int64(8000) {
 					t.Errorf("expected targetPortNumber=8000, got %v (%T)", port, port)
+				}
+			},
+		},
+		{
+			name:  "InferencePool: extensionRef points to EPP service",
+			model: defaultInferencePoolModel("my-model"),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec, ok := result.InferencePool.Object["spec"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected InferencePool spec to be a map")
+				}
+				extRef, ok := spec["extensionRef"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected extensionRef in InferencePool spec")
+				}
+				if extRef["name"] != "my-model-epp" {
+					t.Errorf("expected extensionRef.name=my-model-epp, got %v", extRef["name"])
+				}
+				if extRef["kind"] != "Service" {
+					t.Errorf("expected extensionRef.kind=Service, got %v", extRef["kind"])
+				}
+				if extRef["portNumber"] != int64(9002) {
+					t.Errorf("expected extensionRef.portNumber=9002, got %v", extRef["portNumber"])
 				}
 			},
 		},
@@ -333,7 +360,7 @@ func TestBuildInferencePoolResources(t *testing.T) {
 				foundEndpointsRule := false
 				for _, rule := range role.Rules {
 					for _, apiGroup := range rule.APIGroups {
-						if apiGroup == "inference.networking.x-k8s.io" {
+						if apiGroup == "inference.networking.k8s.io" {
 							for _, resource := range rule.Resources {
 								if resource == "inferencepools" {
 									foundIPRule = true
@@ -356,7 +383,7 @@ func TestBuildInferencePoolResources(t *testing.T) {
 					}
 				}
 				if !foundIPRule {
-					t.Error("expected rule for inference.networking.x-k8s.io/inferencepools")
+					t.Error("expected rule for inference.networking.k8s.io/inferencepools")
 				}
 				if !foundPodsRule {
 					t.Error("expected rule for pods")

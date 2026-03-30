@@ -58,8 +58,8 @@ func TestBuildRoutingResources(t *testing.T) {
 					t.Fatal("expected ExternalRoute to be non-nil")
 				}
 				r := result.ExternalRoute
-				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1beta1" {
-					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1beta1, got %q", r.GetAPIVersion())
+				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1alpha1" {
+					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1alpha1, got %q", r.GetAPIVersion())
 				}
 				if r.GetKind() != "AIGatewayRoute" {
 					t.Errorf("expected kind AIGatewayRoute, got %q", r.GetKind())
@@ -132,8 +132,8 @@ func TestBuildRoutingResources(t *testing.T) {
 					t.Fatalf("expected 1 backendRef, got %d", len(backendRefs))
 				}
 				backendRef := backendRefs[0].(map[string]interface{})
-				if backendRef["group"] != "inference.networking.x-k8s.io" {
-					t.Errorf("expected group inference.networking.x-k8s.io, got %q", backendRef["group"])
+				if backendRef["group"] != "inference.networking.k8s.io" {
+					t.Errorf("expected group inference.networking.k8s.io, got %q", backendRef["group"])
 				}
 				if backendRef["kind"] != "InferencePool" {
 					t.Errorf("expected kind InferencePool, got %q", backendRef["kind"])
@@ -209,8 +209,8 @@ func TestBuildRoutingResources(t *testing.T) {
 					t.Fatal("expected InternalRoute to be non-nil")
 				}
 				r := result.InternalRoute
-				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1beta1" {
-					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1beta1, got %q", r.GetAPIVersion())
+				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1alpha1" {
+					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1alpha1, got %q", r.GetAPIVersion())
 				}
 				if r.GetKind() != "AIGatewayRoute" {
 					t.Errorf("expected kind AIGatewayRoute, got %q", r.GetKind())
@@ -283,8 +283,8 @@ func TestBuildRoutingResources(t *testing.T) {
 					t.Fatalf("expected 1 backendRef, got %d", len(backendRefs))
 				}
 				backendRef := backendRefs[0].(map[string]interface{})
-				if backendRef["group"] != "inference.networking.x-k8s.io" {
-					t.Errorf("expected group inference.networking.x-k8s.io, got %q", backendRef["group"])
+				if backendRef["group"] != "inference.networking.k8s.io" {
+					t.Errorf("expected group inference.networking.k8s.io, got %q", backendRef["group"])
 				}
 				if backendRef["kind"] != "InferencePool" {
 					t.Errorf("expected kind InferencePool, got %q", backendRef["kind"])

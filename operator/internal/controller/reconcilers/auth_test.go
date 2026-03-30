@@ -322,7 +322,11 @@ func TestBuildAuthResources(t *testing.T) {
 				}
 				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
 				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
-				extractFrom := apiKeyAuth["extractFrom"].(map[string]interface{})
+				extractFromArr := apiKeyAuth["extractFrom"].([]interface{})
+				if len(extractFromArr) == 0 {
+					t.Fatal("expected at least one extractFrom entry")
+				}
+				extractFrom := extractFromArr[0].(map[string]interface{})
 				headers := extractFrom["headers"].([]interface{})
 				if len(headers) == 0 {
 					t.Fatal("expected at least one extractFrom header")

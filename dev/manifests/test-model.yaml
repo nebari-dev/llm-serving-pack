@@ -1,0 +1,36 @@
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: test-model
+  namespace: llm-serving
+spec:
+  model:
+    name: "test/tiny-model"
+    source: huggingface
+    storage:
+      type: emptyDir
+      size: 1Gi
+    preload: false
+  resources:
+    gpu:
+      count: 0
+      type: nvidia
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  serving:
+    image: mock-vllm:dev
+    replicas: 1
+    monitoring:
+      enabled: false
+  access:
+    public: true
+  endpoints:
+    external:
+      enabled: true
+      subdomain: test-model
+    internal:
+      enabled: true

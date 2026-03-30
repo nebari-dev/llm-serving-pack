@@ -70,7 +70,7 @@ func buildAIGatewayRoute(
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1beta1",
+			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
 			"kind":       "AIGatewayRoute",
 			"metadata": map[string]interface{}{
 				"name":      name,
@@ -91,7 +91,7 @@ func buildAIGatewayRoute(
 					map[string]interface{}{
 						"backendRefs": []interface{}{
 							map[string]interface{}{
-								"group": "inference.networking.x-k8s.io",
+								"group": "inference.networking.k8s.io",
 								"kind":  "InferencePool",
 								"name":  poolName,
 							},

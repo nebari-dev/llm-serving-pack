@@ -132,9 +132,11 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 							"namespace": cfg.APIKeysNamespace,
 						},
 					},
-					"extractFrom": map[string]interface{}{
-						"headers": []interface{}{
-							"Authorization",
+					"extractFrom": []interface{}{
+						map[string]interface{}{
+							"headers": []interface{}{
+								"Authorization",
+							},
 						},
 					},
 					"sanitize":              true,

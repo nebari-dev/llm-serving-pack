@@ -20,7 +20,7 @@ const (
 
 // InferencePoolResources holds the Kubernetes resources for the Gateway API Inference Extension.
 type InferencePoolResources struct {
-	InferencePool     *unstructured.Unstructured // inference.networking.x-k8s.io/v1alpha2 InferencePool
+	InferencePool     *unstructured.Unstructured // inference.networking.k8s.io/v1 InferencePool
 	EPPDeployment     *appsv1.Deployment
 	EPPService        *corev1.Service
 	EPPServiceAccount *corev1.ServiceAccount
@@ -54,7 +54,7 @@ func BuildInferencePoolResources(model *llmv1alpha1.LLMModel, cfg *config.Operat
 func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "inference.networking.x-k8s.io/v1alpha2",
+			"apiVersion": "inference.networking.k8s.io/v1",
 			"kind":       "InferencePool",
 			"metadata": map[string]interface{}{
 				"name":   model.Name,
@@ -64,6 +64,11 @@ func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *
 				"targetPortNumber": int64(8000),
 				"selector": map[string]interface{}{
 					"app.kubernetes.io/instance": model.Name,
+				},
+				"extensionRef": map[string]interface{}{
+					"name":       model.Name + "-epp",
+					"kind":       "Service",
+					"portNumber": int64(9002),
 				},
 			},
 		},
@@ -178,7 +183,7 @@ func buildEPPRole(eppName string, labels map[string]string) *rbacv1.Role {
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
-				APIGroups: []string{"inference.networking.x-k8s.io"},
+				APIGroups: []string{"inference.networking.k8s.io"},
 				Resources: []string{"inferencepools"},
 				Verbs:     []string{"get", "list", "watch"},
 			},

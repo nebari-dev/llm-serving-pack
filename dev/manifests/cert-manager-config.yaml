@@ -1,0 +1,21 @@
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: llm-operator-webhook-cert
+  namespace: llm-operator-system
+spec:
+  secretName: webhook-server-cert
+  dnsNames:
+    - llm-operator-webhook-service.llm-operator-system.svc
+    - llm-operator-webhook-service.llm-operator-system.svc.cluster.local
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
