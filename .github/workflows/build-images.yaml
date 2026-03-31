@@ -1,0 +1,34 @@
+name: Build Images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-operator:
+    name: Build operator image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build operator image
+        run: docker build -f operator/Dockerfile -t llm-operator:dev operator/
+
+  build-key-manager:
+    name: Build key-manager image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build key-manager image
+        run: docker build -f key-manager/Dockerfile -t llm-key-manager:dev .
+
+  build-mock-vllm:
+    name: Build mock-vllm image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build mock-vllm image
+        run: docker build -t mock-vllm:dev dev/mock-vllm/
