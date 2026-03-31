@@ -1,0 +1,105 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-key-manager
+  namespace: llm-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: llm-key-manager-models
+rules:
+  - apiGroups: ["llm.nebari.dev"]
+    resources: ["llmmodels"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: llm-key-manager-models
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: llm-key-manager-models
+subjects:
+  - kind: ServiceAccount
+    name: llm-key-manager
+    namespace: llm-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llm-key-manager
+  namespace: llm-api-keys
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llm-key-manager
+  namespace: llm-api-keys
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llm-key-manager
+subjects:
+  - kind: ServiceAccount
+    name: llm-key-manager
+    namespace: llm-operator-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-key-manager
+  namespace: llm-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-key-manager
+  template:
+    metadata:
+      labels:
+        app: llm-key-manager
+    spec:
+      serviceAccountName: llm-key-manager
+      containers:
+        - name: key-manager
+          image: llm-key-manager:dev
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: LLM_API_KEYS_NAMESPACE
+              value: "llm-api-keys"
+            - name: LLM_OIDC_GROUPS_CLAIM
+              value: "groups"
+            - name: LLM_AUTH_COOKIE_PREFIX
+              value: "IdToken"
+            - name: LLM_LISTEN_ADDR
+              value: ":8080"
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-key-manager
+  namespace: llm-operator-system
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: llm-key-manager
