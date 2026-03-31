@@ -1,0 +1,38 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-operator:
+    name: Test operator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operator/go.mod
+          cache-dependency-path: operator/go.sum
+
+      - name: Run tests
+        working-directory: operator
+        run: make test
+
+  test-key-manager:
+    name: Test key-manager
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: key-manager/go.mod
+          cache-dependency-path: key-manager/go.sum
+
+      - name: Run tests
+        working-directory: key-manager
+        run: go test ./...

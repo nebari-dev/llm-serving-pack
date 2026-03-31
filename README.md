@@ -114,6 +114,8 @@ response = client.chat.completions.create(
 
 ## Configuration
 
+See [docs/getting-started.md](docs/getting-started.md) for a local dev walkthrough.
+
 See [docs/design.md](docs/design.md) for the full design document, including:
 
 - Complete LLMModel CRD spec and status fields
@@ -146,18 +148,36 @@ Admin applies LLMModel CR
 
 ## Development
 
+See [docs/getting-started.md](docs/getting-started.md) for a full walkthrough of the local dev environment.
+
 ```bash
-# Local dev cluster with kind
+# Create kind cluster with all dependencies
 cd dev && make setup
 
-# Run operator locally
-cd operator && go run ./cmd/main.go
+# Build and load images into the cluster
+make build-images && make load-images
 
-# Run key manager locally
-cd key-manager && go run ./cmd/main.go
+# Deploy operator and key manager
+make deploy
 
-# Run tests
-cd operator && go test ./...
+# Apply a test model
+make apply-test-model
+
+# Watch reconciliation
+kubectl -n llm-serving get llmmodels -w
+
+# Tail logs
+make logs-operator
+make logs-key-manager
+
+# Tear down
+make teardown
+```
+
+Run tests directly:
+
+```bash
+cd operator && make test
 cd key-manager && go test ./...
 ```
 
