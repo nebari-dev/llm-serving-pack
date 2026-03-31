@@ -1,7 +1,7 @@
 # Build context must be the repository root so both modules are available.
 # Usage: docker build -f key-manager/Dockerfile -t key-manager:dev .
 
-FROM golang:1.25rc1 AS builder
+FROM golang:1.24 AS builder
 
 # Allow the Go toolchain to auto-download the exact version declared in go.mod.
 ENV GOTOOLCHAIN=auto
