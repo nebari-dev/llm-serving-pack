@@ -1,0 +1,52 @@
+{{- if .Values.keyManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+  template:
+    metadata:
+      labels:
+        app: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+        {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+      containers:
+        - name: key-manager
+          image: {{ .Values.keyManager.image.repository }}:{{ .Values.keyManager.image.tag }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: LLM_API_KEYS_NAMESPACE
+              value: {{ .Values.apiKeysNamespace | quote }}
+            - name: LLM_OIDC_GROUPS_CLAIM
+              value: {{ .Values.auth.oidc.groupsClaim | quote }}
+            - name: LLM_AUTH_COOKIE_PREFIX
+              value: {{ .Values.auth.oidc.cookiePrefix | quote }}
+            - name: LLM_LISTEN_ADDR
+              value: ":8080"
+            {{- if .Values.keyManager.auditInterval }}
+            - name: LLM_AUDIT_INTERVAL
+              value: {{ .Values.keyManager.auditInterval | quote }}
+            {{- end }}
+            {{- if .Values.keyManager.oidcUserinfoURL }}
+            - name: LLM_OIDC_USERINFO_URL
+              value: {{ .Values.keyManager.oidcUserinfoURL | quote }}
+            {{- end }}
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+{{- end }}

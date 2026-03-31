@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-webhook-cert
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "nebari-llm-serving.fullname" . }}-webhook-cert
+  dnsNames:
+    - {{ include "nebari-llm-serving.fullname" . }}-webhook-service.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc
+    - {{ include "nebari-llm-serving.fullname" . }}-webhook-service.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc.cluster.local
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer

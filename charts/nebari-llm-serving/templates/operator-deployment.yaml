@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-operator
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "nebari-llm-serving.fullname" . }}-operator
+  template:
+    metadata:
+      labels:
+        app: {{ include "nebari-llm-serving.fullname" . }}-operator
+        {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-operator
+      containers:
+        - name: manager
+          image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LLM_BASE_DOMAIN
+              value: {{ .Values.platform.baseDomain | quote }}
+            - name: LLM_EXTERNAL_GATEWAY_NAME
+              value: {{ .Values.platform.gateway.external.name | quote }}
+            - name: LLM_EXTERNAL_GATEWAY_NAMESPACE
+              value: {{ .Values.platform.gateway.external.namespace | quote }}
+            - name: LLM_INTERNAL_GATEWAY_NAME
+              value: {{ .Values.platform.gateway.internal.name | quote }}
+            - name: LLM_INTERNAL_GATEWAY_NAMESPACE
+              value: {{ .Values.platform.gateway.internal.namespace | quote }}
+            - name: LLM_OIDC_ISSUER_URL
+              value: {{ .Values.auth.oidc.issuerURL | quote }}
+            - name: LLM_OIDC_GROUPS_CLAIM
+              value: {{ .Values.auth.oidc.groupsClaim | quote }}
+            - name: LLM_API_KEYS_NAMESPACE
+              value: {{ .Values.apiKeysNamespace | quote }}
+            - name: LLM_DEFAULT_SERVING_IMAGE
+              value: {{ .Values.defaults.serving.image | quote }}
+            - name: ENABLE_WEBHOOKS
+              value: "true"
+          ports:
+            - containerPort: 9443
+              name: webhook-server
+              protocol: TCP
+          volumeMounts:
+            - name: cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: cert
+          secret:
+            secretName: {{ include "nebari-llm-serving.fullname" . }}-webhook-cert

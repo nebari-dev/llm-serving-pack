@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nebari-llm-serving
+description: Nebari software pack for serving LLMs via llm-d
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

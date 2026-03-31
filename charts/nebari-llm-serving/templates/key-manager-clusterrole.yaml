@@ -1,0 +1,12 @@
+{{- if .Values.keyManager.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-key-manager-models
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["llm.nebari.dev"]
+    resources: ["llmmodels"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
