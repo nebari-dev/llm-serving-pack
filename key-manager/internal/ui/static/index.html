@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM API Key Manager</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>LLM API Key Manager</h1>
+  </header>
+
+  <main>
+    <div id="error-banner" class="error-banner hidden"></div>
+
+    <section id="models-section">
+      <h2>Available Models</h2>
+      <div id="models-loading" class="loading">Loading models...</div>
+      <div id="models-container" class="hidden"></div>
+    </section>
+
+    <section id="create-key-section">
+      <h2>Create API Key</h2>
+      <form id="create-key-form">
+        <div class="form-row">
+          <label for="model-select">Model</label>
+          <select id="model-select" name="modelName" required>
+            <option value="">-- select a model --</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label for="description-input">Description</label>
+          <input type="text" id="description-input" name="description" placeholder="e.g. my notebook" maxlength="200">
+        </div>
+        <div class="form-row">
+          <button type="submit" id="create-btn">Create Key</button>
+        </div>
+        <div id="create-error" class="field-error hidden"></div>
+      </form>
+    </section>
+
+    <section id="keys-section">
+      <h2>My API Keys</h2>
+      <div id="keys-loading" class="loading">Loading keys...</div>
+      <div id="keys-container" class="hidden"></div>
+    </section>
+  </main>
+
+  <!-- Modal for displaying new API key -->
+  <div id="key-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal">
+      <h3 id="modal-title">API Key Created</h3>
+      <p class="modal-warning">Copy this key now. It will not be shown again.</p>
+      <div class="key-display">
+        <code id="modal-key-value"></code>
+        <button id="copy-btn" type="button">Copy</button>
+      </div>
+      <p id="modal-client-id" class="modal-meta"></p>
+      <button id="modal-close-btn" type="button" class="btn-primary">Done</button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
