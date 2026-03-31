@@ -1,0 +1,44 @@
+platform:
+  # baseDomain is REQUIRED - the base domain for the Nebari deployment
+  baseDomain: ""
+  gateway:
+    external:
+      name: nebari-gateway
+      namespace: envoy-gateway-system
+    internal:
+      name: nebari-internal-gateway
+      namespace: envoy-gateway-system
+
+auth:
+  oidc:
+    # issuerURL is REQUIRED - the OIDC issuer URL
+    issuerURL: ""
+    groupsClaim: groups
+    audience: ""
+    cookiePrefix: IdToken
+
+envoyAIGateway:
+  # install: if true, installs the Envoy AI Gateway (not yet implemented)
+  install: false
+
+keyManager:
+  enabled: true
+  image:
+    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager
+    tag: v0.1.0
+  auditInterval: 5m
+  oidcUserinfoURL: ""
+
+operator:
+  image:
+    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
+    tag: v0.1.0
+
+# Namespace where API keys (Secrets) are stored
+apiKeysNamespace: llm-api-keys
+
+defaults:
+  serving:
+    image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+  monitoring:
+    enabled: true
