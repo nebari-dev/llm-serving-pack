@@ -11,7 +11,13 @@ platform:
 
 auth:
   oidc:
-    # issuerURL is REQUIRED - the OIDC issuer URL
+    # existingSecret - name of an existing Secret containing OIDC configuration.
+    # When set, issuerURL is read from the secret's "issuer-url" key instead of
+    # the static value below. This is the expected integration path when the
+    # nebari-operator provisions the OIDC client (secret name is typically
+    # "<nebariapp-name>-oidc-client").
+    existingSecret: ""
+    # issuerURL is REQUIRED when existingSecret is not set - the OIDC issuer URL
     issuerURL: ""
     groupsClaim: groups
     audience: ""

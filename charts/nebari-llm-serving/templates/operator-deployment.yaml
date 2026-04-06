@@ -32,8 +32,16 @@ spec:
               value: {{ .Values.platform.gateway.internal.name | quote }}
             - name: LLM_INTERNAL_GATEWAY_NAMESPACE
               value: {{ .Values.platform.gateway.internal.namespace | quote }}
+            {{- if .Values.auth.oidc.existingSecret }}
+            - name: LLM_OIDC_ISSUER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.oidc.existingSecret }}
+                  key: issuer-url
+            {{- else }}
             - name: LLM_OIDC_ISSUER_URL
               value: {{ .Values.auth.oidc.issuerURL | quote }}
+            {{- end }}
             - name: LLM_OIDC_GROUPS_CLAIM
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
             - name: LLM_API_KEYS_NAMESPACE
