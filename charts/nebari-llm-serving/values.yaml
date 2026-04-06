@@ -11,14 +11,15 @@ platform:
 
 auth:
   oidc:
-    # existingSecret - name of an existing Secret containing OIDC configuration.
-    # When set, issuerURL is read from the secret's "issuer-url" key instead of
-    # the static value below. This is the expected integration path when the
-    # nebari-operator provisions the OIDC client (secret name is typically
-    # "<nebariapp-name>-oidc-client").
-    existingSecret: ""
-    # issuerURL is REQUIRED when existingSecret is not set - the OIDC issuer URL
+    # issuerURL - the OIDC issuer URL. When set, this static value is used
+    # directly. When empty (default), the issuer URL is read from a Kubernetes
+    # Secret via secretKeyRef instead - this is the expected integration path
+    # when the nebari-operator provisions the OIDC client with auth enabled.
     issuerURL: ""
+    # existingSecret - name of the Secret containing the "issuer-url" key.
+    # Defaults to "<release-fullname>-oidc-client", which matches the secret
+    # the nebari-operator creates when a NebariApp has auth.enabled: true.
+    existingSecret: ""
     groupsClaim: groups
     audience: ""
     cookiePrefix: IdToken

@@ -32,15 +32,15 @@ spec:
               value: {{ .Values.platform.gateway.internal.name | quote }}
             - name: LLM_INTERNAL_GATEWAY_NAMESPACE
               value: {{ .Values.platform.gateway.internal.namespace | quote }}
-            {{- if .Values.auth.oidc.existingSecret }}
+            {{- if .Values.auth.oidc.issuerURL }}
+            - name: LLM_OIDC_ISSUER_URL
+              value: {{ .Values.auth.oidc.issuerURL | quote }}
+            {{- else }}
             - name: LLM_OIDC_ISSUER_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.auth.oidc.existingSecret }}
+                  name: {{ .Values.auth.oidc.existingSecret | default (printf "%s-oidc-client" (include "nebari-llm-serving.fullname" .)) }}
                   key: issuer-url
-            {{- else }}
-            - name: LLM_OIDC_ISSUER_URL
-              value: {{ .Values.auth.oidc.issuerURL | quote }}
             {{- end }}
             - name: LLM_OIDC_GROUPS_CLAIM
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
