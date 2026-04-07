@@ -27,10 +27,10 @@ func defaultConfig() *config.OperatorConfig {
 	}
 }
 
-func defaultModel(name string) *llmv1alpha1.LLMModel {
+func defaultModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      testAuthModelName,
 			Namespace: "default",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -89,7 +89,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 	}{
 		{
 			name:    "basic deployment: correct image, name, labels, replicas",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -100,14 +100,14 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if dep == nil {
 					t.Fatal("expected Deployment to be non-nil")
 				}
-				if dep.Name != "my-model" {
-					t.Errorf("expected deployment name %q, got %q", "my-model", dep.Name)
+				if dep.Name != testAuthModelName {
+					t.Errorf("expected deployment name %q, got %q", testAuthModelName, dep.Name)
 				}
 				labels := dep.Labels
-				if labels["app.kubernetes.io/instance"] != "my-model" {
+				if labels["app.kubernetes.io/instance"] != testAuthModelName {
 					t.Errorf("expected label app.kubernetes.io/instance=my-model, got %q", labels["app.kubernetes.io/instance"])
 				}
-				if labels["app.kubernetes.io/managed-by"] != "nebari-llm-operator" {
+				if labels["app.kubernetes.io/managed-by"] != testAuthSAName {
 					t.Errorf("expected managed-by label, got %q", labels["app.kubernetes.io/managed-by"])
 				}
 				// Replicas: nil in spec defaults to 1
@@ -127,7 +127,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "serving image from model spec when set",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.Image = "custom/vllm:v1.2.3"
 				return m
 			}(),
@@ -145,7 +145,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "default image from config when serving.image is empty",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -161,7 +161,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "GPU resources: nvidia.com/gpu in limits when gpu.count > 0",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 4, Type: "nvidia"}
 				return m
 			}(),
@@ -184,7 +184,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "no GPU resources when gpu.count == 0",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 0, Type: "nvidia"}
 				return m
 			}(),
@@ -203,7 +203,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "tensorParallelism defaults to gpu.count",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 4, Type: "nvidia"}
 				// TensorParallelism not set
 				return m
@@ -221,7 +221,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "tensorParallelism explicit value used",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 4, Type: "nvidia"}
 				m.Spec.Serving.TensorParallelism = int32Ptr(2)
 				return m
@@ -239,7 +239,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "vllmArgs passed in container args",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.VLLMArgs = []string{"--max-model-len", "4096"}
 				return m
 			}(),
@@ -256,7 +256,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "Advanced extraArgs appended after vllmArgs",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.VLLMArgs = []string{"--base-arg"}
 				m.Spec.Advanced.VLLM.ExtraArgs = []string{"--extra-arg"}
 				return m
@@ -274,7 +274,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "Advanced extraEnv set on container",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Advanced.VLLM.ExtraEnv = []corev1.EnvVar{
 					{Name: "MY_VAR", Value: "my-value"},
 				}
@@ -301,7 +301,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "Advanced tolerations on pod spec",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
 					{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists},
 				}
@@ -325,7 +325,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "Advanced nodeSelector on pod spec",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Advanced.VLLM.NodeSelector = map[string]string{"gpu": "true"}
 				return m
 			}(),
@@ -344,7 +344,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "Advanced affinity on pod spec",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Advanced.VLLM.Affinity = &corev1.Affinity{
 					NodeAffinity: &corev1.NodeAffinity{
 						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
@@ -377,7 +377,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "startup probe: GET /v1/models, delay 15, period 30, failure 120",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -408,7 +408,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "liveness probe: GET /health, period 10, failure 3",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -436,7 +436,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "readiness probe: GET /v1/models, period 5, failure 3",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -464,7 +464,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "init container from StorageResult included",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: storageWithInitContainer(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -482,7 +482,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "volumes from StorageResult included",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -514,7 +514,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "no init container when StorageResult.InitContainer is nil",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -529,7 +529,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "service: ClusterIP type, port 8000",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -540,8 +540,8 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if svc == nil {
 					t.Fatal("expected Service to be non-nil")
 				}
-				if svc.Name != "my-model" {
-					t.Errorf("expected service name %q, got %q", "my-model", svc.Name)
+				if svc.Name != testAuthModelName {
+					t.Errorf("expected service name %q, got %q", testAuthModelName, svc.Name)
 				}
 				if svc.Spec.Type != corev1.ServiceTypeClusterIP {
 					t.Errorf("expected ClusterIP service type, got %q", svc.Spec.Type)
@@ -559,7 +559,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "serviceAccount: correct name",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -583,7 +583,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "PodMonitor created when monitoring.enabled is true",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.Monitoring = llmv1alpha1.MonitoringSpec{Enabled: boolPtr(true)}
 				return m
 			}(),
@@ -597,8 +597,8 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatal("expected PodMonitor to be non-nil when monitoring is enabled")
 				}
 				pm := result.PodMonitor
-				if pm.GetName() != "my-model" {
-					t.Errorf("expected PodMonitor name %q, got %q", "my-model", pm.GetName())
+				if pm.GetName() != testAuthModelName {
+					t.Errorf("expected PodMonitor name %q, got %q", testAuthModelName, pm.GetName())
 				}
 				if pm.GetAPIVersion() != "monitoring.coreos.com/v1" {
 					t.Errorf("expected apiVersion monitoring.coreos.com/v1, got %q", pm.GetAPIVersion())
@@ -629,7 +629,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "PodMonitor NOT created when monitoring.enabled is false",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {
@@ -644,7 +644,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "PodMonitor NOT created when monitoring.enabled is explicitly false",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.Monitoring = llmv1alpha1.MonitoringSpec{Enabled: boolPtr(false)}
 				return m
 			}(),
@@ -662,7 +662,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "replicas from model spec used when set",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.Replicas = int32Ptr(3)
 				return m
 			}(),
@@ -680,7 +680,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "dataParallelism defaults to 1 when not set",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				// DataParallelism not set
 				return m
 			}(),
@@ -697,7 +697,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "dataParallelism explicit value used",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Serving.DataParallelism = int32Ptr(2)
 				return m
 			}(),
@@ -714,7 +714,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "--model arg set to storage.ModelPath",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				return m
 			}(),
 			storage: &StorageResult{
@@ -734,7 +734,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "resource limits merged with GPU limit",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 2, Type: "nvidia"}
 				m.Spec.Resources.Limits = corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("8"),
@@ -763,7 +763,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		{
 			name: "resource requests from model spec",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultModel("my-model")
+				m := defaultModel()
 				m.Spec.Resources.Requests = corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("4"),
 					corev1.ResourceMemory: resource.MustParse("16Gi"),
@@ -784,7 +784,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 		},
 		{
 			name:    "container port 8000 named http",
-			model:   defaultModel("my-model"),
+			model:   defaultModel(),
 			storage: defaultStorage(),
 			cfg:     defaultConfig(),
 			check: func(t *testing.T, result *ModelServiceResources, err error) {

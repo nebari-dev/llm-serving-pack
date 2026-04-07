@@ -17,10 +17,10 @@ const (
 	testInferenceAPIGroup = "inference.networking.k8s.io"
 )
 
-func defaultInferencePoolModel(name string) *llmv1alpha1.LLMModel {
+func defaultInferencePoolModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      testPoolModelName,
 			Namespace: "test-ns",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -53,7 +53,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 	}{
 		{
 			name:  "InferencePool: correct apiVersion, kind, name",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -76,7 +76,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "InferencePool: targetPortNumber is 8000",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -98,7 +98,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "InferencePool: endpointPickerRef points to EPP service",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -126,7 +126,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "InferencePool: selector matches model pods",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -155,14 +155,14 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "InferencePool: labels set to StandardLabels",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				labels := result.InferencePool.GetLabels()
-				if labels["app.kubernetes.io/managed-by"] != "nebari-llm-operator" {
+				if labels["app.kubernetes.io/managed-by"] != testAuthSAName {
 					t.Errorf("expected managed-by label, got %q", labels["app.kubernetes.io/managed-by"])
 				}
 				if labels["app.kubernetes.io/instance"] != testPoolModelName {
@@ -172,7 +172,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Deployment: correct name, image, replicas",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -202,7 +202,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Deployment: container ports 9002 and 9090",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -229,7 +229,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Deployment: args include poolName and poolNamespace",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -244,7 +244,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Deployment: has resource requests and limits",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -285,7 +285,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Deployment: labels include app.kubernetes.io/name: epp",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -304,7 +304,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Service: ports 9002 and 9090",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -337,7 +337,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP ServiceAccount: correct name",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -354,7 +354,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP Role: correct permissions for InferencePool, pods, endpoints, services",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {
@@ -409,7 +409,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 		},
 		{
 			name:  "EPP RoleBinding: links Role to ServiceAccount",
-			model: defaultInferencePoolModel(testPoolModelName),
+			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
 				if err != nil {

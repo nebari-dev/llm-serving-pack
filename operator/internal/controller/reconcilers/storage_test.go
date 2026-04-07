@@ -64,8 +64,8 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				// Check volume references PVC
 				found := false
 				for _, v := range result.Volumes {
-					if v.Name == "model-storage" && v.VolumeSource.PersistentVolumeClaim != nil {
-						if v.VolumeSource.PersistentVolumeClaim.ClaimName == "devstral-32b-model-storage" {
+					if v.Name == modelStorageVolumeName && v.PersistentVolumeClaim != nil {
+						if v.PersistentVolumeClaim.ClaimName == "devstral-32b-model-storage" {
 							found = true
 						}
 					}
@@ -76,7 +76,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				// Check VolumeMount at /model-cache
 				foundMount := false
 				for _, m := range result.VolumeMounts {
-					if m.Name == "model-storage" && m.MountPath == "/model-cache" {
+					if m.Name == modelStorageVolumeName && m.MountPath == modelCachePath {
 						foundMount = true
 					}
 				}
@@ -130,10 +130,10 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				}
 				found := false
 				for _, v := range result.Volumes {
-					if v.Name == "model-storage" && v.VolumeSource.EmptyDir != nil {
+					if v.Name == modelStorageVolumeName && v.EmptyDir != nil {
 						expectedSize := resource.MustParse("200Gi")
-						if v.VolumeSource.EmptyDir.SizeLimit != nil &&
-							v.VolumeSource.EmptyDir.SizeLimit.Cmp(expectedSize) == 0 {
+						if v.EmptyDir.SizeLimit != nil &&
+							v.EmptyDir.SizeLimit.Cmp(expectedSize) == 0 {
 							found = true
 						}
 					}
@@ -312,7 +312,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				// Check emptyDir volume exists
 				foundVolume := false
 				for _, v := range result.Volumes {
-					if v.Name == "model-storage" && v.VolumeSource.EmptyDir != nil {
+					if v.Name == modelStorageVolumeName && v.EmptyDir != nil {
 						foundVolume = true
 					}
 				}
@@ -332,7 +332,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				// Check init container mounts at /shared-models
 				foundInitMount := false
 				for _, m := range result.InitContainer.VolumeMounts {
-					if m.Name == "model-storage" && m.MountPath == "/shared-models" {
+					if m.Name == modelStorageVolumeName && m.MountPath == "/shared-models" {
 						foundInitMount = true
 					}
 				}
@@ -342,7 +342,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				// Check vLLM container mounts at /model-cache
 				foundVLLMMount := false
 				for _, m := range result.VolumeMounts {
-					if m.Name == "model-storage" && m.MountPath == "/model-cache" {
+					if m.Name == modelStorageVolumeName && m.MountPath == modelCachePath {
 						foundVLLMMount = true
 					}
 				}
@@ -392,7 +392,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.ModelPath != "/model-cache" {
+				if result.ModelPath != modelCachePath {
 					t.Errorf("expected ModelPath '/model-cache', got %q", result.ModelPath)
 				}
 			},

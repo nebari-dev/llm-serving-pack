@@ -91,7 +91,7 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		// Requeue immediately - the finalizer update changes the resourceVersion,
 		// and continuing with the stale object causes status update conflicts.
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 	}
 
 	// 4. Set phase to Pending if empty
@@ -99,7 +99,7 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		model.Status.Phase = llmv1alpha1.PhasePending
 		if err := r.Status().Update(ctx, model); err != nil {
 			log.Error(err, "failed to update status phase to Pending")
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: 100 * time.Millisecond}, nil
 		}
 	}
 
@@ -296,7 +296,7 @@ func (r *LLMModelReconciler) reconcileCrossNamespaceResources(
 		return fmt.Errorf("reconciling api key metadata configmap: %w", err)
 	}
 	if auth.ReferenceGrant != nil {
-		if err := r.createOrUpdateUnstructured(ctx, log, auth.ReferenceGrant); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, auth.ReferenceGrant); err != nil {
 			log.Error(err, "failed to reconcile ReferenceGrant - CRD may not be installed, skipping")
 		}
 	}
@@ -376,7 +376,7 @@ func (r *LLMModelReconciler) reconcileModelServiceResources(
 	// PodMonitor (optional CRD)
 	if resources.PodMonitor != nil {
 		resources.PodMonitor.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, log, resources.PodMonitor); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, resources.PodMonitor); err != nil {
 			log.Error(err, "failed to reconcile PodMonitor - CRD may not be installed, skipping")
 		}
 	}
@@ -393,7 +393,7 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 ) error {
 	// InferencePool (unstructured CRD - non-fatal if missing)
 	pool.InferencePool.SetNamespace(model.Namespace)
-	if err := r.createOrUpdateUnstructured(ctx, log, pool.InferencePool); err != nil {
+	if err := r.createOrUpdateUnstructured(ctx, pool.InferencePool); err != nil {
 		log.Error(err, "failed to reconcile InferencePool - CRD may not be installed, skipping")
 	}
 
@@ -446,7 +446,7 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 }
 
 // reconcileRoutingResources creates or updates AIGatewayRoute resources.
-func (r *LLMModelReconciler) reconcileRoutingResources(
+func (r *LLMModelReconciler) reconcileRoutingResources( //nolint:unparam // error return kept for future extensibility
 	ctx context.Context,
 	log controllerLogger,
 	model *llmv1alpha1.LLMModel,
@@ -454,13 +454,13 @@ func (r *LLMModelReconciler) reconcileRoutingResources(
 ) error {
 	if routing.ExternalRoute != nil {
 		routing.ExternalRoute.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, log, routing.ExternalRoute); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, routing.ExternalRoute); err != nil {
 			log.Error(err, "failed to reconcile external AIGatewayRoute - CRD may not be installed, skipping")
 		}
 	}
 	if routing.InternalRoute != nil {
 		routing.InternalRoute.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, log, routing.InternalRoute); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, routing.InternalRoute); err != nil {
 			log.Error(err, "failed to reconcile internal AIGatewayRoute - CRD may not be installed, skipping")
 		}
 	}
@@ -468,18 +468,18 @@ func (r *LLMModelReconciler) reconcileRoutingResources(
 }
 
 // reconcileSecurityPolicies creates or updates SecurityPolicy resources.
-func (r *LLMModelReconciler) reconcileSecurityPolicies(
+func (r *LLMModelReconciler) reconcileSecurityPolicies( //nolint:unparam // error return kept for future extensibility
 	ctx context.Context,
 	log controllerLogger,
 	auth *reconcilers.AuthResources,
 ) error {
 	if auth.ExternalSecurityPolicy != nil {
-		if err := r.createOrUpdateUnstructured(ctx, log, auth.ExternalSecurityPolicy); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, auth.ExternalSecurityPolicy); err != nil {
 			log.Error(err, "failed to reconcile external SecurityPolicy - CRD may not be installed, skipping")
 		}
 	}
 	if auth.InternalSecurityPolicy != nil {
-		if err := r.createOrUpdateUnstructured(ctx, log, auth.InternalSecurityPolicy); err != nil {
+		if err := r.createOrUpdateUnstructured(ctx, auth.InternalSecurityPolicy); err != nil {
 			log.Error(err, "failed to reconcile internal SecurityPolicy - CRD may not be installed, skipping")
 		}
 	}
@@ -733,7 +733,6 @@ func (r *LLMModelReconciler) createOrUpdateRoleBinding(ctx context.Context, rb *
 // failing the reconciliation.
 func (r *LLMModelReconciler) createOrUpdateUnstructured(
 	ctx context.Context,
-	log controllerLogger,
 	obj *unstructured.Unstructured,
 ) error {
 	existing := &unstructured.Unstructured{}

@@ -14,7 +14,7 @@ type RoutingResources struct {
 }
 
 // boolOrDefault returns the value of b if non-nil, otherwise returns def.
-func boolOrDefault(b *bool, def bool) bool {
+func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always true today but the function is used across multiple call sites
 	if b == nil {
 		return def
 	}

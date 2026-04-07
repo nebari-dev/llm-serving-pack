@@ -47,7 +47,7 @@ func BuildModelServiceResources(model *llmv1alpha1.LLMModel, storage *StorageRes
 	}, nil
 }
 
-func buildDeployment(
+func buildDeployment( //nolint:unparam // error return kept for consistency with other build functions
 	model *llmv1alpha1.LLMModel,
 	storage *StorageResult,
 	cfg *config.OperatorConfig,

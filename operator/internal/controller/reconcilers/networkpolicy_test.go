@@ -22,10 +22,10 @@ func defaultNetworkPolicyConfig() *config.OperatorConfig {
 	}
 }
 
-func defaultNetworkPolicyModel(name string) *llmv1alpha1.LLMModel {
+func defaultNetworkPolicyModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      "my-model",
 			Namespace: "model-ns",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -96,7 +96,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 	}{
 		{
 			name:  "policy name is <model-name>-deny-direct",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				if np.Name != "my-model-deny-direct" {
@@ -106,7 +106,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "policy namespace matches model namespace",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				if np.Namespace != "model-ns" {
@@ -116,7 +116,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "podSelector matches model pods via StandardLabels subset",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				sel := np.Spec.PodSelector.MatchLabels
@@ -130,7 +130,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "policyTypes includes Ingress",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				found := false
@@ -146,7 +146,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "allows ingress from external gateway namespace",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg: &config.OperatorConfig{
 				ExternalGatewayNS: "external-gw-ns",
 				InternalGatewayNS: "internal-gw-ns",
@@ -159,7 +159,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "allows ingress from internal gateway namespace",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg: &config.OperatorConfig{
 				ExternalGatewayNS: "external-gw-ns",
 				InternalGatewayNS: "internal-gw-ns",
@@ -172,7 +172,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "when both gateway namespaces are the same only one namespace rule exists",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg: &config.OperatorConfig{
 				ExternalGatewayNS: "envoy-gateway-system",
 				InternalGatewayNS: "envoy-gateway-system",
@@ -186,7 +186,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "allows ingress from EPP pods via podSelector",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				if !hasPodSelectorRule(np.Spec.Ingress, "app.kubernetes.io/name", "epp") {
@@ -196,7 +196,7 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "allows ingress from monitoring namespace on port 8000 only",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				found := false
@@ -228,10 +228,10 @@ func TestBuildNetworkPolicy(t *testing.T) {
 		},
 		{
 			name:  "labels set to StandardLabels",
-			model: defaultNetworkPolicyModel("my-model"),
+			model: defaultNetworkPolicyModel(),
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
-				expected := StandardLabels(defaultNetworkPolicyModel("my-model"))
+				expected := StandardLabels(defaultNetworkPolicyModel())
 				for k, v := range expected {
 					if np.Labels[k] != v {
 						t.Errorf("expected label %q=%q, got %q", k, v, np.Labels[k])

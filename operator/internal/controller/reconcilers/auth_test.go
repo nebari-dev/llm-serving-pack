@@ -16,10 +16,10 @@ const (
 	testAuthSAName    = "nebari-llm-operator"
 )
 
-func defaultAuthModel(name string) *llmv1alpha1.LLMModel {
+func defaultAuthModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      testAuthModelName,
 			Namespace: testAuthNamespace,
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -56,7 +56,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 	}{
 		{
 			name:  "API key Secret: correct name and namespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -75,7 +75,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "API key Secret: empty data and Opaque type",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -91,7 +91,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "API key ConfigMap: correct name and namespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -110,7 +110,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "API key ConfigMap: empty data",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -123,7 +123,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Labels: Secret and ConfigMap include model-name and model-namespace labels",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -150,7 +150,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "ReferenceGrant: correct apiVersion and kind",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -169,7 +169,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "ReferenceGrant: namespace is cfg.APIKeysNamespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -182,7 +182,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "ReferenceGrant: name includes both model name and namespace for uniqueness",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -196,7 +196,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "ReferenceGrant: correct from (SecurityPolicy in model namespace)",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -221,7 +221,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "ReferenceGrant: correct to (Secret by name in api-keys namespace)",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -246,7 +246,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "External SecurityPolicy: correct targetRef to HTTPRoute <name>-external",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -274,7 +274,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "External SecurityPolicy: apiKeyAuth credentialRef to Secret in api-keys namespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -305,7 +305,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		// Tests for these fields will be added when minimum EG version is bumped.
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -337,7 +337,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		{
 			name: "External disabled: ExternalSecurityPolicy is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel(testAuthModelName)
+				m := defaultAuthModel()
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -353,7 +353,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: correct targetRef to HTTPRoute <name>-internal",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -381,7 +381,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: JWT provider with correct issuer and JWKS URI",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -409,7 +409,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: audiences set when OIDCAudience is non-empty",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -431,7 +431,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: audiences omitted when OIDCAudience is empty",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg: func() *config.OperatorConfig {
 				cfg := defaultAuthConfig()
 				cfg.OIDCAudience = ""
@@ -452,7 +452,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: claimToHeaders maps groups and username",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -489,7 +489,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		{
 			name: "Internal disabled: InternalSecurityPolicy is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel(testAuthModelName)
+				m := defaultAuthModel()
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -506,7 +506,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		{
 			name: "Both disabled: both SecurityPolicies nil, but Secret/ConfigMap/ReferenceGrant still created",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel(testAuthModelName)
+				m := defaultAuthModel()
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
@@ -535,7 +535,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "External SecurityPolicy: correct name and namespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -551,7 +551,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 		},
 		{
 			name:  "Internal SecurityPolicy: correct name and namespace",
-			model: defaultAuthModel(testAuthModelName),
+			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {

@@ -40,10 +40,11 @@ func BuildNetworkPolicy(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 }
 
 func buildNetworkPolicyIngressRules(cfg *config.OperatorConfig) []networkingv1.NetworkPolicyIngressRule {
-	var rules []networkingv1.NetworkPolicyIngressRule
-
 	// Allow from gateway namespaces. Deduplicate if both gateways are in the same namespace.
 	gatewayNamespaces := uniqueStrings(cfg.ExternalGatewayNS, cfg.InternalGatewayNS)
+
+	// Pre-allocate: one rule per gateway namespace + EPP rule + monitoring rule
+	rules := make([]networkingv1.NetworkPolicyIngressRule, 0, len(gatewayNamespaces)+2)
 	for _, ns := range gatewayNamespaces {
 		rules = append(rules, networkingv1.NetworkPolicyIngressRule{
 			From: []networkingv1.NetworkPolicyPeer{

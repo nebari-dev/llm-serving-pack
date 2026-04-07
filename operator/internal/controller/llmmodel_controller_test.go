@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -61,11 +62,11 @@ func newReconciler() *LLMModelReconciler {
 }
 
 // newMinimalModel creates a minimal LLMModel for testing.
-func newMinimalModel(name, namespace string) *llmv1alpha1.LLMModel {
+func newMinimalModel(name string) *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: namespace,
+			Namespace: "default",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
 			Model: llmv1alpha1.ModelSpec{
@@ -91,25 +92,26 @@ func newMinimalModel(name, namespace string) *llmv1alpha1.LLMModel {
 }
 
 // reconcileRequest creates a reconcile.Request for the given name/namespace.
-func reconcileRequest(name, namespace string) reconcile.Request {
+func reconcileRequest(name string) reconcile.Request {
 	return reconcile.Request{
-		NamespacedName: types.NamespacedName{Name: name, Namespace: namespace},
+		NamespacedName: types.NamespacedName{Name: name, Namespace: "default"},
 	}
 }
 
-// reconcileUntilStable calls Reconcile repeatedly until it returns no requeue
-// or a RequeueAfter (which indicates the controller is waiting for async work).
-// This handles the multi-pass reconciliation needed when the finalizer add
-// causes an immediate requeue.
+// reconcileUntilStable calls Reconcile repeatedly until it returns no requeue.
+// Short RequeueAfter values (<=1s) indicate the controller has more immediate work
+// to do (e.g. finalizer was just added). Longer values or zero indicate the
+// controller is either done or waiting for async work.
 func reconcileUntilStable(r *LLMModelReconciler, ctx context.Context, req reconcile.Request) error {
 	for i := 0; i < 10; i++ {
 		result, err := r.Reconcile(ctx, req)
 		if err != nil {
 			return err
 		}
-		// RequeueAfter means the controller is waiting for async work (download, startup)
-		// Requeue:true means the controller has more work to do immediately
-		if !result.Requeue {
+		// A short RequeueAfter means the controller has more immediate work to do
+		// (e.g. finalizer add). Zero means reconciliation is complete.
+		// A longer RequeueAfter means waiting for async work (download, startup).
+		if result.RequeueAfter <= 0 || result.RequeueAfter > time.Second {
 			return nil
 		}
 	}
@@ -137,12 +139,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("adds the finalizer and sets phase to Pending on first reconcile", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("reconciling")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying finalizer was added")
@@ -173,12 +175,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("creates Deployment, Service, and ServiceAccount", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("reconciling")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying Deployment was created")
@@ -213,12 +215,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("creates the default-deny NetworkPolicy", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("reconciling")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying NetworkPolicy was created")
@@ -246,12 +248,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("creates Secret and ConfigMap in the api-keys namespace", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("reconciling")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			apiKeysNS := testConfig().APIKeysNamespace
@@ -283,12 +285,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("cleans up cross-namespace resources on deletion", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("first reconcile (creates resources and adds finalizer)")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			apiKeysNS := testConfig().APIKeysNamespace
@@ -306,7 +308,7 @@ var _ = Describe("LLMModel Controller", func() {
 			Expect(k8sClient.Delete(ctx, fetched)).To(Succeed())
 
 			By("reconciling the deletion")
-			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying cross-namespace Secret was deleted")
@@ -346,12 +348,12 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("deletes and recreates the Deployment when model name changes", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			By("first reconcile")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("capturing the initial deployment UID")
@@ -368,7 +370,7 @@ var _ = Describe("LLMModel Controller", func() {
 			Expect(k8sClient.Update(ctx, fetched)).To(Succeed())
 
 			By("reconciling after breaking change")
-			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying the Deployment was deleted (not yet recreated)")
@@ -384,7 +386,7 @@ var _ = Describe("LLMModel Controller", func() {
 			}
 
 			By("reconciling again to recreate the Deployment")
-			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying the new Deployment has a different hash")
@@ -411,7 +413,7 @@ var _ = Describe("LLMModel Controller", func() {
 		It("still creates Deployment and NetworkPolicy when endpoints are disabled", func() {
 			By("creating the LLMModel with both endpoints disabled")
 			falseVal := false
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			model.Spec.Endpoints = llmv1alpha1.EndpointSpec{
 				External: llmv1alpha1.ExternalEndpointSpec{Enabled: &falseVal},
 				Internal: llmv1alpha1.InternalEndpointSpec{Enabled: &falseVal},
@@ -420,7 +422,7 @@ var _ = Describe("LLMModel Controller", func() {
 
 			By("reconciling")
 			r := newReconciler()
-			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying Deployment still exists")
@@ -450,14 +452,14 @@ var _ = Describe("LLMModel Controller", func() {
 
 		It("reconciles multiple times without error", func() {
 			By("creating the LLMModel")
-			model := newMinimalModel(modelName, testNamespace)
+			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
 
 			r := newReconciler()
 
 			By("reconciling three times")
 			for i := 0; i < 3; i++ {
-				err := reconcileUntilStable(r, ctx, reconcileRequest(modelName, testNamespace))
+				err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 				Expect(err).NotTo(HaveOccurred(), "reconcile %d should not error", i+1)
 			}
 
