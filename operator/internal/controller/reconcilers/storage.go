@@ -13,10 +13,13 @@ import (
 const (
 	modelStorageVolumeName = "model-storage"
 	modelCachePath         = "/model-cache"
-	hfInitContainerImage   = "huggingface/transformers:latest"
+	hfInitContainerImage = "python:3.11-slim"
 
 	hfDownloadScriptTemplate = `#!/bin/sh
 set -e
+pip install --quiet 'huggingface_hub[cli,hf_transfer]'
+export HF_HUB_ENABLE_HF_TRANSFER=1
+
 LOCK_FILE="/model-cache/.locked"
 TIMEOUT=3600
 

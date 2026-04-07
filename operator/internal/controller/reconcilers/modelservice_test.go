@@ -70,7 +70,7 @@ func storageWithInitContainer() *StorageResult {
 	s := defaultStorage()
 	c := corev1.Container{
 		Name:    "model-downloader",
-		Image:   "huggingface/transformers:latest",
+		Image:   "python:3.11-slim",
 		Command: []string{"/bin/sh", "-c", "echo downloading"},
 	}
 	s.InitContainer = &c
