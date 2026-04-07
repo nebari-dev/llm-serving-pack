@@ -13,7 +13,7 @@ import (
 func defaultRoutingModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-model",
+			Name:      testAuthModelName,
 			Namespace: "test-ns",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -121,7 +121,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				if backendRef["kind"] != "InferencePool" {
 					t.Errorf("expected kind InferencePool, got %q", backendRef["kind"])
 				}
-				if backendRef["name"] != "my-model" {
+				if backendRef["name"] != testAuthModelName {
 					t.Errorf("expected backendRef name my-model, got %q", backendRef["name"])
 				}
 			},
@@ -219,7 +219,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				if backendRef["kind"] != "InferencePool" {
 					t.Errorf("expected kind InferencePool, got %q", backendRef["kind"])
 				}
-				if backendRef["name"] != "my-model" {
+				if backendRef["name"] != testAuthModelName {
 					t.Errorf("expected backendRef name my-model, got %q", backendRef["name"])
 				}
 			},
@@ -281,10 +281,10 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 					if labels["app.kubernetes.io/managed-by"] != "nebari-llm-operator" {
 						t.Errorf("%s: expected managed-by label, got %q", route.name, labels["app.kubernetes.io/managed-by"])
 					}
-					if labels["app.kubernetes.io/instance"] != "my-model" {
+					if labels["app.kubernetes.io/instance"] != testAuthModelName {
 						t.Errorf("%s: expected instance label my-model, got %q", route.name, labels["app.kubernetes.io/instance"])
 					}
-					if labels["llm.nebari.dev/model"] != "my-model" {
+					if labels["llm.nebari.dev/model"] != testAuthModelName {
 						t.Errorf("%s: expected model label my-model, got %q", route.name, labels["llm.nebari.dev/model"])
 					}
 				}
