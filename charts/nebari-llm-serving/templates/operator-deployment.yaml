@@ -20,7 +20,7 @@ spec:
       containers:
         - name: manager
           image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
           env:
             - name: LLM_BASE_DOMAIN
               value: {{ .Values.platform.baseDomain | quote }}
