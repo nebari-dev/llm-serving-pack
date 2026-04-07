@@ -25,7 +25,7 @@ func defaultNetworkPolicyConfig() *config.OperatorConfig {
 func defaultNetworkPolicyModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "my-model",
+			Name:      testAuthModelName,
 			Namespace: "model-ns",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -120,10 +120,10 @@ func TestBuildNetworkPolicy(t *testing.T) {
 			cfg:   defaultNetworkPolicyConfig(),
 			check: func(t *testing.T, np *networkingv1.NetworkPolicy) {
 				sel := np.Spec.PodSelector.MatchLabels
-				if sel["app.kubernetes.io/instance"] != "my-model" {
+				if sel["app.kubernetes.io/instance"] != testAuthModelName {
 					t.Errorf("expected podSelector app.kubernetes.io/instance=my-model, got %v", sel)
 				}
-				if sel["llm.nebari.dev/model"] != "my-model" {
+				if sel["llm.nebari.dev/model"] != testAuthModelName {
 					t.Errorf("expected podSelector llm.nebari.dev/model=my-model, got %v", sel)
 				}
 			},

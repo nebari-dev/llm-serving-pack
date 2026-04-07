@@ -446,12 +446,12 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 }
 
 // reconcileRoutingResources creates or updates AIGatewayRoute resources.
-func (r *LLMModelReconciler) reconcileRoutingResources( //nolint:unparam // error return kept for future extensibility
+func (r *LLMModelReconciler) reconcileRoutingResources(
 	ctx context.Context,
 	log controllerLogger,
 	model *llmv1alpha1.LLMModel,
 	routing *reconcilers.RoutingResources,
-) error {
+) error { //nolint:unparam // error return kept for future extensibility
 	if routing.ExternalRoute != nil {
 		routing.ExternalRoute.SetNamespace(model.Namespace)
 		if err := r.createOrUpdateUnstructured(ctx, routing.ExternalRoute); err != nil {
@@ -468,11 +468,11 @@ func (r *LLMModelReconciler) reconcileRoutingResources( //nolint:unparam // erro
 }
 
 // reconcileSecurityPolicies creates or updates SecurityPolicy resources.
-func (r *LLMModelReconciler) reconcileSecurityPolicies( //nolint:unparam // error return kept for future extensibility
+func (r *LLMModelReconciler) reconcileSecurityPolicies(
 	ctx context.Context,
 	log controllerLogger,
 	auth *reconcilers.AuthResources,
-) error {
+) error { //nolint:unparam // error return kept for future extensibility
 	if auth.ExternalSecurityPolicy != nil {
 		if err := r.createOrUpdateUnstructured(ctx, auth.ExternalSecurityPolicy); err != nil {
 			log.Error(err, "failed to reconcile external SecurityPolicy - CRD may not be installed, skipping")

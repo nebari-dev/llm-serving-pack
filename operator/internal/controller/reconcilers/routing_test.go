@@ -10,10 +10,10 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
-func defaultRoutingModel(name string) *llmv1alpha1.LLMModel {
+func defaultRoutingModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      "my-model",
 			Namespace: "test-ns",
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
@@ -48,7 +48,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 	}{
 		{
 			name:  "External enabled: correct apiVersion, kind, name suffix -external",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -76,7 +76,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		// Hostname-based routing will be addressed in a future version.
 		{
 			name:  "External: parentRef points to external gateway from config",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -98,7 +98,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		},
 		{
 			name:  "External: backendRef references InferencePool with correct group/kind/name",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -131,7 +131,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		{
 			name: "External disabled (enabled=false): ExternalRoute is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel("my-model")
+				m := defaultRoutingModel()
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -147,7 +147,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		},
 		{
 			name:  "Internal enabled: AIGatewayRoute with name suffix -internal",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -174,7 +174,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		// NOTE: Internal hostname test removed - AIGatewayRoute does not support hostnames.
 		{
 			name:  "Internal: parentRef points to internal gateway from config",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -196,7 +196,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		},
 		{
 			name:  "Internal: backendRef references same InferencePool",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
@@ -227,7 +227,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		{
 			name: "Internal disabled (enabled=false): InternalRoute is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel("my-model")
+				m := defaultRoutingModel()
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -244,7 +244,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		{
 			name: "Both disabled: both routes nil, no error",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel("my-model")
+				m := defaultRoutingModel()
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
@@ -264,7 +264,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		},
 		{
 			name:  "Labels: StandardLabels on both routes",
-			model: defaultRoutingModel("my-model"),
+			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {

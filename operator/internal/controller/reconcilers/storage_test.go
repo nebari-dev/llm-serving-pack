@@ -15,9 +15,9 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-func makeHFModel(name string, storage llmv1alpha1.StorageSpec) *llmv1alpha1.LLMModel {
+func makeHFModel(storage llmv1alpha1.StorageSpec) *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: "devstral-32b"},
 		Spec: llmv1alpha1.LLMModelSpec{
 			Model: llmv1alpha1.ModelSpec{
 				Name:    "mistralai/Devstral-Small-2505",
@@ -42,7 +42,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 	}{
 		{
 			name: "HF + PVC returns PVC with correct name and size",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
 			}),
@@ -96,7 +96,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		{
 			name: "HF + PVC + custom storageClassName",
 			model: func() *llmv1alpha1.LLMModel {
-				m := makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type:             llmv1alpha1.StorageTypePVC,
 					Size:             "200Gi",
 					StorageClassName: "fast-ssd",
@@ -117,7 +117,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		},
 		{
 			name: "HF + emptyDir no PVC, emptyDir volume with sizeLimit",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypeEmptyDir,
 				Size: "200Gi",
 			}),
@@ -150,7 +150,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		{
 			name: "HF + authSecretName sets HF_TOKEN env var",
 			model: func() *llmv1alpha1.LLMModel {
-				m := makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type: llmv1alpha1.StorageTypePVC,
 					Size: "200Gi",
 				})
@@ -180,7 +180,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		},
 		{
 			name: "HF without authSecretName has no HF_TOKEN env var",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
 			}),
@@ -201,7 +201,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		{
 			name: "HF + revision includes --revision in script",
 			model: func() *llmv1alpha1.LLMModel {
-				m := makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type: llmv1alpha1.StorageTypePVC,
 					Size: "200Gi",
 				})
@@ -223,7 +223,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		},
 		{
 			name: "HF without revision has no --revision in script",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
 			}),
@@ -243,7 +243,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		{
 			name: "HF + preload=false has volumes but no init container",
 			model: func() *llmv1alpha1.LLMModel {
-				m := makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type: llmv1alpha1.StorageTypePVC,
 					Size: "200Gi",
 				})
@@ -268,7 +268,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		{
 			name: "HF + preload=nil defaults to creating init container",
 			model: func() *llmv1alpha1.LLMModel {
-				m := makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type: llmv1alpha1.StorageTypePVC,
 					Size: "200Gi",
 				})
@@ -384,7 +384,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		},
 		{
 			name: "ModelPath is always /model-cache",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
 			}),
@@ -399,7 +399,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 		},
 		{
 			name: "init container lock script contains noclobber set -C",
-			model: makeHFModel("devstral-32b", llmv1alpha1.StorageSpec{
+			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
 			}),

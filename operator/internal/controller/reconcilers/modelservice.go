@@ -47,13 +47,13 @@ func BuildModelServiceResources(model *llmv1alpha1.LLMModel, storage *StorageRes
 	}, nil
 }
 
-func buildDeployment( //nolint:unparam // error return kept for consistency with other build functions
+func buildDeployment(
 	model *llmv1alpha1.LLMModel,
 	storage *StorageResult,
 	cfg *config.OperatorConfig,
 	labels map[string]string,
 	saName string,
-) (*appsv1.Deployment, error) {
+) (*appsv1.Deployment, error) { //nolint:unparam // error return kept for consistency with other build functions
 	replicas := int32(1)
 	if model.Spec.Serving.Replicas != nil {
 		replicas = *model.Spec.Serving.Replicas
