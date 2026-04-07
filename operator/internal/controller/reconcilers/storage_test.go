@@ -32,7 +32,7 @@ func makeHFModel(name string, storage llmv1alpha1.StorageSpec) *llmv1alpha1.LLMM
 	}
 }
 
-func TestBuildStorageSpec(t *testing.T) {
+func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {

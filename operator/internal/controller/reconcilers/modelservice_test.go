@@ -11,6 +11,8 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
+const testHTTPPortName = "http"
+
 func int32Ptr(i int32) *int32 {
 	return &i
 }
@@ -46,10 +48,10 @@ func defaultModel(name string) *llmv1alpha1.LLMModel {
 
 func defaultStorage() *StorageResult {
 	return &StorageResult{
-		ModelPath: "/model-cache",
+		ModelPath: modelCachePath,
 		Volumes: []corev1.Volume{
 			{
-				Name: "model-storage",
+				Name: modelStorageVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					EmptyDir: &corev1.EmptyDirVolumeSource{},
 				},
@@ -57,8 +59,8 @@ func defaultStorage() *StorageResult {
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{
-				Name:      "model-storage",
-				MountPath: "/model-cache",
+				Name:      modelStorageVolumeName,
+				MountPath: modelCachePath,
 			},
 		},
 	}
@@ -75,7 +77,7 @@ func storageWithInitContainer() *StorageResult {
 	return s
 }
 
-func TestBuildModelServiceResources(t *testing.T) {
+func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {
@@ -490,7 +492,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 				volumes := result.Deployment.Spec.Template.Spec.Volumes
 				found := false
 				for _, v := range volumes {
-					if v.Name == "model-storage" {
+					if v.Name == modelStorageVolumeName {
 						found = true
 					}
 				}
@@ -501,7 +503,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 				mounts := result.Deployment.Spec.Template.Spec.Containers[0].VolumeMounts
 				foundMount := false
 				for _, m := range mounts {
-					if m.Name == "model-storage" && m.MountPath == "/model-cache" {
+					if m.Name == modelStorageVolumeName && m.MountPath == modelCachePath {
 						foundMount = true
 					}
 				}
@@ -550,7 +552,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 				if svc.Spec.Ports[0].Port != 8000 {
 					t.Errorf("expected port 8000, got %d", svc.Spec.Ports[0].Port)
 				}
-				if svc.Spec.Ports[0].Name != "http" {
+				if svc.Spec.Ports[0].Name != testHTTPPortName {
 					t.Errorf("expected port name 'http', got %q", svc.Spec.Ports[0].Name)
 				}
 			},
@@ -614,7 +616,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 					t.Fatal("expected podMetricsEndpoints to be set")
 				}
 				ep := endpoints[0].(map[string]interface{})
-				if ep["port"] != "http" {
+				if ep["port"] != testHTTPPortName {
 					t.Errorf("expected endpoint port 'http', got %v", ep["port"])
 				}
 				if ep["path"] != "/metrics" {
@@ -716,7 +718,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 				return m
 			}(),
 			storage: &StorageResult{
-				ModelPath:    "/model-cache",
+				ModelPath:    modelCachePath,
 				Volumes:      defaultStorage().Volumes,
 				VolumeMounts: defaultStorage().VolumeMounts,
 			},
@@ -726,7 +728,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				args := result.Deployment.Spec.Template.Spec.Containers[0].Args
-				assertArgValue(t, args, "--model", "/model-cache")
+				assertArgValue(t, args, "--model", modelCachePath)
 			},
 		},
 		{
@@ -792,7 +794,7 @@ func TestBuildModelServiceResources(t *testing.T) {
 				ports := result.Deployment.Spec.Template.Spec.Containers[0].Ports
 				found := false
 				for _, p := range ports {
-					if p.ContainerPort == 8000 && p.Name == "http" {
+					if p.ContainerPort == 8000 && p.Name == testHTTPPortName {
 						found = true
 					}
 				}

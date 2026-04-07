@@ -69,7 +69,7 @@ type LLMModelReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile implements the main reconciliation loop for LLMModel resources.
-func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) { //nolint:gocyclo // sequential reconciliation steps
 	log := logf.FromContext(ctx)
 
 	// 1. Fetch LLMModel

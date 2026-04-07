@@ -37,7 +37,7 @@ func defaultRoutingConfig() *config.OperatorConfig {
 	}
 }
 
-func TestBuildRoutingResources(t *testing.T) {
+func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {

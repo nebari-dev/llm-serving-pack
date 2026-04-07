@@ -75,11 +75,11 @@ func extractToken(r *http.Request, cookiePrefix string) (string, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader != "" {
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			return "", fmt.Errorf("Authorization header must use Bearer scheme")
+			return "", fmt.Errorf("authorization header must use Bearer scheme")
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		if token == "" {
-			return "", fmt.Errorf("Bearer token is empty")
+			return "", fmt.Errorf("bearer token is empty")
 		}
 		return token, nil
 	}

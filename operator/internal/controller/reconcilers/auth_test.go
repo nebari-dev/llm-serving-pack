@@ -9,11 +9,18 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
+const (
+	testAuthModelName = "my-model"
+	testAuthNamespace = "test-ns"
+	testAuthAPIKeysNS = "llm-api-keys"
+	testAuthSAName    = "nebari-llm-operator"
+)
+
 func defaultAuthModel(name string) *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "test-ns",
+			Namespace: testAuthNamespace,
 		},
 		Spec: llmv1alpha1.LLMModelSpec{
 			Model: llmv1alpha1.ModelSpec{
@@ -34,11 +41,11 @@ func defaultAuthConfig() *config.OperatorConfig {
 		OIDCIssuerURL:       "https://oidc.example.com",
 		OIDCGroupsClaim:     "groups",
 		OIDCAudience:        "my-audience",
-		APIKeysNamespace:    "llm-api-keys",
+		APIKeysNamespace:    testAuthAPIKeysNS,
 	}
 }
 
-func TestBuildAuthResources(t *testing.T) {
+func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {
@@ -49,7 +56,7 @@ func TestBuildAuthResources(t *testing.T) {
 	}{
 		{
 			name:  "API key Secret: correct name and namespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -58,17 +65,17 @@ func TestBuildAuthResources(t *testing.T) {
 				if result.APIKeySecret == nil {
 					t.Fatal("expected APIKeySecret to be non-nil")
 				}
-				if result.APIKeySecret.Name != APIKeySecretName("my-model") {
-					t.Errorf("expected name %q, got %q", APIKeySecretName("my-model"), result.APIKeySecret.Name)
+				if result.APIKeySecret.Name != APIKeySecretName(testAuthModelName) {
+					t.Errorf("expected name %q, got %q", APIKeySecretName(testAuthModelName), result.APIKeySecret.Name)
 				}
-				if result.APIKeySecret.Namespace != "llm-api-keys" {
-					t.Errorf("expected namespace llm-api-keys, got %q", result.APIKeySecret.Namespace)
+				if result.APIKeySecret.Namespace != testAuthAPIKeysNS {
+					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.APIKeySecret.Namespace)
 				}
 			},
 		},
 		{
 			name:  "API key Secret: empty data and Opaque type",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -84,7 +91,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "API key ConfigMap: correct name and namespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -93,17 +100,17 @@ func TestBuildAuthResources(t *testing.T) {
 				if result.APIKeyMetadataCM == nil {
 					t.Fatal("expected APIKeyMetadataCM to be non-nil")
 				}
-				if result.APIKeyMetadataCM.Name != APIKeyMetadataConfigMapName("my-model") {
-					t.Errorf("expected name %q, got %q", APIKeyMetadataConfigMapName("my-model"), result.APIKeyMetadataCM.Name)
+				if result.APIKeyMetadataCM.Name != APIKeyMetadataConfigMapName(testAuthModelName) {
+					t.Errorf("expected name %q, got %q", APIKeyMetadataConfigMapName(testAuthModelName), result.APIKeyMetadataCM.Name)
 				}
-				if result.APIKeyMetadataCM.Namespace != "llm-api-keys" {
-					t.Errorf("expected namespace llm-api-keys, got %q", result.APIKeyMetadataCM.Namespace)
+				if result.APIKeyMetadataCM.Namespace != testAuthAPIKeysNS {
+					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.APIKeyMetadataCM.Namespace)
 				}
 			},
 		},
 		{
 			name:  "API key ConfigMap: empty data",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -116,7 +123,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "Labels: Secret and ConfigMap include model-name and model-namespace labels",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -129,21 +136,21 @@ func TestBuildAuthResources(t *testing.T) {
 					{"Secret", result.APIKeySecret.Labels},
 					{"ConfigMap", result.APIKeyMetadataCM.Labels},
 				} {
-					if resource.labels["llm.nebari.dev/model-name"] != "my-model" {
-						t.Errorf("%s: expected model-name label my-model, got %q", resource.name, resource.labels["llm.nebari.dev/model-name"])
+					if resource.labels["llm.nebari.dev/model-name"] != testAuthModelName {
+						t.Errorf("%s: expected model-name label %s, got %q", resource.name, testAuthModelName, resource.labels["llm.nebari.dev/model-name"])
 					}
-					if resource.labels["llm.nebari.dev/model-namespace"] != "test-ns" {
-						t.Errorf("%s: expected model-namespace label test-ns, got %q", resource.name, resource.labels["llm.nebari.dev/model-namespace"])
+					if resource.labels["llm.nebari.dev/model-namespace"] != testAuthNamespace {
+						t.Errorf("%s: expected model-namespace label %s, got %q", resource.name, testAuthNamespace, resource.labels["llm.nebari.dev/model-namespace"])
 					}
-					if resource.labels["app.kubernetes.io/managed-by"] != "nebari-llm-operator" {
-						t.Errorf("%s: expected managed-by label, got %q", resource.name, resource.labels["app.kubernetes.io/managed-by"])
+					if resource.labels["app.kubernetes.io/managed-by"] != testAuthSAName {
+						t.Errorf("%s: expected managed-by label %s, got %q", resource.name, testAuthSAName, resource.labels["app.kubernetes.io/managed-by"])
 					}
 				}
 			},
 		},
 		{
 			name:  "ReferenceGrant: correct apiVersion and kind",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -162,26 +169,26 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "ReferenceGrant: namespace is cfg.APIKeysNamespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.ReferenceGrant.GetNamespace() != "llm-api-keys" {
-					t.Errorf("expected namespace llm-api-keys, got %q", result.ReferenceGrant.GetNamespace())
+				if result.ReferenceGrant.GetNamespace() != testAuthAPIKeysNS {
+					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.ReferenceGrant.GetNamespace())
 				}
 			},
 		},
 		{
 			name:  "ReferenceGrant: name includes both model name and namespace for uniqueness",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				expectedName := "my-model-test-ns-ref-grant"
+				expectedName := testAuthModelName + "-" + testAuthNamespace + "-ref-grant"
 				if result.ReferenceGrant.GetName() != expectedName {
 					t.Errorf("expected name %q, got %q", expectedName, result.ReferenceGrant.GetName())
 				}
@@ -189,7 +196,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "ReferenceGrant: correct from (SecurityPolicy in model namespace)",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -207,14 +214,14 @@ func TestBuildAuthResources(t *testing.T) {
 				if fromEntry["kind"] != "SecurityPolicy" {
 					t.Errorf("expected from kind SecurityPolicy, got %q", fromEntry["kind"])
 				}
-				if fromEntry["namespace"] != "test-ns" {
-					t.Errorf("expected from namespace test-ns, got %q", fromEntry["namespace"])
+				if fromEntry["namespace"] != testAuthNamespace {
+					t.Errorf("expected from namespace %s, got %q", testAuthNamespace, fromEntry["namespace"])
 				}
 			},
 		},
 		{
 			name:  "ReferenceGrant: correct to (Secret by name in api-keys namespace)",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -232,14 +239,14 @@ func TestBuildAuthResources(t *testing.T) {
 				if toEntry["kind"] != "Secret" {
 					t.Errorf("expected to kind Secret, got %q", toEntry["kind"])
 				}
-				if toEntry["name"] != APIKeySecretName("my-model") {
-					t.Errorf("expected to name %q, got %q", APIKeySecretName("my-model"), toEntry["name"])
+				if toEntry["name"] != APIKeySecretName(testAuthModelName) {
+					t.Errorf("expected to name %q, got %q", APIKeySecretName(testAuthModelName), toEntry["name"])
 				}
 			},
 		},
 		{
 			name:  "External SecurityPolicy: correct targetRef to HTTPRoute <name>-external",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -260,14 +267,14 @@ func TestBuildAuthResources(t *testing.T) {
 				if targetRef["kind"] != "HTTPRoute" {
 					t.Errorf("expected kind HTTPRoute, got %q", targetRef["kind"])
 				}
-				if targetRef["name"] != "my-model-external" {
-					t.Errorf("expected name my-model-external, got %q", targetRef["name"])
+				if targetRef["name"] != testAuthModelName+"-external" {
+					t.Errorf("expected name %s-external, got %q", testAuthModelName, targetRef["name"])
 				}
 			},
 		},
 		{
 			name:  "External SecurityPolicy: apiKeyAuth credentialRef to Secret in api-keys namespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -286,11 +293,11 @@ func TestBuildAuthResources(t *testing.T) {
 				if credRef["kind"] != "Secret" {
 					t.Errorf("expected kind Secret, got %q", credRef["kind"])
 				}
-				if credRef["name"] != APIKeySecretName("my-model") {
-					t.Errorf("expected name %q, got %q", APIKeySecretName("my-model"), credRef["name"])
+				if credRef["name"] != APIKeySecretName(testAuthModelName) {
+					t.Errorf("expected name %q, got %q", APIKeySecretName(testAuthModelName), credRef["name"])
 				}
-				if credRef["namespace"] != "llm-api-keys" {
-					t.Errorf("expected namespace llm-api-keys, got %q", credRef["namespace"])
+				if credRef["namespace"] != testAuthAPIKeysNS {
+					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, credRef["namespace"])
 				}
 			},
 		},
@@ -298,7 +305,7 @@ func TestBuildAuthResources(t *testing.T) {
 		// Tests for these fields will be added when minimum EG version is bumped.
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -330,7 +337,7 @@ func TestBuildAuthResources(t *testing.T) {
 		{
 			name: "External disabled: ExternalSecurityPolicy is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel("my-model")
+				m := defaultAuthModel(testAuthModelName)
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -346,7 +353,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "Internal SecurityPolicy: correct targetRef to HTTPRoute <name>-internal",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -367,14 +374,14 @@ func TestBuildAuthResources(t *testing.T) {
 				if targetRef["kind"] != "HTTPRoute" {
 					t.Errorf("expected kind HTTPRoute, got %q", targetRef["kind"])
 				}
-				if targetRef["name"] != "my-model-internal" {
-					t.Errorf("expected name my-model-internal, got %q", targetRef["name"])
+				if targetRef["name"] != testAuthModelName+"-internal" {
+					t.Errorf("expected name %s-internal, got %q", testAuthModelName, targetRef["name"])
 				}
 			},
 		},
 		{
 			name:  "Internal SecurityPolicy: JWT provider with correct issuer and JWKS URI",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -402,7 +409,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "Internal SecurityPolicy: audiences set when OIDCAudience is non-empty",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -424,7 +431,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "Internal SecurityPolicy: audiences omitted when OIDCAudience is empty",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg: func() *config.OperatorConfig {
 				cfg := defaultAuthConfig()
 				cfg.OIDCAudience = ""
@@ -445,7 +452,7 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "Internal SecurityPolicy: claimToHeaders maps groups and username",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
@@ -482,7 +489,7 @@ func TestBuildAuthResources(t *testing.T) {
 		{
 			name: "Internal disabled: InternalSecurityPolicy is nil",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel("my-model")
+				m := defaultAuthModel(testAuthModelName)
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
 			}(),
@@ -499,7 +506,7 @@ func TestBuildAuthResources(t *testing.T) {
 		{
 			name: "Both disabled: both SecurityPolicies nil, but Secret/ConfigMap/ReferenceGrant still created",
 			model: func() *llmv1alpha1.LLMModel {
-				m := defaultAuthModel("my-model")
+				m := defaultAuthModel(testAuthModelName)
 				m.Spec.Endpoints.External.Enabled = boolPtr(false)
 				m.Spec.Endpoints.Internal.Enabled = boolPtr(false)
 				return m
@@ -528,33 +535,33 @@ func TestBuildAuthResources(t *testing.T) {
 		},
 		{
 			name:  "External SecurityPolicy: correct name and namespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.ExternalSecurityPolicy.GetName() != "my-model-external-auth" {
-					t.Errorf("expected name my-model-external-auth, got %q", result.ExternalSecurityPolicy.GetName())
+				if result.ExternalSecurityPolicy.GetName() != testAuthModelName+"-external-auth" {
+					t.Errorf("expected name %s-external-auth, got %q", testAuthModelName, result.ExternalSecurityPolicy.GetName())
 				}
-				if result.ExternalSecurityPolicy.GetNamespace() != "test-ns" {
-					t.Errorf("expected namespace test-ns, got %q", result.ExternalSecurityPolicy.GetNamespace())
+				if result.ExternalSecurityPolicy.GetNamespace() != testAuthNamespace {
+					t.Errorf("expected namespace %s, got %q", testAuthNamespace, result.ExternalSecurityPolicy.GetNamespace())
 				}
 			},
 		},
 		{
 			name:  "Internal SecurityPolicy: correct name and namespace",
-			model: defaultAuthModel("my-model"),
+			model: defaultAuthModel(testAuthModelName),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				if result.InternalSecurityPolicy.GetName() != "my-model-internal-auth" {
-					t.Errorf("expected name my-model-internal-auth, got %q", result.InternalSecurityPolicy.GetName())
+				if result.InternalSecurityPolicy.GetName() != testAuthModelName+"-internal-auth" {
+					t.Errorf("expected name %s-internal-auth, got %q", testAuthModelName, result.InternalSecurityPolicy.GetName())
 				}
-				if result.InternalSecurityPolicy.GetNamespace() != "test-ns" {
-					t.Errorf("expected namespace test-ns, got %q", result.InternalSecurityPolicy.GetNamespace())
+				if result.InternalSecurityPolicy.GetNamespace() != testAuthNamespace {
+					t.Errorf("expected namespace %s, got %q", testAuthNamespace, result.InternalSecurityPolicy.GetNamespace())
 				}
 			},
 		},
