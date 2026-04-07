@@ -32,14 +32,14 @@ keyManager:
   enabled: true
   image:
     repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager
-    tag: v0.1.0
+    tag: latest
   auditInterval: 5m
   oidcUserinfoURL: ""
 
 operator:
   image:
     repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
-    tag: v0.1.0
+    tag: latest
 
 # Namespace where API keys (Secrets) are stored
 apiKeysNamespace: llm-api-keys

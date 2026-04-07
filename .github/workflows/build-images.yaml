@@ -3,32 +3,82 @@ name: Build Images
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/nebari-dev/nebari-llm-serving-pack
 
 jobs:
   build-operator:
-    name: Build operator image
+    name: Build and push operator image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build operator image
-        run: docker build -f operator/Dockerfile -t llm-operator:dev operator/
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/operator
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push operator image
+        uses: docker/build-push-action@v6
+        with:
+          context: operator/
+          file: operator/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   build-key-manager:
-    name: Build key-manager image
+    name: Build and push key-manager image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build key-manager image
-        run: docker build -f key-manager/Dockerfile -t llm-key-manager:dev .
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  build-mock-vllm:
-    name: Build mock-vllm image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/key-manager
+          tags: |
+            type=sha
+            type=ref,event=branch
+            type=semver,pattern=v{{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build mock-vllm image
-        run: docker build -t mock-vllm:dev dev/mock-vllm/
+      - name: Build and push key-manager image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: key-manager/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
