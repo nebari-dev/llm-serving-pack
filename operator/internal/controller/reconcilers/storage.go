@@ -11,36 +11,9 @@ import (
 )
 
 const (
-	modelStorageVolumeName = "model-storage"
-	modelCachePath         = "/model-cache"
-	hfInitContainerImage = "python:3.11-slim"
-
-	hfDownloadScriptTemplate = `#!/bin/sh
-set -e
-pip install --quiet --upgrade 'huggingface_hub[cli,hf_transfer]'
-export HF_HUB_ENABLE_HF_TRANSFER=1
-
-LOCK_FILE="/model-cache/.locked"
-TIMEOUT=3600
-
-# Try to acquire lock (noclobber = atomic create, fails if file exists)
-while ! (set -C; echo "$(date +%%s)" > "$LOCK_FILE") 2>/dev/null; do
-  # Lock exists - check for stale lock
-  lock_time=$(cat "$LOCK_FILE" 2>/dev/null || echo 0)
-  now=$(date +%%s)
-  if [ $((now - lock_time)) -gt $TIMEOUT ]; then
-    echo "Stale lock detected (age: $((now - lock_time))s), taking over"
-    rm -f "$LOCK_FILE"
-    continue
-  fi
-  echo "Waiting for another pod to finish downloading..."
-  sleep 10
-done
-
-# We hold the lock - download (idempotent, checksums existing files)
-huggingface-cli download %s --local-dir /model-cache %s
-rm -f "$LOCK_FILE"
-`
+	modelStorageVolumeName   = "model-storage"
+	modelCachePath           = "/model-cache"
+	hfInitContainerImage     = "ghcr.io/nebari-dev/model-downloader:latest"
 )
 
 // StorageResult holds the storage-related Kubernetes resources for an LLMModel.
@@ -160,18 +133,15 @@ func buildPVC(name string, storage llmv1alpha1.StorageSpec) (*corev1.PersistentV
 }
 
 func buildHFInitContainer(model *llmv1alpha1.LLMModel) corev1.Container {
-	modelName := model.Spec.Model.Name
-	revisionFlag := ""
+	args := []string{model.Spec.Model.Name, "--local-dir", modelCachePath}
 	if model.Spec.Model.Revision != "" {
-		revisionFlag = "--revision " + model.Spec.Model.Revision
+		args = append(args, "--revision", model.Spec.Model.Revision)
 	}
 
-	script := fmt.Sprintf(hfDownloadScriptTemplate, modelName, revisionFlag)
-
 	container := corev1.Container{
-		Name:    "model-downloader",
-		Image:   hfInitContainerImage,
-		Command: []string{"/bin/sh", "-c", script},
+		Name:  "model-downloader",
+		Image: hfInitContainerImage,
+		Args:  args,
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      modelStorageVolumeName,

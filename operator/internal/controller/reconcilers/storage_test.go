@@ -1,7 +1,6 @@
 package reconcilers
 
 import (
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -83,13 +82,13 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				if !foundMount {
 					t.Error("expected VolumeMount 'model-storage' at /model-cache")
 				}
-				// Check init container exists with lock script
+				// Check init container exists with correct args
 				if result.InitContainer == nil {
 					t.Fatal("expected init container to be non-nil")
 				}
-				script := strings.Join(result.InitContainer.Command[2:], " ")
-				if !strings.Contains(script, "huggingface-cli download") {
-					t.Error("expected init container script to contain 'huggingface-cli download'")
+				args := result.InitContainer.Args
+				if len(args) < 3 || args[0] != "mistralai/Devstral-Small-2505" || args[1] != "--local-dir" || args[2] != "/model-cache" {
+					t.Errorf("expected args [model --local-dir /model-cache], got %v", args)
 				}
 			},
 		},
@@ -199,7 +198,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 			},
 		},
 		{
-			name: "HF + revision includes --revision in script",
+			name: "HF + revision includes --revision in args",
 			model: func() *llmv1alpha1.LLMModel {
 				m := makeHFModel(llmv1alpha1.StorageSpec{
 					Type: llmv1alpha1.StorageTypePVC,
@@ -215,14 +214,20 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				if result.InitContainer == nil {
 					t.Fatal("expected init container to be non-nil")
 				}
-				script := strings.Join(result.InitContainer.Command[2:], " ")
-				if !strings.Contains(script, "--revision abc123def456") {
-					t.Errorf("expected script to contain '--revision abc123def456', got: %s", script)
+				args := result.InitContainer.Args
+				foundRevision := false
+				for i, a := range args {
+					if a == "--revision" && i+1 < len(args) && args[i+1] == "abc123def456" {
+						foundRevision = true
+					}
+				}
+				if !foundRevision {
+					t.Errorf("expected args to contain '--revision abc123def456', got %v", args)
 				}
 			},
 		},
 		{
-			name: "HF without revision has no --revision in script",
+			name: "HF without revision has no --revision in args",
 			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
@@ -234,9 +239,10 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				if result.InitContainer == nil {
 					t.Fatal("expected init container to be non-nil")
 				}
-				script := strings.Join(result.InitContainer.Command[2:], " ")
-				if strings.Contains(script, "--revision") {
-					t.Errorf("expected no --revision in script, got: %s", script)
+				for _, a := range result.InitContainer.Args {
+					if a == "--revision" {
+						t.Errorf("expected no --revision in args, got %v", result.InitContainer.Args)
+					}
 				}
 			},
 		},
@@ -398,7 +404,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 			},
 		},
 		{
-			name: "init container lock script contains noclobber set -C",
+			name: "init container uses args not shell script",
 			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
 				Size: "200Gi",
@@ -410,9 +416,11 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 				if result.InitContainer == nil {
 					t.Fatal("expected init container to be non-nil")
 				}
-				script := strings.Join(result.InitContainer.Command[2:], " ")
-				if !strings.Contains(script, "set -C") {
-					t.Errorf("expected lock script to contain 'set -C' (noclobber), got: %s", script)
+				if len(result.InitContainer.Command) != 0 {
+					t.Errorf("expected no Command (uses entrypoint from image), got %v", result.InitContainer.Command)
+				}
+				if len(result.InitContainer.Args) == 0 {
+					t.Error("expected Args to be set")
 				}
 			},
 		},
