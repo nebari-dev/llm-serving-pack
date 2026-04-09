@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	modelStorageVolumeName   = "model-storage"
-	modelCachePath           = "/model-cache"
-	hfInitContainerImage     = "ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest"
+	modelStorageVolumeName = "model-storage"
+	modelCachePath         = "/model-cache"
+	hfInitContainerImage   = "ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest"
 )
 
 // StorageResult holds the storage-related Kubernetes resources for an LLMModel.

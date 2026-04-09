@@ -25,17 +25,17 @@ import (
 // OperatorConfig holds all pack-level configuration parsed from environment variables.
 // It is loaded once at startup and passed to reconcilers.
 type OperatorConfig struct {
-	BaseDomain          string // LLM_BASE_DOMAIN (required)
-	ExternalGatewayName string // LLM_EXTERNAL_GATEWAY_NAME (required)
-	ExternalGatewayNS   string // LLM_EXTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
-	InternalGatewayName string // LLM_INTERNAL_GATEWAY_NAME (required)
-	InternalGatewayNS   string // LLM_INTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
-	OIDCIssuerURL       string // LLM_OIDC_ISSUER_URL (required)
-	OIDCGroupsClaim     string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
-	OIDCAudience        string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
-	DefaultServingImage    string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.5.1")
+	BaseDomain              string // LLM_BASE_DOMAIN (required)
+	ExternalGatewayName     string // LLM_EXTERNAL_GATEWAY_NAME (required)
+	ExternalGatewayNS       string // LLM_EXTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
+	InternalGatewayName     string // LLM_INTERNAL_GATEWAY_NAME (required)
+	InternalGatewayNS       string // LLM_INTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
+	OIDCIssuerURL           string // LLM_OIDC_ISSUER_URL (required)
+	OIDCGroupsClaim         string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
+	OIDCAudience            string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
+	DefaultServingImage     string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.5.1")
 	DefaultStorageClassName string // LLM_DEFAULT_STORAGE_CLASS_NAME (optional, empty = cluster default)
-	APIKeysNamespace       string // LLM_API_KEYS_NAMESPACE (default: "llm-api-keys")
+	APIKeysNamespace        string // LLM_API_KEYS_NAMESPACE (default: "llm-api-keys")
 }
 
 // getEnvOrDefault returns the value of the environment variable named by key,
@@ -62,17 +62,17 @@ func LoadFromEnv() (*OperatorConfig, error) {
 	}
 
 	cfg := &OperatorConfig{
-		BaseDomain:          require("LLM_BASE_DOMAIN"),
-		ExternalGatewayName: require("LLM_EXTERNAL_GATEWAY_NAME"),
-		ExternalGatewayNS:   getEnvOrDefault("LLM_EXTERNAL_GATEWAY_NAMESPACE", "envoy-gateway-system"),
-		InternalGatewayName: require("LLM_INTERNAL_GATEWAY_NAME"),
-		InternalGatewayNS:   getEnvOrDefault("LLM_INTERNAL_GATEWAY_NAMESPACE", "envoy-gateway-system"),
-		OIDCIssuerURL:       require("LLM_OIDC_ISSUER_URL"),
-		OIDCGroupsClaim:     getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups"),
-		OIDCAudience:        os.Getenv("LLM_OIDC_AUDIENCE"),
-		DefaultServingImage:    getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.5.1"),
+		BaseDomain:              require("LLM_BASE_DOMAIN"),
+		ExternalGatewayName:     require("LLM_EXTERNAL_GATEWAY_NAME"),
+		ExternalGatewayNS:       getEnvOrDefault("LLM_EXTERNAL_GATEWAY_NAMESPACE", "envoy-gateway-system"),
+		InternalGatewayName:     require("LLM_INTERNAL_GATEWAY_NAME"),
+		InternalGatewayNS:       getEnvOrDefault("LLM_INTERNAL_GATEWAY_NAMESPACE", "envoy-gateway-system"),
+		OIDCIssuerURL:           require("LLM_OIDC_ISSUER_URL"),
+		OIDCGroupsClaim:         getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups"),
+		OIDCAudience:            os.Getenv("LLM_OIDC_AUDIENCE"),
+		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.5.1"),
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
-		APIKeysNamespace:       getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys"),
+		APIKeysNamespace:        getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys"),
 	}
 
 	if len(missing) > 0 {
