@@ -32,17 +32,18 @@ type StorageResult struct {
 
 // BuildStorageSpec is a pure function that takes an LLMModel and returns the storage
 // resources needed: PVC, init container, volumes, and volume mounts.
-func BuildStorageSpec(model *llmv1alpha1.LLMModel) (*StorageResult, error) {
+// defaultStorageClassName is applied to PVCs when the model doesn't specify one.
+func BuildStorageSpec(model *llmv1alpha1.LLMModel, defaultStorageClassName string) (*StorageResult, error) {
 	switch model.Spec.Model.Source {
 	case llmv1alpha1.ModelSourceOCI:
 		return buildOCIStorageSpec(model)
 	default:
 		// Default is HuggingFace
-		return buildHFStorageSpec(model)
+		return buildHFStorageSpec(model, defaultStorageClassName)
 	}
 }
 
-func buildHFStorageSpec(model *llmv1alpha1.LLMModel) (*StorageResult, error) {
+func buildHFStorageSpec(model *llmv1alpha1.LLMModel, defaultStorageClassName string) (*StorageResult, error) {
 	result := &StorageResult{
 		ModelPath: modelCachePath,
 	}
@@ -69,7 +70,7 @@ func buildHFStorageSpec(model *llmv1alpha1.LLMModel) (*StorageResult, error) {
 	default:
 		// Default to PVC
 		pvcName := model.Name + "-model-storage"
-		pvc, err := buildPVC(pvcName, storage)
+		pvc, err := buildPVC(pvcName, storage, defaultStorageClassName)
 		if err != nil {
 			return nil, fmt.Errorf("building PVC: %w", err)
 		}
@@ -102,7 +103,7 @@ func buildHFStorageSpec(model *llmv1alpha1.LLMModel) (*StorageResult, error) {
 	return result, nil
 }
 
-func buildPVC(name string, storage llmv1alpha1.StorageSpec) (*corev1.PersistentVolumeClaim, error) {
+func buildPVC(name string, storage llmv1alpha1.StorageSpec, defaultStorageClassName string) (*corev1.PersistentVolumeClaim, error) {
 	size, err := parseStorageSize(storage.Size)
 	if err != nil {
 		return nil, fmt.Errorf("parsing storage size: %w", err)
@@ -124,8 +125,11 @@ func buildPVC(name string, storage llmv1alpha1.StorageSpec) (*corev1.PersistentV
 		},
 	}
 
-	if storage.StorageClassName != "" {
-		sc := storage.StorageClassName
+	sc := storage.StorageClassName
+	if sc == "" {
+		sc = defaultStorageClassName
+	}
+	if sc != "" {
 		pvc.Spec.StorageClassName = &sc
 	}
 

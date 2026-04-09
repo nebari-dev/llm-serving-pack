@@ -35,9 +35,10 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		model *llmv1alpha1.LLMModel
-		check func(t *testing.T, result *StorageResult, err error)
+		name                    string
+		model                   *llmv1alpha1.LLMModel
+		defaultStorageClassName string
+		check                   func(t *testing.T, result *StorageResult, err error)
 	}{
 		{
 			name: "HF + PVC returns PVC with correct name and size",
@@ -404,6 +405,67 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 			},
 		},
 		{
+			name: "PVC uses default storageClassName when model does not specify one",
+			model: makeHFModel(llmv1alpha1.StorageSpec{
+				Type: llmv1alpha1.StorageTypePVC,
+				Size: "200Gi",
+			}),
+			defaultStorageClassName: "ebs-gp3",
+			check: func(t *testing.T, result *StorageResult, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.PVC == nil {
+					t.Fatal("expected PVC to be non-nil")
+				}
+				if result.PVC.Spec.StorageClassName == nil || *result.PVC.Spec.StorageClassName != "ebs-gp3" {
+					t.Errorf("expected storageClassName 'ebs-gp3', got %v", result.PVC.Spec.StorageClassName)
+				}
+			},
+		},
+		{
+			name: "model storageClassName overrides default",
+			model: func() *llmv1alpha1.LLMModel {
+				m := makeHFModel(llmv1alpha1.StorageSpec{
+					Type:             llmv1alpha1.StorageTypePVC,
+					Size:             "200Gi",
+					StorageClassName: "efs-sc",
+				})
+				return m
+			}(),
+			defaultStorageClassName: "ebs-gp3",
+			check: func(t *testing.T, result *StorageResult, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.PVC == nil {
+					t.Fatal("expected PVC to be non-nil")
+				}
+				if result.PVC.Spec.StorageClassName == nil || *result.PVC.Spec.StorageClassName != "efs-sc" {
+					t.Errorf("expected storageClassName 'efs-sc', got %v", result.PVC.Spec.StorageClassName)
+				}
+			},
+		},
+		{
+			name: "no storageClassName set when both model and default are empty",
+			model: makeHFModel(llmv1alpha1.StorageSpec{
+				Type: llmv1alpha1.StorageTypePVC,
+				Size: "200Gi",
+			}),
+			defaultStorageClassName: "",
+			check: func(t *testing.T, result *StorageResult, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.PVC == nil {
+					t.Fatal("expected PVC to be non-nil")
+				}
+				if result.PVC.Spec.StorageClassName != nil {
+					t.Errorf("expected no storageClassName, got %v", *result.PVC.Spec.StorageClassName)
+				}
+			},
+		},
+		{
 			name: "init container uses args not shell script",
 			model: makeHFModel(llmv1alpha1.StorageSpec{
 				Type: llmv1alpha1.StorageTypePVC,
@@ -429,7 +491,7 @@ func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := BuildStorageSpec(tt.model)
+			result, err := BuildStorageSpec(tt.model, tt.defaultStorageClassName)
 			tt.check(t, result, err)
 		})
 	}

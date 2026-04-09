@@ -111,7 +111,11 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// 6. Reconcile storage (PVC)
-	storageResult, err := reconcilers.BuildStorageSpec(model)
+	defaultStorageClass := ""
+	if r.Config != nil {
+		defaultStorageClass = r.Config.DefaultStorageClassName
+	}
+	storageResult, err := reconcilers.BuildStorageSpec(model, defaultStorageClass)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("building storage spec: %w", err)
 	}

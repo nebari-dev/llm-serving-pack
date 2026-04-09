@@ -48,6 +48,8 @@ spec:
               value: {{ .Values.apiKeysNamespace | quote }}
             - name: LLM_DEFAULT_SERVING_IMAGE
               value: {{ .Values.defaults.serving.image | quote }}
+            - name: LLM_DEFAULT_STORAGE_CLASS_NAME
+              value: {{ .Values.defaults.storage.storageClassName | quote }}
             - name: ENABLE_WEBHOOKS
               value: "true"
           ports:
