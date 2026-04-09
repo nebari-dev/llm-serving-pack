@@ -1,0 +1,51 @@
+# NVIDIA GPU Operator ArgoCD Application.
+# Required for GPU nodes to advertise nvidia.com/gpu as an allocatable
+# resource. Without this, GPU-requiring pods stay Pending.
+#
+# If your nodes use a pre-installed NVIDIA driver AMI (like AWS
+# AL2023_x86_64_NVIDIA), disable driver and toolkit installation since
+# the AMI already includes both.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nvidia-gpu-operator
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: foundational
+
+  source:
+    chart: gpu-operator
+    repoURL: https://helm.ngc.nvidia.com/nvidia
+    targetRevision: v26.3.0
+    helm:
+      releaseName: nvidia-gpu-operator
+      values: |
+        # Disable driver and toolkit if using a pre-installed NVIDIA AMI.
+        # Remove these overrides if your nodes need the operator to install
+        # NVIDIA drivers.
+        driver:
+          enabled: false
+        toolkit:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gpu-operator
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,41 @@
+# Mistral Devstral Small - a coding-focused model.
+# Requires a HuggingFace token for gated model access.
+# Create the secret first:
+#   kubectl create secret generic hf-token -n llm-serving \
+#     --from-literal=HF_TOKEN=hf_your_token_here
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: devstral-small
+  namespace: llm-serving
+spec:
+  model:
+    name: "mistralai/Devstral-Small-2505"
+    source: huggingface
+    authSecretName: hf-token
+    storage:
+      type: pvc
+      size: "80Gi"
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+    requests:
+      cpu: "4"
+      memory: "16Gi"
+    limits:
+      cpu: "8"
+      memory: "32Gi"
+  serving:
+    replicas: 1
+    tensorParallelism: 1
+  access:
+    public: false
+    groups:
+      - "developers"
+  endpoints:
+    external:
+      enabled: true
+      subdomain: devstral
+    internal:
+      enabled: true

@@ -1,0 +1,36 @@
+# Example using an OCI/modelcar image instead of HuggingFace download.
+# The model weights are baked into a container image and copied into the
+# serving pod via an init container. No download or PVC required.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: my-oci-model
+  namespace: llm-serving
+spec:
+  model:
+    name: "my-org/my-model"
+    source: oci
+    image: "registry.example.com/models/my-model:v1"
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "16Gi"
+  serving:
+    replicas: 1
+    tensorParallelism: 1
+  access:
+    public: false
+    groups:
+      - "ml-team"
+  endpoints:
+    external:
+      enabled: true
+      subdomain: my-model
+    internal:
+      enabled: true

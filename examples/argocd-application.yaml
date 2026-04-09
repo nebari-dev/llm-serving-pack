@@ -1,0 +1,82 @@
+# Example ArgoCD Application for deploying the LLM serving pack.
+#
+# This uses a multi-source setup:
+#   Source 1: The Helm chart from this repo with cluster-specific values
+#   Source 2: LLMModel CRs from your cluster config repo
+#
+# Replace all placeholder values (your-cluster, your-org, etc.) with your
+# actual configuration before applying.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nebari-llm-serving
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: nebari-foundational
+    app.kubernetes.io/managed-by: nebari-infrastructure-core
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: foundational
+
+  sources:
+    # Source 1: LLM serving pack Helm chart
+    - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
+      targetRevision: main
+      path: charts/nebari-llm-serving
+      helm:
+        releaseName: nebari-llm-serving
+        values: |
+          platform:
+            baseDomain: "your-cluster.example.com"
+            gateway:
+              external:
+                name: nebari-gateway
+                namespace: envoy-gateway-system
+              internal:
+                name: nebari-gateway
+                namespace: envoy-gateway-system
+
+          defaults:
+            storage:
+              # Set the StorageClass for model PVCs. Use a StorageClass backed
+              # by cloud-native storage (EFS on AWS, Filestore on GCP, etc.)
+              # so PVC size is not limited by node disk.
+              storageClassName: efs-sc
+
+          auth:
+            oidc:
+              # Static OIDC issuer URL. If left empty, the operator reads
+              # the issuer URL from a Secret provisioned by nebari-operator.
+              issuerURL: "https://keycloak.your-cluster.example.com/realms/nebari"
+              groupsClaim: groups
+
+          keyManager:
+            enabled: true
+
+    # Source 2: LLMModel CRs from your cluster config repo
+    - repoURL: https://github.com/your-org/your-cluster-config.git
+      targetRevision: main
+      path: clusters/your-cluster/manifests/llm-models
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: nebari-llm-serving-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

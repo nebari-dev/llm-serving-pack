@@ -1,0 +1,42 @@
+# Qwen3.5-35B-A3B with GPTQ Int4 quantization.
+# Fits on a single GPU (e.g. NVIDIA L4, A10G) with ~20GB model weight.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: qwen3-5-35b-a3b-gptq-int4
+  namespace: llm-serving
+spec:
+  model:
+    name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
+    source: huggingface
+    storage:
+      type: pvc
+      size: "30Gi"
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "12Gi"
+  serving:
+    replicas: 1
+    tensorParallelism: 1
+    vllmArgs:
+      - "--quantization"
+      - "gptq"
+      - "--max-model-len"
+      - "8192"
+  access:
+    public: false
+    groups:
+      - "llm"
+  endpoints:
+    external:
+      enabled: true
+      subdomain: qwen3-5-35b
+    internal:
+      enabled: true
