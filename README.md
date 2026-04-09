@@ -10,7 +10,7 @@ Each model gets per-model access control via OIDC groups (works with any OIDC pr
 
 An optional key manager web UI lets users generate and revoke API keys for models they have access to.
 
-Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar images.
+Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar images. Model downloads use a purpose-built [distroless container image](model-downloader/) with pixi-managed dependencies for reproducibility.
 
 ## Quick start
 
@@ -18,12 +18,13 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 
 - Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
-- NVIDIA GPUs available on worker nodes
-- Envoy AI Gateway (installed by this pack, or pre-installed)
+- NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin)
+- Envoy Gateway installed (deployed by nebari-infrastructure-core)
+- A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models)
 
 ### Deploy the pack
 
-Create an ArgoCD Application:
+The pack is deployed as an ArgoCD Application. A multi-source setup lets you keep model definitions in a separate Git repo from the pack itself:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -31,70 +32,132 @@ kind: Application
 metadata:
   name: nebari-llm-serving
   namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  source:
-    repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack
-    path: charts/nebari-llm-serving
-    targetRevision: main
-    helm:
-      valueFiles:
-        - values-prod.yaml
+  project: foundational
+
+  sources:
+    # Source 1: LLM serving pack Helm chart
+    - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
+      targetRevision: main
+      path: charts/nebari-llm-serving
+      helm:
+        releaseName: nebari-llm-serving
+        values: |
+          platform:
+            baseDomain: "your-cluster.example.com"
+            gateway:
+              external:
+                name: nebari-gateway
+                namespace: envoy-gateway-system
+              internal:
+                name: nebari-gateway
+                namespace: envoy-gateway-system
+
+          defaults:
+            storage:
+              storageClassName: efs-sc  # or gp3, longhorn, etc.
+
+          auth:
+            oidc:
+              issuerURL: "https://keycloak.your-cluster.example.com/realms/nebari"
+              groupsClaim: groups
+
+          keyManager:
+            enabled: true
+
+    # Source 2: LLMModel CRs from your cluster config repo
+    - repoURL: https://github.com/your-org/your-cluster-config.git
+      targetRevision: main
+      path: clusters/your-cluster/manifests/llm-models
+
   destination:
     server: https://kubernetes.default.svc
-    namespace: llm-serving
+    namespace: nebari-llm-serving-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
 ```
 
 ### Deploy a model
 
-Create a namespace (if it doesn't exist) and label it:
-
-```bash
-kubectl create namespace llm-serving
-kubectl label namespace llm-serving nebari.dev/managed=true
-```
-
-Apply an LLMModel:
+Add an `LLMModel` resource to your cluster config repo (the path referenced by Source 2 above):
 
 ```yaml
 apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
-  name: devstral-32b
+  name: qwen3-5-35b-a3b-gptq-int4
   namespace: llm-serving
 spec:
   model:
-    name: "mistralai/Devstral-Small-2505"
+    name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
     source: huggingface
-    authSecretName: hf-token
     storage:
       type: pvc
-      size: 80Gi
+      size: "30Gi"
+      # storageClassName: efs-sc  # optional, overrides the pack default
   resources:
     gpu:
       count: 1
       type: nvidia
+    requests:
+      cpu: "2"
+      memory: "8Gi"
+    limits:
+      cpu: "4"
+      memory: "12Gi"
   serving:
     replicas: 1
     tensorParallelism: 1
+    vllmArgs:
+      - "--quantization"
+      - "gptq"
+      - "--max-model-len"
+      - "8192"
   access:
+    public: false
     groups:
-      - everyone
+      - "llm"
   endpoints:
     external:
       enabled: true
-      subdomain: devstral
+      subdomain: qwen3-5-35b
     internal:
       enabled: true
+```
+
+For gated models that require authentication, create a Secret with your HuggingFace token and reference it:
+
+```yaml
+spec:
+  model:
+    authSecretName: hf-token  # Secret with key "HF_TOKEN"
 ```
 
 ### Use the model
 
 External (API key):
 ```bash
-curl https://devstral.llm.nebari.example.com/v1/chat/completions \
+curl https://qwen3-5-35b.your-cluster.example.com/v1/chat/completions \
   -H "Authorization: Bearer sk-your-api-key" \
   -H "Content-Type: application/json" \
-  -d '{"model": "mistralai/Devstral-Small-2505", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 Internal (JWT from JupyterLab or in-cluster service):
@@ -103,27 +166,32 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://devstral-32b.llm-serving.svc.cluster.local/v1",
+    base_url="http://qwen3-5-35b-a3b-gptq-int4.llm-serving.svc.cluster.local/v1",
     api_key=os.environ["JUPYTERHUB_API_TOKEN"],  # JWT from Nebari
 )
 response = client.chat.completions.create(
-    model="mistralai/Devstral-Small-2505",
+    model="Qwen/Qwen3.5-35B-A3B-GPTQ-Int4",
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
 
-## Configuration
+## Helm values reference
 
-See [docs/getting-started.md](docs/getting-started.md) for a local dev walkthrough.
-
-See [docs/design.md](docs/design.md) for the full design document, including:
-
-- Complete LLMModel CRD spec and status fields
-- Pack-level Helm values reference
-- Dual endpoint auth architecture
-- Key manager design
-- Multi-namespace support
-- Model loading strategies
+| Value | Description | Default |
+|-------|-------------|---------|
+| `platform.baseDomain` | Base domain for the Nebari deployment (required) | `""` |
+| `platform.gateway.external.name` | Name of the external Gateway resource | `nebari-gateway` |
+| `platform.gateway.external.namespace` | Namespace of the external Gateway | `envoy-gateway-system` |
+| `platform.gateway.internal.name` | Name of the internal Gateway resource | `nebari-internal-gateway` |
+| `platform.gateway.internal.namespace` | Namespace of the internal Gateway | `envoy-gateway-system` |
+| `auth.oidc.issuerURL` | OIDC issuer URL (static value, or read from Secret if empty) | `""` |
+| `auth.oidc.groupsClaim` | JWT claim containing group memberships | `groups` |
+| `auth.oidc.audience` | Expected JWT audience (empty = no audience check) | `""` |
+| `defaults.serving.image` | Default vLLM serving image | `ghcr.io/llm-d/llm-d-cuda:v0.5.1` |
+| `defaults.storage.storageClassName` | Default StorageClass for model PVCs (empty = cluster default) | `""` |
+| `defaults.monitoring.enabled` | Enable PodMonitor for Prometheus scraping | `true` |
+| `keyManager.enabled` | Deploy the key manager web UI | `true` |
+| `apiKeysNamespace` | Namespace where API key Secrets are stored | `llm-api-keys` |
 
 ## Architecture
 
@@ -133,7 +201,7 @@ Admin applies LLMModel CR
         v
   LLM Operator (watches CRDs across all managed namespaces)
         |
-        +---> PVC + init container (model download)
+        +---> PVC + model-downloader init container (HuggingFace download)
         +---> vLLM Deployment + Service
         +---> InferencePool + EPP (intelligent scheduling)
         +---> AIGatewayRoute + SecurityPolicy (external, API key auth)
@@ -145,6 +213,23 @@ Admin applies LLMModel CR
         +---> Generates API keys, writes to K8s Secrets
         +---> Envoy Gateway validates keys natively
 ```
+
+### Container images
+
+| Image | Description |
+|-------|-------------|
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | LLM operator - reconciles LLMModel CRDs |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager web UI and API |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | Model download init container (distroless, pixi-managed) |
+
+### Infrastructure requirements
+
+The pack expects the following to be available on the cluster:
+
+- **GPU Operator**: The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/overview.html) must be installed so that GPU nodes advertise `nvidia.com/gpu` as an allocatable resource. If your nodes use a pre-installed NVIDIA driver AMI (like AWS `AL2023_x86_64_NVIDIA`), configure the operator with `driver.enabled=false` and `toolkit.enabled=false`.
+- **Storage**: A StorageClass capable of provisioning PVCs sized for your models. EFS (`efs.csi.aws.com`) is recommended on AWS for its ReadWriteMany support and independence from node disk size. Set the StorageClass name via `defaults.storage.storageClassName`.
+- **Gateway**: Envoy Gateway with the Gateway API and AI Gateway extensions. Typically deployed by nebari-infrastructure-core.
+- **OIDC provider**: Keycloak or any OIDC-compliant provider for auth. The pack reads the issuer URL from either the Helm value or a Kubernetes Secret provisioned by the nebari-operator.
 
 ## Development
 
