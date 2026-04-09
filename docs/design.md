@@ -67,7 +67,7 @@ spec:
       memory: "64Gi"
 
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
     replicas: 1
     tensorParallelism: 2             # defaults to gpu.count
     dataParallelism: 1
@@ -484,7 +484,7 @@ operator:
 
 defaults:
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
   resources:
     requests:
       cpu: "4"

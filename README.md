@@ -187,7 +187,7 @@ response = client.chat.completions.create(
 | `auth.oidc.issuerURL` | OIDC issuer URL (static value, or read from Secret if empty) | `""` |
 | `auth.oidc.groupsClaim` | JWT claim containing group memberships | `groups` |
 | `auth.oidc.audience` | Expected JWT audience (empty = no audience check) | `""` |
-| `defaults.serving.image` | Default vLLM serving image | `ghcr.io/llm-d/llm-d-cuda:v0.5.1` |
+| `defaults.serving.image` | Default vLLM serving image | `ghcr.io/llm-d/llm-d-cuda:v0.6.0` |
 | `defaults.storage.storageClassName` | Default StorageClass for model PVCs (empty = cluster default) | `""` |
 | `defaults.monitoring.enabled` | Enable PodMonitor for Prometheus scraping | `true` |
 | `keyManager.enabled` | Deploy the key manager web UI | `true` |

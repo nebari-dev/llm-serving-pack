@@ -48,7 +48,7 @@ apiKeysNamespace: llm-api-keys
 
 defaults:
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.5.1
+    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
   storage:
     storageClassName: ""
   monitoring:

@@ -33,7 +33,7 @@ type OperatorConfig struct {
 	OIDCIssuerURL           string // LLM_OIDC_ISSUER_URL (required)
 	OIDCGroupsClaim         string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
 	OIDCAudience            string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
-	DefaultServingImage     string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.5.1")
+	DefaultServingImage     string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.6.0")
 	DefaultStorageClassName string // LLM_DEFAULT_STORAGE_CLASS_NAME (optional, empty = cluster default)
 	APIKeysNamespace        string // LLM_API_KEYS_NAMESPACE (default: "llm-api-keys")
 }
@@ -70,7 +70,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		OIDCIssuerURL:           require("LLM_OIDC_ISSUER_URL"),
 		OIDCGroupsClaim:         getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups"),
 		OIDCAudience:            os.Getenv("LLM_OIDC_AUDIENCE"),
-		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.5.1"),
+		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.6.0"),
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
 		APIKeysNamespace:        getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys"),
 	}
