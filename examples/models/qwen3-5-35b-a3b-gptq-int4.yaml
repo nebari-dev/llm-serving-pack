@@ -28,6 +28,8 @@ spec:
     vllmArgs:
       - "--quantization"
       - "gptq"
+      - "--dtype"
+      - "float16"
       - "--max-model-len"
       - "8192"
   access:
