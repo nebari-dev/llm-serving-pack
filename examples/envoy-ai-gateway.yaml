@@ -1,0 +1,49 @@
+# Envoy AI Gateway ArgoCD Application.
+#
+# Required by the LLM serving operator - the operator generates
+# AIGatewayRoute and SecurityPolicy resources that depend on the
+# AI Gateway CRDs being installed on the cluster.
+#
+# Prerequisites:
+#   - Envoy Gateway must already be installed (deployed by nic as a
+#     foundational service). The AI Gateway extends Envoy Gateway.
+#
+# This manual installation is a workaround until the chart's
+# envoyAIGateway.install flag is implemented:
+#   https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-ai-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: foundational
+
+  source:
+    chart: ai-gateway-helm
+    repoURL: oci://docker.io/envoyproxy
+    targetRevision: v0.3.0
+    helm:
+      releaseName: envoy-ai-gateway
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-ai-gateway-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

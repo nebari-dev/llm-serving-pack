@@ -20,6 +20,7 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
 - NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin). **Note**: nebari-infrastructure-core does not install this automatically yet - tracked in [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until that is done, install it manually as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
 - Envoy Gateway installed (deployed by nebari-infrastructure-core)
+- Envoy AI Gateway installed. **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
 - A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models)
 
 ### Deploy the pack
