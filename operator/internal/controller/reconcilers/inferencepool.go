@@ -101,10 +101,10 @@ func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[
 			{Name: "metrics", ContainerPort: 9090, Protocol: corev1.ProtocolTCP},
 		},
 		Args: []string{
-			"--poolName", model.Name,
-			"--poolNamespace", model.Namespace,
-			"--grpcPort", "9002",
-			"--metricsPort", "9090",
+			"--pool-name", model.Name,
+			"--pool-namespace", model.Namespace,
+			"--grpc-port", "9002",
+			"--metrics-port", "9090",
 		},
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{

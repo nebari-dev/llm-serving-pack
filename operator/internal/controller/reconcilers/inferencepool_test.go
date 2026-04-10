@@ -228,7 +228,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 			},
 		},
 		{
-			name:  "EPP Deployment: args include poolName and poolNamespace",
+			name:  "EPP Deployment: args include pool-name and pool-namespace",
 			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
@@ -236,10 +236,10 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 					t.Fatalf("unexpected error: %v", err)
 				}
 				args := result.EPPDeployment.Spec.Template.Spec.Containers[0].Args
-				assertArgValue(t, args, "--poolName", testPoolModelName)
-				assertArgValue(t, args, "--poolNamespace", "test-ns")
-				assertArgValue(t, args, "--grpcPort", "9002")
-				assertArgValue(t, args, "--metricsPort", "9090")
+				assertArgValue(t, args, "--pool-name", testPoolModelName)
+				assertArgValue(t, args, "--pool-namespace", "test-ns")
+				assertArgValue(t, args, "--grpc-port", "9002")
+				assertArgValue(t, args, "--metrics-port", "9090")
 			},
 		},
 		{
