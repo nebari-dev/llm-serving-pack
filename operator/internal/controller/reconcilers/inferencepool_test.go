@@ -6,6 +6,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/yaml"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -342,6 +344,67 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				}
 				if !strings.Contains(data, "max-score-picker") {
 					t.Errorf("expected max-score-picker plugin in config, got: %s", data)
+				}
+			},
+		},
+		{
+			name:  "EPP ConfigMap: default config is valid YAML",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				data := result.EPPConfigMap.Data["epp-config.yaml"]
+				parsed := map[string]any{}
+				if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+					t.Fatalf("default epp-config.yaml is not valid YAML: %v\ncontent:\n%s", err, data)
+				}
+				if parsed["kind"] != "EndpointPickerConfig" {
+					t.Errorf("expected parsed kind=EndpointPickerConfig, got %v", parsed["kind"])
+				}
+			},
+		},
+		{
+			name: "EPP ConfigMap: user schedulerConfig override replaces default",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultInferencePoolModel()
+				m.Spec.Advanced.InferencePool.SchedulerConfig = &runtime.RawExtension{
+					Raw: []byte(`{"apiVersion":"inference.networking.x-k8s.io/v1alpha1","kind":"EndpointPickerConfig","plugins":[{"type":"prefix-cache-scorer"},{"type":"max-score-picker"}],"schedulingProfiles":[{"name":"default","plugins":[{"pluginRef":"max-score-picker"},{"pluginRef":"prefix-cache-scorer","weight":2}]}]}`),
+				}
+				return m
+			}(),
+			cfg: defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				data := result.EPPConfigMap.Data["epp-config.yaml"]
+				if !strings.Contains(data, "prefix-cache-scorer") {
+					t.Errorf("expected override to include prefix-cache-scorer, got: %s", data)
+				}
+				parsed := map[string]any{}
+				if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+					t.Fatalf("rendered override is not valid YAML: %v", err)
+				}
+			},
+		},
+		{
+			name: "EPP ConfigMap: invalid schedulerConfig JSON returns error",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultInferencePoolModel()
+				m.Spec.Advanced.InferencePool.SchedulerConfig = &runtime.RawExtension{
+					Raw: []byte(`{not valid json`),
+				}
+				return m
+			}(),
+			cfg: defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err == nil {
+					t.Fatal("expected error for invalid schedulerConfig JSON, got nil")
+				}
+				if result != nil {
+					t.Error("expected nil result on error")
 				}
 			},
 		},

@@ -40,7 +40,7 @@ keyManager:
 operator:
   image:
     repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
-    tag: dev-epp-config-fix
+    tag: latest
     pullPolicy: Always
 
 # Namespace where API keys (Secrets) are stored

@@ -1,14 +1,20 @@
-// Resource specs based on GIE inferencepool chart v1.4.0
+// Resource specs based on GIE inferencepool chart v1.4.0 and the EPP deployment
+// template from llm-d-inference-scheduler v0.6.1-rc.1.
 package reconcilers
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/yaml"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -54,7 +60,10 @@ func BuildInferencePoolResources(model *llmv1alpha1.LLMModel, cfg *config.Operat
 	eppName := model.Name + "-epp"
 
 	inferencePool := buildInferencePool(model, labels)
-	eppConfigMap := buildEPPConfigMap(eppName, labels)
+	eppConfigMap, err := buildEPPConfigMap(model, eppName, labels)
+	if err != nil {
+		return nil, fmt.Errorf("building EPP ConfigMap: %w", err)
+	}
 	eppDeployment := buildEPPDeployment(model, eppName, labels)
 	eppService := buildEPPService(model, eppName, labels)
 	eppSA := buildEPPServiceAccount(eppName, labels)
@@ -78,16 +87,37 @@ func eppConfigMapName(eppName string) string {
 	return eppName + "-config"
 }
 
-func buildEPPConfigMap(eppName string, labels map[string]string) *corev1.ConfigMap {
+// buildEPPConfigMap renders the EndpointPickerConfig YAML for the EPP deployment.
+// If the user provides spec.advanced.inferencePool.schedulerConfig, that value
+// is used verbatim; otherwise the minimal built-in default is used.
+func buildEPPConfigMap(model *llmv1alpha1.LLMModel, eppName string, labels map[string]string) (*corev1.ConfigMap, error) {
+	configYAML, err := renderEPPConfig(model.Spec.Advanced.InferencePool.SchedulerConfig)
+	if err != nil {
+		return nil, err
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   eppConfigMapName(eppName),
 			Labels: labels,
 		},
 		Data: map[string]string{
-			eppConfigFileName: eppDefaultConfig,
+			eppConfigFileName: configYAML,
 		},
+	}, nil
+}
+
+// renderEPPConfig returns the EPP config YAML to put in the ConfigMap. When the
+// user supplies schedulerConfig, its bytes (JSON from the API server) are
+// converted to YAML and used directly; otherwise the built-in default is used.
+func renderEPPConfig(override *runtime.RawExtension) (string, error) {
+	if override == nil || len(override.Raw) == 0 {
+		return eppDefaultConfig, nil
 	}
+	yamlBytes, err := yaml.JSONToYAML(override.Raw)
+	if err != nil {
+		return "", fmt.Errorf("converting schedulerConfig JSON to YAML: %w", err)
+	}
+	return string(yamlBytes), nil
 }
 
 func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *unstructured.Unstructured {
@@ -136,7 +166,7 @@ func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[
 		ProbeHandler: corev1.ProbeHandler{
 			GRPC: &corev1.GRPCAction{
 				Port:    9003,
-				Service: ptrTo("envoy.service.ext_proc.v3.ExternalProcessor"),
+				Service: ptr.To("envoy.service.ext_proc.v3.ExternalProcessor"),
 			},
 		},
 		InitialDelaySeconds: 5,
@@ -158,6 +188,9 @@ func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[
 			"--grpc-health-port", "9003",
 			"--metrics-port", "9090",
 			"--config-file", eppConfigMountDir + "/" + eppConfigFileName,
+			// TODO: expose --zap-encoder and --v via operator config; `--v 4` is
+			// debug-verbose for steady-state production but matches upstream
+			// reference deployments and aids post-crash-fix triage.
 			"--zap-encoder", "json",
 			"--v", "4",
 		},
@@ -219,8 +252,6 @@ func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[
 		},
 	}
 }
-
-func ptrTo[T any](v T) *T { return &v }
 
 func buildEPPService(model *llmv1alpha1.LLMModel, eppName string, labels map[string]string) *corev1.Service {
 	return &corev1.Service{
