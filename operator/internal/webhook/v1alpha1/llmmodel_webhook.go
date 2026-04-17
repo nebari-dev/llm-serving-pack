@@ -72,6 +72,10 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, err
 	}
 
+	if err := validateAccess(llmmodel); err != nil {
+		return nil, err
+	}
+
 	subdomain, err := effectiveSubdomain(llmmodel)
 	if err != nil {
 		return nil, err
@@ -98,6 +102,10 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, err
 	}
 
+	if err := validateAccess(llmmodel); err != nil {
+		return nil, err
+	}
+
 	subdomain, err := effectiveSubdomain(llmmodel)
 	if err != nil {
 		return nil, err
@@ -111,6 +119,25 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 	warnings := emptyDirPreloadWarnings(llmmodel)
 
 	return warnings, nil
+}
+
+// validateAccess ensures the model explicitly declares who may call it: either
+// Access.Public=true or a non-empty Access.Groups list. A model with neither
+// would have no one able to call its internal JWT endpoint (the SecurityPolicy
+// would default-deny) and no groups to gate external API-key minting against,
+// so the ambiguous state is rejected at admission time.
+func validateAccess(llmmodel *llmv1alpha1.LLMModel) error {
+	public := llmmodel.Spec.Access.Public != nil && *llmmodel.Spec.Access.Public
+	if public {
+		return nil
+	}
+	if len(llmmodel.Spec.Access.Groups) == 0 {
+		return fmt.Errorf(
+			"spec.access must declare either public=true or at least one group in groups; " +
+				"a model with neither cannot be accessed by any user",
+		)
+	}
+	return nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type LLMModel.

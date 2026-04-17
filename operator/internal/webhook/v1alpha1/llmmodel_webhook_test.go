@@ -91,6 +91,30 @@ var _ = Describe("LLMModel Webhook", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
 		})
 
+		It("should reject a LLMModel with no public flag and no groups", func() {
+			ns := newManagedNamespace("test-managed-empty-access")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			model := newBaseLLMModel("my-model-empty-access", ns.Name)
+			model.Spec.Access = llmv1alpha1.AccessSpec{} // neither Public nor Groups
+			err := k8sClient.Create(bgCtx, model)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("spec.access"))
+		})
+
+		It("should accept a LLMModel with Access.Public=true and no groups", func() {
+			ns := newManagedNamespace("test-managed-public")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			model := newBaseLLMModel("my-model-public", ns.Name)
+			public := true
+			model.Spec.Access = llmv1alpha1.AccessSpec{Public: &public}
+			Expect(k8sClient.Create(bgCtx, model)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
+		})
+
 		It("should reject a LLMModel in a namespace without the managed label", func() {
 			ns := newUnmanagedNamespace("test-unmanaged-create")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
