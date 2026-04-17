@@ -437,6 +437,15 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 		return fmt.Errorf("reconciling EPP Service: %w", err)
 	}
 
+	// EPP ConfigMap (must exist before Deployment so the volume mount resolves)
+	pool.EPPConfigMap.Namespace = model.Namespace
+	if err := reconcilers.SetOwnerReference(model, pool.EPPConfigMap, r.Scheme); err != nil {
+		return fmt.Errorf("setting owner on EPP ConfigMap: %w", err)
+	}
+	if err := r.createOrUpdateConfigMap(ctx, pool.EPPConfigMap); err != nil {
+		return fmt.Errorf("reconciling EPP ConfigMap: %w", err)
+	}
+
 	// EPP Deployment
 	pool.EPPDeployment.Namespace = model.Namespace
 	if err := reconcilers.SetOwnerReference(model, pool.EPPDeployment, r.Scheme); err != nil {
