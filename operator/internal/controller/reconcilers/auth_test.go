@@ -27,6 +27,12 @@ func defaultAuthModel() *llmv1alpha1.LLMModel {
 				Name:   "mistralai/Mistral-7B-v0.1",
 				Source: llmv1alpha1.ModelSourceHuggingFace,
 			},
+			// Default to a non-public model with one group so the internal
+			// SecurityPolicy always has a valid authorization block; matches
+			// the invariant the webhook enforces at admission time.
+			Access: llmv1alpha1.AccessSpec{
+				Groups: []string{"data-scientists"},
+			},
 		},
 	}
 }
@@ -483,6 +489,104 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 				if !foundUsername {
 					t.Error("expected claimToHeaders entry for X-Auth-User -> preferred_username")
+				}
+			},
+		},
+		{
+			name: "Internal SecurityPolicy: authorization allows only model's groups when not public",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultAuthModel()
+				m.Spec.Access = llmv1alpha1.AccessSpec{
+					Groups: []string{"ml-team", "platform"},
+				}
+				return m
+			}(),
+			cfg: defaultAuthConfig(),
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.InternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				authz, ok := spec["authorization"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected authorization block on internal SecurityPolicy")
+				}
+				if authz["defaultAction"] != "Deny" {
+					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
+				}
+				rules := authz["rules"].([]interface{})
+				if len(rules) != 1 {
+					t.Fatalf("expected 1 rule, got %d", len(rules))
+				}
+				rule := rules[0].(map[string]interface{})
+				if rule["action"] != "Allow" {
+					t.Errorf("expected action=Allow, got %v", rule["action"])
+				}
+				principal := rule["principal"].(map[string]interface{})
+				jwtP := principal["jwt"].(map[string]interface{})
+				if jwtP["provider"] != "oidc" {
+					t.Errorf("expected provider=oidc, got %v", jwtP["provider"])
+				}
+				claims := jwtP["claims"].([]interface{})
+				if len(claims) != 1 {
+					t.Fatalf("expected 1 claim matcher, got %d", len(claims))
+				}
+				claim := claims[0].(map[string]interface{})
+				if claim["name"] != "groups" {
+					t.Errorf("expected claim name=groups, got %v", claim["name"])
+				}
+				if claim["valueType"] != "StringArray" {
+					t.Errorf("expected valueType=StringArray, got %v", claim["valueType"])
+				}
+				values := claim["values"].([]interface{})
+				if len(values) != 2 || values[0] != "ml-team" || values[1] != "platform" {
+					t.Errorf("expected values=[ml-team platform], got %v", values)
+				}
+			},
+		},
+		{
+			name: "Internal SecurityPolicy: public model has no authorization block",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultAuthModel()
+				public := true
+				m.Spec.Access = llmv1alpha1.AccessSpec{Public: &public}
+				return m
+			}(),
+			cfg: defaultAuthConfig(),
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.InternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				if _, found := spec["authorization"]; found {
+					t.Error("expected no authorization block for public model")
+				}
+			},
+		},
+		{
+			name: "Internal SecurityPolicy: authorization uses configured groups claim name",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultAuthModel()
+				m.Spec.Access = llmv1alpha1.AccessSpec{
+					Groups: []string{"ops"},
+				}
+				return m
+			}(),
+			cfg: func() *config.OperatorConfig {
+				c := defaultAuthConfig()
+				c.OIDCGroupsClaim = "realm_access.roles"
+				return c
+			}(),
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.InternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				authz := spec["authorization"].(map[string]interface{})
+				rules := authz["rules"].([]interface{})
+				claim := rules[0].(map[string]interface{})["principal"].(map[string]interface{})["jwt"].(map[string]interface{})["claims"].([]interface{})[0].(map[string]interface{})
+				if claim["name"] != "realm_access.roles" {
+					t.Errorf("expected configured claim name, got %v", claim["name"])
 				}
 			},
 		},

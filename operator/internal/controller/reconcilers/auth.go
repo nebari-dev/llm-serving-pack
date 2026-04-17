@@ -173,6 +173,29 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 		provider["audiences"] = []interface{}{cfg.OIDCAudience}
 	}
 
+	spec := map[string]interface{}{
+		"targetRefs": []interface{}{
+			map[string]interface{}{
+				"group": "gateway.networking.k8s.io",
+				"kind":  "HTTPRoute",
+				"name":  model.Name + "-internal",
+			},
+		},
+		"jwt": map[string]interface{}{
+			"providers": []interface{}{
+				provider,
+			},
+		},
+	}
+
+	// When the model is not public, add an authorization block that requires
+	// the JWT's groups claim to contain at least one of the model's allowed
+	// groups. The webhook rejects CRs where Public is false and Groups is
+	// empty, so we never render an Allow rule with no values.
+	if !isPublic(model) {
+		spec["authorization"] = buildGroupAuthorization(model.Spec.Access.Groups, cfg.OIDCGroupsClaim)
+	}
+
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
@@ -182,17 +205,40 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 				"namespace": model.Namespace,
 				"labels":    labelsToInterface(StandardLabels(model)),
 			},
-			"spec": map[string]interface{}{
-				"targetRefs": []interface{}{
-					map[string]interface{}{
-						"group": "gateway.networking.k8s.io",
-						"kind":  "HTTPRoute",
-						"name":  model.Name + "-internal",
-					},
-				},
-				"jwt": map[string]interface{}{
-					"providers": []interface{}{
-						provider,
+			"spec": spec,
+		},
+	}
+}
+
+// isPublic returns true when the model's access policy is explicitly public.
+func isPublic(model *llmv1alpha1.LLMModel) bool {
+	return model.Spec.Access.Public != nil && *model.Spec.Access.Public
+}
+
+// buildGroupAuthorization returns an Envoy Gateway Authorization config that
+// allows requests whose JWT groups claim contains one of the listed groups and
+// denies everything else by default.
+func buildGroupAuthorization(groups []string, groupsClaim string) map[string]interface{} {
+	values := make([]interface{}, 0, len(groups))
+	for _, g := range groups {
+		values = append(values, g)
+	}
+	return map[string]interface{}{
+		"defaultAction": "Deny",
+		"rules": []interface{}{
+			map[string]interface{}{
+				"name":   "allow-groups",
+				"action": "Allow",
+				"principal": map[string]interface{}{
+					"jwt": map[string]interface{}{
+						"provider": "oidc",
+						"claims": []interface{}{
+							map[string]interface{}{
+								"name":      groupsClaim,
+								"valueType": "StringArray",
+								"values":    values,
+							},
+						},
 					},
 				},
 			},
