@@ -1,0 +1,40 @@
+{{- if and .Values.keyManager.enabled .Values.keyManager.nebariApp.enabled }}
+apiVersion: reconcilers.nebari.dev/v1
+kind: NebariApp
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  hostname: {{ required "keyManager.nebariApp.hostname is required when keyManager.nebariApp.enabled=true" .Values.keyManager.nebariApp.hostname | quote }}
+  gateway: {{ .Values.keyManager.nebariApp.gateway | quote }}
+  service:
+    name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+    port: 8080
+  auth:
+    enabled: true
+    provider: keycloak
+    provisionClient: {{ .Values.keyManager.nebariApp.auth.provisionClient }}
+    scopes:
+      {{- toYaml .Values.keyManager.nebariApp.auth.scopes | nindent 6 }}
+  {{- with .Values.keyManager.nebariApp.landingPage }}
+  landingPage:
+    enabled: {{ .enabled }}
+    {{- if .enabled }}
+    displayName: {{ required "keyManager.nebariApp.landingPage.displayName is required when landingPage is enabled" .displayName | quote }}
+    {{- with .description }}
+    description: {{ . | quote }}
+    {{- end }}
+    {{- with .category }}
+    category: {{ . | quote }}
+    {{- end }}
+    {{- with .icon }}
+    icon: {{ . | quote }}
+    {{- end }}
+    {{- with .priority }}
+    priority: {{ . }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}

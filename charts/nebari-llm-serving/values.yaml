@@ -36,6 +36,38 @@ keyManager:
     pullPolicy: Always
   auditInterval: 5m
   oidcUserinfoURL: ""
+  # nebariApp - the NebariApp CR that exposes the key-manager UI via the
+  # nebari-operator (HTTPRoute, TLS cert, Keycloak client, landing-page tile).
+  # Set enabled=false when installing standalone without a Nebari cluster.
+  nebariApp:
+    enabled: true
+    # hostname - fully qualified hostname for the UI. Required when enabled.
+    # Example: llm-keys.your-cluster.example.com
+    hostname: ""
+    # gateway - which Nebari shared gateway to attach the HTTPRoute to.
+    # Valid values: "public" or "internal".
+    gateway: public
+    auth:
+      # provisionClient: true tells nebari-operator to create a dedicated
+      # Keycloak client for the UI and write credentials to the Secret
+      # <nebariapp-name>-oidc-client. The gateway uses these to enforce
+      # OIDC login before forwarding to the key-manager.
+      provisionClient: true
+      scopes:
+        - openid
+        - profile
+        - email
+        - groups
+    # landingPage controls how the UI appears on the Nebari landing page.
+    landingPage:
+      enabled: true
+      displayName: "LLM API Keys"
+      description: "Manage your personal API keys for LLM inference."
+      category: "Platform"
+      # icon - one of the built-in keys (jupyter, grafana, prometheus,
+      # keycloak, argocd, kubernetes) or a URL to a custom image.
+      icon: "keycloak"
+      priority: 100
 
 operator:
   image:

@@ -55,6 +55,19 @@ spec:
 
           keyManager:
             enabled: true
+            # nebariApp exposes the key-manager UI through the nebari-operator
+            # (HTTPRoute + TLS + Keycloak client + landing-page tile).
+            nebariApp:
+              enabled: true
+              hostname: "llm-keys.your-cluster.example.com"
+              gateway: public
+              landingPage:
+                enabled: true
+                displayName: "LLM API Keys"
+                description: "Manage your personal API keys for LLM inference."
+                category: "Platform"
+                icon: "keycloak"
+                priority: 100
 
     # Source 2: LLMModel CRs from your cluster config repo
     - repoURL: https://github.com/your-org/your-cluster-config.git
@@ -66,6 +79,12 @@ spec:
     namespace: nebari-llm-serving-system
 
   syncPolicy:
+    # The NebariApp operator requires nebari.dev/managed=true on any namespace
+    # it reconciles resources into. Let ArgoCD manage that label on the
+    # destination namespace so it's set on first sync.
+    managedNamespaceMetadata:
+      labels:
+        nebari.dev/managed: "true"
     automated:
       prune: true
       selfHeal: true
@@ -73,6 +92,10 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+      # The NebariApp CRD is installed by nebari-operator. ArgoCD dry-runs
+      # all resources before syncing, so it may report NebariApp as missing
+      # if sync ordering races with CRD install; skip the dry-run rather
+      # than fail the preflight check.
       - SkipDryRunOnMissingResource=true
     retry:
       limit: 5
