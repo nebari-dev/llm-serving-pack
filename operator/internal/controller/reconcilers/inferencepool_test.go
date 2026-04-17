@@ -1,9 +1,13 @@
 package reconcilers
 
 import (
+	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/yaml"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -201,7 +205,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 			},
 		},
 		{
-			name:  "EPP Deployment: container ports 9002 and 9090",
+			name:  "EPP Deployment: container ports 9002, 9003 and 9090",
 			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
@@ -210,10 +214,14 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				}
 				ports := result.EPPDeployment.Spec.Template.Spec.Containers[0].Ports
 				foundGRPC := false
+				foundGRPCHealth := false
 				foundMetrics := false
 				for _, p := range ports {
 					if p.ContainerPort == 9002 && p.Name == "grpc" {
 						foundGRPC = true
+					}
+					if p.ContainerPort == 9003 && p.Name == "grpc-health" {
+						foundGRPCHealth = true
 					}
 					if p.ContainerPort == 9090 && p.Name == "metrics" {
 						foundMetrics = true
@@ -222,13 +230,16 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if !foundGRPC {
 					t.Error("expected container port 9002 named grpc")
 				}
+				if !foundGRPCHealth {
+					t.Error("expected container port 9003 named grpc-health")
+				}
 				if !foundMetrics {
 					t.Error("expected container port 9090 named metrics")
 				}
 			},
 		},
 		{
-			name:  "EPP Deployment: args include pool-name and pool-namespace",
+			name:  "EPP Deployment: args include pool-name, pool-namespace, ports, and config-file",
 			model: defaultInferencePoolModel(),
 			cfg:   defaultInferencePoolConfig(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
@@ -239,7 +250,162 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				assertArgValue(t, args, "--pool-name", testPoolModelName)
 				assertArgValue(t, args, "--pool-namespace", "test-ns")
 				assertArgValue(t, args, "--grpc-port", "9002")
+				assertArgValue(t, args, "--grpc-health-port", "9003")
 				assertArgValue(t, args, "--metrics-port", "9090")
+				assertArgValue(t, args, "--config-file", "/etc/epp/epp-config.yaml")
+			},
+		},
+		{
+			name:  "EPP Deployment: gRPC health probes on port 9003",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				c := result.EPPDeployment.Spec.Template.Spec.Containers[0]
+				if c.LivenessProbe == nil || c.LivenessProbe.GRPC == nil {
+					t.Fatal("expected gRPC liveness probe")
+				}
+				if c.LivenessProbe.GRPC.Port != 9003 {
+					t.Errorf("expected liveness probe port 9003, got %d", c.LivenessProbe.GRPC.Port)
+				}
+				if c.ReadinessProbe == nil || c.ReadinessProbe.GRPC == nil {
+					t.Fatal("expected gRPC readiness probe")
+				}
+				if c.ReadinessProbe.GRPC.Port != 9003 {
+					t.Errorf("expected readiness probe port 9003, got %d", c.ReadinessProbe.GRPC.Port)
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: config volume mounted from ConfigMap at /etc/epp",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.EPPDeployment.Spec.Template.Spec
+				// VolumeMount
+				var mount *corev1.VolumeMount
+				for i, m := range spec.Containers[0].VolumeMounts {
+					if m.Name == "epp-config" {
+						mount = &spec.Containers[0].VolumeMounts[i]
+						break
+					}
+				}
+				if mount == nil {
+					t.Fatal("expected volumeMount named epp-config")
+				}
+				if mount.MountPath != "/etc/epp" {
+					t.Errorf("expected mountPath /etc/epp, got %q", mount.MountPath)
+				}
+				// Volume
+				var vol *corev1.Volume
+				for i, v := range spec.Volumes {
+					if v.Name == "epp-config" {
+						vol = &spec.Volumes[i]
+						break
+					}
+				}
+				if vol == nil {
+					t.Fatal("expected volume named epp-config")
+				}
+				if vol.ConfigMap == nil {
+					t.Fatal("expected epp-config volume to reference a ConfigMap")
+				}
+				if vol.ConfigMap.Name != testPoolEPPName+"-config" {
+					t.Errorf("expected ConfigMap name %s-config, got %q", testPoolEPPName, vol.ConfigMap.Name)
+				}
+			},
+		},
+		{
+			name:  "EPP ConfigMap: contains epp-config.yaml with EndpointPickerConfig kind",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				cm := result.EPPConfigMap
+				if cm == nil {
+					t.Fatal("expected EPPConfigMap to be non-nil")
+				}
+				if cm.Name != testPoolEPPName+"-config" {
+					t.Errorf("expected ConfigMap name %s-config, got %q", testPoolEPPName, cm.Name)
+				}
+				data, ok := cm.Data["epp-config.yaml"]
+				if !ok {
+					t.Fatal("expected epp-config.yaml key in ConfigMap Data")
+				}
+				if !strings.Contains(data, "kind: EndpointPickerConfig") {
+					t.Errorf("expected EndpointPickerConfig kind in config, got: %s", data)
+				}
+				if !strings.Contains(data, "max-score-picker") {
+					t.Errorf("expected max-score-picker plugin in config, got: %s", data)
+				}
+			},
+		},
+		{
+			name:  "EPP ConfigMap: default config is valid YAML",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				data := result.EPPConfigMap.Data["epp-config.yaml"]
+				parsed := map[string]any{}
+				if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+					t.Fatalf("default epp-config.yaml is not valid YAML: %v\ncontent:\n%s", err, data)
+				}
+				if parsed["kind"] != "EndpointPickerConfig" {
+					t.Errorf("expected parsed kind=EndpointPickerConfig, got %v", parsed["kind"])
+				}
+			},
+		},
+		{
+			name: "EPP ConfigMap: user schedulerConfig override replaces default",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultInferencePoolModel()
+				m.Spec.Advanced.InferencePool.SchedulerConfig = &runtime.RawExtension{
+					Raw: []byte(`{"apiVersion":"inference.networking.x-k8s.io/v1alpha1","kind":"EndpointPickerConfig","plugins":[{"type":"prefix-cache-scorer"},{"type":"max-score-picker"}],"schedulingProfiles":[{"name":"default","plugins":[{"pluginRef":"max-score-picker"},{"pluginRef":"prefix-cache-scorer","weight":2}]}]}`),
+				}
+				return m
+			}(),
+			cfg: defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				data := result.EPPConfigMap.Data["epp-config.yaml"]
+				if !strings.Contains(data, "prefix-cache-scorer") {
+					t.Errorf("expected override to include prefix-cache-scorer, got: %s", data)
+				}
+				parsed := map[string]any{}
+				if err := yaml.Unmarshal([]byte(data), &parsed); err != nil {
+					t.Fatalf("rendered override is not valid YAML: %v", err)
+				}
+			},
+		},
+		{
+			name: "EPP ConfigMap: invalid schedulerConfig JSON returns error",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultInferencePoolModel()
+				m.Spec.Advanced.InferencePool.SchedulerConfig = &runtime.RawExtension{
+					Raw: []byte(`{not valid json`),
+				}
+				return m
+			}(),
+			cfg: defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err == nil {
+					t.Fatal("expected error for invalid schedulerConfig JSON, got nil")
+				}
+				if result != nil {
+					t.Error("expected nil result on error")
+				}
 			},
 		},
 		{
