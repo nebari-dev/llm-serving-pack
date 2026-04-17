@@ -160,16 +160,19 @@ func getEnvOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
-// makeUserinfoLookup returns a UserGroupsLookup that calls the OIDC userinfo endpoint.
-// For v0.1 this is a stub that returns an error so the auditor skips revocation
-// safely until token exchange is implemented.
+// makeUserinfoLookup returns a UserGroupsLookup for the audit loop.
+//
+// This is currently a stub: OIDC /userinfo only returns claims for the token
+// bearer, and the auditor has a username rather than a user token, so the
+// userinfo endpoint is not usable as-is. The lookup returns an error so the
+// auditor fails safe (skips revocation) rather than deleting keys it cannot
+// verify.
+//
+// The real implementation calls the Keycloak admin API with a service-account
+// token; tracked in
+// https://github.com/nebari-dev/nebari-llm-serving-pack/issues/55.
 func makeUserinfoLookup(userinfoURL string) audit.UserGroupsLookup {
 	return func(ctx context.Context, username string) ([]string, error) {
-		// TODO: Implement OIDC userinfo lookup.
-		// This requires either:
-		//   1. A service account token that can query the Keycloak admin API.
-		//   2. Token exchange to obtain a token for the user.
-		// Returning an error causes the auditor to skip revocation (fail-safe).
 		return nil, fmt.Errorf("userinfo lookup not yet implemented (url: %s, user: %s)", userinfoURL, username)
 	}
 }

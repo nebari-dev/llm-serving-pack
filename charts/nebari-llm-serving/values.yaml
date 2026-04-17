@@ -35,6 +35,12 @@ keyManager:
     tag: latest
     pullPolicy: Always
   auditInterval: 5m
+  # oidcUserinfoURL is currently non-functional and only exists to gate the
+  # audit loop on/off. The lookup it drives is stubbed out (see #55 for the
+  # Keycloak admin implementation); setting this URL will cause the auditor
+  # to log a lookup failure for every key and skip revocation rather than
+  # delete keys it cannot verify. Leave empty to keep the audit loop
+  # disabled entirely until #55 lands.
   oidcUserinfoURL: ""
 
 operator:

@@ -231,13 +231,11 @@ This is a hard RBAC boundary. The key manager can only access Secrets in the ded
 
 ### API key audit
 
-The key manager runs a periodic background audit (configurable interval, default 5 minutes) that:
+The key manager includes a periodic background audit (configurable interval, default 5 minutes) that walks every API key Secret in `llm-api-keys`, looks up each creator's current groups, and revokes keys whose creator no longer belongs to a group in the model's `access.groups`.
 
-1. Lists all API key Secrets in `llm-api-keys`
-2. For each key entry, looks up the creator's current groups via the OIDC userinfo endpoint
-3. If the creator no longer belongs to a group that matches the model's `access.groups`, revokes the key
+**Current state:** the audit framework is wired up but the user-groups lookup is stubbed. Calling the OIDC `/userinfo` endpoint only works for the token bearer, and the auditor has a username rather than a user token, so it cannot be used as-is. Until this is replaced with a Keycloak admin lookup (tracked in #55), external API keys are **not** automatically revoked when a user loses group membership. The audit loop returns an error from the lookup and fails safe (skips revocation) rather than deleting keys it cannot verify.
 
-There is a window (up to the audit interval) where a user who has lost group access can still use existing keys. This is acceptable for v0.1 and consistent with how most RBAC systems handle eventual consistency.
+Operator-visible consequence: if a user is removed from a model's allowed groups, their JWT-based access to the internal endpoint is denied on the next request (the gateway checks `spec.access.groups` per request), but any external API keys they previously minted keep working until an admin deletes them manually or the LLMModel is deleted. Plan for this when designing group membership changes - or disable the external endpoint for models that need stricter revocation.
 
 ### Resource creation approach
 
