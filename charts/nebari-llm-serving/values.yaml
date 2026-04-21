@@ -36,38 +36,23 @@ keyManager:
     pullPolicy: Always
   auditInterval: 5m
   oidcUserinfoURL: ""
-  # nebariApp - the NebariApp CR that exposes the key-manager UI via the
-  # nebari-operator (HTTPRoute, TLS cert, Keycloak client, landing-page tile).
-  # Set enabled=false when installing standalone without a Nebari cluster.
+  # nebariApp - opt the key-manager UI into external exposure via the
+  # nebari-operator. When enabled, the operator reconciles a NebariApp CR
+  # into an HTTPRoute, cert-manager Certificate, per-app Gateway HTTPS
+  # listener, and (optional) Keycloak OIDC client + landing-page tile.
+  #
+  # The chart owns the `service` field (computed from the release name);
+  # everything else flows through `spec` verbatim so deployments can
+  # configure routing/auth/landingPage/etc. without chart changes. See:
+  #   https://github.com/nebari-dev/nebari-operator/blob/main/api/v1/nebariapp_types.go
   nebariApp:
     enabled: true
-    # hostname - fully qualified hostname for the UI. Required when enabled.
-    # Example: llm-keys.your-cluster.example.com
-    hostname: ""
-    # gateway - which Nebari shared gateway to attach the HTTPRoute to.
-    # Valid values: "public" or "internal".
-    gateway: public
-    auth:
-      # provisionClient: true tells nebari-operator to create a dedicated
-      # Keycloak client for the UI and write credentials to the Secret
-      # <nebariapp-name>-oidc-client. The gateway uses these to enforce
-      # OIDC login before forwarding to the key-manager.
-      provisionClient: true
-      scopes:
-        - openid
-        - profile
-        - email
-        - groups
-    # landingPage controls how the UI appears on the Nebari landing page.
-    landingPage:
-      enabled: true
-      displayName: "LLM API Keys"
-      description: "Manage your personal API keys for LLM inference."
-      category: "Platform"
-      # icon - one of the built-in keys (jupyter, grafana, prometheus,
-      # keycloak, argocd, kubernetes) or a URL to a custom image.
-      icon: "keycloak"
-      priority: 100
+    # spec is rendered as-is into the NebariApp CR's spec. The chart adds
+    # a `service:` block computed from the release name and merges this
+    # map alongside it. At minimum, set spec.hostname (the CRD requires
+    # it). Routing/auth/landingPage/etc. are deployment-specific and
+    # should be set in the consuming Helm release values.
+    spec: {}
 
 operator:
   image:

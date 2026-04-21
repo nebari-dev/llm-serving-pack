@@ -1,4 +1,14 @@
 {{- if and .Values.keyManager.enabled .Values.keyManager.nebariApp.enabled }}
+# NebariApp - exposes the key-manager UI through the nebari-operator, which
+# reconciles this CR into an HTTPRoute, cert-manager Certificate, per-app
+# Gateway HTTPS listener, optional Keycloak OIDC client, and optional
+# landing-page tile.
+#
+# The chart owns the `service` block (it depends on chart fullname); every
+# other field is passed straight through from `keyManager.nebariApp.spec`
+# so consumers can configure routing, auth, landingPage, etc. without a
+# chart change. See the NebariApp CRD docs for the full schema:
+#   https://github.com/nebari-dev/nebari-operator/blob/main/api/v1/nebariapp_types.go
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
 metadata:
@@ -6,35 +16,12 @@ metadata:
   namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
   labels:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    app.kubernetes.io/component: key-manager
 spec:
-  hostname: {{ required "keyManager.nebariApp.hostname is required when keyManager.nebariApp.enabled=true" .Values.keyManager.nebariApp.hostname | quote }}
-  gateway: {{ .Values.keyManager.nebariApp.gateway | quote }}
   service:
     name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
     port: 8080
-  auth:
-    enabled: true
-    provider: keycloak
-    provisionClient: {{ .Values.keyManager.nebariApp.auth.provisionClient }}
-    scopes:
-      {{- toYaml .Values.keyManager.nebariApp.auth.scopes | nindent 6 }}
-  {{- with .Values.keyManager.nebariApp.landingPage }}
-  landingPage:
-    enabled: {{ .enabled }}
-    {{- if .enabled }}
-    displayName: {{ required "keyManager.nebariApp.landingPage.displayName is required when landingPage is enabled" .displayName | quote }}
-    {{- with .description }}
-    description: {{ . | quote }}
-    {{- end }}
-    {{- with .category }}
-    category: {{ . | quote }}
-    {{- end }}
-    {{- with .icon }}
-    icon: {{ . | quote }}
-    {{- end }}
-    {{- with .priority }}
-    priority: {{ . }}
-    {{- end }}
-    {{- end }}
+  {{- with .Values.keyManager.nebariApp.spec }}
+  {{- toYaml . | nindent 2 }}
   {{- end }}
 {{- end }}
