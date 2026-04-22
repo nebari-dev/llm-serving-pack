@@ -3,7 +3,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
-  namespace: {{ .Values.apiKeysNamespace }}
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
   labels:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}
 roleRef:

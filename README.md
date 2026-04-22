@@ -104,7 +104,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: qwen3-5-35b-a3b-gptq-int4
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system
 spec:
   model:
     name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
@@ -167,7 +167,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://qwen3-5-35b-a3b-gptq-int4.llm-serving.svc.cluster.local/v1",
+    base_url="http://qwen3-5-35b-a3b-gptq-int4.nebari-llm-serving-system.svc.cluster.local/v1",
     api_key=os.environ["JUPYTERHUB_API_TOKEN"],  # JWT from Nebari
 )
 response = client.chat.completions.create(
@@ -192,7 +192,6 @@ response = client.chat.completions.create(
 | `defaults.storage.storageClassName` | Default StorageClass for model PVCs (empty = cluster default) | `""` |
 | `defaults.monitoring.enabled` | Enable PodMonitor for Prometheus scraping | `true` |
 | `keyManager.enabled` | Deploy the key manager web UI | `true` |
-| `apiKeysNamespace` | Namespace where API key Secrets are stored | `llm-api-keys` |
 
 ## Architecture
 

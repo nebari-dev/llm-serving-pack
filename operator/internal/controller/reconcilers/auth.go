@@ -9,29 +9,31 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
-// AuthResources holds all auth-related resources for an LLMModel.
+// AuthResources holds all auth-related resources for an LLMModel. All
+// resources live in the LLMModel's own namespace - the operator no longer
+// uses a separate api-keys namespace because Envoy Gateway's
+// SecurityPolicy.spec.apiKeyAuth.credentialRefs rejects cross-namespace
+// Secret references (it does not honor ReferenceGrant for that field; see
+// nebari-dev/nebari-llm-serving-pack#59). The model webhook enforces that
+// LLMModel CRs live in the operator's namespace so that the key-manager
+// (also in the operator namespace) can find these Secrets.
 type AuthResources struct {
-	// Resources in the llm-api-keys namespace (no ownerReference, cleaned up via finalizer)
-	APIKeySecret     *corev1.Secret
-	APIKeyMetadataCM *corev1.ConfigMap
-	ReferenceGrant   *unstructured.Unstructured // gateway.networking.k8s.io/v1beta1 ReferenceGrant
-
-	// Resources in the model namespace
+	APIKeySecret           *corev1.Secret
+	APIKeyMetadataCM       *corev1.ConfigMap
 	ExternalSecurityPolicy *unstructured.Unstructured // apiKeyAuth SecurityPolicy, nil if external disabled
 	InternalSecurityPolicy *unstructured.Unstructured // JWT SecurityPolicy, nil if internal disabled
 }
 
 // BuildAuthResources is a pure function that computes all auth-related Kubernetes resources
-// for the given LLMModel: API key Secret, metadata ConfigMap, ReferenceGrant, and SecurityPolicies.
+// for the given LLMModel: API key Secret, metadata ConfigMap, and SecurityPolicies.
+// All resources are placed in the LLMModel's own namespace.
 func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*AuthResources, error) {
 	result := &AuthResources{}
 
-	// Shared labels for cross-namespace resources (Secret and ConfigMap in api-keys namespace)
-	crossNSLabels := buildCrossNSLabels(model)
+	labels := StandardLabels(model)
 
-	result.APIKeySecret = buildAPIKeySecret(model, cfg, crossNSLabels)
-	result.APIKeyMetadataCM = buildAPIKeyMetadataConfigMap(model, cfg, crossNSLabels)
-	result.ReferenceGrant = buildReferenceGrant(model, cfg)
+	result.APIKeySecret = buildAPIKeySecret(model, labels)
+	result.APIKeyMetadataCM = buildAPIKeyMetadataConfigMap(model, labels)
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model, cfg)
@@ -44,62 +46,23 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 	return result, nil
 }
 
-// buildCrossNSLabels returns labels for resources that live in the api-keys namespace
-// but belong to a specific model in another namespace.
-func buildCrossNSLabels(model *llmv1alpha1.LLMModel) map[string]string {
-	labels := StandardLabels(model)
-	labels["llm.nebari.dev/model-name"] = model.Name
-	labels["llm.nebari.dev/model-namespace"] = model.Namespace
-	return labels
-}
-
-func buildAPIKeySecret(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig, labels map[string]string) *corev1.Secret {
+func buildAPIKeySecret(model *llmv1alpha1.LLMModel, labels map[string]string) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      APIKeySecretName(model.Name),
-			Namespace: cfg.APIKeysNamespace,
+			Namespace: model.Namespace,
 			Labels:    labels,
 		},
 		Type: corev1.SecretTypeOpaque,
 	}
 }
 
-func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig, labels map[string]string) *corev1.ConfigMap {
+func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      APIKeyMetadataConfigMapName(model.Name),
-			Namespace: cfg.APIKeysNamespace,
+			Namespace: model.Namespace,
 			Labels:    labels,
-		},
-	}
-}
-
-func buildReferenceGrant(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) *unstructured.Unstructured {
-	name := model.Name + "-" + model.Namespace + "-ref-grant"
-	return &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "gateway.networking.k8s.io/v1beta1",
-			"kind":       "ReferenceGrant",
-			"metadata": map[string]interface{}{
-				"name":      name,
-				"namespace": cfg.APIKeysNamespace,
-			},
-			"spec": map[string]interface{}{
-				"from": []interface{}{
-					map[string]interface{}{
-						"group":     "gateway.envoyproxy.io",
-						"kind":      "SecurityPolicy",
-						"namespace": model.Namespace,
-					},
-				},
-				"to": []interface{}{
-					map[string]interface{}{
-						"group": "",
-						"kind":  "Secret",
-						"name":  APIKeySecretName(model.Name),
-					},
-				},
-			},
 		},
 	}
 }
@@ -124,12 +87,15 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 					},
 				},
 				"apiKeyAuth": map[string]interface{}{
+					// No `namespace` field - Envoy Gateway's APIKeyAuth rejects
+					// any cross-namespace credentialRef (and does not honor
+					// ReferenceGrant for this field). The Secret lives in the
+					// same namespace as this SecurityPolicy by design.
 					"credentialRefs": []interface{}{
 						map[string]interface{}{
-							"group":     "",
-							"kind":      "Secret",
-							"name":      APIKeySecretName(model.Name),
-							"namespace": cfg.APIKeysNamespace,
+							"group": "",
+							"kind":  "Secret",
+							"name":  APIKeySecretName(model.Name),
 						},
 					},
 					"extractFrom": []interface{}{

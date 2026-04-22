@@ -3,17 +3,10 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: llm-operator-system
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: llm-api-keys
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: llm-serving
   labels:
+    # Per #59 LLMModels live in the operator's own namespace, so this
+    # namespace also needs the managed label that the validating webhook
+    # checks for.
     nebari.dev/managed: "true"
 ---
 apiVersion: v1
@@ -115,10 +108,14 @@ spec:
               value: "https://keycloak.llm.local/realms/nebari"
             - name: LLM_OIDC_GROUPS_CLAIM
               value: "groups"
-            - name: LLM_API_KEYS_NAMESPACE
-              value: "llm-api-keys"
             - name: ENABLE_WEBHOOKS
               value: "true"
+            # POD_NAMESPACE feeds the webhook's same-namespace check on
+            # LLMModel CRs (#59).
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - containerPort: 9443
               name: webhook-server

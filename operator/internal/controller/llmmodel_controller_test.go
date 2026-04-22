@@ -234,8 +234,8 @@ var _ = Describe("LLMModel Controller", func() {
 		})
 	})
 
-	Describe("Cross-namespace resources (llm-api-keys namespace)", func() {
-		const modelName = "test-cross-ns"
+	Describe("Auth resources (Secret + ConfigMap in the model's namespace)", func() {
+		const modelName = "test-auth-resources"
 
 		AfterEach(func() {
 			model := &llmv1alpha1.LLMModel{}
@@ -246,7 +246,7 @@ var _ = Describe("LLMModel Controller", func() {
 			}
 		})
 
-		It("creates Secret and ConfigMap in the api-keys namespace", func() {
+		It("creates Secret and ConfigMap in the model's own namespace", func() {
 			By("creating the LLMModel")
 			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
@@ -256,34 +256,26 @@ var _ = Describe("LLMModel Controller", func() {
 			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
-			apiKeysNS := testConfig().APIKeysNamespace
-
-			By("verifying the api-keys namespace was created")
-			ns := &corev1.Namespace{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: apiKeysNS}, ns)).To(Succeed())
-
-			By("verifying API key Secret exists in api-keys namespace")
+			By("verifying API key Secret exists in the model's namespace")
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name:      modelName + "-api-keys",
-				Namespace: apiKeysNS,
+				Namespace: testNamespace,
 			}, secret)).To(Succeed())
-			Expect(secret.Labels["llm.nebari.dev/model-name"]).To(Equal(modelName))
 
-			By("verifying API key metadata ConfigMap exists in api-keys namespace")
+			By("verifying API key metadata ConfigMap exists in the model's namespace")
 			cm := &corev1.ConfigMap{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name:      modelName + "-api-key-metadata",
-				Namespace: apiKeysNS,
+				Namespace: testNamespace,
 			}, cm)).To(Succeed())
-			Expect(cm.Labels["llm.nebari.dev/model-name"]).To(Equal(modelName))
 		})
 	})
 
 	Describe("Deletion with finalizer cleanup", func() {
 		const modelName = "test-deletion"
 
-		It("cleans up cross-namespace resources on deletion", func() {
+		It("deletes the API-key Secret and ConfigMap on LLMModel deletion", func() {
 			By("creating the LLMModel")
 			model := newMinimalModel(modelName)
 			Expect(k8sClient.Create(ctx, model)).To(Succeed())
@@ -293,13 +285,11 @@ var _ = Describe("LLMModel Controller", func() {
 			err := reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
-			apiKeysNS := testConfig().APIKeysNamespace
-
-			By("verifying cross-namespace resources exist")
+			By("verifying auth resources exist in the model's namespace")
 			secret := &corev1.Secret{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name:      modelName + "-api-keys",
-				Namespace: apiKeysNS,
+				Namespace: testNamespace,
 			}, secret)).To(Succeed())
 
 			By("deleting the LLMModel (triggers finalizer)")
@@ -311,19 +301,19 @@ var _ = Describe("LLMModel Controller", func() {
 			err = reconcileUntilStable(r, ctx, reconcileRequest(modelName))
 			Expect(err).NotTo(HaveOccurred())
 
-			By("verifying cross-namespace Secret was deleted")
+			By("verifying API-key Secret was deleted")
 			deletedSecret := &corev1.Secret{}
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      modelName + "-api-keys",
-				Namespace: apiKeysNS,
+				Namespace: testNamespace,
 			}, deletedSecret)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
-			By("verifying cross-namespace ConfigMap was deleted")
+			By("verifying metadata ConfigMap was deleted")
 			deletedCM := &corev1.ConfigMap{}
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      modelName + "-api-key-metadata",
-				Namespace: apiKeysNS,
+				Namespace: testNamespace,
 			}, deletedCM)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 

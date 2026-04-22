@@ -1,5 +1,8 @@
 # Nebari LLM serving pack design
 
+> **Note (April 2026, [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59)):**
+> This document still describes the original "dedicated `llm-api-keys` namespace + ReferenceGrant" pattern. The actual implementation no longer matches that pattern. Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.credentialRefs` rejects cross-namespace Secret references and does not honor `ReferenceGrant` for that field, so the pack now keeps everything (LLMModel CRs, model pods, API-key Secrets, key-manager) in a single operator namespace, and a validating webhook enforces that LLMModel CRs are created there. The architecture sections below should be read with that change in mind; a full rewrite is pending.
+
 ## Overview
 
 A Nebari software pack for serving LLMs using llm-d with modelcar/OCI support for model distribution. The pack deploys a Go operator that watches a custom `LLMModel` CRD. Admins apply one LLMModel per model they want to serve. The operator handles everything downstream: model storage, vLLM serving pods, inference scheduling, routing, and access control.

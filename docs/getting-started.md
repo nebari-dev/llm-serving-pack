@@ -145,10 +145,10 @@ curl -s -X POST http://localhost:8080/api/v1/keys \
   -d '{"modelName": "test-model", "namespace": "llm-serving"}' | jq .
 ```
 
-The response includes the generated key. Keys are stored as Kubernetes Secrets in the `llm-api-keys` namespace:
+The response includes the generated key. Keys are stored as Kubernetes Secrets in the operator namespace (defaults to `llm-operator-system` for the dev cluster, `nebari-llm-serving-system` for the chart):
 
 ```bash
-kubectl -n llm-api-keys get secrets
+kubectl -n llm-operator-system get secrets -l llm.nebari.dev/model
 ```
 
 ## 9. Cleanup

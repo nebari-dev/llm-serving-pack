@@ -44,14 +44,18 @@ spec:
             {{- end }}
             - name: LLM_OIDC_GROUPS_CLAIM
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
-            - name: LLM_API_KEYS_NAMESPACE
-              value: {{ .Values.apiKeysNamespace | quote }}
             - name: LLM_DEFAULT_SERVING_IMAGE
               value: {{ .Values.defaults.serving.image | quote }}
             - name: LLM_DEFAULT_STORAGE_CLASS_NAME
               value: {{ .Values.defaults.storage.storageClassName | quote }}
             - name: ENABLE_WEBHOOKS
               value: "true"
+            # POD_NAMESPACE feeds the validating webhook's same-namespace
+            # check on LLMModel CRs (#59).
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - containerPort: 9443
               name: webhook-server

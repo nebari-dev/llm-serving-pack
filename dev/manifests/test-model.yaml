@@ -2,7 +2,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: test-model
-  namespace: llm-serving
+  namespace: llm-operator-system  # per #59 LLMModels live in the operator namespace
 spec:
   model:
     name: "test/tiny-model"

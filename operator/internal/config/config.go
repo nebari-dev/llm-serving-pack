@@ -35,7 +35,14 @@ type OperatorConfig struct {
 	OIDCAudience            string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
 	DefaultServingImage     string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.6.0")
 	DefaultStorageClassName string // LLM_DEFAULT_STORAGE_CLASS_NAME (optional, empty = cluster default)
-	APIKeysNamespace        string // LLM_API_KEYS_NAMESPACE (default: "llm-api-keys")
+	// APIKeysNamespace is no longer used to PLACE Secrets - per #59 the
+	// API-key Secrets and metadata ConfigMaps now live in the LLMModel's
+	// own namespace so SecurityPolicy.apiKeyAuth.credentialRefs can
+	// reference them without a cross-namespace ref. This field is kept
+	// only so the finalizer can clean up legacy resources from clusters
+	// originally deployed against a separate api-keys namespace; new
+	// deployments leave it empty.
+	APIKeysNamespace string // LLM_API_KEYS_NAMESPACE (legacy cleanup hint, default empty)
 }
 
 // getEnvOrDefault returns the value of the environment variable named by key,
@@ -72,7 +79,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		OIDCAudience:            os.Getenv("LLM_OIDC_AUDIENCE"),
 		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.6.0"),
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
-		APIKeysNamespace:        getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys"),
+		APIKeysNamespace:        os.Getenv("LLM_API_KEYS_NAMESPACE"),
 	}
 
 	if len(missing) > 0 {
