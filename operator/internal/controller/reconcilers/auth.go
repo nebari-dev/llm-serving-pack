@@ -67,7 +67,7 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 	}
 }
 
-func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) *unstructured.Unstructured {
+func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, _ *config.OperatorConfig) *unstructured.Unstructured {
 	name := model.Name + "-external-auth"
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
