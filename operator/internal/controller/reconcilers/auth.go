@@ -134,8 +134,11 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 	provider := map[string]interface{}{
 		"name":   "oidc",
 		"issuer": cfg.OIDCIssuerURL,
+		// Keycloak-specific JWKS path. The rest of the pack assumes Keycloak
+		// (issuer URL convention, group-membership mapper, etc.) and Keycloak
+		// does not serve JWKS at /.well-known/jwks.json. See issue #61.
 		"remoteJWKS": map[string]interface{}{
-			"uri": cfg.OIDCIssuerURL + "/.well-known/jwks.json",
+			"uri": cfg.OIDCIssuerURL + "/protocol/openid-connect/certs",
 		},
 		"claimToHeaders": []interface{}{
 			map[string]interface{}{

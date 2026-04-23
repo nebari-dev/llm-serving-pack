@@ -318,6 +318,8 @@ In-cluster app -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> 
 - JWT validation: verifies signature against the OIDC issuer's JWKS endpoint, checks audience, extracts groups from the configured claim, validates group membership against the model's `access.groups`
 - No browser redirects - this is pure bearer token validation for service-to-service calls
 
+JWKS endpoint resolution: the operator currently constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`, the Keycloak convention. This matches the rest of the pack's Keycloak assumptions (issuer URL format, group-membership mapper) but means a non-Keycloak OIDC provider will not work out of the box even though the surrounding config fields are provider-agnostic. The long-term fix is to fetch `<issuerURL>/.well-known/openid-configuration` and read `jwks_uri` from the discovery document; until that lands, treat the internal SecurityPolicy JWKS path as Keycloak-only. Tracked in issue #61.
+
 The `jwt` SecurityPolicy type in Envoy Gateway validates bearer tokens without OIDC redirect flows. It takes the issuer URL, fetches the JWKS, and validates the token signature, expiry, and claims. This is the correct mechanism for service-to-service auth where the calling service already has a JWT.
 
 Note on JWT availability: in Nebari, JupyterHub injects tokens into user pods. For other in-cluster services, the application must handle OIDC login and forward the resulting token. If a service cannot obtain a JWT, it should use the external endpoint with an API key instead.
