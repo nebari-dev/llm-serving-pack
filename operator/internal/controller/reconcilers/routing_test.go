@@ -331,7 +331,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 			},
 		},
 		{
-			name: "Both routes: Host header matches use Exact type",
+			name:  "Both routes: Host header matches use Exact type",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
