@@ -1,47 +1,14 @@
 package secrets
 
-import (
-	"fmt"
-	"hash/fnv"
-	"testing"
-)
+import "testing"
 
-// expectedSanitized mirrors the sanitization rules in sanitizeUsernameForKey
-// so test cases can pin exact expected values without duplicating the hash
-// computation in each row. It is intentionally a separate implementation
-// from the production code so that an accidental change to the sanitization
-// rules will fail these tests.
-func expectedSanitized(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	allValid := true
-	for i := 0; i < len(raw); i++ {
-		if !isValidDataKeyByte(raw[i]) {
-			allValid = false
-			break
-		}
-	}
-	if allValid {
-		return raw
-	}
-	out := make([]byte, 0, len(raw)+9)
-	for i := 0; i < len(raw); i++ {
-		c := raw[i]
-		switch {
-		case c == '@':
-			out = append(out, "-at-"...)
-		case isValidDataKeyByte(c):
-			out = append(out, c)
-		default:
-			out = append(out, '-')
-		}
-	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(raw))
-	return fmt.Sprintf("%s-%08x", string(out), h.Sum32())
-}
-
+// Each row pins a literal expected output. The hash suffixes are FNV-1a
+// over the raw username; pinning them as literals (rather than computing
+// them via fnv in the test) means any change to either the substitution
+// rules OR the hash algorithm fails the test loudly. That is the drift
+// detector. The companion black-box test in manager_test.go has its own
+// independent reproduction of the rule used to assemble end-to-end
+// expected clientIDs.
 func TestSanitizeUsernameForKey(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -66,27 +33,27 @@ func TestSanitizeUsernameForKey(t *testing.T) {
 		{
 			name:  "single @ becomes -at- with hash suffix",
 			input: "alice@example.com",
-			want:  expectedSanitized("alice@example.com"),
+			want:  "alice-at-example.com-94a4b546",
 		},
 		{
 			name:  "multiple @ each become -at- with hash suffix",
 			input: "weird@@example.com",
-			want:  expectedSanitized("weird@@example.com"),
+			want:  "weird-at--at-example.com-a114d2ab",
 		},
 		{
 			name:  "plus is replaced with dash",
 			input: "alice+tag@example.com",
-			want:  expectedSanitized("alice+tag@example.com"),
+			want:  "alice-tag-at-example.com-916aa631",
 		},
 		{
 			name:  "space is replaced with dash",
 			input: "alice smith",
-			want:  expectedSanitized("alice smith"),
+			want:  "alice-smith-0c2e7d10",
 		},
 		{
 			name:  "unicode bytes are each replaced with dash",
 			input: "alicé",
-			want:  expectedSanitized("alicé"),
+			want:  "alic---7bb18798", // é is two bytes in UTF-8, both invalid
 		},
 		{
 			name:  "uppercase is preserved",
@@ -112,9 +79,6 @@ func TestSanitizeUsernameForKey(t *testing.T) {
 			if tc.input != "" && !isValidDataKeyName(got) {
 				t.Errorf("sanitizeUsernameForKey(%q) = %q is not a valid k8s data key", tc.input, got)
 			}
-			if tc.input == "" && got != "" {
-				t.Errorf("sanitizeUsernameForKey(\"\") = %q, want \"\"", got)
-			}
 		})
 	}
 }
@@ -139,7 +103,6 @@ func TestSanitizeUsernameForKey_NoCollisions(t *testing.T) {
 			if gotA == gotB {
 				t.Errorf("collision: sanitizeUsernameForKey(%q) == sanitizeUsernameForKey(%q) == %q", p.a, p.b, gotA)
 			}
-			// And both must be valid k8s data keys (since neither input is empty).
 			if !isValidDataKeyName(gotA) {
 				t.Errorf("sanitizeUsernameForKey(%q) = %q is not a valid k8s data key", p.a, gotA)
 			}

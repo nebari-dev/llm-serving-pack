@@ -25,7 +25,7 @@ func sanitizedPrefix(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	allValid := raw != ""
+	allValid := true
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
 		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_'
