@@ -26,13 +26,21 @@ func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always t
 //
 // Each AIGatewayRoute is rendered by the Envoy AI Gateway controller into an
 // HTTPRoute. AIGatewayRouteSpec itself does not currently expose a hostnames
-// field (the upstream controller does not propagate hostnames onto the
-// generated HTTPRoute), so we ensure deterministic per-model routing by
-// constraining every rule with a `Host` header match for the model's FQDN.
-// Without a host constraint, every route attached to a Gateway matches every
-// request and SecurityPolicy attachment becomes non-deterministic - an
-// external (API key) request can be matched against the internal route's JWT
-// filter and rejected. See issue #64.
+// field (verified against envoyproxy/ai-gateway main; the upstream controller
+// also does not propagate hostnames onto the generated HTTPRoute), so we
+// ensure deterministic per-model routing by constraining every rule with a
+// `Host` header match for the model's FQDN. Without a host constraint, every
+// route attached to a Gateway matches every request and SecurityPolicy
+// attachment becomes non-deterministic - an external (API key) request can be
+// matched against the internal route's JWT filter and rejected. See issue #64.
+//
+// HTTP/2 note: production traffic is HTTP/2 (HTTPS through Envoy). The Gateway
+// API spec mandates that conformant implementations treat the HTTP/1.1 Host
+// header and the HTTP/2 :authority pseudo-header as equivalent for header
+// matching (see HTTPHeaderMatch in the Gateway API spec). Envoy normalises
+// :authority to Host before HTTPRoute header matching runs, so an Exact Host
+// matcher fires identically under both protocols. Revisit if upstream changes
+// either assumption, or migrate to spec.hostnames once it is propagated.
 func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*RoutingResources, error) {
 	result := &RoutingResources{}
 

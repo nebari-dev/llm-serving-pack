@@ -234,8 +234,6 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				}
 			},
 		},
-		// NOTE: hostname tests removed - AIGatewayRoute does not support hostnames.
-		// Subdomain/hostname routing will be addressed via Gateway listener config.
 		{
 			name: "External disabled (enabled=false): ExternalRoute is nil",
 			model: func() *llmv1alpha1.LLMModel {

@@ -302,3 +302,64 @@ func TestInternalHostname(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveSubdomain(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		subdomain string
+		want      string
+		wantErr   bool
+	}{
+		{
+			name:      "explicit subdomain is used as-is",
+			modelName: "anything",
+			subdomain: "qwen3-5-35b",
+			want:      "qwen3-5-35b",
+		},
+		{
+			name:      "empty subdomain falls back to slugified model name",
+			modelName: "Qwen3_30B-A3B",
+			subdomain: "",
+			want:      "qwen3-30b-a3b",
+		},
+		{
+			name:      "explicit subdomain over 63 chars is rejected",
+			modelName: "anything",
+			subdomain: strings.Repeat("a", 64),
+			wantErr:   true,
+		},
+		{
+			name:      "explicit subdomain at exactly 63 chars is accepted",
+			modelName: "anything",
+			subdomain: strings.Repeat("a", 63),
+			want:      strings.Repeat("a", 63),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := &llmv1alpha1.LLMModel{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.modelName},
+				Spec: llmv1alpha1.LLMModelSpec{
+					Endpoints: llmv1alpha1.EndpointSpec{
+						External: llmv1alpha1.ExternalEndpointSpec{Subdomain: tt.subdomain},
+					},
+				},
+			}
+			got, err := EffectiveSubdomain(model)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (got=%q)", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("EffectiveSubdomain = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
