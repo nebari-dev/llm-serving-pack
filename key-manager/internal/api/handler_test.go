@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +14,11 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
+
+// discardLogger returns a slog logger that discards all output, for tests.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // --- mock implementations ---
 
@@ -61,6 +68,7 @@ func newHandlerWithMocks(lister ModelLister, km KeyManager) *Handler {
 	return &Handler{
 		lister:  lister,
 		secrets: km,
+		logger:  discardLogger(),
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -44,6 +45,79 @@ func NewManager(c client.Client, namespace string) *Manager {
 // secretName returns the name of the Secret for a model.
 func secretName(modelName string) string {
 	return modelName + "-api-keys"
+}
+
+// sanitizeUsernameForKey converts a username into a form that is valid as a
+// Kubernetes Secret/ConfigMap data key. K8s data keys must match
+// [-._a-zA-Z0-9]+, so SSO email usernames (e.g. "alice@example.com") would
+// otherwise cause the API server to reject the update.
+//
+// Already-valid input is returned unchanged so the common ASCII case keeps
+// human-readable clientIDs. When sanitization is needed, "@" becomes "-at-"
+// and any other disallowed byte becomes "-"; an 8-hex-char FNV-1a hash of
+// the raw username is then appended so two distinct raw usernames that
+// would otherwise collide (e.g. "alice@example.com" vs literal
+// "alice-at-example.com") get unique keys.
+//
+// The original (unsanitized) username is still recorded in KeyInfo.Creator
+// so ownership lookups work against the raw value. Empty input returns ""
+// and must be rejected by the caller before composing a data key.
+func sanitizeUsernameForKey(username string) string {
+	if username == "" {
+		return ""
+	}
+	// Fast path: if every byte is already valid, return as-is to avoid
+	// allocating and to keep clientIDs human-readable for ASCII users.
+	if isValidDataKeyName(username) {
+		return username
+	}
+	var b strings.Builder
+	b.Grow(len(username) + 9) // worst case "@"-only inputs grow ~4x; "+ -XXXXXXXX" suffix is 9
+	for i := 0; i < len(username); i++ {
+		c := username[i]
+		switch {
+		case c == '@':
+			b.WriteString("-at-")
+		case isValidDataKeyByte(c):
+			b.WriteByte(c)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(username))
+	fmt.Fprintf(&b, "-%08x", h.Sum32())
+	return b.String()
+}
+
+// isValidDataKeyByte reports whether c is allowed in a Kubernetes
+// Secret/ConfigMap data key.
+func isValidDataKeyByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z':
+		return true
+	case c >= 'A' && c <= 'Z':
+		return true
+	case c >= '0' && c <= '9':
+		return true
+	case c == '-' || c == '.' || c == '_':
+		return true
+	}
+	return false
+}
+
+// isValidDataKeyName reports whether s contains only bytes allowed in a
+// Kubernetes Secret/ConfigMap data key.
+func isValidDataKeyName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isValidDataKeyByte(s[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // configMapName returns the name of the ConfigMap for a model.
@@ -85,6 +159,9 @@ func (m *Manager) getConfigMap(ctx context.Context, modelName string) (*corev1.C
 // CreateKey generates a new API key for a model, writes it to the Secret,
 // and stores metadata in the ConfigMap. Returns the key (only time it's shown).
 func (m *Manager) CreateKey(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
 	const maxRetries = 3
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -111,7 +188,11 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 	}
 
 	// Count existing keys for this user to determine the sequence number.
-	userPrefix := "user-" + username + "-"
+	// The sanitized username is used both for the data-key prefix and for the
+	// composed clientID so the count and the new clientID stay in sync.
+	// KeyInfo.Creator below preserves the raw username for ownership checks.
+	safeUsername := sanitizeUsernameForKey(username)
+	userPrefix := "user-" + safeUsername + "-"
 	count := 0
 	for k := range secret.Data {
 		if strings.HasPrefix(k, userPrefix) {
@@ -119,7 +200,7 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		}
 	}
 	sequence := count + 1
-	clientID := fmt.Sprintf("user-%s-%d", username, sequence)
+	clientID := fmt.Sprintf("user-%s-%d", safeUsername, sequence)
 
 	apiKey, err := generateAPIKey()
 	if err != nil {

@@ -2,6 +2,8 @@ package secrets_test
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,44 @@ import (
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
+
+// sanitizedPrefix mirrors the production sanitizeUsernameForKey helper so
+// black-box tests can assemble the exact clientID the manager will produce
+// without exporting the helper. Kept as an independent implementation so a
+// drift between this and production fails the integration tests below.
+func sanitizedPrefix(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	allValid := true
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_'
+		if !valid {
+			allValid = false
+			break
+		}
+	}
+	if allValid {
+		return raw
+	}
+	out := make([]byte, 0, len(raw)+9)
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_'
+		switch {
+		case c == '@':
+			out = append(out, "-at-"...)
+		case valid:
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(raw))
+	return fmt.Sprintf("%s-%08x", string(out), h.Sum32())
+}
 
 const testNamespace = "llm-api-keys"
 
@@ -182,6 +222,26 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
 			}
 		})
+	}
+}
+
+func TestCreateKey_EmptyUsername(t *testing.T) {
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			makeSecret("my-model", testNamespace),
+			makeConfigMap("my-model", testNamespace),
+		).
+		Build()
+
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	_, err := mgr.CreateKey(context.Background(), "my-model", "", "test")
+	if err == nil {
+		t.Fatal("expected error for empty username, got nil")
+	}
+	if !strings.Contains(err.Error(), "username") {
+		t.Errorf("expected error to mention username, got: %v", err)
 	}
 }
 
@@ -399,6 +459,120 @@ func TestRevokeKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
+	tests := []struct {
+		name             string
+		username         string
+		wantClientID     string
+		wantCreatorRaw   string
+		existingDataKeys []string
+	}{
+		{
+			name:           "email username gets @ replaced with -at- and a hash suffix",
+			username:       "alice@example.com",
+			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-1",
+			wantCreatorRaw: "alice@example.com",
+		},
+		{
+			name:           "plain alphanumeric username is unchanged",
+			username:       "chuck",
+			wantClientID:   "user-chuck-1",
+			wantCreatorRaw: "chuck",
+		},
+		{
+			name:             "sequence increments using sanitized prefix",
+			username:         "alice@example.com",
+			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-2",
+			wantCreatorRaw:   "alice@example.com",
+			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-1"},
+		},
+		{
+			name:           "raw alice-at-example.com does NOT collide with alice@example.com",
+			username:       "alice-at-example.com",
+			wantClientID:   "user-alice-at-example.com-1", // already valid -> no hash suffix
+			wantCreatorRaw: "alice-at-example.com",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := buildScheme(t)
+
+			secretData := map[string][]byte{}
+			for _, k := range tc.existingDataKeys {
+				secretData[k] = []byte("sk-existingkey00000000000000000000")
+			}
+			cmData := map[string]string{}
+			for _, k := range tc.existingDataKeys {
+				cmData[k] = `{"clientId":"` + k + `","creator":"` + tc.username + `","description":"","createdAt":"2024-01-01T00:00:00Z","modelName":"my-model","namespace":"llm-api-keys"}`
+			}
+
+			secret := makeSecret("my-model", testNamespace)
+			secret.Data = secretData
+			cm := makeConfigMap("my-model", testNamespace)
+			cm.Data = cmData
+
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(secret, cm).
+				Build()
+
+			mgr := secrets.NewManager(fakeClient, testNamespace)
+			result, err := mgr.CreateKey(context.Background(), "my-model", tc.username, "test")
+			if err != nil {
+				t.Fatalf("CreateKey error: %v", err)
+			}
+			if result.ClientID != tc.wantClientID {
+				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
+			}
+
+			// Verify the data key landed in the Secret with the sanitized form.
+			updatedSecret := &corev1.Secret{}
+			secretKey := types.NamespacedName{Namespace: testNamespace, Name: "my-model-api-keys"}
+			if err := fakeClient.Get(context.Background(), secretKey, updatedSecret); err != nil {
+				t.Fatalf("Get Secret: %v", err)
+			}
+			if _, ok := updatedSecret.Data[tc.wantClientID]; !ok {
+				t.Errorf("expected sanitized clientID %q in Secret data, keys: %v", tc.wantClientID, mapKeys(updatedSecret.Data))
+			}
+
+			// Verify Creator preserves the raw username (so ListKeysForUser
+			// matches against the SSO identity, not the mangled key form).
+			updatedCM := &corev1.ConfigMap{}
+			cmKey := types.NamespacedName{Namespace: testNamespace, Name: "my-model-api-key-metadata"}
+			if err := fakeClient.Get(context.Background(), cmKey, updatedCM); err != nil {
+				t.Fatalf("Get ConfigMap: %v", err)
+			}
+			raw, ok := updatedCM.Data[tc.wantClientID]
+			if !ok {
+				t.Fatalf("expected sanitized clientID %q in ConfigMap data", tc.wantClientID)
+			}
+			if !strings.Contains(raw, `"creator":"`+tc.wantCreatorRaw+`"`) {
+				t.Errorf("expected ConfigMap entry to record creator %q verbatim, got: %s", tc.wantCreatorRaw, raw)
+			}
+
+			// And the round-trip via ListKeysForUser using the raw username
+			// must find the key.
+			found, err := mgr.ListKeysForUser(context.Background(), tc.username)
+			if err != nil {
+				t.Fatalf("ListKeysForUser error: %v", err)
+			}
+			if len(found) == 0 {
+				t.Errorf("ListKeysForUser(%q) returned 0 keys, want >=1", tc.username)
+			}
+		})
+	}
+}
+
+// mapKeys returns the keys of m as a slice (for diagnostic output).
+func mapKeys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestCreateKeyThenListKeys(t *testing.T) {
