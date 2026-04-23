@@ -2,6 +2,8 @@ package secrets_test
 
 import (
 	"context"
+	"fmt"
+	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,44 @@ import (
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
+
+// sanitizedPrefix mirrors the production sanitizeUsernameForKey helper so
+// black-box tests can assemble the exact clientID the manager will produce
+// without exporting the helper. Kept as an independent implementation so a
+// drift between this and production fails the integration tests below.
+func sanitizedPrefix(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	allValid := raw != ""
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_'
+		if !valid {
+			allValid = false
+			break
+		}
+	}
+	if allValid {
+		return raw
+	}
+	out := make([]byte, 0, len(raw)+9)
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		valid := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_'
+		switch {
+		case c == '@':
+			out = append(out, "-at-"...)
+		case valid:
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(raw))
+	return fmt.Sprintf("%s-%08x", string(out), h.Sum32())
+}
 
 const testNamespace = "llm-api-keys"
 
@@ -182,6 +222,26 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
 			}
 		})
+	}
+}
+
+func TestCreateKey_EmptyUsername(t *testing.T) {
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			makeSecret("my-model", testNamespace),
+			makeConfigMap("my-model", testNamespace),
+		).
+		Build()
+
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	_, err := mgr.CreateKey(context.Background(), "my-model", "", "test")
+	if err == nil {
+		t.Fatal("expected error for empty username, got nil")
+	}
+	if !strings.Contains(err.Error(), "username") {
+		t.Errorf("expected error to mention username, got: %v", err)
 	}
 }
 
@@ -410,9 +470,9 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 		existingDataKeys []string
 	}{
 		{
-			name:           "email username gets @ replaced with -at-",
+			name:           "email username gets @ replaced with -at- and a hash suffix",
 			username:       "alice@example.com",
-			wantClientID:   "user-alice-at-example.com-1",
+			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-1",
 			wantCreatorRaw: "alice@example.com",
 		},
 		{
@@ -424,9 +484,15 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 		{
 			name:             "sequence increments using sanitized prefix",
 			username:         "alice@example.com",
-			wantClientID:     "user-alice-at-example.com-2",
+			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-2",
 			wantCreatorRaw:   "alice@example.com",
-			existingDataKeys: []string{"user-alice-at-example.com-1"},
+			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-1"},
+		},
+		{
+			name:           "raw alice-at-example.com does NOT collide with alice@example.com",
+			username:       "alice-at-example.com",
+			wantClientID:   "user-alice-at-example.com-1", // already valid -> no hash suffix
+			wantCreatorRaw: "alice-at-example.com",
 		},
 	}
 

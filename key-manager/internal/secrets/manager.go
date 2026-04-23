@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -51,18 +52,27 @@ func secretName(modelName string) string {
 // [-._a-zA-Z0-9]+, so SSO email usernames (e.g. "alice@example.com") would
 // otherwise cause the API server to reject the update.
 //
-// "@" is replaced with "-at-" so emails round-trip readably; any other
-// disallowed byte is replaced with "-". Already-valid input is returned
-// unchanged. The original (unsanitized) username is still recorded in
-// KeyInfo.Creator so ownership lookups work against the raw value.
+// Already-valid input is returned unchanged so the common ASCII case keeps
+// human-readable clientIDs. When sanitization is needed, "@" becomes "-at-"
+// and any other disallowed byte becomes "-"; an 8-hex-char FNV-1a hash of
+// the raw username is then appended so two distinct raw usernames that
+// would otherwise collide (e.g. "alice@example.com" vs literal
+// "alice-at-example.com") get unique keys.
+//
+// The original (unsanitized) username is still recorded in KeyInfo.Creator
+// so ownership lookups work against the raw value. Empty input returns ""
+// and must be rejected by the caller before composing a data key.
 func sanitizeUsernameForKey(username string) string {
+	if username == "" {
+		return ""
+	}
 	// Fast path: if every byte is already valid, return as-is to avoid
-	// allocating.
+	// allocating and to keep clientIDs human-readable for ASCII users.
 	if isValidDataKeyName(username) {
 		return username
 	}
 	var b strings.Builder
-	b.Grow(len(username))
+	b.Grow(len(username) + 9) // worst case "@"-only inputs grow ~4x; "+ -XXXXXXXX" suffix is 9
 	for i := 0; i < len(username); i++ {
 		c := username[i]
 		switch {
@@ -74,6 +84,9 @@ func sanitizeUsernameForKey(username string) string {
 			b.WriteByte('-')
 		}
 	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(username))
+	fmt.Fprintf(&b, "-%08x", h.Sum32())
 	return b.String()
 }
 
@@ -146,6 +159,9 @@ func (m *Manager) getConfigMap(ctx context.Context, modelName string) (*corev1.C
 // CreateKey generates a new API key for a model, writes it to the Secret,
 // and stores metadata in the ConfigMap. Returns the key (only time it's shown).
 func (m *Manager) CreateKey(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
+	if username == "" {
+		return nil, fmt.Errorf("username is required")
+	}
 	const maxRetries = 3
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
