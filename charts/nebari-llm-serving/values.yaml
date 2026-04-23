@@ -54,6 +54,17 @@ keyManager:
     # gateway - which Nebari shared gateway to attach the HTTPRoute to.
     # Valid values: "public" or "internal".
     gateway: public
+    # routing is passed through verbatim to NebariApp.spec.routing. Without
+    # this block the nebari-operator sets RoutingReady=False and skips both
+    # the HTTPRoute and the cert-manager Certificate, leaving the gateway
+    # to fall back to its default (bare-domain) cert for this hostname,
+    # which browsers see as a cert mismatch. The default below mounts the
+    # UI at the path root with a single PathPrefix route. Override here to
+    # add publicRoutes, tls overrides, custom annotations, etc.
+    routing:
+      routes:
+        - pathPrefix: /
+          pathType: PathPrefix
     auth:
       # provisionClient: true tells nebari-operator to create a dedicated
       # Keycloak client for the UI and write credentials to the Secret
