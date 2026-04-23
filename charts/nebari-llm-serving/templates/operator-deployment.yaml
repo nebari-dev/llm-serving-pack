@@ -19,7 +19,7 @@ spec:
       serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-operator
       containers:
         - name: manager
-          image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}
+          image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
           env:
             - name: LLM_BASE_DOMAIN
