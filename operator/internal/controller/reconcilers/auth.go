@@ -30,13 +30,13 @@ type AuthResources struct {
 func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*AuthResources, error) {
 	result := &AuthResources{}
 
-	labels := StandardLabels(model)
+	labels := authResourceLabels(model)
 
 	result.APIKeySecret = buildAPIKeySecret(model, labels)
 	result.APIKeyMetadataCM = buildAPIKeyMetadataConfigMap(model, labels)
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
-		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model, cfg)
+		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model)
 	}
 
 	if boolOrDefault(model.Spec.Endpoints.Internal.Enabled, true) {
@@ -44,6 +44,17 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 	}
 
 	return result, nil
+}
+
+// authResourceLabels returns the labels applied to the API-key Secret and
+// metadata ConfigMap. The `llm.nebari.dev/model-name` label is the documented
+// selector for `kubectl get secrets -l llm.nebari.dev/model` (see
+// docs/getting-started.md). The `model-namespace` label was redundant once
+// these resources moved into the model's own namespace (#59) and was dropped.
+func authResourceLabels(model *llmv1alpha1.LLMModel) map[string]string {
+	labels := StandardLabels(model)
+	labels["llm.nebari.dev/model-name"] = model.Name
+	return labels
 }
 
 func buildAPIKeySecret(model *llmv1alpha1.LLMModel, labels map[string]string) *corev1.Secret {
@@ -67,7 +78,7 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 	}
 }
 
-func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, _ *config.OperatorConfig) *unstructured.Unstructured {
+func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unstructured {
 	name := model.Name + "-external-auth"
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{

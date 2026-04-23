@@ -128,7 +128,7 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
-		if err := r.reconcileAuthSecretAndConfigMap(ctx, log, authResources); err != nil {
+		if err := r.reconcileAuthSecretAndConfigMap(ctx, authResources); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -270,7 +270,6 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 // outlive a reapply of the LLMModel; cleanup is handled by the finalizer.
 func (r *LLMModelReconciler) reconcileAuthSecretAndConfigMap(
 	ctx context.Context,
-	log controllerLogger,
 	auth *reconcilers.AuthResources,
 ) error {
 	if err := r.createOrUpdateSecret(ctx, auth.APIKeySecret); err != nil {
@@ -279,7 +278,6 @@ func (r *LLMModelReconciler) reconcileAuthSecretAndConfigMap(
 	if err := r.createOrUpdateConfigMap(ctx, auth.APIKeyMetadataCM); err != nil {
 		return fmt.Errorf("reconciling api key metadata configmap: %w", err)
 	}
-	_ = log
 	return nil
 }
 

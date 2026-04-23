@@ -84,14 +84,14 @@ Apply the test `LLMModel` resource, which uses the mock vLLM image:
 make apply-test-model
 ```
 
-This creates an `LLMModel` named `test-model` in the `llm-serving` namespace. The operator reconciles it and creates the supporting resources.
+This creates an `LLMModel` named `test-model` in the `llm-operator-system` namespace. The operator reconciles it and creates the supporting resources. (Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) all LLMModels must live in the operator's own namespace - the validating webhook rejects anywhere else.)
 
 ## 6. Watch reconciliation
 
 Watch the `LLMModel` status update as the operator reconciles:
 
 ```bash
-kubectl -n llm-serving get llmmodels -w
+kubectl -n llm-operator-system get llmmodels -w
 ```
 
 You should see the `READY` column transition through states as each sub-resource is created. Once all reconcilers complete, the model shows `Ready`.
@@ -107,9 +107,9 @@ make logs-operator
 Once the model is ready, verify the created resources:
 
 ```bash
-kubectl -n llm-serving get all
-kubectl -n llm-serving get aigatewayroutes
-kubectl -n envoy-gateway-system get securitypolicies
+kubectl -n llm-operator-system get all
+kubectl -n llm-operator-system get aigatewayroutes
+kubectl -n llm-operator-system get securitypolicies
 ```
 
 The operator creates:
@@ -117,8 +117,7 @@ The operator creates:
 - A `Service` for the deployment
 - An `InferencePool` for intelligent request scheduling
 - `AIGatewayRoute` resources for external (API key) and internal (JWT) access
-- `SecurityPolicy` resources for auth enforcement
-- A `ReferenceGrant` to allow cross-namespace policy references
+- `SecurityPolicy` resources for auth enforcement (the API-key Secret they reference is co-located in this same namespace; see [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) for why)
 
 ## 8. Test the key manager API
 
@@ -142,7 +141,7 @@ Create an API key for the test model:
 curl -s -X POST http://localhost:8080/api/v1/keys \
   -H "Authorization: Bearer fake-jwt-token" \
   -H "Content-Type: application/json" \
-  -d '{"modelName": "test-model", "namespace": "llm-serving"}' | jq .
+  -d '{"modelName": "test-model"}' | jq .
 ```
 
 The response includes the generated key. Keys are stored as Kubernetes Secrets in the operator namespace (defaults to `llm-operator-system` for the dev cluster, `nebari-llm-serving-system` for the chart):

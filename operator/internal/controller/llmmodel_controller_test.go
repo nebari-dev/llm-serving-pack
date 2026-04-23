@@ -48,7 +48,11 @@ func testConfig() *config.OperatorConfig {
 		OIDCGroupsClaim:     "groups",
 		OIDCAudience:        "",
 		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
-		APIKeysNamespace:    "llm-api-keys-test",
+		// Empty matches the post-#59 default. The legacy ReferenceGrant
+		// cleanup branch in reconcileDelete checks for non-empty, so
+		// leaving it empty disables that branch (which is what new
+		// installs want). A separate fixture covers the legacy path.
+		APIKeysNamespace: "",
 	}
 }
 

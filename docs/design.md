@@ -1,8 +1,5 @@
 # Nebari LLM serving pack design
 
-> **Note (April 2026, [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59)):**
-> This document still describes the original "dedicated `llm-api-keys` namespace + ReferenceGrant" pattern. The actual implementation no longer matches that pattern. Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.credentialRefs` rejects cross-namespace Secret references and does not honor `ReferenceGrant` for that field, so the pack now keeps everything (LLMModel CRs, model pods, API-key Secrets, key-manager) in a single operator namespace, and a validating webhook enforces that LLMModel CRs are created there. The architecture sections below should be read with that change in mind; a full rewrite is pending.
-
 ## Overview
 
 A Nebari software pack for serving LLMs using llm-d with modelcar/OCI support for model distribution. The pack deploys a Go operator that watches a custom `LLMModel` CRD. Admins apply one LLMModel per model they want to serve. The operator handles everything downstream: model storage, vLLM serving pods, inference scheduling, routing, and access control.
@@ -44,7 +41,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: devstral-32b
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system
 spec:
   model:
     name: "mistralai/Devstral-Small-2505"
@@ -183,35 +180,37 @@ Changes to `model.revision` are treated as breaking changes that trigger a re-do
 ### Components deployed by the Helm chart (pack install)
 
 1. **LLMModel CRD** definition
-2. **LLM operator** - Go controller (kubebuilder/controller-runtime) watching LLMModel CRs
+2. **LLM operator** - Go controller (kubebuilder/controller-runtime) watching LLMModel CRs in its own namespace
 3. **Key manager** (conditional, `keyManager.enabled`) - web UI + REST API behind a NebariApp with Keycloak/OIDC auth
 4. **Envoy AI Gateway** (conditional, `envoyAIGateway.install`) - controller and CRDs; when false, assumes pre-installed
-5. **`llm-api-keys` namespace** - dedicated namespace for API key Secrets, isolated from model namespaces
+
+The chart creates the operator namespace and labels it `nebari.dev/managed=true` (gated on `createNamespace: true`, default on). Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) all per-model resources - including API-key Secrets - live in this same namespace.
 
 ### Resources created by the operator per LLMModel
 
-| Resource | Namespace | Purpose |
-|---|---|---|
-| PVC | model namespace | Model storage (HuggingFace source, pvc storage type) |
-| Deployment (vLLM) | model namespace | Model serving pods with init container for preloading |
-| Service | model namespace | ClusterIP for the vLLM pods |
-| ServiceAccount | model namespace | Pod identity |
-| NetworkPolicy | model namespace | Default-deny ingress, allow only Gateway + EPP + Prometheus |
-| InferencePool + EPP | model namespace | Intelligent inference scheduling |
-| AIGatewayRoute (external) | model namespace | External endpoint with token counting, rate limiting |
-| AIGatewayRoute (internal) | model namespace | Internal endpoint with token counting, rate limiting |
-| SecurityPolicy (external) | model namespace | apiKeyAuth with sanitize:true, referencing api-keys Secret via ReferenceGrant |
-| SecurityPolicy (internal) | model namespace | JWT validation with group claim matching against access.groups |
-| Secret (API keys) | `llm-api-keys` | Per-model API key store (created by operator, data managed by key manager) |
-| ConfigMap (key metadata) | `llm-api-keys` | Per-model metadata for API keys (creator, timestamp, description) |
-| ReferenceGrant | `llm-api-keys` | Allows SecurityPolicy in model namespace to reference Secret in llm-api-keys |
-| PodMonitor | model namespace | Prometheus metrics scraping (when monitoring enabled) |
+All resources live in the LLMModel's own namespace, which (per the validating webhook) is the operator's namespace.
+
+| Resource | Purpose |
+|---|---|
+| PVC | Model storage (HuggingFace source, pvc storage type) |
+| Deployment (vLLM) | Model serving pods with init container for preloading |
+| Service | ClusterIP for the vLLM pods |
+| ServiceAccount | Pod identity |
+| NetworkPolicy | Default-deny ingress, allow only Gateway + EPP + Prometheus |
+| InferencePool + EPP | Intelligent inference scheduling |
+| AIGatewayRoute (external) | External endpoint with token counting, rate limiting |
+| AIGatewayRoute (internal) | Internal endpoint with token counting, rate limiting |
+| SecurityPolicy (external) | apiKeyAuth referencing the per-model Secret in the same namespace |
+| SecurityPolicy (internal) | JWT validation with group claim matching against access.groups |
+| Secret (API keys) | Per-model API key store (created by operator, data managed by key manager) |
+| ConfigMap (key metadata) | Per-model metadata for API keys (creator, timestamp, description) |
+| PodMonitor | Prometheus metrics scraping (when monitoring enabled) |
 
 ### Resource ownership
 
-All operator-created resources in the model namespace have an ownerReference back to the LLMModel CR. Deleting the LLMModel garbage-collects these resources.
+All operator-created resources except the API-key Secret + ConfigMap have an ownerReference back to the LLMModel CR. Deleting the LLMModel garbage-collects them.
 
-Resources in the `llm-api-keys` namespace (API key Secret, metadata ConfigMap, ReferenceGrant) cannot use cross-namespace ownerReferences. Instead, the operator labels them with `llm.nebari.dev/model-name` and `llm.nebari.dev/model-namespace`, and a finalizer on the LLMModel ensures cleanup on deletion.
+The API-key Secret and metadata ConfigMap deliberately omit ownerReferences. Their lifetime should outlive a reapply of the LLMModel CR (so an admin can recreate the LLMModel without users losing their issued keys). Cleanup is handled by a finalizer on the LLMModel that removes both resources when the CR is being deleted.
 
 ### NetworkPolicy
 
@@ -227,16 +226,16 @@ This makes the Gateway the only path to the model, whether endpoints are enabled
 
 The key manager runs with a dedicated ServiceAccount. Its RBAC is scoped to two areas:
 
-- **ClusterRole** for LLMModel read access: `get`, `list`, `watch` on `llmmodels.llm.nebari.dev` across all namespaces
-- **Role in `llm-api-keys` namespace**: `get`, `list`, `create`, `update`, `patch`, `delete` on Secrets and ConfigMaps in the `llm-api-keys` namespace only
+- **ClusterRole** for LLMModel read access: `get`, `list`, `watch` on `llmmodels.llm.nebari.dev` across all namespaces (broader than strictly needed today; see #59 follow-ups for tightening to a Role in the operator namespace)
+- **Role in the operator namespace**: `get`, `list`, `create`, `update`, `patch`, `delete` on Secrets and ConfigMaps in the operator namespace only
 
-This is a hard RBAC boundary. The key manager can only access Secrets in the dedicated `llm-api-keys` namespace, not in model namespaces or anywhere else. Kubernetes RBAC does not support label-based filtering, so namespace isolation is the enforcement mechanism.
+The key manager can only access Secrets in the operator namespace, not anywhere else. Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) the API-key Secrets live in this same namespace, so this Role grants exactly the access the key manager needs and nothing more.
 
 ### API key audit
 
 The key manager runs a periodic background audit (configurable interval, default 5 minutes) that:
 
-1. Lists all API key Secrets in `llm-api-keys`
+1. Lists all API key Secrets in the operator namespace
 2. For each key entry, looks up the creator's current groups via the OIDC userinfo endpoint
 3. If the creator no longer belongs to a group that matches the model's `access.groups`, revokes the key
 
@@ -253,13 +252,12 @@ The tradeoff is tracking upstream changes manually. Each resource template in th
 ```
 LLMModel CR applied
   |
-  +-> Validate (webhook: subdomain uniqueness, DNS length, namespace label)
+  +-> Validate (webhook: subdomain uniqueness, DNS length, namespace label, same-as-operator-namespace)
   |
   +-> Phase: Pending
   |
   +-> Create PVC (if HF source + PVC storage type)
-  +-> Create API key Secret + metadata ConfigMap in llm-api-keys namespace
-  +-> Create ReferenceGrant in llm-api-keys namespace
+  +-> Create API key Secret + metadata ConfigMap in the LLMModel's own namespace
   +-> Create NetworkPolicy
   |
   +-> Create vLLM Deployment with init container for model download
@@ -304,7 +302,7 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
 - SecurityPolicy with `apiKeyAuth` attached to the generated HTTPRoute (same name as AIGatewayRoute)
 - `sanitize: true` strips the API key before forwarding to vLLM
 - `forwardClientIDHeader: X-Client-ID` passes the authenticated client ID downstream for logging and GIE flow control
-- API key Secret referenced cross-namespace via ReferenceGrant from `llm-api-keys`
+- API key Secret referenced same-namespace from the SecurityPolicy (per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) - Envoy Gateway's APIKeyAuth does not honor cross-namespace credentialRefs)
 
 ### Internal endpoint
 
@@ -359,7 +357,7 @@ A small web application behind NebariApp that lets authenticated users generate 
 2. Keycloak/OIDC login via NebariApp auth
 3. Key manager watches all LLMModel CRs, filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`)
 4. User sees only models they can access
-5. User creates a key for a model; key manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the `llm-api-keys` namespace, and writes metadata to the corresponding ConfigMap
+5. User creates a key for a model; key manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the operator namespace, and writes metadata to the corresponding ConfigMap
 6. Envoy Gateway's apiKeyAuth picks up the new Secret entry immediately
 
 Revocation: remove the entry from the Secret and its corresponding metadata from the ConfigMap. Immediate effect.
@@ -370,7 +368,7 @@ API keys are issued based on the user's groups at creation time. If a user later
 
 ### Data model
 
-No database. State is split across two Kubernetes resources per model, both in the `llm-api-keys` namespace:
+No database. State is split across two Kubernetes resources per model, both in the operator namespace (alongside the LLMModel CR and the SecurityPolicy that reads the Secret):
 
 - **Secret** (`<model-name>-api-keys`): contains only the data Envoy Gateway needs. Each entry: key = client ID (e.g., `user-chuck-1`), value = the API key. This Secret is the source of truth for authentication because Envoy Gateway's apiKeyAuth reads from it natively. Individual Secrets are limited to 1 MiB, which supports roughly a few thousand keys per model. This is a known scaling limit for v0.1.
 
@@ -521,11 +519,11 @@ spec:
         - values-prod.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: llm-serving
+    namespace: nebari-llm-serving-system
 ```
 
-2. ArgoCD deploys the pack: CRD, operator, key manager, AI Gateway, `llm-api-keys` namespace
-3. Admin applies LLMModel CRs (directly or via a second ArgoCD Application for GitOps)
+2. ArgoCD deploys the pack: CRD, operator, key manager, AI Gateway. The chart also creates the operator namespace and labels it `nebari.dev/managed=true` (gated on `createNamespace: true`, default on).
+3. Admin applies LLMModel CRs in the operator namespace (directly or via a second ArgoCD Application for GitOps). Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) the validating webhook rejects LLMModels created anywhere else.
 4. Operator reconciles each LLMModel through its phases
 5. Users access the key manager UI to generate API keys, or use their JWT for in-cluster access
 
@@ -537,7 +535,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: devstral-32b
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system
 spec:
   model:
     name: "mistralai/Devstral-Small-2505"
@@ -571,7 +569,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: qwen3-235b
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system
 spec:
   model:
     name: "Qwen/Qwen3-235B-A22B"
@@ -674,17 +672,23 @@ nebari-llm-serving-pack/
   docs/
 ```
 
-## Multi-namespace support
+## Single-namespace deployment model
 
-LLMModels can be deployed in any namespace with the `nebari.dev/managed=true` label. This enables team isolation: the data science team deploys models in `llm-data-science`, the engineering team in `llm-engineering`.
+Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59), all pack components - the operator, the key manager, the LLMModel CRs, the model pods, the API-key Secrets, and the Envoy Gateway SecurityPolicies that reference them - live in **a single namespace per pack install**. The validating webhook on LLMModel rejects CRs created in any other namespace.
 
-**Operator**: single instance deployed by the Helm chart, with a ClusterRole that watches LLMModel CRs across all namespaces with `nebari.dev/managed=true`. It creates resources in the same namespace as the LLMModel (except API key Secrets, which go to `llm-api-keys`). One LLMModel failing reconciliation does not block others - errors are isolated per CR.
+This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.credentialRefs` rejects cross-namespace Secret references and does not honor `ReferenceGrant` for that field. Co-locating the Secret with the SecurityPolicy is the only way to make `apiKeyAuth` work today. The earlier multi-namespace design (one operator watching `llm-data-science`, `llm-engineering`, etc., with a dedicated `llm-api-keys` namespace bridged via ReferenceGrant) hit this wall and is no longer how the pack is laid out.
 
-**Key manager**: single instance with a ClusterRole for LLMModel read access and a Role scoped to the `llm-api-keys` namespace for Secret/ConfigMap management. A user who belongs to groups with access to models in multiple namespaces sees all of them in the UI, grouped by namespace.
+**Operator**: single instance deployed by the Helm chart. Watches LLMModel CRs across all namespaces (current ClusterRole scope) but the webhook only accepts CRs in the operator's own namespace, so in practice it only ever reconciles CRs there. Tightening the ClusterRole to a Role on the operator namespace is a follow-up; see #59 discussion.
 
-**API key isolation**: all API key Secrets live in the dedicated `llm-api-keys` namespace. This provides a hard RBAC boundary - the key manager's ServiceAccount can only access Secrets in this namespace, not in model namespaces. ReferenceGrants allow Envoy Gateway SecurityPolicies in model namespaces to reference these Secrets cross-namespace.
+**Key manager**: single instance, RBAC scoped to the operator namespace for Secret/ConfigMap management. The Secrets it manages live in the same namespace it does, so a same-namespace Role is sufficient.
 
-**Namespace creation**: the operator does not create model namespaces. Admins create namespaces and label them `nebari.dev/managed=true` before applying LLMModels. The `llm-api-keys` namespace is created by the Helm chart.
+**API-key Secrets**: live in the operator namespace alongside the SecurityPolicies that reference them. The `apiKeyAuth.credentialRefs` field on each model SecurityPolicy carries no `namespace` field (an explicit assertion in `auth_test.go`).
+
+**Per-team isolation**: achieved by running multiple pack installs (one per team's operator namespace), not by a single operator watching multiple namespaces. This is operationally heavier than the original design but matches the only path the upstream auth machinery supports.
+
+**Operator namespace setup**: the chart provisions the operator namespace and applies `nebari.dev/managed=true` (gated on `createNamespace: true`, default on). Set `createNamespace: false` if something else - ArgoCD `managedNamespaceMetadata`, a Terraform module - is responsible for creating and labelling the namespace.
+
+**POD_NAMESPACE**: the operator deployment injects `POD_NAMESPACE` from the downward API and passes it to the webhook setup. Empty `POD_NAMESPACE` puts the webhook in test mode and skips the same-namespace check (used by envtest, which doesn't run the operator inside a pod).
 
 ## Security model
 
@@ -692,7 +696,7 @@ LLMModels can be deployed in any namespace with the `nebari.dev/managed=true` la
 
 **Network isolation**: model pods have a default-deny NetworkPolicy. Traffic is only allowed from the Envoy Gateway data plane, the EPP, and Prometheus. Direct Service access is blocked for all in-cluster workloads.
 
-**Secret isolation**: API key Secrets are in a dedicated namespace with namespace-scoped RBAC. The key manager is the only non-operator component with access to these Secrets.
+**Secret isolation**: API key Secrets live in the operator namespace with namespace-scoped RBAC. The key manager and the operator are the only components with access to these Secrets - the operator creates them, the key manager reads/updates them. SecurityPolicies in the same namespace reference them via `apiKeyAuth.credentialRefs` without crossing namespace boundaries (which Envoy Gateway does not allow for that field; see [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59)).
 
 **Gateway as security boundary**: all model access (external and internal) flows through Envoy Gateway, where auth is enforced via SecurityPolicy. The external endpoint uses apiKeyAuth with `sanitize: true` (API keys are stripped before reaching vLLM). The internal endpoint uses JWT validation against the OIDC issuer's JWKS endpoint.
 

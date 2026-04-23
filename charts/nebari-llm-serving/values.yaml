@@ -1,3 +1,10 @@
+# createNamespace controls whether the chart provisions the operator's own
+# namespace and labels it `nebari.dev/managed=true` (required by the
+# validating webhook). Set to false when something else owns the namespace
+# - e.g. ArgoCD's managedNamespaceMetadata, a Terraform module, or
+# `helm install --create-namespace` followed by your own labelling.
+createNamespace: true
+
 platform:
   # baseDomain is REQUIRED - the base domain for the Nebari deployment
   baseDomain: ""

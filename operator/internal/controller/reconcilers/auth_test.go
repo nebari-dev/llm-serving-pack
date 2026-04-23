@@ -46,7 +46,11 @@ func defaultAuthConfig() *config.OperatorConfig {
 		OIDCIssuerURL:       "https://oidc.example.com",
 		OIDCGroupsClaim:     "groups",
 		OIDCAudience:        "my-audience",
-		APIKeysNamespace:    testAuthNamespace,
+		// APIKeysNamespace is no longer used to PLACE Secrets (per #59).
+		// Leaving it empty matches the post-#59 default and ensures the
+		// pure-build tests are not entangled with the legacy-cleanup
+		// branch.
+		APIKeysNamespace: "",
 	}
 }
 
