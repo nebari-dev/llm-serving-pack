@@ -91,7 +91,7 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, err
 	}
 
-	subdomain, err := effectiveSubdomain(llmmodel)
+	subdomain, err := reconcilers.EffectiveSubdomain(llmmodel)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, err
 	}
 
-	subdomain, err := effectiveSubdomain(llmmodel)
+	subdomain, err := reconcilers.EffectiveSubdomain(llmmodel)
 	if err != nil {
 		return nil, err
 	}
@@ -210,25 +210,6 @@ func (v *LLMModelCustomValidator) validateNamespaceLabel(ctx context.Context, na
 	return nil
 }
 
-// effectiveSubdomain returns the subdomain that will be used for this LLMModel.
-// It uses spec.endpoints.external.subdomain if set, otherwise it slugifies the model name.
-// It also validates that the result does not exceed 63 characters.
-func effectiveSubdomain(llmmodel *llmv1alpha1.LLMModel) (string, error) {
-	subdomain := llmmodel.Spec.Endpoints.External.Subdomain
-	if subdomain == "" {
-		subdomain = reconcilers.Slugify(llmmodel.Name)
-	}
-
-	if len(subdomain) > 63 {
-		return "", fmt.Errorf(
-			"effective subdomain %q is %d characters long; subdomains must be 63 characters or fewer",
-			subdomain, len(subdomain),
-		)
-	}
-
-	return subdomain, nil
-}
-
 // validateSubdomainCollision checks that no other LLMModel across all namespaces
 // uses the same effective subdomain. The model identified by (excludeNamespace, excludeName)
 // is excluded from the check (used for updates).
@@ -249,7 +230,7 @@ func (v *LLMModelCustomValidator) validateSubdomainCollision(
 			continue
 		}
 
-		existingSubdomain, err := effectiveSubdomain(existing)
+		existingSubdomain, err := reconcilers.EffectiveSubdomain(existing)
 		if err != nil {
 			// If an existing model has an invalid subdomain, skip it rather than
 			// blocking new creates.

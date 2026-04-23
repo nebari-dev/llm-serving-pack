@@ -23,8 +23,31 @@ func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always t
 
 // BuildRoutingResources is a pure function that computes the AIGatewayRoute resources
 // for external and internal endpoints of the given model.
+//
+// Each AIGatewayRoute is rendered by the Envoy AI Gateway controller into an
+// HTTPRoute. AIGatewayRouteSpec itself does not currently expose a hostnames
+// field (verified against envoyproxy/ai-gateway main; the upstream controller
+// also does not propagate hostnames onto the generated HTTPRoute), so we
+// ensure deterministic per-model routing by constraining every rule with a
+// `Host` header match for the model's FQDN. Without a host constraint, every
+// route attached to a Gateway matches every request and SecurityPolicy
+// attachment becomes non-deterministic - an external (API key) request can be
+// matched against the internal route's JWT filter and rejected. See issue #64.
+//
+// HTTP/2 note: production traffic is HTTP/2 (HTTPS through Envoy). The Gateway
+// API spec mandates that conformant implementations treat the HTTP/1.1 Host
+// header and the HTTP/2 :authority pseudo-header as equivalent for header
+// matching (see HTTPHeaderMatch in the Gateway API spec). Envoy normalises
+// :authority to Host before HTTPRoute header matching runs, so an Exact Host
+// matcher fires identically under both protocols. Revisit if upstream changes
+// either assumption, or migrate to spec.hostnames once it is propagated.
 func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*RoutingResources, error) {
 	result := &RoutingResources{}
+
+	subdomain, err := EffectiveSubdomain(model)
+	if err != nil {
+		return nil, err
+	}
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildAIGatewayRoute(
@@ -34,6 +57,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
 			model.Name,
+			ExternalHostname(subdomain, cfg.BaseDomain),
 		)
 	}
 
@@ -45,6 +69,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
 			model.Name,
+			InternalHostname(subdomain, cfg.BaseDomain),
 		)
 	}
 
@@ -56,6 +81,7 @@ func buildAIGatewayRoute(
 	labels map[string]string,
 	gatewayName, gatewayNS string,
 	poolName string,
+	hostname string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -73,11 +99,24 @@ func buildAIGatewayRoute(
 						"namespace": gatewayNS,
 					},
 				},
-				// Note: AIGatewayRoute does not support hostnames directly.
-				// Hostname-based routing will be addressed in a future version
-				// via Gateway listener configuration or EnvoyPatchPolicy.
 				"rules": []interface{}{
 					map[string]interface{}{
+						// Match on the Host header so this rule only fires for
+						// the model's FQDN. The Envoy AI Gateway controller
+						// propagates Headers matchers onto the generated
+						// HTTPRoute, giving us deterministic per-model routing
+						// even when multiple routes share a Gateway listener.
+						"matches": []interface{}{
+							map[string]interface{}{
+								"headers": []interface{}{
+									map[string]interface{}{
+										"type":  "Exact",
+										"name":  "Host",
+										"value": hostname,
+									},
+								},
+							},
+						},
 						"backendRefs": []interface{}{
 							map[string]interface{}{
 								"group": "inference.networking.k8s.io",
