@@ -46,6 +46,67 @@ func secretName(modelName string) string {
 	return modelName + "-api-keys"
 }
 
+// sanitizeUsernameForKey converts a username into a form that is valid as a
+// Kubernetes Secret/ConfigMap data key. K8s data keys must match
+// [-._a-zA-Z0-9]+, so SSO email usernames (e.g. "alice@example.com") would
+// otherwise cause the API server to reject the update.
+//
+// "@" is replaced with "-at-" so emails round-trip readably; any other
+// disallowed byte is replaced with "-". Already-valid input is returned
+// unchanged. The original (unsanitized) username is still recorded in
+// KeyInfo.Creator so ownership lookups work against the raw value.
+func sanitizeUsernameForKey(username string) string {
+	// Fast path: if every byte is already valid, return as-is to avoid
+	// allocating.
+	if isValidDataKeyName(username) {
+		return username
+	}
+	var b strings.Builder
+	b.Grow(len(username))
+	for i := 0; i < len(username); i++ {
+		c := username[i]
+		switch {
+		case c == '@':
+			b.WriteString("-at-")
+		case isValidDataKeyByte(c):
+			b.WriteByte(c)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// isValidDataKeyByte reports whether c is allowed in a Kubernetes
+// Secret/ConfigMap data key.
+func isValidDataKeyByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z':
+		return true
+	case c >= 'A' && c <= 'Z':
+		return true
+	case c >= '0' && c <= '9':
+		return true
+	case c == '-' || c == '.' || c == '_':
+		return true
+	}
+	return false
+}
+
+// isValidDataKeyName reports whether s contains only bytes allowed in a
+// Kubernetes Secret/ConfigMap data key.
+func isValidDataKeyName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isValidDataKeyByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // configMapName returns the name of the ConfigMap for a model.
 func configMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
@@ -111,7 +172,11 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 	}
 
 	// Count existing keys for this user to determine the sequence number.
-	userPrefix := "user-" + username + "-"
+	// The sanitized username is used both for the data-key prefix and for the
+	// composed clientID so the count and the new clientID stay in sync.
+	// KeyInfo.Creator below preserves the raw username for ownership checks.
+	safeUsername := sanitizeUsernameForKey(username)
+	userPrefix := "user-" + safeUsername + "-"
 	count := 0
 	for k := range secret.Data {
 		if strings.HasPrefix(k, userPrefix) {
@@ -119,7 +184,7 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		}
 	}
 	sequence := count + 1
-	clientID := fmt.Sprintf("user-%s-%d", username, sequence)
+	clientID := fmt.Sprintf("user-%s-%d", safeUsername, sequence)
 
 	apiKey, err := generateAPIKey()
 	if err != nil {

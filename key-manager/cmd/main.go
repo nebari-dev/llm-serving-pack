@@ -65,7 +65,7 @@ func main() {
 	// 3. Create components.
 	watcher := models.NewWatcher(k8sClient)
 	secretsMgr := secrets.NewManager(k8sClient, apiKeysNamespace)
-	handler := api.NewHandler(watcher, secretsMgr)
+	handler := api.NewHandler(watcher, secretsMgr, logger)
 
 	// 4. Set up context with signal handling for graceful shutdown.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

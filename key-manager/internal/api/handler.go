@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
@@ -26,13 +27,19 @@ type KeyManager interface {
 type Handler struct {
 	lister  ModelLister
 	secrets KeyManager
+	logger  *slog.Logger
 }
 
 // NewHandler creates a Handler with the given model lister and key manager.
-func NewHandler(w ModelLister, s KeyManager) *Handler {
+// If logger is nil, slog.Default() is used.
+func NewHandler(w ModelLister, s KeyManager, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Handler{
 		lister:  w,
 		secrets: s,
+		logger:  logger,
 	}
 }
 
@@ -79,6 +86,7 @@ func (h *Handler) getKeys(w http.ResponseWriter, r *http.Request) {
 
 	keys, err := h.secrets.ListKeysForUser(r.Context(), user.Username)
 	if err != nil {
+		h.logger.Error("getKeys failed", "error", err, "user", user.Username)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -127,6 +135,7 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.secrets.CreateKey(r.Context(), req.ModelName, user.Username, req.Description)
 	if err != nil {
+		h.logger.Error("createKey failed", "error", err, "user", user.Username, "model", req.ModelName)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -152,6 +161,7 @@ func (h *Handler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	// List all keys for the model to find and verify ownership.
 	keys, err := h.secrets.ListKeys(r.Context(), modelName)
 	if err != nil {
+		h.logger.Error("deleteKey: ListKeys failed", "error", err, "user", user.Username, "model", modelName, "namespace", namespace, "clientID", clientID)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -176,6 +186,7 @@ func (h *Handler) deleteKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.secrets.RevokeKey(r.Context(), modelName, clientID); err != nil {
+		h.logger.Error("deleteKey: RevokeKey failed", "error", err, "user", user.Username, "model", modelName, "namespace", namespace, "clientID", clientID)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
