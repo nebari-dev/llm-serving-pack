@@ -407,7 +407,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 					t.Errorf("expected issuer https://oidc.example.com, got %q", provider["issuer"])
 				}
 				remoteJWKS := provider["remoteJWKS"].(map[string]interface{})
-				expectedURI := "https://oidc.example.com/.well-known/jwks.json"
+				expectedURI := "https://oidc.example.com/protocol/openid-connect/certs"
 				if remoteJWKS["uri"] != expectedURI {
 					t.Errorf("expected JWKS URI %q, got %q", expectedURI, remoteJWKS["uri"])
 				}
