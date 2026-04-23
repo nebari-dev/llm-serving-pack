@@ -116,7 +116,7 @@ func TestLoadFromEnv(t *testing.T) {
 				OIDCGroupsClaim:     "groups",
 				OIDCAudience:        "",
 				DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
-				APIKeysNamespace:    "llm-api-keys",
+				APIKeysNamespace:    "",
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func TestLoadFromEnv(t *testing.T) {
 				OIDCGroupsClaim:     "groups",
 				OIDCAudience:        "",
 				DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
-				APIKeysNamespace:    "llm-api-keys",
+				APIKeysNamespace:    "",
 			},
 		},
 		{

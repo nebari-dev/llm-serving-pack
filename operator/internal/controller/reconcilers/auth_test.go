@@ -12,7 +12,6 @@ import (
 const (
 	testAuthModelName = "my-model"
 	testAuthNamespace = "test-ns"
-	testAuthAPIKeysNS = "llm-api-keys"
 	testAuthSAName    = "nebari-llm-operator"
 )
 
@@ -47,7 +46,11 @@ func defaultAuthConfig() *config.OperatorConfig {
 		OIDCIssuerURL:       "https://oidc.example.com",
 		OIDCGroupsClaim:     "groups",
 		OIDCAudience:        "my-audience",
-		APIKeysNamespace:    testAuthAPIKeysNS,
+		// APIKeysNamespace is no longer used to PLACE Secrets (per #59).
+		// Leaving it empty matches the post-#59 default and ensures the
+		// pure-build tests are not entangled with the legacy-cleanup
+		// branch.
+		APIKeysNamespace: "",
 	}
 }
 
@@ -74,8 +77,8 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if result.APIKeySecret.Name != APIKeySecretName(testAuthModelName) {
 					t.Errorf("expected name %q, got %q", APIKeySecretName(testAuthModelName), result.APIKeySecret.Name)
 				}
-				if result.APIKeySecret.Namespace != testAuthAPIKeysNS {
-					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.APIKeySecret.Namespace)
+				if result.APIKeySecret.Namespace != testAuthNamespace {
+					t.Errorf("expected namespace %s, got %q", testAuthNamespace, result.APIKeySecret.Namespace)
 				}
 			},
 		},
@@ -109,8 +112,8 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if result.APIKeyMetadataCM.Name != APIKeyMetadataConfigMapName(testAuthModelName) {
 					t.Errorf("expected name %q, got %q", APIKeyMetadataConfigMapName(testAuthModelName), result.APIKeyMetadataCM.Name)
 				}
-				if result.APIKeyMetadataCM.Namespace != testAuthAPIKeysNS {
-					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.APIKeyMetadataCM.Namespace)
+				if result.APIKeyMetadataCM.Namespace != testAuthNamespace {
+					t.Errorf("expected namespace %s, got %q", testAuthNamespace, result.APIKeyMetadataCM.Namespace)
 				}
 			},
 		},
@@ -128,13 +131,17 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			},
 		},
 		{
-			name:  "Labels: Secret and ConfigMap include model-name and model-namespace labels",
+			name:  "Labels: Secret and ConfigMap include standard labels (managed-by)",
 			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
+				// model-name / model-namespace labels were specific to the
+				// pre-#59 cross-namespace pattern. Now Secret + CM live in
+				// the model's own namespace, so namespace-of-origin doesn't
+				// need to be encoded as a label.
 				for _, resource := range []struct {
 					name   string
 					labels map[string]string
@@ -142,111 +149,9 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 					{"Secret", result.APIKeySecret.Labels},
 					{"ConfigMap", result.APIKeyMetadataCM.Labels},
 				} {
-					if resource.labels["llm.nebari.dev/model-name"] != testAuthModelName {
-						t.Errorf("%s: expected model-name label %s, got %q", resource.name, testAuthModelName, resource.labels["llm.nebari.dev/model-name"])
-					}
-					if resource.labels["llm.nebari.dev/model-namespace"] != testAuthNamespace {
-						t.Errorf("%s: expected model-namespace label %s, got %q", resource.name, testAuthNamespace, resource.labels["llm.nebari.dev/model-namespace"])
-					}
 					if resource.labels["app.kubernetes.io/managed-by"] != testAuthSAName {
 						t.Errorf("%s: expected managed-by label %s, got %q", resource.name, testAuthSAName, resource.labels["app.kubernetes.io/managed-by"])
 					}
-				}
-			},
-		},
-		{
-			name:  "ReferenceGrant: correct apiVersion and kind",
-			model: defaultAuthModel(),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if result.ReferenceGrant == nil {
-					t.Fatal("expected ReferenceGrant to be non-nil")
-				}
-				if result.ReferenceGrant.GetAPIVersion() != "gateway.networking.k8s.io/v1beta1" {
-					t.Errorf("expected apiVersion gateway.networking.k8s.io/v1beta1, got %q", result.ReferenceGrant.GetAPIVersion())
-				}
-				if result.ReferenceGrant.GetKind() != "ReferenceGrant" {
-					t.Errorf("expected kind ReferenceGrant, got %q", result.ReferenceGrant.GetKind())
-				}
-			},
-		},
-		{
-			name:  "ReferenceGrant: namespace is cfg.APIKeysNamespace",
-			model: defaultAuthModel(),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if result.ReferenceGrant.GetNamespace() != testAuthAPIKeysNS {
-					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, result.ReferenceGrant.GetNamespace())
-				}
-			},
-		},
-		{
-			name:  "ReferenceGrant: name includes both model name and namespace for uniqueness",
-			model: defaultAuthModel(),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				expectedName := testAuthModelName + "-" + testAuthNamespace + "-ref-grant"
-				if result.ReferenceGrant.GetName() != expectedName {
-					t.Errorf("expected name %q, got %q", expectedName, result.ReferenceGrant.GetName())
-				}
-			},
-		},
-		{
-			name:  "ReferenceGrant: correct from (SecurityPolicy in model namespace)",
-			model: defaultAuthModel(),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ReferenceGrant.Object["spec"].(map[string]interface{})
-				from := spec["from"].([]interface{})
-				if len(from) != 1 {
-					t.Fatalf("expected 1 from entry, got %d", len(from))
-				}
-				fromEntry := from[0].(map[string]interface{})
-				if fromEntry["group"] != "gateway.envoyproxy.io" {
-					t.Errorf("expected from group gateway.envoyproxy.io, got %q", fromEntry["group"])
-				}
-				if fromEntry["kind"] != "SecurityPolicy" {
-					t.Errorf("expected from kind SecurityPolicy, got %q", fromEntry["kind"])
-				}
-				if fromEntry["namespace"] != testAuthNamespace {
-					t.Errorf("expected from namespace %s, got %q", testAuthNamespace, fromEntry["namespace"])
-				}
-			},
-		},
-		{
-			name:  "ReferenceGrant: correct to (Secret by name in api-keys namespace)",
-			model: defaultAuthModel(),
-			cfg:   defaultAuthConfig(),
-			check: func(t *testing.T, result *AuthResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				spec := result.ReferenceGrant.Object["spec"].(map[string]interface{})
-				to := spec["to"].([]interface{})
-				if len(to) != 1 {
-					t.Fatalf("expected 1 to entry, got %d", len(to))
-				}
-				toEntry := to[0].(map[string]interface{})
-				if toEntry["group"] != "" {
-					t.Errorf("expected to group empty string, got %q", toEntry["group"])
-				}
-				if toEntry["kind"] != "Secret" {
-					t.Errorf("expected to kind Secret, got %q", toEntry["kind"])
-				}
-				if toEntry["name"] != APIKeySecretName(testAuthModelName) {
-					t.Errorf("expected to name %q, got %q", APIKeySecretName(testAuthModelName), toEntry["name"])
 				}
 			},
 		},
@@ -279,20 +184,20 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			},
 		},
 		{
-			name:  "External SecurityPolicy: apiKeyAuth credentialRef to Secret in api-keys namespace",
+			name:  "External SecurityPolicy: apiKeyAuth credentialRef is same-namespace (no namespace field)",
 			model: defaultAuthModel(),
 			cfg:   defaultAuthConfig(),
 			check: func(t *testing.T, result *AuthResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
-				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
-				credentialRefs := apiKeyAuth["credentialRefs"].([]interface{})
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]any)
+				apiKeyAuth := spec["apiKeyAuth"].(map[string]any)
+				credentialRefs := apiKeyAuth["credentialRefs"].([]any)
 				if len(credentialRefs) != 1 {
 					t.Fatalf("expected 1 credentialRef, got %d", len(credentialRefs))
 				}
-				credRef := credentialRefs[0].(map[string]interface{})
+				credRef := credentialRefs[0].(map[string]any)
 				if credRef["group"] != "" {
 					t.Errorf("expected group empty string, got %q", credRef["group"])
 				}
@@ -302,8 +207,10 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if credRef["name"] != APIKeySecretName(testAuthModelName) {
 					t.Errorf("expected name %q, got %q", APIKeySecretName(testAuthModelName), credRef["name"])
 				}
-				if credRef["namespace"] != testAuthAPIKeysNS {
-					t.Errorf("expected namespace %s, got %q", testAuthAPIKeysNS, credRef["namespace"])
+				// Per #59: Envoy Gateway's APIKeyAuth rejects any non-same-ns
+				// credentialRef, so we deliberately leave `namespace` unset.
+				if _, present := credRef["namespace"]; present {
+					t.Errorf("expected no namespace field on credentialRef, got %q", credRef["namespace"])
 				}
 			},
 		},
@@ -631,9 +538,6 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 				if result.APIKeyMetadataCM == nil {
 					t.Error("expected APIKeyMetadataCM to be non-nil even when both endpoints disabled")
-				}
-				if result.ReferenceGrant == nil {
-					t.Error("expected ReferenceGrant to be non-nil even when both endpoints disabled")
 				}
 			},
 		},

@@ -30,8 +30,12 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  # Per #59 the API-key Secrets and metadata ConfigMaps live in the
+  # operator's own namespace alongside the LLMModels and SecurityPolicies
+  # that reference them. The key-manager only needs RBAC on its own
+  # namespace.
   name: llm-key-manager
-  namespace: llm-api-keys
+  namespace: llm-operator-system
 rules:
   - apiGroups: [""]
     resources: ["secrets", "configmaps"]
@@ -41,7 +45,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: llm-key-manager
-  namespace: llm-api-keys
+  namespace: llm-operator-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -75,8 +79,12 @@ spec:
             - containerPort: 8080
               name: http
           env:
+            # Per #59 the API-key Secrets live in the operator's own
+            # namespace - use the downward API to pick that up.
             - name: LLM_API_KEYS_NAMESPACE
-              value: "llm-api-keys"
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: LLM_OIDC_GROUPS_CLAIM
               value: "groups"
             - name: LLM_AUTH_COOKIE_PREFIX

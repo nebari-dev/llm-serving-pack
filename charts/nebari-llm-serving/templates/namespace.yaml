@@ -1,0 +1,21 @@
+{{- if .Values.createNamespace -}}
+# Operator namespace.
+#
+# The validating webhook on LLMModel rejects any CR whose namespace lacks
+# `nebari.dev/managed=true`, and post-#59 also rejects any CR not in the
+# operator's own namespace. So the operator namespace must carry that
+# label or the chart bricks the pack on first install.
+#
+# `helm install --create-namespace` builds the namespace WITHOUT the
+# label. This template fills the gap. Set createNamespace=false if you
+# already manage the namespace yourself (e.g. via ArgoCD's
+# managedNamespaceMetadata, or a Terraform module) and have applied the
+# label there.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    nebari.dev/managed: "true"
+{{- end }}

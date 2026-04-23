@@ -109,7 +109,9 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = SetupLLMModelWebhookWithManager(mgr)
+	// Empty operatorNamespace disables the same-ns enforcement so the
+	// envtest suite can create LLMModels in any namespace it wants.
+	err = SetupLLMModelWebhookWithManager(mgr, "")
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook

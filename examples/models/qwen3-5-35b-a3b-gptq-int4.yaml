@@ -4,7 +4,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: qwen3-5-35b-a3b-gptq-int4
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system  # LLMModel must live in the operator namespace (per #59); for the dev cluster use llm-operator-system
 spec:
   model:
     name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"

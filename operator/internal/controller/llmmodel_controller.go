@@ -27,7 +27,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -103,14 +102,7 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// 5. Ensure the llm-api-keys namespace exists (if Config is available)
-	if r.Config != nil {
-		if err := r.ensureNamespace(ctx, r.Config.APIKeysNamespace); err != nil {
-			return ctrl.Result{}, fmt.Errorf("ensuring api-keys namespace: %w", err)
-		}
-	}
-
-	// 6. Reconcile storage (PVC)
+	// 5. Reconcile storage (PVC)
 	defaultStorageClass := ""
 	if r.Config != nil {
 		defaultStorageClass = r.Config.DefaultStorageClassName
@@ -129,14 +121,14 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// 7. Reconcile auth resources (cross-namespace: Secret, ConfigMap, ReferenceGrant)
+	// 6. Reconcile auth resources (Secret + ConfigMap, both in the model's namespace)
 	var authResources *reconcilers.AuthResources
 	if r.Config != nil {
 		authResources, err = reconcilers.BuildAuthResources(model, r.Config)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
-		if err := r.reconcileCrossNamespaceResources(ctx, log, authResources); err != nil {
+		if err := r.reconcileAuthSecretAndConfigMap(ctx, authResources); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -213,34 +205,37 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("cleaning up cross-namespace resources", "model", model.Name)
+	log.Info("cleaning up auth resources", "model", model.Name)
 
-	if r.Config != nil {
-		// Delete Secret in api-keys namespace
-		secret := &corev1.Secret{}
-		secretKey := types.NamespacedName{
-			Name:      reconcilers.APIKeySecretName(model.Name),
-			Namespace: r.Config.APIKeysNamespace,
+	// Delete API-key Secret in the model's namespace.
+	secret := &corev1.Secret{}
+	secretKey := types.NamespacedName{
+		Name:      reconcilers.APIKeySecretName(model.Name),
+		Namespace: model.Namespace,
+	}
+	if err := r.Get(ctx, secretKey, secret); err == nil {
+		if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("deleting api key secret: %w", err)
 		}
-		if err := r.Get(ctx, secretKey, secret); err == nil {
-			if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("deleting api key secret: %w", err)
-			}
-		}
+	}
 
-		// Delete ConfigMap in api-keys namespace
-		cm := &corev1.ConfigMap{}
-		cmKey := types.NamespacedName{
-			Name:      reconcilers.APIKeyMetadataConfigMapName(model.Name),
-			Namespace: r.Config.APIKeysNamespace,
+	// Delete metadata ConfigMap in the model's namespace.
+	cm := &corev1.ConfigMap{}
+	cmKey := types.NamespacedName{
+		Name:      reconcilers.APIKeyMetadataConfigMapName(model.Name),
+		Namespace: model.Namespace,
+	}
+	if err := r.Get(ctx, cmKey, cm); err == nil {
+		if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("deleting api key metadata configmap: %w", err)
 		}
-		if err := r.Get(ctx, cmKey, cm); err == nil {
-			if err := r.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("deleting api key metadata configmap: %w", err)
-			}
-		}
+	}
 
-		// Delete ReferenceGrant in api-keys namespace
+	// Pre-#59 deployments may have left a ReferenceGrant behind in the
+	// dedicated api-keys namespace. Best-effort cleanup of that legacy
+	// resource so the namespace can drain. Skip if the API-keys namespace
+	// concept isn't even configured anymore.
+	if r.Config != nil && r.Config.APIKeysNamespace != "" && r.Config.APIKeysNamespace != model.Namespace {
 		refGrant := &unstructured.Unstructured{}
 		refGrant.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "gateway.networking.k8s.io",
@@ -253,8 +248,7 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 		}
 		if err := r.Get(ctx, refGrantKey, refGrant); err == nil {
 			if err := r.Delete(ctx, refGrant); err != nil && !apierrors.IsNotFound(err) {
-				// Non-fatal: CRD may not be installed
-				log.Error(err, "failed to delete ReferenceGrant during cleanup")
+				log.Error(err, "failed to delete legacy ReferenceGrant during cleanup")
 			}
 		}
 	}
@@ -268,29 +262,14 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 	return ctrl.Result{}, nil
 }
 
-// ensureNamespace creates the namespace if it does not exist.
-func (r *LLMModelReconciler) ensureNamespace(ctx context.Context, name string) error {
-	ns := &corev1.Namespace{}
-	if err := r.Get(ctx, types.NamespacedName{Name: name}, ns); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-		ns = &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{Name: name},
-		}
-		if err := r.Create(ctx, ns); err != nil && !apierrors.IsAlreadyExists(err) {
-			return err
-		}
-	}
-	return nil
-}
-
-// reconcileCrossNamespaceResources creates or updates the Secret, ConfigMap, and
-// ReferenceGrant in the api-keys namespace. These resources have no owner references
-// and are cleaned up by the finalizer.
-func (r *LLMModelReconciler) reconcileCrossNamespaceResources(
+// reconcileAuthSecretAndConfigMap creates or updates the API-key Secret and
+// metadata ConfigMap. Both live in the LLMModel's own namespace (no longer in
+// a separate api-keys namespace) so the SecurityPolicy can reference them
+// without a cross-namespace credentialRef. These resources have no owner
+// references because they hold user-issued API keys whose lifetime should
+// outlive a reapply of the LLMModel; cleanup is handled by the finalizer.
+func (r *LLMModelReconciler) reconcileAuthSecretAndConfigMap(
 	ctx context.Context,
-	log controllerLogger,
 	auth *reconcilers.AuthResources,
 ) error {
 	if err := r.createOrUpdateSecret(ctx, auth.APIKeySecret); err != nil {
@@ -298,11 +277,6 @@ func (r *LLMModelReconciler) reconcileCrossNamespaceResources(
 	}
 	if err := r.createOrUpdateConfigMap(ctx, auth.APIKeyMetadataCM); err != nil {
 		return fmt.Errorf("reconciling api key metadata configmap: %w", err)
-	}
-	if auth.ReferenceGrant != nil {
-		if err := r.createOrUpdateUnstructured(ctx, auth.ReferenceGrant); err != nil {
-			log.Error(err, "failed to reconcile ReferenceGrant - CRD may not be installed, skipping")
-		}
 	}
 	return nil
 }

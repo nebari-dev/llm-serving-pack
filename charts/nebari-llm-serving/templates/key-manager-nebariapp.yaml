@@ -12,6 +12,15 @@ spec:
   service:
     name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
     port: 8080
+  {{- with .Values.keyManager.nebariApp.routing }}
+  # routing is passed through verbatim from values so consumers can set
+  # routes / publicRoutes / tls / annotations without further chart edits.
+  # Required if you want the nebari-operator to provision an HTTPRoute and
+  # cert-manager Certificate for the key-manager hostname; without it the
+  # operator marks RoutingReady=False and skips both.
+  routing:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   auth:
     enabled: true
     provider: keycloak

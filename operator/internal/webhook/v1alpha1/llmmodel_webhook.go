@@ -38,9 +38,19 @@ import (
 var llmmodellog = logf.Log.WithName("llmmodel-resource")
 
 // SetupLLMModelWebhookWithManager registers the webhook for LLMModel in the manager.
-func SetupLLMModelWebhookWithManager(mgr ctrl.Manager) error {
+// operatorNamespace is the namespace the operator pod runs in; the webhook
+// rejects LLMModel CRs created in any other namespace because the API-key
+// Secret must live in the same namespace as the SecurityPolicy that
+// references it (Envoy Gateway's APIKeyAuth.credentialRefs does not honor
+// ReferenceGrant for cross-namespace refs - see #59) and the key-manager
+// can only read Secrets in its own namespace. An empty operatorNamespace
+// disables the check (used in tests that don't run inside a pod).
+func SetupLLMModelWebhookWithManager(mgr ctrl.Manager, operatorNamespace string) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&llmv1alpha1.LLMModel{}).
-		WithValidator(&LLMModelCustomValidator{Client: mgr.GetClient()}).
+		WithValidator(&LLMModelCustomValidator{
+			Client:            mgr.GetClient(),
+			OperatorNamespace: operatorNamespace,
+		}).
 		Complete()
 }
 
@@ -55,7 +65,8 @@ func SetupLLMModelWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type LLMModelCustomValidator struct {
-	Client client.Client
+	Client            client.Client
+	OperatorNamespace string // pod namespace; LLMModels must live here. Empty disables the check.
 }
 
 var _ webhook.CustomValidator = &LLMModelCustomValidator{}
@@ -67,6 +78,10 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, fmt.Errorf("expected a LLMModel object but got %T", obj)
 	}
 	llmmodellog.Info("Validation for LLMModel upon creation", "name", llmmodel.GetName())
+
+	if err := v.validateOperatorNamespace(llmmodel.Namespace); err != nil {
+		return nil, err
+	}
 
 	if err := v.validateNamespaceLabel(ctx, llmmodel.Namespace); err != nil {
 		return nil, err
@@ -90,6 +105,28 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 	return warnings, nil
 }
 
+// validateOperatorNamespace rejects LLMModels created outside the operator's
+// own namespace. The pack's auth model needs the API-key Secret to live in
+// the same namespace as the SecurityPolicy that references it (Envoy Gateway's
+// APIKeyAuth.credentialRefs does not honor ReferenceGrant); the simplest way
+// to keep that invariant is to require all LLMModels to live alongside the
+// operator and key-manager. Empty OperatorNamespace skips the check (used in
+// envtest setups that don't run the operator inside a pod).
+func (v *LLMModelCustomValidator) validateOperatorNamespace(namespace string) error {
+	if v.OperatorNamespace == "" {
+		return nil
+	}
+	if namespace != v.OperatorNamespace {
+		return fmt.Errorf(
+			"LLMModel must be created in the operator's namespace %q (got %q); "+
+				"the API-key Secret needs to be co-located with its SecurityPolicy "+
+				"because Envoy Gateway's APIKeyAuth rejects cross-namespace credentialRefs",
+			v.OperatorNamespace, namespace,
+		)
+	}
+	return nil
+}
+
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type LLMModel.
 func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	llmmodel, ok := newObj.(*llmv1alpha1.LLMModel)
@@ -97,6 +134,10 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, fmt.Errorf("expected a LLMModel object for the newObj but got %T", newObj)
 	}
 	llmmodellog.Info("Validation for LLMModel upon update", "name", llmmodel.GetName())
+
+	if err := v.validateOperatorNamespace(llmmodel.Namespace); err != nil {
+		return nil, err
+	}
 
 	if err := v.validateNamespaceLabel(ctx, llmmodel.Namespace); err != nil {
 		return nil, err

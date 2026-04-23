@@ -1,9 +1,13 @@
 {{- if .Values.keyManager.enabled }}
+# Per #59 the API-key Secrets and metadata ConfigMaps live in the operator
+# namespace (alongside the LLMModel CRs and SecurityPolicies that reference
+# them). The key-manager only needs RBAC on its own namespace, no longer a
+# separate api-keys namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
-  namespace: {{ .Values.apiKeysNamespace }}
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
   labels:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}
 rules:

@@ -5,7 +5,7 @@ apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel
 metadata:
   name: my-oci-model
-  namespace: llm-serving
+  namespace: nebari-llm-serving-system  # LLMModel must live in the operator namespace (per #59); for the dev cluster use llm-operator-system
 spec:
   model:
     name: "my-org/my-model"
