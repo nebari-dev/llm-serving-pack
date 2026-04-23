@@ -39,7 +39,10 @@ keyManager:
   enabled: true
   image:
     repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager
-    tag: latest
+    # tag defaults to .Chart.AppVersion when empty so the chart version and
+    # the image version always move together. Override only when testing a
+    # specific image build (e.g. tag: 0.1.0-alpha.2 or tag: sha-abc1234).
+    tag: ""
     pullPolicy: Always
   auditInterval: 5m
   oidcUserinfoURL: ""
@@ -90,7 +93,10 @@ keyManager:
 operator:
   image:
     repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
-    tag: latest
+    # tag defaults to .Chart.AppVersion when empty so the chart version and
+    # the image version always move together. Override only when testing a
+    # specific image build (e.g. tag: 0.1.0-alpha.2 or tag: sha-abc1234).
+    tag: ""
     pullPolicy: Always
 
 

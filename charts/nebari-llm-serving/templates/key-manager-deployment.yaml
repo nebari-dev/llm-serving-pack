@@ -20,7 +20,7 @@ spec:
       serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-key-manager
       containers:
         - name: key-manager
-          image: {{ .Values.keyManager.image.repository }}:{{ .Values.keyManager.image.tag }}
+          image: {{ .Values.keyManager.image.repository }}:{{ .Values.keyManager.image.tag | default .Chart.AppVersion }}
           imagePullPolicy: {{ .Values.keyManager.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - containerPort: 8080
