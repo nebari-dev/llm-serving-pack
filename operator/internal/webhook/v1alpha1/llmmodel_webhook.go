@@ -211,22 +211,10 @@ func (v *LLMModelCustomValidator) validateNamespaceLabel(ctx context.Context, na
 }
 
 // effectiveSubdomain returns the subdomain that will be used for this LLMModel.
-// It uses spec.endpoints.external.subdomain if set, otherwise it slugifies the model name.
-// It also validates that the result does not exceed 63 characters.
+// It delegates to reconcilers.EffectiveSubdomain so the webhook and the
+// controller agree on the value.
 func effectiveSubdomain(llmmodel *llmv1alpha1.LLMModel) (string, error) {
-	subdomain := llmmodel.Spec.Endpoints.External.Subdomain
-	if subdomain == "" {
-		subdomain = reconcilers.Slugify(llmmodel.Name)
-	}
-
-	if len(subdomain) > 63 {
-		return "", fmt.Errorf(
-			"effective subdomain %q is %d characters long; subdomains must be 63 characters or fewer",
-			subdomain, len(subdomain),
-		)
-	}
-
-	return subdomain, nil
+	return reconcilers.EffectiveSubdomain(llmmodel)
 }
 
 // validateSubdomainCollision checks that no other LLMModel across all namespaces

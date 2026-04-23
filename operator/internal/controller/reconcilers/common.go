@@ -65,6 +65,26 @@ func APIKeyMetadataConfigMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
 }
 
+// EffectiveSubdomain returns the subdomain that will be used for this LLMModel.
+// It uses spec.endpoints.external.subdomain if set, otherwise it slugifies the
+// model name. It also validates that the result does not exceed 63 characters
+// (the maximum length of a single DNS label).
+func EffectiveSubdomain(model *llmv1alpha1.LLMModel) (string, error) {
+	subdomain := model.Spec.Endpoints.External.Subdomain
+	if subdomain == "" {
+		subdomain = Slugify(model.Name)
+	}
+
+	if len(subdomain) > 63 {
+		return "", fmt.Errorf(
+			"effective subdomain %q is %d characters long; subdomains must be 63 characters or fewer",
+			subdomain, len(subdomain),
+		)
+	}
+
+	return subdomain, nil
+}
+
 // ExternalHostname returns the external hostname for a model's endpoint.
 func ExternalHostname(subdomain, baseDomain string) string {
 	return subdomain + ".llm." + baseDomain
