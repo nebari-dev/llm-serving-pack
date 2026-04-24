@@ -173,8 +173,15 @@ func buildVLLMArgs(model *llmv1alpha1.LLMModel, storage *StorageResult) []string
 		dataParallelism = *model.Spec.Serving.DataParallelism
 	}
 
+	// --served-model-name makes vLLM accept the model under its public
+	// name (spec.model.name, e.g. "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4") even
+	// though --model points at a local path. Without this, OpenAI-style
+	// clients that pass "model": "<name>" in the request body get a
+	// vLLM 404 "The model X does not exist" because vLLM has registered
+	// the model under the path instead.
 	args := []string{
 		"--model", storage.ModelPath,
+		"--served-model-name", model.Spec.Model.Name,
 		"--tensor-parallel-size", fmt.Sprintf("%d", tensorParallelism),
 		"--data-parallel-size", fmt.Sprintf("%d", dataParallelism),
 	}
