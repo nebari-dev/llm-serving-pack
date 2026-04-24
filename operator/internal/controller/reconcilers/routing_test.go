@@ -67,6 +67,33 @@ func modelHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) strin
 	return v
 }
 
+// hostHeaderMatchValue returns the value of the Host header matcher on the
+// first rule of the given AIGatewayRoute, or fails the test.
+func hostHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string {
+	t.Helper()
+	if route == nil {
+		t.Fatal("expected route to be non-nil")
+	}
+	spec, _ := route.Object["spec"].(map[string]interface{})
+	rules, _ := spec["rules"].([]interface{})
+	rule, _ := rules[0].(map[string]interface{})
+	matches, _ := rule["matches"].([]interface{})
+	match, _ := matches[0].(map[string]interface{})
+	headers, _ := match["headers"].([]interface{})
+	for _, h := range headers {
+		header, _ := h.(map[string]interface{})
+		if header["name"] == "Host" {
+			v, ok := header["value"].(string)
+			if !ok {
+				t.Fatalf("expected Host header value to be a string, got %T", header["value"])
+			}
+			return v
+		}
+	}
+	t.Fatalf("did not find a Host header matcher in %v", headers)
+	return ""
+}
+
 func defaultRoutingModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
@@ -271,6 +298,36 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				}
 				if got := modelHeaderMatchValue(t, result.InternalRoute); got != wantModelName {
 					t.Errorf("expected internal x-ai-eg-model match %q (subdomain ignored at routing layer), got %q", wantModelName, got)
+				}
+			},
+		},
+		{
+			name:  "External: rule has Host matcher for shared external hostname (scopes route to shared listener)",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				got := hostHeaderMatchValue(t, result.ExternalRoute)
+				want := "llm.example.com"
+				if got != want {
+					t.Errorf("expected external Host match %q, got %q", want, got)
+				}
+			},
+		},
+		{
+			name:  "Internal: rule has Host matcher for shared internal hostname",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				got := hostHeaderMatchValue(t, result.InternalRoute)
+				want := "llm-internal.example.com"
+				if got != want {
+					t.Errorf("expected internal Host match %q, got %q", want, got)
 				}
 			},
 		},
