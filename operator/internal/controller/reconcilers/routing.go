@@ -53,6 +53,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.ExternalGatewayNS,
 			model.Name,
 			model.Spec.Model.Name,
+			SharedExternalHostname(cfg.BaseDomain),
 		)
 	}
 
@@ -65,6 +66,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.InternalGatewayNS,
 			model.Name,
 			model.Spec.Model.Name,
+			SharedInternalHostname(cfg.BaseDomain),
 		)
 	}
 
@@ -77,6 +79,7 @@ func buildAIGatewayRoute(
 	gatewayName, gatewayNS string,
 	poolName string,
 	modelName string,
+	hostname string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -96,15 +99,35 @@ func buildAIGatewayRoute(
 				},
 				"rules": []interface{}{
 					map[string]interface{}{
-						// Match on the `x-ai-eg-model` header that the Envoy AI
-						// Gateway controller derives from the request body's
-						// `model` field. The controller propagates Headers
-						// matchers onto the generated HTTPRoute, giving us
-						// deterministic per-model routing even when multiple
-						// routes share a Gateway listener and a hostname.
+						// Match on BOTH the shared hostname (Host header) AND the
+						// `x-ai-eg-model` header.
+						//
+						// The Host match scopes this rule to the listener for
+						// the shared hostname, keeping unrelated listeners on
+						// the same Gateway (llm-keys, argocd, keycloak, the
+						// base domain, etc.) from routing traffic here. The AI
+						// Gateway controller does not propagate a hostnames
+						// field onto the generated HTTPRoute, so without the
+						// Host match the route attaches to every listener.
+						//
+						// The x-ai-eg-model match gives us per-model dispatch
+						// once a request lands on a shared hostname. The Envoy
+						// AI Gateway extproc filter derives the value from the
+						// request body's `model` field before HTTPRoute
+						// matching runs. Both matches are ANDed (per Gateway
+						// API spec).
+						//
+						// Regression fixed: alpha.3 shipped only the header
+						// match, causing requests to llm-keys.<base> to hit
+						// per-model APIKeyAuth SecurityPolicy.
 						"matches": []interface{}{
 							map[string]interface{}{
 								"headers": []interface{}{
+									map[string]interface{}{
+										"type":  "Exact",
+										"name":  "Host",
+										"value": hostname,
+									},
 									map[string]interface{}{
 										"type":  "Exact",
 										"name":  "x-ai-eg-model",
