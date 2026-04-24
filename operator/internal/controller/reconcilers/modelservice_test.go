@@ -219,6 +219,19 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name:    "vllm --served-model-name is set to spec.model.name",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				args := result.Deployment.Spec.Template.Spec.Containers[0].Args
+				assertArgValue(t, args, "--served-model-name", "mistralai/Mistral-7B-v0.1")
+			},
+		},
+		{
 			name: "tensorParallelism explicit value used",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
