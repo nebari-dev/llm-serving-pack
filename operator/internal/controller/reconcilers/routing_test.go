@@ -332,6 +332,38 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 			},
 		},
 		{
+			name:  "External: parentRef has sectionName pinning to shared external listener",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.ExternalRoute.Object["spec"].(map[string]interface{})
+				parentRefs := spec["parentRefs"].([]interface{})
+				parentRef := parentRefs[0].(map[string]interface{})
+				if parentRef["sectionName"] != ExternalHTTPSListenerName {
+					t.Errorf("expected external parentRef sectionName %q, got %v", ExternalHTTPSListenerName, parentRef["sectionName"])
+				}
+			},
+		},
+		{
+			name:  "Internal: parentRef has sectionName pinning to shared internal listener",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.InternalRoute.Object["spec"].(map[string]interface{})
+				parentRefs := spec["parentRefs"].([]interface{})
+				parentRef := parentRefs[0].(map[string]interface{})
+				if parentRef["sectionName"] != InternalHTTPSListenerName {
+					t.Errorf("expected internal parentRef sectionName %q, got %v", InternalHTTPSListenerName, parentRef["sectionName"])
+				}
+			},
+		},
+		{
 			name:  "Both routes: x-ai-eg-model matches use Exact type",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
