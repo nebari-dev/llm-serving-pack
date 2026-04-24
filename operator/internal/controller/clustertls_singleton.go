@@ -106,6 +106,14 @@ func (r *ClusterTLSSingleton) Reconcile(ctx context.Context) error {
 		log.Info("skipping shared-TLS reconcile: baseDomain is empty")
 		return nil
 	}
+	if r.Config.OperatorNamespace == "" {
+		// POD_NAMESPACE is optional (envtest / webhook test mode); without
+		// it we have no home namespace for the Certificate and Secret, so
+		// we can't do anything useful. See design.md §Single-namespace
+		// deployment model.
+		log.Info("skipping shared-TLS reconcile: POD_NAMESPACE (OperatorNamespace) is empty")
+		return nil
+	}
 
 	// 1. Ensure the Certificate.
 	if err := r.ensureCertificate(ctx); err != nil {

@@ -208,6 +208,24 @@ func TestClusterTLSSingleton_Reconcile(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "empty OperatorNamespace (test mode): no-op, returns no error",
+			mutateCfg: func(cfg *config.OperatorConfig) {
+				cfg.OperatorNamespace = ""
+			},
+			check: func(t *testing.T, c client.Client, cfg *config.OperatorConfig) {
+				// Nothing meaningful to check in the cluster; the important
+				// assertion is that Reconcile returned nil (verified by the
+				// t.Fatalf guard in the test driver below). Exercise: confirm
+				// no Certificate was accidentally created in the empty namespace.
+				cert := getUnstructured(t, c,
+					schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
+					reconcilers.SharedTLSCertificateName, "")
+				if cert != nil {
+					t.Error("no Certificate should be created with empty OperatorNamespace")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -262,6 +262,14 @@ The operator creates Kubernetes resources directly rather than rendering the ups
 
 The tradeoff is tracking upstream changes manually. Each resource template in the operator code must document which llm-d-modelservice chart version it's based on. When llm-d releases updates, we diff their chart and update our resource specs.
 
+### Cluster-singleton reconcilers
+
+Most operator work is per-LLMModel and flows through `LLMModelReconciler`. A small amount of state is cluster-wide and not owned by any single LLMModel: the shared-TLS Certificate covering `llm.<baseDomain>` and `llm-internal.<baseDomain>`, the cross-namespace ReferenceGrants, and the HTTPS listeners on the external and internal Gateways.
+
+These are reconciled by `ClusterTLSSingleton`, a `manager.Runnable` (not a controller-runtime Reconciler) that runs under leader election with a 5-minute resync after an initial reconcile on leader acquisition. It sets no OwnerReferences on its targets: the Certificate is cluster-scoped in spirit even though it lives in a namespace, and the Gateways are owned out-of-band by the platform - the operator only mutates their `.spec.listeners` slice in place, matched by listener name. On operator uninstall the Certificate and listeners stay behind so in-flight traffic continues to terminate TLS while a new pack version rolls.
+
+Use this pattern for any future cluster-wide concern; do not co-locate cluster-wide state inside `LLMModelReconciler`. The split keeps per-model reconciles fast and keeps cluster-singleton reconciles rare and idempotent.
+
 ### Reconciliation flow
 
 ```

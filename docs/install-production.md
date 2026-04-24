@@ -34,6 +34,10 @@ managed by ArgoCD. For local development against `kind` see
   `platform.gateway.manageSharedListeners: false` if a cluster admin
   owns the listeners out-of-band - the operator will still create the
   Certificate so admins can wire the resulting Secret in by hand.
+  Note: flipping `manageSharedListeners` from true to false does not
+  retroactively remove listeners the operator already added. Remove
+  them by hand (or via your Gateway-owning tool) before flipping the
+  flag if a clean slate is required.
 
 The `llmd-test` cluster wires all of this up via ArgoCD apps in
 `clusters/llmd-test/apps/` of the `nic-test` repo - use those as the
