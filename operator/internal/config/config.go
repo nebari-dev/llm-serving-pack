@@ -43,6 +43,25 @@ type OperatorConfig struct {
 	// originally deployed against a separate api-keys namespace; new
 	// deployments leave it empty.
 	APIKeysNamespace string // LLM_API_KEYS_NAMESPACE (legacy cleanup hint, default empty)
+	// OperatorNamespace is the namespace the operator runs in. Used as
+	// the home namespace for the shared-TLS Certificate and Secret so
+	// the cert lives in one well-known place independent of per-model
+	// namespaces. Injected via the downward API on the Deployment.
+	// Optional: empty is valid (webhook "test mode" per design.md
+	// §Single-namespace deployment model; envtest doesn't run inside a
+	// pod). The shared-TLS reconciler skips on empty rather than
+	// failing the whole operator.
+	OperatorNamespace string // POD_NAMESPACE (optional; empty = test mode)
+	// ClusterIssuerName is the cert-manager ClusterIssuer used to issue
+	// the shared-TLS certificate covering llm.<baseDomain> and
+	// llm-internal.<baseDomain>. HTTP-01 is the assumed challenge type;
+	// wildcards are not supported by this pack.
+	ClusterIssuerName string // LLM_CLUSTER_ISSUER_NAME (default: "letsencrypt-production")
+	// ManageSharedListeners controls whether the operator patches HTTPS
+	// listeners onto the external and internal shared Gateways. When
+	// false the operator still creates the shared Certificate but leaves
+	// listener management to the cluster admin (runbook). Default true.
+	ManageSharedListeners bool // LLM_MANAGE_SHARED_LISTENERS (default: "true")
 }
 
 // getEnvOrDefault returns the value of the environment variable named by key,
@@ -52,6 +71,22 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// getEnvBool parses an environment variable as a boolean. Accepted true values
+// are "true", "1", "yes", "on" (case-insensitive). Anything else returns false.
+// An unset or empty variable returns defaultVal.
+func getEnvBool(key string, defaultVal bool) bool {
+	v := strings.ToLower(os.Getenv(key))
+	if v == "" {
+		return defaultVal
+	}
+	switch v {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // LoadFromEnv reads configuration from environment variables and returns an
@@ -80,6 +115,9 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.6.0"),
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
 		APIKeysNamespace:        os.Getenv("LLM_API_KEYS_NAMESPACE"),
+		OperatorNamespace:       os.Getenv("POD_NAMESPACE"),
+		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-production"),
+		ManageSharedListeners:   getEnvBool("LLM_MANAGE_SHARED_LISTENERS", true),
 	}
 
 	if len(missing) > 0 {

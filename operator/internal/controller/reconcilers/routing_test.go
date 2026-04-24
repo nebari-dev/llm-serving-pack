@@ -11,10 +11,10 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
-// hostHeaderMatch extracts the Host header matcher from the first rule of the
-// given AIGatewayRoute. It fatally fails the test if the structure does not
-// match the operator's expected layout.
-func hostHeaderMatch(t *testing.T, route *unstructured.Unstructured) map[string]interface{} {
+// modelHeaderMatch extracts the `x-ai-eg-model` header matcher from the first
+// rule of the given AIGatewayRoute. It fatally fails the test if the structure
+// does not match the operator's expected layout.
+func modelHeaderMatch(t *testing.T, route *unstructured.Unstructured) map[string]interface{} {
 	t.Helper()
 	if route == nil {
 		t.Fatal("expected route to be non-nil")
@@ -48,21 +48,21 @@ func hostHeaderMatch(t *testing.T, route *unstructured.Unstructured) map[string]
 		if !ok {
 			continue
 		}
-		if header["name"] == "Host" {
+		if header["name"] == "x-ai-eg-model" {
 			return header
 		}
 	}
-	t.Fatalf("did not find a Host header matcher in %v", headers)
+	t.Fatalf("did not find an x-ai-eg-model header matcher in %v", headers)
 	return nil
 }
 
-// hostHeaderMatchValue returns the value of the Host header matcher.
-func hostHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string {
+// modelHeaderMatchValue returns the value of the x-ai-eg-model header matcher.
+func modelHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string {
 	t.Helper()
-	header := hostHeaderMatch(t, route)
+	header := modelHeaderMatch(t, route)
 	v, ok := header["value"].(string)
 	if !ok {
-		t.Fatalf("expected Host header value to be a string, got %T", header["value"])
+		t.Fatalf("expected x-ai-eg-model header value to be a string, got %T", header["value"])
 	}
 	return v
 }
@@ -97,6 +97,8 @@ func defaultRoutingConfig() *config.OperatorConfig {
 func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
+	const wantModelName = "mistralai/Mistral-7B-v0.1"
+
 	tests := []struct {
 		name  string
 		model *llmv1alpha1.LLMModel
@@ -130,55 +132,16 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 			},
 		},
 		{
-			name:  "External: rule has Host header match for external FQDN (default subdomain from name slugification)",
+			name:  "External: rule has x-ai-eg-model header match equal to spec.model.name",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				got := hostHeaderMatchValue(t, result.ExternalRoute)
-				want := "my-model.llm.example.com"
-				if got != want {
-					t.Errorf("expected external Host header match %q, got %q", want, got)
-				}
-			},
-		},
-		{
-			name: "External: rule has Host header match using explicit subdomain from spec",
-			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel()
-				m.Spec.Endpoints.External.Subdomain = "custom-sub"
-				return m
-			}(),
-			cfg: defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				got := hostHeaderMatchValue(t, result.ExternalRoute)
-				want := "custom-sub.llm.example.com"
-				if got != want {
-					t.Errorf("expected external Host header match %q, got %q", want, got)
-				}
-			},
-		},
-		{
-			name: "External: rule has Host header match for slugified multi-part model name",
-			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel()
-				m.Name = "Qwen3_30B-A3B"
-				return m
-			}(),
-			cfg: defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				got := hostHeaderMatchValue(t, result.ExternalRoute)
-				want := "qwen3-30b-a3b.llm.example.com"
-				if got != want {
-					t.Errorf("expected external Host header match %q, got %q", want, got)
+				got := modelHeaderMatchValue(t, result.ExternalRoute)
+				if got != wantModelName {
+					t.Errorf("expected external x-ai-eg-model match %q, got %q", wantModelName, got)
 				}
 			},
 		},
@@ -278,22 +241,21 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 			},
 		},
 		{
-			name:  "Internal: rule has Host header match for internal FQDN (default subdomain)",
+			name:  "Internal: rule has x-ai-eg-model header match equal to spec.model.name",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				got := hostHeaderMatchValue(t, result.InternalRoute)
-				want := "my-model.llm-internal.example.com"
-				if got != want {
-					t.Errorf("expected internal Host header match %q, got %q", want, got)
+				got := modelHeaderMatchValue(t, result.InternalRoute)
+				if got != wantModelName {
+					t.Errorf("expected internal x-ai-eg-model match %q, got %q", wantModelName, got)
 				}
 			},
 		},
 		{
-			name: "Internal: rule has Host header match using explicit subdomain from spec",
+			name: "External and internal: subdomain on spec does not change matcher value",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultRoutingModel()
 				m.Spec.Endpoints.External.Subdomain = "custom-sub"
@@ -304,34 +266,16 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				got := hostHeaderMatchValue(t, result.InternalRoute)
-				want := "custom-sub.llm-internal.example.com"
-				if got != want {
-					t.Errorf("expected internal Host header match %q, got %q", want, got)
+				if got := modelHeaderMatchValue(t, result.ExternalRoute); got != wantModelName {
+					t.Errorf("expected external x-ai-eg-model match %q (subdomain ignored at routing layer), got %q", wantModelName, got)
+				}
+				if got := modelHeaderMatchValue(t, result.InternalRoute); got != wantModelName {
+					t.Errorf("expected internal x-ai-eg-model match %q (subdomain ignored at routing layer), got %q", wantModelName, got)
 				}
 			},
 		},
 		{
-			name: "Internal: rule has Host header match for slugified multi-part model name",
-			model: func() *llmv1alpha1.LLMModel {
-				m := defaultRoutingModel()
-				m.Name = "Qwen3_30B-A3B"
-				return m
-			}(),
-			cfg: defaultRoutingConfig(),
-			check: func(t *testing.T, result *RoutingResources, err error) {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				got := hostHeaderMatchValue(t, result.InternalRoute)
-				want := "qwen3-30b-a3b.llm-internal.example.com"
-				if got != want {
-					t.Errorf("expected internal Host header match %q, got %q", want, got)
-				}
-			},
-		},
-		{
-			name:  "Both routes: Host header matches use Exact type",
+			name:  "Both routes: x-ai-eg-model matches use Exact type",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
@@ -345,12 +289,12 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 					{"external", result.ExternalRoute},
 					{"internal", result.InternalRoute},
 				} {
-					header := hostHeaderMatch(t, route.r)
+					header := modelHeaderMatch(t, route.r)
 					if header["type"] != "Exact" {
-						t.Errorf("%s: expected Host match type Exact, got %v", route.name, header["type"])
+						t.Errorf("%s: expected x-ai-eg-model match type Exact, got %v", route.name, header["type"])
 					}
-					if header["name"] != "Host" {
-						t.Errorf("%s: expected header name Host, got %v", route.name, header["name"])
+					if header["name"] != "x-ai-eg-model" {
+						t.Errorf("%s: expected header name x-ai-eg-model, got %v", route.name, header["name"])
 					}
 				}
 			},

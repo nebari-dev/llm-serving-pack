@@ -15,6 +15,21 @@ platform:
     internal:
       name: nebari-internal-gateway
       namespace: envoy-gateway-system
+    # manageSharedListeners controls whether the operator patches HTTPS
+    # listeners for llm.<baseDomain> and llm-internal.<baseDomain> onto
+    # the shared Gateways above. Default true; the operator adds and
+    # updates its listeners by name and leaves every other listener on
+    # the Gateway untouched. Set to false if a cluster admin owns the
+    # listeners out-of-band; the operator will still create the shared
+    # TLS Certificate but skip the Gateway patch.
+    manageSharedListeners: true
+  tls:
+    # clusterIssuer - the cert-manager ClusterIssuer used to issue the
+    # shared TLS certificate covering llm.<baseDomain> and
+    # llm-internal.<baseDomain>. HTTP-01 is the assumed challenge type;
+    # wildcard SANs are not supported. Override when running against a
+    # staging issuer or a different production issuer.
+    clusterIssuer: letsencrypt-production
 
 auth:
   oidc:

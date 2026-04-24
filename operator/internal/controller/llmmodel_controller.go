@@ -550,20 +550,19 @@ func (r *LLMModelReconciler) updateStatus(
 		}
 	}
 
-	// Update endpoint URLs. Go through reconcilers.EffectiveSubdomain so the
-	// status URL, the routing builder, and the validating webhook all derive
-	// the subdomain identically; if the helper grows additional rules
-	// (length cap changes, reserved-name list, etc.) every consumer picks
-	// them up.
+	// Update endpoint URLs. Every model on the cluster shares the same
+	// hostname pair (`llm.<baseDomain>` external, `llm-internal.<baseDomain>`
+	// internal); per-model routing happens via the `x-ai-eg-model` header
+	// matched on each AIGatewayRoute (see reconcilers.BuildRoutingResources).
+	// The status URL is therefore identical across models - clients
+	// disambiguate by setting the `model` field in the OpenAI-compatible
+	// request body, which the AI Gateway extracts into the header.
 	if r.Config != nil {
-		subdomain, err := reconcilers.EffectiveSubdomain(model)
-		if err == nil {
-			if r.Config.ExternalGatewayName != "" {
-				fresh.Status.Endpoints.External = "https://" + reconcilers.ExternalHostname(subdomain, r.Config.BaseDomain)
-			}
-			if r.Config.InternalGatewayName != "" {
-				fresh.Status.Endpoints.Internal = "https://" + reconcilers.InternalHostname(subdomain, r.Config.BaseDomain)
-			}
+		if r.Config.ExternalGatewayName != "" {
+			fresh.Status.Endpoints.External = "https://" + reconcilers.SharedExternalHostname(r.Config.BaseDomain)
+		}
+		if r.Config.InternalGatewayName != "" {
+			fresh.Status.Endpoints.Internal = "https://" + reconcilers.SharedInternalHostname(r.Config.BaseDomain)
 		}
 	}
 

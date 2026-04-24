@@ -194,6 +194,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "LLMModel")
 		os.Exit(1)
 	}
+
+	// Register the cluster-singleton reconciler that owns the shared-TLS
+	// Certificate and HTTPS listener patches on the external/internal
+	// Gateways. It runs once on leader acquisition and then on a slow
+	// resync; see internal/controller/clustertls_singleton.go.
+	if err := mgr.Add(&controller.ClusterTLSSingleton{
+		Client: mgr.GetClient(),
+		Config: operatorCfg,
+	}); err != nil {
+		setupLog.Error(err, "unable to register ClusterTLSSingleton")
+		os.Exit(1)
+	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		// POD_NAMESPACE is injected via the downward API on the operator

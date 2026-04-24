@@ -91,12 +91,13 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, err
 	}
 
-	subdomain, err := reconcilers.EffectiveSubdomain(llmmodel)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := v.validateSubdomainCollision(ctx, subdomain, llmmodel.Namespace, llmmodel.Name); err != nil {
+	// Validate the effective subdomain length even though routing no longer
+	// uses it. The CRD still exposes endpoints.external.subdomain; rejecting
+	// >63-char values at admission time keeps the field a valid DNS label
+	// for any future per-model FQDN routing. No cross-model collision check
+	// is performed - models share a hostname pair and disambiguate via the
+	// `x-ai-eg-model` header (see reconcilers.BuildRoutingResources).
+	if _, err := reconcilers.EffectiveSubdomain(llmmodel); err != nil {
 		return nil, err
 	}
 
@@ -147,13 +148,13 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, err
 	}
 
-	subdomain, err := reconcilers.EffectiveSubdomain(llmmodel)
-	if err != nil {
-		return nil, err
-	}
-
-	// Exclude the model being updated from the collision check.
-	if err := v.validateSubdomainCollision(ctx, subdomain, llmmodel.Namespace, llmmodel.Name); err != nil {
+	// Validate the effective subdomain length even though routing no longer
+	// uses it. The CRD still exposes endpoints.external.subdomain; rejecting
+	// >63-char values at admission time keeps the field a valid DNS label
+	// for any future per-model FQDN routing. No cross-model collision check
+	// is performed - models share a hostname pair and disambiguate via the
+	// `x-ai-eg-model` header (see reconcilers.BuildRoutingResources).
+	if _, err := reconcilers.EffectiveSubdomain(llmmodel); err != nil {
 		return nil, err
 	}
 
@@ -205,44 +206,6 @@ func (v *LLMModelCustomValidator) validateNamespaceLabel(ctx context.Context, na
 				"LLMModel resources can only be created in namespaces managed by Nebari",
 			namespaceName,
 		)
-	}
-
-	return nil
-}
-
-// validateSubdomainCollision checks that no other LLMModel across all namespaces
-// uses the same effective subdomain. The model identified by (excludeNamespace, excludeName)
-// is excluded from the check (used for updates).
-func (v *LLMModelCustomValidator) validateSubdomainCollision(
-	ctx context.Context,
-	subdomain, excludeNamespace, excludeName string,
-) error {
-	var modelList llmv1alpha1.LLMModelList
-	if err := v.Client.List(ctx, &modelList); err != nil {
-		return fmt.Errorf("failed to list LLMModels for subdomain collision check: %w", err)
-	}
-
-	for i := range modelList.Items {
-		existing := &modelList.Items[i]
-
-		// Skip the model being created/updated.
-		if existing.Namespace == excludeNamespace && existing.Name == excludeName {
-			continue
-		}
-
-		existingSubdomain, err := reconcilers.EffectiveSubdomain(existing)
-		if err != nil {
-			// If an existing model has an invalid subdomain, skip it rather than
-			// blocking new creates.
-			continue
-		}
-
-		if existingSubdomain == subdomain {
-			return fmt.Errorf(
-				"subdomain %q is already in use by LLMModel %s/%s; each model must have a unique subdomain",
-				subdomain, existing.Namespace, existing.Name,
-			)
-		}
 	}
 
 	return nil

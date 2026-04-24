@@ -126,7 +126,22 @@ var _ = Describe("LLMModel Webhook", func() {
 			Expect(err.Error()).To(ContainSubstring("nebari.dev/managed"))
 		})
 
-		It("should accept a LLMModel with an explicit valid subdomain", func() {
+		It("should reject a LLMModel whose effective subdomain exceeds 63 characters", func() {
+			ns := newManagedNamespace("test-managed-long-subdomain")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			// An explicit subdomain that is 64 chars long - too long for a
+			// DNS label even though we no longer use it for routing.
+			longSubdomain := strings.Repeat("a", 64)
+			model := newBaseLLMModel("my-model-long-sub", ns.Name)
+			model.Spec.Endpoints.External.Subdomain = longSubdomain
+			err := k8sClient.Create(bgCtx, model)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("63"))
+		})
+
+		It("should accept a LLMModel with an explicit subdomain (the field is currently unused at the routing layer)", func() {
 			ns := newManagedNamespace("test-managed-explicit-subdomain")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
@@ -137,41 +152,28 @@ var _ = Describe("LLMModel Webhook", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
 		})
 
-		It("should reject a LLMModel whose effective subdomain exceeds 63 characters", func() {
-			ns := newManagedNamespace("test-managed-long-subdomain")
+		It("should accept two LLMModels that share the same subdomain (collision check no longer runs)", func() {
+			// Routing now uses the `x-ai-eg-model` header on a shared
+			// hostname pair, so per-model subdomains do not need to be
+			// unique. The webhook no longer lists every LLMModel on
+			// admission to verify uniqueness.
+			ns := newManagedNamespace("test-managed-no-collision")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
 
-			// An explicit subdomain that is 64 chars long - too long.
-			longSubdomain := strings.Repeat("a", 64)
-			model := newBaseLLMModel("my-model-long-sub", ns.Name)
-			model.Spec.Endpoints.External.Subdomain = longSubdomain
-			err := k8sClient.Create(bgCtx, model)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("63"))
-		})
-
-		It("should reject a second LLMModel whose subdomain collides with an existing one", func() {
-			ns := newManagedNamespace("test-managed-collision")
-			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
-			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
-
-			// First model: explicit subdomain "shared-subdomain"
-			first := newBaseLLMModel("first-model-collision", ns.Name)
+			first := newBaseLLMModel("first-shared-sub", ns.Name)
 			first.Spec.Endpoints.External.Subdomain = "shared-subdomain"
 			Expect(k8sClient.Create(bgCtx, first)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, first) })
 
-			// Second model in a different namespace but same subdomain.
-			ns2 := newManagedNamespace("test-managed-collision2")
+			ns2 := newManagedNamespace("test-managed-no-collision2")
 			Expect(k8sClient.Create(bgCtx, ns2)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns2) })
 
-			second := newBaseLLMModel("second-model-collision", ns2.Name)
+			second := newBaseLLMModel("second-shared-sub", ns2.Name)
 			second.Spec.Endpoints.External.Subdomain = "shared-subdomain"
-			err := k8sClient.Create(bgCtx, second)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("subdomain"))
+			Expect(k8sClient.Create(bgCtx, second)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, second) })
 		})
 
 		It("should accept but warn when storage type is emptyDir and preload is true", func() {
@@ -191,28 +193,27 @@ var _ = Describe("LLMModel Webhook", func() {
 	})
 
 	Context("ValidateUpdate", func() {
-		It("should reject an update that causes a subdomain collision", func() {
-			ns := newManagedNamespace("test-managed-update-collision")
+		It("should allow an update that keeps the same subdomain across two models (no collision check)", func() {
+			// Routing uses `x-ai-eg-model` on a shared hostname, so two
+			// models in the same namespace can share a subdomain. This
+			// test guards against the collision check being re-introduced
+			// without thinking about TLS SAN cost.
+			ns := newManagedNamespace("test-managed-update-shared-sub")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
 
-			// Create the first model to claim the subdomain.
 			first := newBaseLLMModel("update-first", ns.Name)
 			first.Spec.Endpoints.External.Subdomain = "taken-subdomain"
 			Expect(k8sClient.Create(bgCtx, first)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, first) })
 
-			// Create the second model with a different subdomain.
 			second := newBaseLLMModel("update-second", ns.Name)
 			second.Spec.Endpoints.External.Subdomain = "free-subdomain"
 			Expect(k8sClient.Create(bgCtx, second)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, second) })
 
-			// Now update second to collide with first.
 			second.Spec.Endpoints.External.Subdomain = "taken-subdomain"
-			err := k8sClient.Update(bgCtx, second)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("subdomain"))
+			Expect(k8sClient.Update(bgCtx, second)).To(Succeed())
 		})
 
 		It("should allow an update that keeps the same subdomain (self-update)", func() {

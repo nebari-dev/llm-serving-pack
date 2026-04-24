@@ -22,9 +22,22 @@ managed by ArgoCD. For local development against `kind` see
   `nebari-operator` (the operator looks up users in Keycloak to enforce
   group-based access).
 - The Nebari shared Gateway (`gateway.networking.k8s.io/Gateway`) is
-  provisioned out-of-band. The pack does not ship one. The Gateway
-  needs at least an HTTPS listener with a wildcard or per-app
-  certificate that covers your pack hostnames.
+  provisioned out-of-band. The pack does not ship one, but starting at
+  v0.1.0-alpha.3 the operator patches its own HTTPS listeners for
+  `llm.<baseDomain>` and `llm-internal.<baseDomain>` onto the external
+  and internal Gateways. Pre-existing listeners on those Gateways
+  (base-domain, Argo CD, Keycloak, etc.) are matched by name and left
+  alone. The operator also creates the `Certificate` for those two
+  hostnames in its own namespace, using the cluster-issuer named by
+  `platform.tls.clusterIssuer` (default `letsencrypt-production`);
+  the chart does not template the Certificate separately. Set
+  `platform.gateway.manageSharedListeners: false` if a cluster admin
+  owns the listeners out-of-band - the operator will still create the
+  Certificate so admins can wire the resulting Secret in by hand.
+  Note: flipping `manageSharedListeners` from true to false does not
+  retroactively remove listeners the operator already added. Remove
+  them by hand (or via your Gateway-owning tool) before flipping the
+  flag if a clean slate is required.
 
 The `llmd-test` cluster wires all of this up via ArgoCD apps in
 `clusters/llmd-test/apps/` of the `nic-test` repo - use those as the
@@ -44,7 +57,7 @@ roughly this order. Every one of these is its own ArgoCD app on
 | gateway-config | The shared `Gateway` + `GatewayClass` resources | 2 |
 | cluster-issuers | cert-manager `ClusterIssuer` (Let's Encrypt etc.) | 3 |
 | envoy-ai-gateway-crds | Envoy AI Gateway CRDs (must precede the controller) | 3 |
-| certificates | The shared gateway TLS Certificate | 3 |
+| certificates | The shared gateway TLS Certificate for pre-existing listeners (base-domain, Argo CD, Keycloak). Pack-owned `llm.*` listeners get their Certificate from the operator at sync-wave 7. | 3 |
 | httproutes | Cluster-level HTTPRoutes for shared services (argocd, keycloak) | 3 |
 | envoy-ai-gateway | Envoy AI Gateway controller | 4 |
 | gateway-api-inference-extension | InferencePool / InferenceModel CRDs | 4 |
