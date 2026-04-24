@@ -24,30 +24,25 @@ func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always t
 // BuildRoutingResources is a pure function that computes the AIGatewayRoute resources
 // for external and internal endpoints of the given model.
 //
-// Each AIGatewayRoute is rendered by the Envoy AI Gateway controller into an
-// HTTPRoute. AIGatewayRouteSpec itself does not currently expose a hostnames
-// field (verified against envoyproxy/ai-gateway main; the upstream controller
-// also does not propagate hostnames onto the generated HTTPRoute), so we
-// ensure deterministic per-model routing by constraining every rule with a
-// `Host` header match for the model's FQDN. Without a host constraint, every
-// route attached to a Gateway matches every request and SecurityPolicy
-// attachment becomes non-deterministic - an external (API key) request can be
-// matched against the internal route's JWT filter and rejected. See issue #64.
+// Routing model: every model on the cluster shares a single hostname pair
+// (`llm.<baseDomain>` external, `llm-internal.<baseDomain>` internal). This lets
+// one TLS certificate, issued via HTTP-01, serve every model. We disambiguate
+// models with a per-route header matcher on `x-ai-eg-model`. The Envoy AI
+// Gateway controller automatically extracts the `model` field from the JSON
+// request body of OpenAI-compatible requests and surfaces it as that header
+// before HTTPRoute matching runs (verified against envoyproxy/ai-gateway main).
+// Each AIGatewayRoute is rendered into an HTTPRoute that matches its own
+// `x-ai-eg-model` value, giving us deterministic per-model routing even when
+// every route shares a Gateway listener. SecurityPolicy attachment stays
+// per-HTTPRoute (per model), so per-model API keys and per-model JWT group
+// authorisation are unchanged.
 //
-// HTTP/2 note: production traffic is HTTP/2 (HTTPS through Envoy). The Gateway
-// API spec mandates that conformant implementations treat the HTTP/1.1 Host
-// header and the HTTP/2 :authority pseudo-header as equivalent for header
-// matching (see HTTPHeaderMatch in the Gateway API spec). Envoy normalises
-// :authority to Host before HTTPRoute header matching runs, so an Exact Host
-// matcher fires identically under both protocols. Revisit if upstream changes
-// either assumption, or migrate to spec.hostnames once it is propagated.
+// This supersedes the per-model `Host` header design from #64. The Host header
+// approach worked but required a TLS SAN per model, which is incompatible with
+// HTTP-01 issuance (no wildcards). Revisit if the AI Gateway changes how it
+// surfaces the model identifier or if wildcard certs become available.
 func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*RoutingResources, error) {
 	result := &RoutingResources{}
-
-	subdomain, err := EffectiveSubdomain(model)
-	if err != nil {
-		return nil, err
-	}
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildAIGatewayRoute(
@@ -57,7 +52,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
 			model.Name,
-			ExternalHostname(subdomain, cfg.BaseDomain),
+			model.Spec.Model.Name,
 		)
 	}
 
@@ -69,7 +64,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
 			model.Name,
-			InternalHostname(subdomain, cfg.BaseDomain),
+			model.Spec.Model.Name,
 		)
 	}
 
@@ -81,7 +76,7 @@ func buildAIGatewayRoute(
 	labels map[string]string,
 	gatewayName, gatewayNS string,
 	poolName string,
-	hostname string,
+	modelName string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -101,18 +96,19 @@ func buildAIGatewayRoute(
 				},
 				"rules": []interface{}{
 					map[string]interface{}{
-						// Match on the Host header so this rule only fires for
-						// the model's FQDN. The Envoy AI Gateway controller
-						// propagates Headers matchers onto the generated
-						// HTTPRoute, giving us deterministic per-model routing
-						// even when multiple routes share a Gateway listener.
+						// Match on the `x-ai-eg-model` header that the Envoy AI
+						// Gateway controller derives from the request body's
+						// `model` field. The controller propagates Headers
+						// matchers onto the generated HTTPRoute, giving us
+						// deterministic per-model routing even when multiple
+						// routes share a Gateway listener and a hostname.
 						"matches": []interface{}{
 							map[string]interface{}{
 								"headers": []interface{}{
 									map[string]interface{}{
 										"type":  "Exact",
-										"name":  "Host",
-										"value": hostname,
+										"name":  "x-ai-eg-model",
+										"value": modelName,
 									},
 								},
 							},

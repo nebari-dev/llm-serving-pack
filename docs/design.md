@@ -85,7 +85,7 @@ spec:
   endpoints:
     external:
       enabled: true
-      subdomain: ""                  # optional override; defaults to slugified metadata.name
+      subdomain: ""                  # reserved for future per-model FQDN routing; currently unused at the routing layer
     internal:
       enabled: true
 
@@ -140,8 +140,8 @@ status:
     ready: 1
     desired: 1
   endpoints:
-    external: "https://devstral-32b.llm.nebari.example.com"
-    internal: "https://devstral-32b.llm-internal.nebari.example.com"
+    external: "https://llm.nebari.example.com"
+    internal: "https://llm-internal.nebari.example.com"
 ```
 
 Phase semantics:
@@ -154,18 +154,21 @@ Phase semantics:
 
 When both endpoints are disabled, the operator still creates the vLLM Deployment and InferencePool but skips route and SecurityPolicy creation. The model is deployed but not exposed - the NetworkPolicy blocks all direct access, so the model can only be verified via `kubectl get llmmodel` status and pod logs. This is useful for testing that a model launches correctly before exposing it.
 
-### Subdomain generation
+### Hostnames and per-model routing
 
-When `endpoints.external.subdomain` is empty, the operator derives it from `metadata.name`: lowercase, replace non-alphanumeric characters with dashes, truncate to 48 characters, append a short hash suffix if truncated.
+Every model on the cluster shares a single hostname pair: `llm.<baseDomain>` for the external endpoint and `llm-internal.<baseDomain>` for the internal endpoint, where `baseDomain` comes from pack-level Helm values. One TLS certificate covering both names serves every model. This is required for HTTP-01 issuance, where wildcard SANs are not available - a per-model FQDN scheme would force a new SAN for every new model.
 
-If `subdomain` is set explicitly, that value is used as-is.
+Per-model routing happens via the `x-ai-eg-model` request header. The Envoy AI Gateway controller automatically extracts the `model` field from the JSON request body of OpenAI-compatible requests and surfaces it as that header. Each LLMModel produces an AIGatewayRoute whose single rule matches `x-ai-eg-model: <spec.model.name>` exactly; the upstream controller propagates that header matcher onto the rendered HTTPRoute so per-model SecurityPolicy attachment (API key for external, JWT group check for internal) stays deterministic. Clients do not need to know any per-model URL - they just set `model` in the request body, the same way they would against api.openai.com.
 
-A validating webhook rejects LLMModels if:
-- The generated or explicit subdomain collides with an existing LLMModel's subdomain
-- The subdomain exceeds the 63-character DNS label limit
+The `endpoints.external.subdomain` field on LLMModel is currently unused at the routing layer. It is retained on the CRD and validated by the webhook for the >63-character DNS label limit so it can be re-wired into routing if and when wildcard certs (DNS-01) become available across deployments. There is no longer a cross-model subdomain collision check; the webhook does not list every LLMModel on admission.
+
+This supersedes the per-model FQDN + `Host`-header design from issue [#64](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/64) once cluster validation showed the TLS SAN cost was prohibitive under HTTP-01.
+
+A validating webhook still rejects LLMModels if:
+- The effective subdomain exceeds the 63-character DNS label limit
 - The namespace lacks the `nebari.dev/managed=true` label
-
-The full external hostname is `<subdomain>.llm.<baseDomain>`, where `baseDomain` comes from pack-level Helm values.
+- The namespace differs from the operator's own namespace
+- `spec.access` declares neither `public=true` nor any groups
 
 ### Model revision pinning
 
@@ -252,7 +255,7 @@ The tradeoff is tracking upstream changes manually. Each resource template in th
 ```
 LLMModel CR applied
   |
-  +-> Validate (webhook: subdomain uniqueness, DNS length, namespace label, same-as-operator-namespace)
+  +-> Validate (webhook: subdomain DNS length, namespace label, same-as-operator-namespace, access)
   |
   +-> Phase: Pending
   |
@@ -297,9 +300,9 @@ For CI pipelines, external applications, anything outside the cluster.
 Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth SecurityPolicy -> InferencePool -> vLLM
 ```
 
-- Hostname: `<subdomain>.llm.<baseDomain>`
+- Hostname: `llm.<baseDomain>` (shared across all models on the cluster; per-model dispatch is by `x-ai-eg-model` header)
 - AIGatewayRoute for token counting, rate limiting, protocol normalization
-- SecurityPolicy with `apiKeyAuth` attached to the generated HTTPRoute (same name as AIGatewayRoute)
+- SecurityPolicy with `apiKeyAuth` attached to the generated HTTPRoute (same name as AIGatewayRoute), per model
 - `sanitize: true` strips the API key before forwarding to vLLM
 - `forwardClientIDHeader: X-Client-ID` passes the authenticated client ID downstream for logging and GIE flow control
 - API key Secret referenced same-namespace from the SecurityPolicy (per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) - Envoy Gateway's APIKeyAuth does not honor cross-namespace credentialRefs)
@@ -312,9 +315,9 @@ For JupyterLab, in-cluster chat UIs, notebooks.
 In-cluster app -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> JWT SecurityPolicy -> InferencePool -> vLLM
 ```
 
-- Hostname: `<subdomain>.llm-internal.<baseDomain>` (via internal Gateway)
+- Hostname: `llm-internal.<baseDomain>` (shared across all models; per-model dispatch is by `x-ai-eg-model` header)
 - AIGatewayRoute for token counting, rate limiting, protocol normalization
-- SecurityPolicy with `jwt` auth (not OIDC) attached to the generated HTTPRoute
+- SecurityPolicy with `jwt` auth (not OIDC) attached to the generated HTTPRoute, per model
 - JWT validation: verifies signature against the OIDC issuer's JWKS endpoint, checks audience, extracts groups from the configured claim, validates group membership against the model's `access.groups`
 - No browser redirects - this is pure bearer token validation for service-to-service calls
 
