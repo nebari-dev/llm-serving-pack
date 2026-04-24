@@ -135,9 +135,18 @@ func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *
 						"number": int64(8000),
 					},
 				},
+				// Selector must exclude the EPP pod, which also carries
+				// `app.kubernetes.io/instance=<model.Name>` (it's part of
+				// the same logical deployment). Adding
+				// `app.kubernetes.io/name=llmmodel` narrows the match to
+				// just the model (vLLM) pods. Without this, the
+				// InferencePool advertises the EPP pod's IP as a backend
+				// on port 8000, where nothing is listening, and every
+				// inference request 503s with "Connection refused".
 				"selector": map[string]interface{}{
 					"matchLabels": map[string]interface{}{
 						"app.kubernetes.io/instance": model.Name,
+						"app.kubernetes.io/name":     "llmmodel",
 					},
 				},
 				"endpointPickerRef": map[string]interface{}{
