@@ -69,7 +69,8 @@ func newFakeClientWithGateway(t *testing.T, extraObjs ...client.Object) client.W
 	})
 	intGW := newGateway(t, "nebari-internal-gateway", "envoy-gateway-system", []interface{}{})
 
-	objs := []client.Object{extGW, intGW}
+	objs := make([]client.Object, 0, 2+len(extraObjs))
+	objs = append(objs, extGW, intGW)
 	objs = append(objs, extraObjs...)
 
 	return fake.NewClientBuilder().

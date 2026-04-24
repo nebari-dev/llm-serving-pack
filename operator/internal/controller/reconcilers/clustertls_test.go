@@ -130,7 +130,8 @@ func TestBuildSharedCertificate(t *testing.T) {
 func TestBuildSecretReferenceGrant(t *testing.T) {
 	t.Parallel()
 
-	got := BuildSecretReferenceGrant("envoy-gateway-system", "llm-serving")
+	const fromNS = "envoy-gateway-system"
+	got := BuildSecretReferenceGrant(fromNS, "llm-serving")
 	if got.GetAPIVersion() != "gateway.networking.k8s.io/v1beta1" {
 		t.Errorf("apiVersion = %q, want gateway.networking.k8s.io/v1beta1", got.GetAPIVersion())
 	}
@@ -140,7 +141,7 @@ func TestBuildSecretReferenceGrant(t *testing.T) {
 	if got.GetNamespace() != "llm-serving" {
 		t.Errorf("namespace = %q, want llm-serving (Secret's namespace)", got.GetNamespace())
 	}
-	if !strings.Contains(got.GetName(), "envoy-gateway-system") {
+	if !strings.Contains(got.GetName(), fromNS) {
 		t.Errorf("name %q should include source namespace for uniqueness", got.GetName())
 	}
 	from, _, _ := unstructured.NestedSlice(got.Object, "spec", "from")
@@ -151,8 +152,8 @@ func TestBuildSecretReferenceGrant(t *testing.T) {
 	if fromEntry["kind"] != "Gateway" {
 		t.Errorf("from.kind = %v, want Gateway", fromEntry["kind"])
 	}
-	if fromEntry["namespace"] != "envoy-gateway-system" {
-		t.Errorf("from.namespace = %v, want envoy-gateway-system", fromEntry["namespace"])
+	if fromEntry["namespace"] != fromNS {
+		t.Errorf("from.namespace = %v, want %q", fromEntry["namespace"], fromNS)
 	}
 	to, _, _ := unstructured.NestedSlice(got.Object, "spec", "to")
 	if len(to) != 1 {

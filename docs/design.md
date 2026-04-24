@@ -164,6 +164,18 @@ The `endpoints.external.subdomain` field on LLMModel is currently unused at the 
 
 This supersedes the per-model FQDN + `Host`-header design from issue [#64](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/64) once cluster validation showed the TLS SAN cost was prohibitive under HTTP-01.
 
+#### Who owns the certificate and the Gateway listeners
+
+The operator owns both, as a cluster-singleton. At startup (and every 5 minutes after, as a backstop) the operator:
+
+1. Ensures a `cert-manager.io/v1 Certificate` in its own namespace named `nebari-llm-shared-tls`, with `dnsNames` set to the two shared hostnames and `issuerRef` pointing at the `ClusterIssuer` from `platform.tls.clusterIssuer` (default `letsencrypt-production`). cert-manager writes the issued cert into a Secret of the same name.
+2. Ensures a `gateway.networking.k8s.io/v1beta1 ReferenceGrant` in its own namespace for each distinct Gateway namespace, permitting Gateways there to consume the shared Secret.
+3. Patches HTTPS listeners named `llm-https` / `llm-internal-https` onto the external and internal Gateways, with `tls.certificateRefs` pointing at the shared Secret. The merge is keyed on listener name: pre-existing listeners for the base domain, Argo CD, Keycloak, or anything else on the shared Gateway are preserved; only the two operator-named listeners are managed.
+
+This places the operator consistent with the nebari-operator NebariApp pattern - the thing that knows it needs TLS is the thing that provisions TLS. The chart does not template a Certificate, and the runbook does not ask admins to add listeners by hand.
+
+Escape hatch: set `platform.gateway.manageSharedListeners: false` in chart values. The operator still creates the Certificate (so admins get the rendered Secret for free), but skips the Gateway listener patch, leaving the listener definition to whoever owns the shared Gateway out-of-band.
+
 A validating webhook still rejects LLMModels if:
 - The effective subdomain exceeds the 63-character DNS label limit
 - The namespace lacks the `nebari.dev/managed=true` label
