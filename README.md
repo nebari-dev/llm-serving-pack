@@ -19,9 +19,12 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 - Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
 - NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin). **Note**: nebari-infrastructure-core does not install this automatically yet - tracked in [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until that is done, install it manually as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
-- Envoy Gateway installed (deployed by nebari-infrastructure-core)
-- Envoy AI Gateway installed. **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
-- A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models)
+- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Ready-to-apply example in [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml); see [`docs/install-production.md`](docs/install-production.md#wiring-envoy-gateway-to-the-ai-gateway-extension-manager) for the rationale.
+- Envoy AI Gateway installed (v0.5.0+). **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
+- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) installed (InferencePool / InferenceModel CRDs).
+- A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-production`; override with `platform.tls.clusterIssuer` in the chart values.
+- DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` resolving to the shared Gateway's load balancer (a wildcard CNAME on the base domain is the simplest way). Required for HTTP-01 issuance on the shared Certificate.
+- A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models).
 
 ### Deploy the pack
 
@@ -43,7 +46,7 @@ spec:
   sources:
     # Source 1: LLM serving pack Helm chart
     - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: main
+      targetRevision: v0.1.0-alpha.7
       path: charts/nebari-llm-serving
       helm:
         releaseName: nebari-llm-serving
@@ -57,6 +60,15 @@ spec:
               internal:
                 name: nebari-gateway
                 namespace: envoy-gateway-system
+              # Operator patches its own HTTPS listeners onto the shared
+              # Gateway for llm.<baseDomain> + llm-internal.<baseDomain>.
+              # Pre-existing listeners are matched by name and left alone.
+              manageSharedListeners: true
+            tls:
+              # Must name a cert-manager ClusterIssuer that already
+              # exists on the cluster. HTTP-01 is the assumed challenge
+              # type; no wildcards required.
+              clusterIssuer: letsencrypt-production
 
           defaults:
             storage:
@@ -128,7 +140,7 @@ spec:
     tensorParallelism: 1
     vllmArgs:
       - "--quantization"
-      - "gptq"
+      - "gptq_marlin"
       - "--max-model-len"
       - "8192"
   access:
@@ -138,7 +150,6 @@ spec:
   endpoints:
     external:
       enabled: true
-      subdomain: qwen3-5-35b
     internal:
       enabled: true
 ```
@@ -153,9 +164,11 @@ spec:
 
 ### Use the model
 
+All models on the cluster share one hostname pair; clients dispatch by setting the `model` field in the request body (same as an OpenAI API call).
+
 External (API key):
 ```bash
-curl https://qwen3-5-35b.your-cluster.example.com/v1/chat/completions \
+curl https://llm.your-cluster.example.com/v1/chat/completions \
   -H "Authorization: Bearer sk-your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
@@ -167,7 +180,7 @@ import os
 from openai import OpenAI
 
 client = OpenAI(
-    base_url="http://qwen3-5-35b-a3b-gptq-int4.nebari-llm-serving-system.svc.cluster.local/v1",
+    base_url="https://llm-internal.your-cluster.example.com/v1",
     api_key=os.environ["JUPYTERHUB_API_TOKEN"],  # JWT from Nebari
 )
 response = client.chat.completions.create(

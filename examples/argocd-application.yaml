@@ -23,8 +23,11 @@ spec:
 
   sources:
     # Source 1: LLM serving pack Helm chart
+    #
+    # Pin a tagged release. Chart AppVersion drives the operator and
+    # key-manager image tags, so pinning the chart pins the images too.
     - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: main
+      targetRevision: v0.1.0-alpha.7
       path: charts/nebari-llm-serving
       helm:
         releaseName: nebari-llm-serving
@@ -38,6 +41,20 @@ spec:
               internal:
                 name: nebari-gateway
                 namespace: envoy-gateway-system
+              # The operator patches HTTPS listeners for llm.<baseDomain>
+              # and llm-internal.<baseDomain> onto the shared Gateway(s)
+              # above. Pre-existing listeners are matched by name and
+              # left untouched. Set to false to have the operator only
+              # create the shared Certificate and skip the listener patch
+              # (useful if a cluster admin owns the listeners out-of-band).
+              manageSharedListeners: true
+            tls:
+              # Names the cert-manager ClusterIssuer the operator will
+              # use for the shared llm.<baseDomain> + llm-internal.<baseDomain>
+              # Certificate. Must already exist on the cluster. HTTP-01
+              # is the assumed challenge type; wildcards are not
+              # supported and not required.
+              clusterIssuer: letsencrypt-production
 
           defaults:
             storage:

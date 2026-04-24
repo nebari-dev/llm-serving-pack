@@ -1,0 +1,110 @@
+# Envoy Gateway ArgoCD Application with AI-Gateway-compatible values.
+#
+# The nebari-llm-serving-pack relies on Envoy AI Gateway's ext_proc
+# filter to extract the `model` field from OpenAI-style request bodies
+# and dispatch per-model. For that filter to be programmed into
+# Envoy's HCM, Envoy Gateway MUST be installed with:
+#
+#   1. extensionApis.enableBackend=true
+#      so the Backend API is available (AI Gateway uses it).
+#
+#   2. extensionManager.service.fqdn pointing at the AI Gateway
+#      controller's gRPC endpoint (port 1063), with xdsTranslator hooks
+#      so Envoy Gateway calls AI Gateway at xDS translation time.
+#
+#   3. extensionManager.backendResources listing
+#      inference.networking.k8s.io/InferencePool so Envoy Gateway will
+#      accept InferencePool as a valid HTTPRoute backendRef
+#      (otherwise it falls back to direct_response 500).
+#
+# Without (1) and (3), the HTTPRoute translates to a 500.
+# Without (2), ext_proc never lands in the filter chain and
+# per-model requests 404 with "No matching route found".
+#
+# Config shape is taken verbatim from envoyproxy/ai-gateway v0.5.0:
+#   https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml
+#
+# After first install or after changing these values, restart the
+# Envoy proxy pod so the AI Gateway admission webhook injects the
+# ai-gateway-extproc sidecar container.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: foundational
+
+  source:
+    chart: gateway-helm
+    repoURL: docker.io/envoyproxy
+    targetRevision: v1.6.2       # or later; pin to a tested version
+    helm:
+      releaseName: envoy-gateway
+      values: |
+        config:
+          envoyGateway:
+            gateway:
+              controllerName: gateway.envoyproxy.io/gatewayclass-controller
+            extensionApis:
+              enableEnvoyPatchPolicy: true
+              enableBackend: true
+            extensionManager:
+              hooks:
+                xdsTranslator:
+                  translation:
+                    listener:
+                      includeAll: true
+                    route:
+                      includeAll: true
+                    cluster:
+                      includeAll: true
+                    secret:
+                      includeAll: true
+                  post:
+                    - Translation
+                    - Cluster
+                    - Route
+              service:
+                fqdn:
+                  hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+                  port: 1063
+              backendResources:
+                - group: inference.networking.k8s.io
+                  kind: InferencePool
+                  version: v1
+        deployment:
+          envoyGateway:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+          replicas: 1
+        service:
+          type: ClusterIP
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-gateway-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

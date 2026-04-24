@@ -7,11 +7,14 @@
 #
 # Prerequisites:
 #   - Kubernetes 1.32+
-#   - Envoy Gateway v1.6+ installed (nic installs Envoy Gateway as a
-#     foundational service, but you may need to apply the AI-Gateway-
-#     compatible values from
-#     https://raw.githubusercontent.com/envoyproxy/ai-gateway/main/manifests/envoy-gateway-values.yaml
-#     to enable the Extension Manager required by the AI Gateway).
+#   - Envoy Gateway v1.6+ installed WITH the AI-Gateway-compatible
+#     values (extensionApis.enableBackend, extensionManager pointing at
+#     this controller, backendResources allowing InferencePool). See
+#     ./envoy-gateway.yaml for the complete configuration. Nebari
+#     Infrastructure Core ships a bare Envoy Gateway install by
+#     default - you MUST replace or supplement those values with the
+#     ones in envoy-gateway.yaml or the pack's routing will 404 at
+#     runtime.
 #
 # This manual installation is a workaround until the chart's
 # envoyAIGateway.install flag is implemented:

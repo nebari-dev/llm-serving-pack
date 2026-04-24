@@ -22,26 +22,95 @@ managed by ArgoCD. For local development against `kind` see
   `nebari-operator` (the operator looks up users in Keycloak to enforce
   group-based access).
 - The Nebari shared Gateway (`gateway.networking.k8s.io/Gateway`) is
-  provisioned out-of-band. The pack does not ship one, but starting at
-  v0.1.0-alpha.3 the operator patches its own HTTPS listeners for
-  `llm.<baseDomain>` and `llm-internal.<baseDomain>` onto the external
-  and internal Gateways. Pre-existing listeners on those Gateways
-  (base-domain, Argo CD, Keycloak, etc.) are matched by name and left
-  alone. The operator also creates the `Certificate` for those two
-  hostnames in its own namespace, using the cluster-issuer named by
-  `platform.tls.clusterIssuer` (default `letsencrypt-production`);
-  the chart does not template the Certificate separately. Set
-  `platform.gateway.manageSharedListeners: false` if a cluster admin
-  owns the listeners out-of-band - the operator will still create the
-  Certificate so admins can wire the resulting Secret in by hand.
-  Note: flipping `manageSharedListeners` from true to false does not
-  retroactively remove listeners the operator already added. Remove
-  them by hand (or via your Gateway-owning tool) before flipping the
-  flag if a clean slate is required.
+  provisioned out-of-band. The pack does not ship one; the operator
+  patches its own HTTPS listeners for `llm.<baseDomain>` and
+  `llm-internal.<baseDomain>` onto the external and internal Gateways.
+  Pre-existing listeners (base-domain, Argo CD, Keycloak, etc.) are
+  matched by name and left alone. The operator also creates the
+  `Certificate` for those two hostnames in its own namespace, using
+  the cluster-issuer named by `platform.tls.clusterIssuer` (default
+  `letsencrypt-production`); the chart does not template the
+  Certificate separately. Set `platform.gateway.manageSharedListeners:
+  false` if a cluster admin owns the listeners out-of-band - the
+  operator will still create the Certificate so admins can wire the
+  resulting Secret in by hand. Note: flipping `manageSharedListeners`
+  from true to false does not retroactively remove listeners the
+  operator already added. Remove them by hand before flipping the flag
+  if a clean slate is required.
+
+- **Envoy Gateway must be installed with the AI Gateway extension manager
+  wired up.** Without this, the routing layer does not work at runtime
+  (requests 404 with "No matching route found"). See the next section
+  for the exact Helm values.
 
 The `llmd-test` cluster wires all of this up via ArgoCD apps in
 `clusters/llmd-test/apps/` of the `nic-test` repo - use those as the
 reference shape.
+
+## Wiring Envoy Gateway to the AI Gateway extension manager
+
+The pack's per-model routing uses the Envoy AI Gateway's `ext_proc`
+filter to extract the `model` field from OpenAI-style request bodies
+into an `x-ai-eg-model` header that HTTPRoute matchers then dispatch
+on. For that filter to be programmed into Envoy's filter chain, three
+things need to be true on the cluster:
+
+1. `envoy-gateway` is configured to call AI Gateway's extension server
+   at reconcile time.
+2. `envoy-gateway` is told that `inference.networking.k8s.io/InferencePool`
+   is a valid backend kind (otherwise the model's HTTPRoute falls back
+   to `direct_response: 500`).
+3. The AI Gateway admission webhook injects an `ai-gateway-extproc`
+   sidecar into the Envoy proxy pod (runs automatically once
+   AI Gateway is installed and an AIGatewayRoute exists on the
+   Gateway; no extra config needed).
+
+Items 1 and 2 require specific `envoy-gateway` Helm values. Match the
+canonical shape from [`envoyproxy/ai-gateway` `envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml):
+
+```yaml
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true                  # required for AI Gateway
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:   { includeAll: true }
+            route:      { includeAll: true }
+            cluster:    { includeAll: true }
+            secret:     { includeAll: true }
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+```
+
+If these are missing on an existing install, add them, restart the
+`envoy-gateway` Deployment, and recreate the Envoy proxy pod (so the
+admission webhook injects the `ai-gateway-extproc` sidecar):
+
+```bash
+kubectl rollout restart -n envoy-gateway-system deployment/envoy-gateway
+# After rollout:
+kubectl delete pod -n envoy-gateway-system -l gateway.envoyproxy.io/owning-gateway-name=<your-gateway>
+```
+
+Verify by checking the Envoy admin `/config_dump` for the model's SNI
+filter chain - it should include `envoy.filters.http.ext_proc/aigateway`
+alongside `api_key_auth` (external) or `jwt_authn` + `rbac` (internal).
 
 ## Component layout
 
@@ -52,14 +121,14 @@ roughly this order. Every one of these is its own ArgoCD app on
 | Component | Purpose | Sync-wave |
 |---|---|---|
 | cert-manager | Issues TLS certs for the gateway, webhook, NebariApps | 1 |
-| envoy-gateway | The Gateway API data-plane | 2 |
+| envoy-gateway | The Gateway API data-plane. **Must be installed with the `extensionApis` + `extensionManager` + `backendResources` config from the section above.** | 2 |
 | nvidia-gpu-operator | GPU device plugin + drivers on GPU nodes | 2 |
 | gateway-config | The shared `Gateway` + `GatewayClass` resources | 2 |
 | cluster-issuers | cert-manager `ClusterIssuer` (Let's Encrypt etc.) | 3 |
 | envoy-ai-gateway-crds | Envoy AI Gateway CRDs (must precede the controller) | 3 |
-| certificates | The shared gateway TLS Certificate for pre-existing listeners (base-domain, Argo CD, Keycloak). Pack-owned `llm.*` listeners get their Certificate from the operator at sync-wave 7. | 3 |
+| certificates | TLS Certificates for pre-existing shared listeners (base-domain, Argo CD, Keycloak). The `llm.<base>` + `llm-internal.<base>` Certificate is operator-owned (sync-wave 7). | 3 |
 | httproutes | Cluster-level HTTPRoutes for shared services (argocd, keycloak) | 3 |
-| envoy-ai-gateway | Envoy AI Gateway controller | 4 |
+| envoy-ai-gateway | Envoy AI Gateway controller. Its `pod-mutator` admission webhook injects the `ai-gateway-extproc` sidecar into Envoy proxy pods created AFTER this controller comes up. | 4 |
 | gateway-api-inference-extension | InferencePool / InferenceModel CRDs | 4 |
 | keycloak | OIDC provider | 4 |
 | postgresql | Backing store for keycloak | 4 |
@@ -120,7 +189,7 @@ spec:
   project: foundational
   sources:
     - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: v0.1.0-alpha.2
+      targetRevision: v0.1.0-alpha.7
       path: charts/nebari-llm-serving
       helm:
         releaseName: nebari-llm-serving
@@ -134,6 +203,14 @@ spec:
               internal:
                 name: nebari-gateway
                 namespace: envoy-gateway-system
+              manageSharedListeners: true
+            tls:
+              # ClusterIssuer the operator will use to issue the shared
+              # llm.<baseDomain> + llm-internal.<baseDomain> Certificate.
+              # Must already exist on the cluster. Default in the chart
+              # is "letsencrypt-production"; override here if your
+              # cluster uses a different name.
+              clusterIssuer: letsencrypt-issuer
 
           defaults:
             storage:
@@ -171,19 +248,26 @@ Notes:
   `Namespace` template that adds the `nebari.dev/managed=true` label
   required by the validating webhook. Helm and ArgoCD both create
   the namespace; the chart-managed labels win.
-- Pin a tagged release (`v0.1.0-alpha.2` or later). The chart's
-  default image tag (`:latest`) tracks main and can lag behind; pin
-  the chart and the images move together.
+- Pin a tagged release (`v0.1.0-alpha.7` or later). The chart's image
+  tags default to `.Chart.AppVersion` so the chart and the images move
+  together. Do not leave `targetRevision: HEAD` in production.
 - `auth.oidc.issuerURL` must be the **public** (browser-reachable)
   Keycloak issuer URL. Envoy's JWT filter resolves the JWKS endpoint
   from this. Currently this assumes Keycloak (path is hardcoded to
-  `/protocol/openid-connect/certs`); see issue #61 / #66 for the
+  `/protocol/openid-connect/certs`); see issue #66 for the
   provider-agnostic discovery refactor.
+- `platform.tls.clusterIssuer` must name a cluster-scoped cert-manager
+  `ClusterIssuer` that's already installed. HTTP-01 is the assumed
+  challenge type; wildcards are not supported (and not required - the
+  operator issues a cert with the two shared hostnames as explicit
+  SANs). HTTP-01 needs DNS for both hostnames to resolve to the
+  Gateway LB before the install; a wildcard CNAME at the base domain
+  covers this naturally.
 
 ## Per-model LLMModel CR
 
-LLMModels must live in the operator's namespace (post-#59 webhook
-constraint). A minimal CR for a real GPU model:
+LLMModels must live in the operator's namespace. A minimal CR for a
+real GPU model:
 
 ```yaml
 apiVersion: llm.nebari.dev/v1alpha1
@@ -193,7 +277,7 @@ metadata:
   namespace: nebari-llm-serving-system
 spec:
   model:
-    name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
+    name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"    # also the "model" field clients send
     source: huggingface
     storage:
       type: pvc
@@ -218,13 +302,29 @@ spec:
     public: false
     groups: ["llm"]
   endpoints:
-    external: { enabled: true, subdomain: qwen3-5-35b }
+    external: { enabled: true }
     internal: { enabled: true }
 ```
 
-The model is then reachable at:
-- External (API key): `https://qwen3-5-35b.llm.<baseDomain>`
-- Internal (JWT): `https://qwen3-5-35b.llm-internal.<baseDomain>`
+All models on the cluster share the same hostname pair:
+
+- External (API key): `https://llm.<baseDomain>/v1/chat/completions`
+- Internal (JWT): `https://llm-internal.<baseDomain>/v1/chat/completions`
+
+Clients dispatch between models by setting the `model` field in the
+OpenAI-style request body (matches `spec.model.name` above). Example:
+
+```bash
+curl -sS -X POST https://llm.<baseDomain>/v1/chat/completions \
+  -H "Authorization: Bearer sk-..." \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen/Qwen3.5-35B-A3B-GPTQ-Int4","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
+```
+
+> `endpoints.external.subdomain` on the CRD is currently unused at the
+> routing layer but kept for forward compatibility if wildcard certs
+> (DNS-01) become available. Leave it empty unless you have a specific
+> reason to set it.
 
 ## Validation checklist
 
@@ -234,33 +334,59 @@ After ArgoCD reports the `nebari-llm-serving` app `Synced` and `Healthy`:
 2. `kubectl get llmmodel -A` shows your model with `READY=True`.
 3. The model's pod is `Running` and the vLLM container reports
    "Started server" in its logs.
-4. The model's `SecurityPolicy`s (one external, one internal) report
+4. `kubectl get certificate -n nebari-llm-serving-system nebari-llm-shared-tls`
+   reports `READY=True` (cert-manager solved HTTP-01 for both shared
+   hostnames; if this stays `False`, DNS isn't resolving yet).
+5. The shared Gateway has `llm-https` and `llm-internal-https`
+   listeners alongside any pre-existing listeners. Verify with:
+   `kubectl get gateway <name> -n envoy-gateway-system -o jsonpath='{range .spec.listeners[*]}{.name}: {.hostname}{"\n"}{end}'`.
+6. The model's `SecurityPolicy`s (one external, one internal) report
    `Accepted=True`.
-5. As a member of the model's group, log into the key-manager UI at
+7. The Envoy proxy pod has an `ai-gateway-extproc` init container
+   (native sidecar) and the filter chain for the `llm.<baseDomain>`
+   SNI contains `envoy.filters.http.ext_proc/aigateway` (check via
+   port-forward on the envoy admin port `19000` and
+   `/config_dump`). If the `ext_proc` filter is missing, the
+   envoy-gateway `extensionManager` config is wrong or the
+   `ai-gateway-extproc` container wasn't injected on pod create -
+   restart the Envoy proxy pod.
+8. As a member of the model's group, log into the key-manager UI at
    `https://llm-keys.<baseDomain>`, mint an API key, and call the
-   external endpoint with it.
-6. From a JupyterLab pod (or any in-cluster service with a JWT for the
+   external endpoint with it (see `curl` example above). Expect a
+   real chat-completion response, not a 5xx.
+9. From a JupyterLab pod (or any in-cluster service with a JWT for the
    same group), call the internal endpoint with the JWT and confirm
    you get a real model response (not a 500 `direct_response`).
 
-If any of those fail, check the operator logs and the key-manager
-logs first (`kubectl -n nebari-llm-serving-system logs ...`). After
-issue #57 every 500-returning code path in the key-manager emits a
-structured log line - grep for the failing handler name.
+If any of those fail, check the operator and key-manager logs first
+(`kubectl -n nebari-llm-serving-system logs ...`), then the Envoy
+access logs (`kubectl -n envoy-gateway-system logs <envoy-pod>
+-c envoy | grep POST`). `route_name` in the access log tells you
+which rule matched; `rule/0` means the per-model rule, `rule/1` means
+the AI Gateway catch-all (model not recognised).
 
 ## Known limitations
 
-- **Keycloak only.** The operator constructs the JWT JWKS URL using
-  the Keycloak path convention. Other OIDC providers will 404. See
-  #61 (fix shipped) and #66 (provider-agnostic discovery).
+- **Keycloak only (path conventions).** The operator constructs the
+  JWT JWKS URL using the Keycloak path convention. Other OIDC
+  providers will 404. See #66 (provider-agnostic discovery).
 - **No API key rotation or expiry yet.** See #67.
 - **No metrics endpoint.** Logs only. See #69.
 - **Gateway not provisioned by this chart.** You must install the
-  shared Gateway out-of-band (see the `gateway-config` ArgoCD app on
-  `llmd-test` for a reference).
-- **Helm chart install is lint-validated only.** Real install in CI
-  is tracked in #68. Until that ships, expect to discover install
-  issues during the validation checklist above.
+  shared Gateway out-of-band. The pack's operator patches its own
+  HTTPS listeners onto it at runtime; the Gateway resource itself is
+  not pack-owned. See the `gateway-config` ArgoCD app on `llmd-test`
+  for a reference.
+- **OCI / modelcar model source is untested in production.** The code
+  path exists but has not been exercised end-to-end on a real
+  cluster. If you need it, validate first on a dev cluster.
+- **Helm chart install is lint-validated only in CI.** Real install
+  in CI is tracked in #68.
+- **Single-GPU clusters can deadlock on rolling updates.** The
+  Deployment uses `RollingUpdate` with `maxUnavailable: 25%`, so a
+  new pod can't schedule while the old one still holds the only GPU.
+  If you hit this, `kubectl delete pod` on the old one; the new pod
+  then schedules.
 
 ## Reference: `llmd-test` ArgoCD apps
 

@@ -490,6 +490,9 @@ platform:
     internal:
       name: nebari-internal-gateway
       namespace: envoy-gateway-system
+    manageSharedListeners: true
+  tls:
+    clusterIssuer: letsencrypt-production
 
 auth:
   oidc:
@@ -498,15 +501,21 @@ auth:
     audience: ""
 
 envoyAIGateway:
-  install: true
+  install: false   # not yet implemented (#44); install via a separate ArgoCD app
 
 keyManager:
   enabled: true
-  image: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager:v0.1.0
+  image:
+    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager
+    # tag defaults to .Chart.AppVersion when empty; override only for
+    # testing specific image builds (e.g. tag: sha-abc1234)
+    tag: ""
   auditInterval: 5m
 
 operator:
-  image: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator:v0.1.0
+  image:
+    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
+    tag: ""
 
 defaults:
   serving:
@@ -538,7 +547,7 @@ spec:
   source:
     repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack
     path: charts/nebari-llm-serving
-    targetRevision: v0.1.0
+    targetRevision: v0.1.0-alpha.7   # pin a real release; image tags follow
     helm:
       valueFiles:
         - values-prod.yaml

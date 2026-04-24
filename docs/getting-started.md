@@ -2,6 +2,15 @@
 
 This guide walks through setting up a local development environment using [kind](https://kind.sigs.k8s.io/) to test the nebari-llm-serving-pack without a full Nebari deployment.
 
+> **Scope of this dev path.** The local `kind` setup exercises the
+> operator, key manager, CRD, webhook, and reconciler logic against a
+> real Kubernetes API. It does **not** install Envoy AI Gateway or
+> wire up the `ext_proc` filter that production uses for per-model
+> dispatch, and it uses a mock vLLM instead of real model-serving
+> pods. For end-to-end inference testing with the full routing layer,
+> use a real cluster as documented in
+> [`install-production.md`](install-production.md).
+
 ## Prerequisites
 
 Install the following tools before proceeding:
