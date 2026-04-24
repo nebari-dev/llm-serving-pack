@@ -42,19 +42,25 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_OIDC_AUDIENCE":              "my-audience",
 				"LLM_DEFAULT_SERVING_IMAGE":      "my-registry/my-image:v1.0.0",
 				"LLM_API_KEYS_NAMESPACE":         "my-api-keys-ns",
+				"POD_NAMESPACE":                  "llm-serving",
+				"LLM_CLUSTER_ISSUER_NAME":        "my-issuer",
+				"LLM_MANAGE_SHARED_LISTENERS":    "false",
 			},
 			wantErr: false,
 			wantConfig: &OperatorConfig{
-				BaseDomain:          "example.com",
-				ExternalGatewayName: "external-gw",
-				ExternalGatewayNS:   "custom-external-ns",
-				InternalGatewayName: "internal-gw",
-				InternalGatewayNS:   "custom-internal-ns",
-				OIDCIssuerURL:       "https://auth.example.com",
-				OIDCGroupsClaim:     "custom-groups",
-				OIDCAudience:        "my-audience",
-				DefaultServingImage: "my-registry/my-image:v1.0.0",
-				APIKeysNamespace:    "my-api-keys-ns",
+				BaseDomain:            "example.com",
+				ExternalGatewayName:   "external-gw",
+				ExternalGatewayNS:     "custom-external-ns",
+				InternalGatewayName:   "internal-gw",
+				InternalGatewayNS:     "custom-internal-ns",
+				OIDCIssuerURL:         "https://auth.example.com",
+				OIDCGroupsClaim:       "custom-groups",
+				OIDCAudience:          "my-audience",
+				DefaultServingImage:   "my-registry/my-image:v1.0.0",
+				APIKeysNamespace:      "my-api-keys-ns",
+				OperatorNamespace:     "llm-serving",
+				ClusterIssuerName:     "my-issuer",
+				ManageSharedListeners: false,
 			},
 		},
 		{
@@ -63,6 +69,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_EXTERNAL_GATEWAY_NAME": "external-gw",
 				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
 				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
 			},
 			wantErr:     true,
 			errContains: []string{"LLM_BASE_DOMAIN"},
@@ -73,6 +80,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_BASE_DOMAIN":           "example.com",
 				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
 				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
 			},
 			wantErr:     true,
 			errContains: []string{"LLM_EXTERNAL_GATEWAY_NAME"},
@@ -83,6 +91,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_BASE_DOMAIN":           "example.com",
 				"LLM_EXTERNAL_GATEWAY_NAME": "external-gw",
 				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
 			},
 			wantErr:     true,
 			errContains: []string{"LLM_INTERNAL_GATEWAY_NAME"},
@@ -104,19 +113,23 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_EXTERNAL_GATEWAY_NAME": "external-gw",
 				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
 				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
 			},
 			wantErr: false,
 			wantConfig: &OperatorConfig{
-				BaseDomain:          "example.com",
-				ExternalGatewayName: "external-gw",
-				ExternalGatewayNS:   "envoy-gateway-system",
-				InternalGatewayName: "internal-gw",
-				InternalGatewayNS:   "envoy-gateway-system",
-				OIDCIssuerURL:       "https://auth.example.com",
-				OIDCGroupsClaim:     "groups",
-				OIDCAudience:        "",
-				DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
-				APIKeysNamespace:    "",
+				BaseDomain:            "example.com",
+				ExternalGatewayName:   "external-gw",
+				ExternalGatewayNS:     "envoy-gateway-system",
+				InternalGatewayName:   "internal-gw",
+				InternalGatewayNS:     "envoy-gateway-system",
+				OIDCIssuerURL:         "https://auth.example.com",
+				OIDCGroupsClaim:       "groups",
+				OIDCAudience:          "",
+				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+				APIKeysNamespace:      "",
+				OperatorNamespace:     "llm-serving",
+				ClusterIssuerName:     "letsencrypt-production",
+				ManageSharedListeners: true,
 			},
 		},
 		{
@@ -127,19 +140,23 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
 				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
 				"LLM_OIDC_AUDIENCE":         "",
+				"POD_NAMESPACE":             "llm-serving",
 			},
 			wantErr: false,
 			wantConfig: &OperatorConfig{
-				BaseDomain:          "example.com",
-				ExternalGatewayName: "external-gw",
-				ExternalGatewayNS:   "envoy-gateway-system",
-				InternalGatewayName: "internal-gw",
-				InternalGatewayNS:   "envoy-gateway-system",
-				OIDCIssuerURL:       "https://auth.example.com",
-				OIDCGroupsClaim:     "groups",
-				OIDCAudience:        "",
-				DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
-				APIKeysNamespace:    "",
+				BaseDomain:            "example.com",
+				ExternalGatewayName:   "external-gw",
+				ExternalGatewayNS:     "envoy-gateway-system",
+				InternalGatewayName:   "internal-gw",
+				InternalGatewayNS:     "envoy-gateway-system",
+				OIDCIssuerURL:         "https://auth.example.com",
+				OIDCGroupsClaim:       "groups",
+				OIDCAudience:          "",
+				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+				APIKeysNamespace:      "",
+				OperatorNamespace:     "llm-serving",
+				ClusterIssuerName:     "letsencrypt-production",
+				ManageSharedListeners: true,
 			},
 		},
 		{
@@ -151,6 +168,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_EXTERNAL_GATEWAY_NAME",
 				"LLM_INTERNAL_GATEWAY_NAME",
 				"LLM_OIDC_ISSUER_URL",
+				"POD_NAMESPACE",
 			},
 		},
 	}
@@ -169,6 +187,9 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_OIDC_AUDIENCE",
 				"LLM_DEFAULT_SERVING_IMAGE",
 				"LLM_API_KEYS_NAMESPACE",
+				"POD_NAMESPACE",
+				"LLM_CLUSTER_ISSUER_NAME",
+				"LLM_MANAGE_SHARED_LISTENERS",
 			}
 			for _, v := range allVars {
 				t.Setenv(v, "")
@@ -228,6 +249,15 @@ func TestLoadFromEnv(t *testing.T) {
 			}
 			if got.APIKeysNamespace != tt.wantConfig.APIKeysNamespace {
 				t.Errorf("APIKeysNamespace = %q, want %q", got.APIKeysNamespace, tt.wantConfig.APIKeysNamespace)
+			}
+			if got.OperatorNamespace != tt.wantConfig.OperatorNamespace {
+				t.Errorf("OperatorNamespace = %q, want %q", got.OperatorNamespace, tt.wantConfig.OperatorNamespace)
+			}
+			if got.ClusterIssuerName != tt.wantConfig.ClusterIssuerName {
+				t.Errorf("ClusterIssuerName = %q, want %q", got.ClusterIssuerName, tt.wantConfig.ClusterIssuerName)
+			}
+			if got.ManageSharedListeners != tt.wantConfig.ManageSharedListeners {
+				t.Errorf("ManageSharedListeners = %v, want %v", got.ManageSharedListeners, tt.wantConfig.ManageSharedListeners)
 			}
 		})
 	}

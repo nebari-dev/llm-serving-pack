@@ -44,3 +44,14 @@ rules:
   - apiGroups: ["monitoring.coreos.com"]
     resources: ["podmonitors"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Shared-TLS reconciler: the operator creates a cert-manager Certificate
+  # in its own namespace covering the shared llm/llm-internal hostnames and
+  # patches HTTPS listeners onto the shared Gateways (platform.gateway.*).
+  # The Gateway CRs themselves are owned out-of-band by the platform; the
+  # operator only mutates the listeners slice in place.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get", "list", "watch", "update", "patch"]
