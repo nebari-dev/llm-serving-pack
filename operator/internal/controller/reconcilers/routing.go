@@ -51,6 +51,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			StandardLabels(model),
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
+			ExternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
 			SharedExternalHostname(cfg.BaseDomain),
@@ -64,6 +65,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			StandardLabels(model),
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
+			InternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
 			SharedInternalHostname(cfg.BaseDomain),
@@ -77,6 +79,7 @@ func buildAIGatewayRoute(
 	name, namespace string,
 	labels map[string]string,
 	gatewayName, gatewayNS string,
+	listenerSectionName string,
 	poolName string,
 	modelName string,
 	hostname string,
@@ -91,35 +94,39 @@ func buildAIGatewayRoute(
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
+				// sectionName scopes this HTTPRoute attachment to a single
+				// named listener on the parent Gateway. Required because the
+				// AI Gateway controller auto-appends a catch-all "route-not-
+				// found" rule (path: / with no host/header constraints) to
+				// every generated HTTPRoute; without sectionName, that rule
+				// attaches to every listener on the Gateway and any
+				// SecurityPolicy bound to this HTTPRoute catches traffic
+				// bound for unrelated hostnames (key-manager UI, argocd,
+				// keycloak, base domain). Regression seen in alpha.3/alpha.4;
+				// the Host header matcher on the first rule narrowed that
+				// rule but had no effect on the catch-all.
 				"parentRefs": []interface{}{
 					map[string]interface{}{
-						"name":      gatewayName,
-						"namespace": gatewayNS,
+						"name":        gatewayName,
+						"namespace":   gatewayNS,
+						"sectionName": listenerSectionName,
 					},
 				},
 				"rules": []interface{}{
 					map[string]interface{}{
 						// Match on BOTH the shared hostname (Host header) AND the
-						// `x-ai-eg-model` header.
-						//
-						// The Host match scopes this rule to the listener for
-						// the shared hostname, keeping unrelated listeners on
-						// the same Gateway (llm-keys, argocd, keycloak, the
-						// base domain, etc.) from routing traffic here. The AI
-						// Gateway controller does not propagate a hostnames
-						// field onto the generated HTTPRoute, so without the
-						// Host match the route attaches to every listener.
+						// `x-ai-eg-model` header. With sectionName scoping
+						// on parentRefs above, the Host match is defence in
+						// depth: it guarantees the rule only fires for the
+						// intended FQDN even if a future refactor loosens
+						// parent attachment.
 						//
 						// The x-ai-eg-model match gives us per-model dispatch
-						// once a request lands on a shared hostname. The Envoy
-						// AI Gateway extproc filter derives the value from the
-						// request body's `model` field before HTTPRoute
-						// matching runs. Both matches are ANDed (per Gateway
-						// API spec).
-						//
-						// Regression fixed: alpha.3 shipped only the header
-						// match, causing requests to llm-keys.<base> to hit
-						// per-model APIKeyAuth SecurityPolicy.
+						// once a request lands on a shared listener. The
+						// Envoy AI Gateway extproc filter derives the value
+						// from the request body's `model` field before
+						// HTTPRoute matching runs. Both matches are ANDed
+						// (per Gateway API spec).
 						"matches": []interface{}{
 							map[string]interface{}{
 								"headers": []interface{}{
