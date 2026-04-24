@@ -155,6 +155,15 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if instanceLabel != testPoolModelName {
 					t.Errorf("expected matchLabels app.kubernetes.io/instance=my-model, got %v", instanceLabel)
 				}
+				// Must also filter by app.kubernetes.io/name=llmmodel to
+				// exclude the EPP pod, which shares the instance label.
+				nameLabel, ok := matchLabels["app.kubernetes.io/name"]
+				if !ok {
+					t.Fatal("expected app.kubernetes.io/name in matchLabels (to exclude EPP pod)")
+				}
+				if nameLabel != "llmmodel" {
+					t.Errorf("expected matchLabels app.kubernetes.io/name=llmmodel, got %v", nameLabel)
+				}
 			},
 		},
 		{
