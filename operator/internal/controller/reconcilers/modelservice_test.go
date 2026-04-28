@@ -816,6 +816,33 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				}
 			},
 		},
+		{
+			name:    "pod securityContext sets fsGroup so model-downloader nonroot user can write to PVC",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				sc := result.Deployment.Spec.Template.Spec.SecurityContext
+				if sc == nil {
+					t.Fatal("expected pod SecurityContext to be set")
+				}
+				if sc.FSGroup == nil {
+					t.Fatal("expected fsGroup to be set")
+				}
+				if *sc.FSGroup != modelDownloaderUserGID {
+					t.Errorf("expected fsGroup=%d (distroless nonroot gid), got %d", modelDownloaderUserGID, *sc.FSGroup)
+				}
+				if sc.FSGroupChangePolicy == nil {
+					t.Fatal("expected fsGroupChangePolicy to be set")
+				}
+				if *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+					t.Errorf("expected fsGroupChangePolicy=%q, got %q", corev1.FSGroupChangeOnRootMismatch, *sc.FSGroupChangePolicy)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

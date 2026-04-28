@@ -10,10 +10,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
+
+// modelDownloaderUserGID matches the uid/gid of the `nonroot` user in the
+// distroless base image used for the model-downloader init container
+// (gcr.io/distroless/cc-debian12:nonroot). Setting fsGroup to this value lets
+// kubelet chown PVC-backed model storage to a group the nonroot user can
+// write to.
+const modelDownloaderUserGID int64 = 65532
 
 // ModelServiceResources holds the Kubernetes resources for serving an LLMModel.
 type ModelServiceResources struct {
@@ -61,6 +69,7 @@ func buildDeployment(
 
 	container := buildVLLMContainer(model, storage, cfg)
 
+	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: saName,
 		Containers:         []corev1.Container{container},
@@ -68,6 +77,10 @@ func buildDeployment(
 		Tolerations:        model.Spec.Advanced.VLLM.Tolerations,
 		NodeSelector:       model.Spec.Advanced.VLLM.NodeSelector,
 		Affinity:           model.Spec.Advanced.VLLM.Affinity,
+		SecurityContext: &corev1.PodSecurityContext{
+			FSGroup:             ptr.To(modelDownloaderUserGID),
+			FSGroupChangePolicy: &fsGroupChangePolicy,
+		},
 	}
 
 	if storage.InitContainer != nil {
