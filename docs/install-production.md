@@ -169,6 +169,120 @@ kernel driver, so all that is needed is the container toolkit and the
 device plugin. The NVIDIA GPU Operator chart installs both, plus
 node-feature-discovery so GPU nodes get the right labels.
 
+### 3.0 k3s / on-prem GPU nodes (host-managed driver + toolkit)
+
+> **Skip this subsection on a managed node group that ships a vendor GPU
+> AMI (e.g. EKS + AL2023 NVIDIA AMI).** It applies when the cluster is
+> **k3s** on hosts you manage yourself (on-prem, bare-metal, or a k3s
+> test rig). Validated on Ubuntu 24.04 with an A10G; the same applies to
+> the on-prem RTX A5000 (both are GA102, same `-server-open` driver
+> branch).
+
+On k3s two things differ from the managed-AMI path, and both must be
+handled before continuing to 3.1:
+
+**1. Disable the operator's toolkit as well as its driver, and install
+both on the host.** The operator's `nvidia-container-toolkit-daemonset`
+assumes a vanilla-containerd layout and overwrites k3s's generated
+`config.toml` (replacing the full CRI config with a stub), which knocks
+the node `NotReady`. Setting `toolkit.env CONTAINERD_CONFIG=...` does
+**not** help - it triggers the same clobber. Use this values block in
+the section 3.1 Application instead of the `driver.enabled: false`-only
+one:
+
+```yaml
+values: |
+  # Driver and toolkit are installed on the host (apt). The operator
+  # only runs NFD + device-plugin + dcgm to expose nvidia.com/gpu.
+  driver:
+    enabled: false
+  toolkit:
+    enabled: false
+```
+
+Host install (Ubuntu 24.04, validated versions noted):
+
+```bash
+# nvidia-container-toolkit from the libnvidia-container apt repo
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit   # 1.19.1 validated
+
+# Driver: install ONE coherent server-open metapackage. Do NOT use
+# `ubuntu-drivers install --gpgpu` - on the validation box it mixed
+# 580 + 595 packages and omitted nvidia-utils, so nvidia-smi was missing.
+sudo apt-get install -y nvidia-driver-580-server-open   # 580.159.03; GA102 (A10G / RTX A5000)
+sudo modprobe nvidia
+nvidia-smi    # must list the GPU before continuing
+```
+
+If a previous operator-managed toolkit install left a binary behind,
+remove it (`sudo rm -rf /usr/local/nvidia/toolkit`) so k3s points at
+`/usr/bin/nvidia-container-runtime` on restart.
+
+**2. Make `nvidia` the default containerd runtime.** The pack's model
+pods are created with **no `runtimeClassName`**, so on k3s (whose
+default runtime is `runc`) the GPU libraries are never injected and vLLM
+fails with `Failed to infer device type`. k3s auto-detects a
+host-installed `nvidia-container-runtime` and writes an `nvidia`
+RuntimeClass into its generated config, but does not make it the
+default. Pin it with a **single self-contained**
+`/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl`, then
+`sudo systemctl restart k3s`:
+
+```toml
+version = 2
+
+[plugins."io.containerd.internal.v1.opt"]
+  path = "/var/lib/rancher/k3s/agent/containerd"
+[plugins."io.containerd.grpc.v1.cri"]
+  stream_server_address = "127.0.0.1"
+  stream_server_port = "10010"
+  enable_selinux = false
+  enable_unprivileged_ports = true
+  enable_unprivileged_icmp = true
+  sandbox_image = "rancher/mirrored-pause:3.6"
+
+[plugins."io.containerd.grpc.v1.cri".containerd]
+  snapshotter = "overlayfs"
+  disable_snapshot_annotations = true
+  default_runtime_name = "nvidia"
+
+[plugins."io.containerd.grpc.v1.cri".cni]
+  # NOTE: this data-dir hash is k3s-version-specific. Copy the bin_dir
+  # value from the live /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+  # on your node rather than hard-coding this one.
+  bin_dir = "/var/lib/rancher/k3s/data/<k3s-hash>/bin"
+  conf_dir = "/var/lib/rancher/k3s/agent/etc/cni/net.d"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+  runtime_type = "io.containerd.runc.v2"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+  SystemdCgroup = true
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/var/lib/rancher/k3s/agent/etc/containerd/certs.d"
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes."nvidia"]
+  runtime_type = "io.containerd.runc.v2"
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes."nvidia".options]
+  BinaryName = "/usr/bin/nvidia-container-runtime"
+  SystemdCgroup = true
+```
+
+> **Do not** try to set only `default_runtime_name` by re-opening the
+> `[plugins."io.containerd.grpc.v1.cri".containerd]` table on top of
+> k3s's `{{ template "base" . }}` include. Reopening an existing table
+> produces a `duplicated tables` TOML error that crashes containerd and
+> takes the node `NotReady`. Appending a brand-new sub-table is legal;
+> reopening an existing one is not. Use a single static template like
+> the one above. Validate it with
+> `python3 -c "import tomllib; tomllib.load(open('config.toml.tmpl','rb'))"`
+> **before** restarting k3s.
+
 ### 3.1 Add the ArgoCD Application
 
 Commit this file to your cluster-config repo at the path your `nebari-root`
@@ -298,6 +412,17 @@ device plugin is not reporting GPUs to the kubelet; check
 `kubectl describe node <gpu-node>` for `nvidia.com/gpu` under
 `Capacity` and `Allocatable`, and `kubectl logs -n
 nvidia-gpu-operator <device-plugin-pod>` for errors.
+
+> **k3s / host-managed runtime (section 3.0):** if the pod runs but
+> the logs show `exec: "nvidia-smi": executable file not found in
+> $PATH` (or `Failed to infer device type`), the pod was scheduled on
+> the default `runc` runtime, which does not inject the NVIDIA
+> libraries/binaries. Either make `nvidia` the default runtime (as in
+> the section 3.0 `config.toml.tmpl`), or add `runtimeClassName:
+> nvidia` to the pod spec (`spec.runtimeClassName: nvidia`, a sibling
+> of `restartPolicy`). The GPU Operator's device plugin reports
+> `nvidia.com/gpu` regardless of which runtime is default, so a pod
+> can schedule onto the GPU yet still miss the NVIDIA injection.
 
 ## 4. Install AI Gateway and Inference Extension CRDs
 
@@ -588,12 +713,18 @@ throughout - the controller restart only blocks new XDS pushes.
 
 ```bash
 kubectl get configmap -n envoy-gateway-system envoy-gateway-config \
-  -o jsonpath='{.data.envoy-gateway\.yaml}' | grep -A 5 extensionManager
+  -o jsonpath='{.data.envoy-gateway\.yaml}' | grep -A 25 '^extensionManager:'
 ```
 
 Expected: the rendered config shows the `extensionManager` block with
 `hostname: ai-gateway-controller.envoy-ai-gateway-system...`,
 `port: 1063`, and `backendResources` listing `InferencePool`.
+
+> The rendered `envoy-gateway.yaml` sorts top-level keys
+> alphabetically, so `hostname`/`port` land ~20 lines below the
+> `extensionManager:` header. `grep -A 5` truncates the block before
+> them - use `-A 25` and anchor on `^extensionManager:` so you match
+> the block header, not the inline `backendResources` reference.
 
 > **Note on the Envoy proxy pod.** You do *not* need to recreate the
 > existing Envoy proxy pod (the data plane) at this point. The AI
@@ -887,6 +1018,16 @@ quantized to 4-bit GPTQ that fits comfortably on a single L40S
 Pick a different model if your hardware demands it; sizing rules of
 thumb:
 
+> **24 GB GPUs (A10G / A5000):** `Qwen/Qwen3.5-35B-A3B-GPTQ-Int4` does
+> NOT fit. It is a multimodal MoE - vLLM builds a dummy vision encoder
+> in `qwen3_vl.py` during `profile_run`, and the int4 weights plus that
+> encoder consume ~21.7 GiB before any KV cache, so it OOMs
+> (`torch.OutOfMemoryError: CUDA out of memory`) on a 24 GB card. For
+> 24 GB GPUs use a small text-only model to validate the
+> deploy/shard/serve path, e.g. `Qwen/Qwen2.5-1.5B-Instruct` (fp16, no
+> quantization): ~2.9 GiB weights, ~16 GiB KV cache, serves cleanly at
+> `--max-model-len 8192`. See the sizing-validation note in section 9.2.
+
 - Total model weights size + ~30% headroom must fit in GPU VRAM.
 - For PVC-backed storage, set `spec.model.storage.size` to at least
   twice the on-disk weights size (Hugging Face writes incomplete
@@ -949,6 +1090,31 @@ hostname and route by URL path under `/v1/`.
 Apply directly with `kubectl apply -f`. Per-model manifests are not
 gated by sync waves and do not need to live in the cluster-config
 repo; treat them as data-plane content the pack consumes.
+
+> **k3s / host-managed driver (section 3.0), `llm-d-cuda` image:** add
+> the two env vars below under `spec.advanced.vllm.extraEnv`, or the
+> vLLM pod crashloops with `ld: cannot find -l:libcuda.so.1` -
+> surfacing misleadingly as `Model architectures [...] failed to be
+> inspected` because Triton's JIT import crashes during vLLM's
+> model-arch inspection.
+>
+> ```yaml
+>   advanced:
+>     vllm:
+>       extraEnv:
+>         - { name: NVIDIA_DRIVER_CAPABILITIES, value: "all" }
+>         - { name: LIBRARY_PATH, value: "/usr/lib/x86_64-linux-gnu" }
+> ```
+>
+> Why: with the host-managed runtime the pod gets only the `utility`
+> driver capability (enough for `nvidia-smi`, not `libcuda.so.1`);
+> `NVIDIA_DRIVER_CAPABILITIES=all` injects `libcuda.so.1` - but it
+> lands in `/usr/lib/x86_64-linux-gnu` (Debian multiarch) while the
+> image's Triton links it RHEL-style with `-l:libcuda.so.1
+> -L/usr/lib64`, and `ld` searches `-L` dirs, not the ldconfig cache.
+> `LIBRARY_PATH` makes gcc/ld add the multiarch dir. `extraEnv` on the
+> CR is the only durable place - a `kubectl set env` on the Deployment
+> is reverted by the operator within seconds.
 
 ### 9.3 Watch reconciliation
 
@@ -1479,8 +1645,12 @@ yet issued), or there is a hostname conflict with another listener.
   storageClass), insufficient CPU/memory
 - For single-GPU nodes: only one model can run at a time. A rolling
   update will deadlock if the new pod cannot schedule alongside the
-  old one. Set `spec.serving.replicas: 0`, wait for the old pod to
-  terminate, then set it back to `1`.
+  old one (the new pod stays `Pending` while the old pod holds the
+  one GPU). On the nebari pack the operator enforces
+  `spec.serving.replicas`, so scaling the Deployment to 0 (or setting
+  `replicas: 0`) is reverted within seconds. Instead, after applying
+  the respec, `kubectl delete pod <old-pod>` to free the GPU and let
+  the new pod schedule.
 
 ### Model downloads slowly or times out
 
@@ -1507,3 +1677,49 @@ proxy pod to trigger re-injection:
 kubectl delete pod -n envoy-gateway-system \
   -l gateway.envoyproxy.io/owning-gateway-name=nebari-gateway
 ```
+
+### vLLM pod crashloops with `ld: cannot find -l:libcuda.so.1`
+
+Seen on k3s / host-managed driver nodes (section 3.0) running the
+`llm-d-cuda` image. The traceback often surfaces as `Model
+architectures [...] failed to be inspected` because Triton's JIT
+import crashes during vLLM's model-arch inspection. The pod has only
+the `utility` driver capability, and even with `libcuda.so.1`
+injected it lands in a directory `ld` does not search. Fix: add
+`NVIDIA_DRIVER_CAPABILITIES=all` and
+`LIBRARY_PATH=/usr/lib/x86_64-linux-gnu` to
+`spec.advanced.vllm.extraEnv` on the LLMModel - see the callout in
+section 9.2.
+
+A related symptom on the same nodes is vLLM logging `Failed to infer
+device type`: the pod was scheduled on the default `runc` runtime,
+which exposes no GPU. Make `nvidia` the default containerd runtime or
+ensure the pod uses `runtimeClassName: nvidia` (section 3.0/3.4).
+
+### `ai-gateway-controller` crashloops (`PostRouteModify` SIGSEGV) after deleting a model
+
+```
+ERROR controller.inference-pool failed to sync InferencePool
+  {"error": "ExtensionReference service <model>-epp not found ..."}
+panic: runtime error: invalid memory address or nil pointer dereference
+  ... extensionserver.(*Server).PostRouteModify ...
+```
+
+Deleting an `LLMModel` removes its vLLM and EPP Deployments/Services,
+but does **not** garbage-collect the per-model gateway resources
+(`InferencePool`, `AIGatewayRoute`, `HTTPRoute`) - they have no
+owner-ref back to the CR. The orphaned `InferencePool` keeps an
+`ExtensionReference` to the now-deleted `<model>-epp` Service, and the
+AI Gateway controller nil-derefs on it and crashloops. Delete the
+leftovers by hand, then restart the controller:
+
+```bash
+NS=nebari-llm-serving-system; M=<model>
+kubectl delete inferencepool $M -n $NS
+kubectl delete aigatewayroute $M-external $M-internal -n $NS
+# deleting the AIGatewayRoutes cascade-deletes their HTTPRoutes
+kubectl rollout restart deploy/ai-gateway-controller -n envoy-ai-gateway-system
+```
+
+Confirm recovery: the controller logs should show only the live
+model's `InferencePool` being reconciled, with no panic.
