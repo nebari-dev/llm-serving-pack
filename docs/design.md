@@ -168,7 +168,7 @@ This supersedes the per-model FQDN + `Host`-header design from issue [#64](https
 
 The operator owns both, as a cluster-singleton. At startup (and every 5 minutes after, as a backstop) the operator:
 
-1. Ensures a `cert-manager.io/v1 Certificate` in its own namespace named `nebari-llm-shared-tls`, with `dnsNames` set to the two shared hostnames and `issuerRef` pointing at the `ClusterIssuer` from `platform.tls.clusterIssuer` (default `letsencrypt-production`). cert-manager writes the issued cert into a Secret of the same name.
+1. Ensures a `cert-manager.io/v1 Certificate` in its own namespace named `nebari-llm-shared-tls`, with `dnsNames` set to the two shared hostnames and `issuerRef` pointing at the `ClusterIssuer` from `platform.tls.clusterIssuer` (default `letsencrypt-production`). cert-manager writes the issued cert into a Secret of the same name. In bring-your-own-certificate mode (`platform.tls.secretName` set), no Certificate is created - the operator instead expects a pre-provisioned `kubernetes.io/tls` Secret of that name in its namespace, deletes any Certificate it previously managed, and the listeners/ReferenceGrants below reference the user Secret. This is the path for air-gapped / private-CA clusters where ACME issuance is impossible; cert-manager is not required at all in this mode.
 2. Ensures a `gateway.networking.k8s.io/v1beta1 ReferenceGrant` in its own namespace for each distinct Gateway namespace, permitting Gateways there to consume the shared Secret.
 3. Patches HTTPS listeners named `llm-https` / `llm-internal-https` onto the external and internal Gateways, with `tls.certificateRefs` pointing at the shared Secret. The merge is keyed on listener name: pre-existing listeners for the base domain, Argo CD, Keycloak, or anything else on the shared Gateway are preserved; only the two operator-named listeners are managed.
 
@@ -493,6 +493,7 @@ platform:
     manageSharedListeners: true
   tls:
     clusterIssuer: letsencrypt-production
+    secretName: ""           # set for bring-your-own-certificate mode
 
 auth:
   oidc:

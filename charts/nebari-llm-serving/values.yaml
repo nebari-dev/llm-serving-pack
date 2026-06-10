@@ -30,6 +30,16 @@ platform:
     # wildcard SANs are not supported. Override when running against a
     # staging issuer or a different production issuer.
     clusterIssuer: letsencrypt-production
+    # secretName - when set, bring-your-own-certificate mode: the operator
+    # does NOT create a cert-manager Certificate (and deletes one it
+    # previously managed). The shared Gateway listeners terminate TLS with
+    # this pre-provisioned kubernetes.io/tls Secret instead. The Secret
+    # must live in the operator's namespace and its certificate must cover
+    # llm.<baseDomain> and llm-internal.<baseDomain> (two SANs or a
+    # wildcard). Intended for air-gapped / private-CA environments where
+    # ACME issuance is impossible; cert-manager is not required at all in
+    # this mode. clusterIssuer is ignored while this is set.
+    secretName: ""
 
 auth:
   oidc:

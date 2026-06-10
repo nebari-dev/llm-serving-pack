@@ -131,7 +131,7 @@ func TestBuildSecretReferenceGrant(t *testing.T) {
 	t.Parallel()
 
 	const fromNS = "envoy-gateway-system"
-	got := BuildSecretReferenceGrant(fromNS, "llm-serving")
+	got := BuildSecretReferenceGrant(fromNS, "llm-serving", SharedTLSSecretName)
 	if got.GetAPIVersion() != "gateway.networking.k8s.io/v1beta1" {
 		t.Errorf("apiVersion = %q, want gateway.networking.k8s.io/v1beta1", got.GetAPIVersion())
 	}
@@ -165,6 +165,20 @@ func TestBuildSecretReferenceGrant(t *testing.T) {
 	}
 	if toEntry["name"] != SharedTLSSecretName {
 		t.Errorf("to.name = %v, want %q", toEntry["name"], SharedTLSSecretName)
+	}
+}
+
+func TestBuildSecretReferenceGrant_UserProvidedSecretName(t *testing.T) {
+	t.Parallel()
+
+	got := BuildSecretReferenceGrant("envoy-gateway-system", "llm-serving", "nebari-wildcard-tls")
+	to, _, _ := unstructured.NestedSlice(got.Object, "spec", "to")
+	if len(to) != 1 {
+		t.Fatalf("expected 1 to entry, got %d", len(to))
+	}
+	toEntry, _ := to[0].(map[string]interface{})
+	if toEntry["name"] != "nebari-wildcard-tls" {
+		t.Errorf("to.name = %v, want nebari-wildcard-tls (the user-provided secret)", toEntry["name"])
 	}
 }
 
