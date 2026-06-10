@@ -12,6 +12,8 @@ import (
 // UserInfo holds the authenticated user's identity extracted from JWT claims.
 type UserInfo struct {
 	Username string
+	Name     string
+	Email    string
 	Groups   []string
 }
 
@@ -112,10 +114,14 @@ func parseJWT(token, groupsClaim string) (*UserInfo, error) {
 	}
 
 	username, _ := claims["preferred_username"].(string)
+	name, _ := claims["name"].(string)
+	email, _ := claims["email"].(string)
 	groups := extractGroups(claims, groupsClaim)
 
 	return &UserInfo{
 		Username: username,
+		Name:     name,
+		Email:    email,
 		Groups:   groups,
 	}, nil
 }

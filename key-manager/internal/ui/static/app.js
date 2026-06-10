@@ -357,7 +357,66 @@ $('revoke-confirm-btn').addEventListener('click', async () => {
 });
 
 // ---------------------------------------------------------------------------
+// Account menu
+// ---------------------------------------------------------------------------
+function userInitials(name, email) {
+  if (name) {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  }
+  if (email) return email.slice(0, 2).toUpperCase();
+  return 'U';
+}
+
+async function loadMe() {
+  try {
+    const me = await apiFetch('GET', '/api/me');
+    const displayName = me.name || me.username || me.email || 'Account';
+    $('account-avatar').textContent = userInitials(me.name || me.username, me.email);
+    $('account-name').textContent = displayName;
+    $('account-menu-name').textContent = me.name || me.username || 'Signed in';
+    const emailEl = $('account-menu-email');
+    if (me.email) {
+      emailEl.textContent = me.email;
+      emailEl.classList.remove('hidden');
+    } else {
+      emailEl.classList.add('hidden');
+    }
+  } catch (err) {
+    // Non-fatal: leave the default "Account" label in place.
+    console.error('failed to load account info:', err);
+  }
+}
+
+function closeAccountMenu() {
+  $('account-menu').classList.add('hidden');
+  $('account-btn').setAttribute('aria-expanded', 'false');
+}
+
+$('account-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeAllMenus();
+  const menu = $('account-menu');
+  const isOpen = !menu.classList.contains('hidden');
+  if (isOpen) {
+    closeAccountMenu();
+  } else {
+    menu.classList.remove('hidden');
+    $('account-btn').setAttribute('aria-expanded', 'true');
+  }
+});
+
+$('signout-btn').addEventListener('click', () => {
+  window.location.href = '/logout';
+});
+
+// Close the account menu when clicking elsewhere.
+document.addEventListener('click', closeAccountMenu);
+
+// ---------------------------------------------------------------------------
 // Initialise
 // ---------------------------------------------------------------------------
+loadMe();
 loadModels();
 loadKeys();

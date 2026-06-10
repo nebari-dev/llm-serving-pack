@@ -45,6 +45,7 @@ func NewHandler(w ModelLister, s KeyManager, logger *slog.Logger) *Handler {
 
 // RegisterRoutes registers all API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/me", h.getMe)
 	mux.HandleFunc("GET /api/models", h.getModels)
 	mux.HandleFunc("GET /api/keys", h.getKeys)
 	mux.HandleFunc("POST /api/keys", h.createKey)
@@ -56,6 +57,27 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// getMe handles GET /api/me, returning the authenticated user's identity.
+func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	groups := user.Groups
+	if groups == nil {
+		groups = []string{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"username": user.Username,
+		"name":     user.Name,
+		"email":    user.Email,
+		"groups":   groups,
+	})
 }
 
 // getModels handles GET /api/models.
