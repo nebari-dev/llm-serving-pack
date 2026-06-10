@@ -7,57 +7,167 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <header>
-    <h1>LLM API Key Manager</h1>
-  </header>
-
-  <main>
-    <div id="error-banner" class="error-banner hidden"></div>
-
-    <section id="models-section">
-      <h2>Available Models</h2>
-      <div id="models-loading" class="loading">Loading models...</div>
-      <div id="models-container" class="hidden"></div>
-    </section>
-
-    <section id="create-key-section">
-      <h2>Create API Key</h2>
-      <form id="create-key-form">
-        <div class="form-row">
-          <label for="model-select">Model</label>
-          <select id="model-select" name="modelName" required>
-            <option value="">-- select a model --</option>
-          </select>
+  <!-- Top navigation bar -->
+  <nav class="topbar">
+    <div class="topbar-brand">
+      <img class="logo" src="/nebari-logo.svg" alt="Nebari" width="112" height="28">
+    </div>
+    <div class="topbar-account">
+      <button type="button" id="account-btn" class="account-trigger" aria-haspopup="true" aria-expanded="false">
+        <span class="avatar" id="account-avatar" aria-hidden="true">U</span>
+        <span class="account-name" id="account-name">Account</span>
+        <svg class="icon account-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div id="account-menu" class="account-menu hidden" role="menu" aria-labelledby="account-btn">
+        <div class="account-menu-head">
+          <p class="account-menu-name" id="account-menu-name">Signed in</p>
+          <p class="account-menu-email hidden" id="account-menu-email"></p>
         </div>
-        <div class="form-row">
-          <label for="description-input">Description</label>
-          <input type="text" id="description-input" name="description" placeholder="e.g. my notebook" maxlength="200">
-        </div>
-        <div class="form-row">
-          <button type="submit" id="create-btn">Create Key</button>
-        </div>
-        <div id="create-error" class="field-error hidden"></div>
-      </form>
-    </section>
+        <button type="button" id="signout-btn" class="menu-item" role="menuitem">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Sign out
+        </button>
+      </div>
+    </div>
+  </nav>
 
-    <section id="keys-section">
-      <h2>My API Keys</h2>
-      <div id="keys-loading" class="loading">Loading keys...</div>
+  <main class="page">
+    <header class="page-head">
+      <h1 class="page-title">LLM API Key Manager</h1>
+      <p class="page-subtitle">View and manage your API keys. Do not share your API keys with others or expose them in the browser or shared repositories.</p>
+    </header>
+
+    <div id="error-banner" class="alert alert-destructive hidden" role="alert"></div>
+
+    <!-- My API Keys card -->
+    <section class="card">
+      <div class="card-head">
+        <h2 class="card-title">My API Keys</h2>
+        <button type="button" id="create-key-btn" class="btn btn-primary">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Create new key
+        </button>
+      </div>
+      <div class="card-divider"></div>
+      <div id="keys-loading" class="state-text">Loading keys…</div>
       <div id="keys-container" class="hidden"></div>
     </section>
   </main>
 
-  <!-- Modal for displaying new API key -->
-  <div id="key-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
-    <div class="modal">
-      <h3 id="modal-title">API Key Created</h3>
-      <p class="modal-warning">Copy this key now. It will not be shown again.</p>
-      <div class="key-display">
-        <code id="modal-key-value"></code>
-        <button id="copy-btn" type="button">Copy</button>
+  <!-- Create API Key dialog -->
+  <div id="create-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="create-dialog-title">
+    <div class="dialog" style="width: 400px;">
+      <div class="dialog-head">
+        <h3 class="dialog-title" id="create-dialog-title">Create API Key</h3>
+        <button type="button" class="btn-icon" data-close="create-dialog" aria-label="Close">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
       </div>
-      <p id="modal-client-id" class="modal-meta"></p>
-      <button id="modal-close-btn" type="button" class="btn-primary">Done</button>
+      <form id="create-key-form" class="dialog-body">
+        <div class="field">
+          <label for="model-select">Model</label>
+          <select id="model-select" name="modelName" required>
+            <option value="">Select a model</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="description-input">Description</label>
+          <input type="text" id="description-input" name="description" placeholder="e.g. Research notebook" maxlength="200">
+        </div>
+        <div id="create-error" class="field-error hidden"></div>
+        <div class="dialog-foot">
+          <button type="button" class="btn btn-secondary" data-close="create-dialog">Cancel</button>
+          <button type="submit" id="create-submit-btn" class="btn btn-primary">Create</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- API Key Created dialog -->
+  <div id="created-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="created-dialog-title">
+    <div class="dialog" style="width: 437px;">
+      <div class="dialog-head">
+        <h3 class="dialog-title" id="created-dialog-title">API Key Created</h3>
+        <button type="button" class="btn-icon" data-close="created-dialog" aria-label="Close">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="field">
+          <label for="created-client-id">Client ID</label>
+          <input type="text" id="created-client-id" class="readonly-input" readonly>
+        </div>
+        <div class="field">
+          <label for="created-api-key">API Key</label>
+          <div class="key-row">
+            <input type="text" id="created-api-key" class="readonly-input" readonly>
+            <button type="button" id="copy-btn" class="btn btn-secondary">
+              <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2"/>
+                <path d="M5 15V5a2 2 0 012-2h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+              Copy
+            </button>
+          </div>
+        </div>
+        <div class="alert alert-warning">
+          <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 9v4m0 4h.01M10.3 3.86l-8.5 14.7A2 2 0 003.5 21.5h17a2 2 0 001.7-2.94l-8.5-14.7a2 2 0 00-3.4 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Copy this key now. It will not be shown again.</span>
+        </div>
+        <p class="helper-text">For security reasons, this key is only displayed once and cannot be retrieved later. If you lose it, you'll need to create a new one.</p>
+        <div class="dialog-foot">
+          <button type="button" id="download-btn" class="btn btn-secondary">
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Download .txt
+          </button>
+          <button type="button" id="created-done-btn" class="btn btn-primary">
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            I've copied my key
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Revoke confirmation dialog -->
+  <div id="revoke-dialog" class="dialog-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="revoke-dialog-title">
+    <div class="dialog" style="width: 437px;">
+      <div class="dialog-head">
+        <h3 class="dialog-title" id="revoke-dialog-title">Revoke API Key?</h3>
+        <button type="button" class="btn-icon" data-close="revoke-dialog" aria-label="Close">
+          <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <p id="revoke-message" class="dialog-text"></p>
+        <div class="dialog-foot">
+          <button type="button" class="btn btn-secondary" data-close="revoke-dialog">Cancel</button>
+          <button type="button" id="revoke-confirm-btn" class="btn btn-destructive">
+            <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 9v4m0 4h.01M10.3 3.86l-8.5 14.7A2 2 0 003.5 21.5h17a2 2 0 001.7-2.94l-8.5-14.7a2 2 0 00-3.4 0z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Revoke Key
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
