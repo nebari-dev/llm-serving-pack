@@ -379,9 +379,13 @@ func hasListenerNamed(listeners []interface{}, name string) bool {
 // call into NotFound handling directly).
 var _ = apierrors.IsNotFound
 
+// userProvidedTLSSecret is the bring-your-own-certificate Secret name used
+// across the user-provided-secret tests.
+const userProvidedTLSSecret = "nebari-wildcard-tls"
+
 func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 	cfg := testOperatorConfig()
-	cfg.TLSSecretName = "nebari-wildcard-tls"
+	cfg.TLSSecretName = userProvidedTLSSecret
 
 	// Seed a previously managed Certificate (from cert-manager mode) and the
 	// user-provided Secret to simulate an in-place switchover.
@@ -392,7 +396,7 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 
 	secret := &unstructured.Unstructured{}
 	secret.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"})
-	secret.SetName("nebari-wildcard-tls")
+	secret.SetName(userProvidedTLSSecret)
 	secret.SetNamespace(cfg.OperatorNamespace)
 	_ = unstructured.SetNestedField(secret.Object, "kubernetes.io/tls", "type")
 
@@ -422,8 +426,8 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 		t.Fatalf("expected 1 to entry, got %d", len(to))
 	}
 	toEntry, _ := to[0].(map[string]interface{})
-	if toEntry["name"] != "nebari-wildcard-tls" {
-		t.Errorf("ReferenceGrant to.name = %v, want nebari-wildcard-tls", toEntry["name"])
+	if toEntry["name"] != userProvidedTLSSecret {
+		t.Errorf("ReferenceGrant to.name = %v, want %q", toEntry["name"], userProvidedTLSSecret)
 	}
 
 	// Both shared listeners must terminate TLS with the user-provided Secret.
@@ -451,8 +455,8 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 				t.Fatalf("%s: expected 1 certificateRef, got %d", tc.listener, len(refs))
 			}
 			ref, _ := refs[0].(map[string]interface{})
-			if ref["name"] != "nebari-wildcard-tls" {
-				t.Errorf("%s certificateRef name = %v, want nebari-wildcard-tls", tc.listener, ref["name"])
+			if ref["name"] != userProvidedTLSSecret {
+				t.Errorf("%s certificateRef name = %v, want %q", tc.listener, ref["name"], userProvidedTLSSecret)
 			}
 		}
 		if !found {
@@ -463,7 +467,7 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 
 func TestClusterTLSSingleton_Reconcile_UserProvidedSecret_MissingSecretIsNotAnError(t *testing.T) {
 	cfg := testOperatorConfig()
-	cfg.TLSSecretName = "nebari-wildcard-tls"
+	cfg.TLSSecretName = userProvidedTLSSecret
 
 	c := newFakeClientWithGateway(t)
 	r := &ClusterTLSSingleton{Client: c, Config: cfg}
