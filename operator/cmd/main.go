@@ -195,6 +195,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.PassthroughModelReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Config: operatorCfg,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "PassthroughModel")
+		os.Exit(1)
+	}
+
 	// Register the cluster-singleton reconciler that owns the shared-TLS
 	// Certificate and HTTPS listener patches on the external/internal
 	// Gateways. It runs once on leader acquisition and then on a slow
