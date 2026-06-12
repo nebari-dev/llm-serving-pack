@@ -101,6 +101,18 @@ func buildDeployment(
 		podSpec.InitContainers = []corev1.Container{*storage.InitContainer}
 	}
 
+	// Default to Recreate, not RollingUpdate: the old pod holds the node's
+	// GPUs (and a ReadWriteOnce model PVC), so a surged replacement pod can
+	// never schedule on a cluster without spare GPU capacity and the rollout
+	// deadlocks until someone deletes the old ReplicaSet by hand. Recreate
+	// tears the old pod down first, accepting brief downtime over a wedged
+	// rollout. Clusters with free GPUs can opt back into RollingUpdate via
+	// spec.serving.updateStrategy.
+	strategyType := appsv1.RecreateDeploymentStrategyType
+	if model.Spec.Serving.UpdateStrategy == llmv1alpha1.UpdateStrategyRollingUpdate {
+		strategyType = appsv1.RollingUpdateDeploymentStrategyType
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   model.Name,
@@ -108,13 +120,8 @@ func buildDeployment(
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
-			// Recreate, not RollingUpdate: the old pod holds the node's GPUs
-			// (and a ReadWriteOnce model PVC), so a surged replacement pod can
-			// never schedule and the rollout deadlocks until someone deletes
-			// the old ReplicaSet by hand. Spec changes instead tear the old
-			// pod down first, accepting brief downtime over a wedged rollout.
 			Strategy: appsv1.DeploymentStrategy{
-				Type: appsv1.RecreateDeploymentStrategyType,
+				Type: strategyType,
 			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{

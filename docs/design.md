@@ -306,7 +306,7 @@ The controller is event-driven and idempotent. Each reconciliation evaluates cur
 
 When a running LLMModel's spec changes, the operator updates the corresponding resources in place. For changes that affect the vLLM Deployment (image, vllmArgs, resources, replicas), the operator updates the Deployment spec and Kubernetes restarts the pods. For changes to access groups or endpoints, the operator updates SecurityPolicies and routes without touching the Deployment.
 
-The Deployment uses the `Recreate` strategy rather than a rolling update. Model pods hold exclusive resources - the node's GPUs and a ReadWriteOnce model PVC - so a rolling update's surged replacement pod can never schedule while the old pod is alive, deadlocking the rollout until the old ReplicaSet is deleted by hand. `Recreate` tears down the old pod first, trading brief downtime for a rollout that always completes.
+The Deployment's rollout strategy is controlled by `spec.serving.updateStrategy` (`Recreate`, the default, or `RollingUpdate`). The default is `Recreate` because model pods hold exclusive resources - the node's GPUs and a ReadWriteOnce model PVC - so on clusters without spare GPU capacity a rolling update's surged replacement pod can never schedule while the old pod is alive, deadlocking the rollout until the old ReplicaSet is deleted by hand. `Recreate` tears down the old pod first, trading brief downtime for a rollout that always completes. Clusters with enough free GPUs to run old and new pods side by side can set `RollingUpdate` for zero-downtime updates.
 
 ### /dev/shm for tensor parallelism
 

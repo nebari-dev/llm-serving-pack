@@ -131,10 +131,31 @@ type ServingSpec struct {
 	// vllmArgs are additional arguments passed to vLLM
 	// +optional
 	VLLMArgs []string `json:"vllmArgs,omitempty"`
+	// updateStrategy controls how spec changes roll out to serving pods.
+	// Recreate (the default) tears down the old pod before starting the
+	// replacement: model pods hold exclusive resources (the node's GPUs and
+	// a ReadWriteOnce model PVC), so on clusters without spare GPU capacity
+	// a RollingUpdate's surged pod can never schedule and the rollout
+	// deadlocks. Set RollingUpdate for zero-downtime updates on clusters
+	// with enough free GPUs to run old and new pods side by side.
+	// +optional
+	// +kubebuilder:validation:Enum=Recreate;RollingUpdate
+	// +kubebuilder:default=Recreate
+	UpdateStrategy UpdateStrategy `json:"updateStrategy,omitempty"`
 	// monitoring configures Prometheus monitoring
 	// +optional
 	Monitoring MonitoringSpec `json:"monitoring,omitempty"`
 }
+
+// UpdateStrategy is the rollout strategy for the model serving Deployment.
+type UpdateStrategy string
+
+const (
+	// UpdateStrategyRecreate tears down old pods before creating new ones.
+	UpdateStrategyRecreate UpdateStrategy = "Recreate"
+	// UpdateStrategyRollingUpdate surges replacement pods before old ones exit.
+	UpdateStrategyRollingUpdate UpdateStrategy = "RollingUpdate"
+)
 
 type MonitoringSpec struct {
 	// enabled controls whether a PodMonitor is created

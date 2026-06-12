@@ -833,6 +833,25 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name: "updateStrategy RollingUpdate opts into rolling updates",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Serving.UpdateStrategy = llmv1alpha1.UpdateStrategyRollingUpdate
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				strategy := result.Deployment.Spec.Strategy
+				if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+					t.Errorf("expected deployment strategy %q, got %q", appsv1.RollingUpdateDeploymentStrategyType, strategy.Type)
+				}
+			},
+		},
+		{
 			name: "memory-backed /dev/shm volume capped at the memory limit",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
