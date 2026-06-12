@@ -1,0 +1,17 @@
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  labels:
+    app.kubernetes.io/name: nebari-llm-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: passthroughmodel-sample
+spec:
+  provider:
+    hostname: openrouter.ai
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    catchAll: true
+  access:
+    groups:
+      - llm
