@@ -302,9 +302,15 @@ LLMModel CR applied
 
 The controller is event-driven and idempotent. Each reconciliation evaluates current state and takes the next appropriate action. When waiting for async operations (model download, pod startup), the controller requeues with a delay rather than blocking.
 
-### Spec updates and rolling restarts
+### Spec updates and restarts
 
-When a running LLMModel's spec changes, the operator updates the corresponding resources in place. For changes that affect the vLLM Deployment (image, vllmArgs, resources, replicas), the operator updates the Deployment spec and Kubernetes handles the rolling restart. For changes to access groups or endpoints, the operator updates SecurityPolicies and routes without touching the Deployment.
+When a running LLMModel's spec changes, the operator updates the corresponding resources in place. For changes that affect the vLLM Deployment (image, vllmArgs, resources, replicas), the operator updates the Deployment spec and Kubernetes restarts the pods. For changes to access groups or endpoints, the operator updates SecurityPolicies and routes without touching the Deployment.
+
+The Deployment uses the `Recreate` strategy rather than a rolling update. Model pods hold exclusive resources - the node's GPUs and a ReadWriteOnce model PVC - so a rolling update's surged replacement pod can never schedule while the old pod is alive, deadlocking the rollout until the old ReplicaSet is deleted by hand. `Recreate` tears down the old pod first, trading brief downtime for a rollout that always completes.
+
+### /dev/shm for tensor parallelism
+
+Every model pod mounts a memory-backed emptyDir at `/dev/shm` in the vllm container. Kubernetes defaults `/dev/shm` to 64Mi, which is far too small for vLLM with `tensorParallelism > 1`: the worker processes exchange tensors through POSIX shared memory (and NCCL's SHM transport uses it too), so multi-GPU engines hang or crash during startup on the default size. The volume is capped at the model's memory limit when one is set; tmpfs pages count toward the container's memory limit regardless, so the cap reserves no extra memory.
 
 Changes to `model.name`, `model.source`, `model.storage`, or `model.revision` require a new model download. The operator stores a hash of these fields as an annotation (`llm.nebari.dev/model-config-hash`) on the Deployment. When the hash changes, the operator deletes the existing Deployment and recreates it, re-entering the Downloading phase.
 
