@@ -227,6 +227,10 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "LLMModel")
 			os.Exit(1)
 		}
+		if err := webhookv1alpha1.SetupPassthroughModelWebhookWithManager(mgr, operatorNamespace); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "PassthroughModel")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
