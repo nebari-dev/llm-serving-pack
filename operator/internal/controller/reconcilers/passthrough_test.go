@@ -12,13 +12,26 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
+// Shared literals for the passthrough fixtures, named to avoid colliding
+// with the function-local consts other test files in this package declare.
+const (
+	ptCRName        = "openrouter"
+	ptBackendName   = "openrouter-backend"
+	ptKindBackend   = "Backend"
+	ptKindHTTPRoute = "HTTPRoute"
+	ptHostHeader    = "Host"
+	ptModelHeader   = "x-ai-eg-model"
+	ptGatewayNS     = "envoy-gateway-system"
+	ptExternalHost  = "llm.example.com"
+)
+
 func testPassthroughConfig() *config.OperatorConfig {
 	return &config.OperatorConfig{
 		BaseDomain:          "example.com",
 		ExternalGatewayName: "nebari-gateway",
-		ExternalGatewayNS:   "envoy-gateway-system",
+		ExternalGatewayNS:   ptGatewayNS,
 		InternalGatewayName: "nebari-gateway",
-		InternalGatewayNS:   "envoy-gateway-system",
+		InternalGatewayNS:   ptGatewayNS,
 		OIDCIssuerURL:       "https://keycloak.example.com/realms/nebari",
 		OIDCGroupsClaim:     "groups",
 	}
@@ -27,7 +40,7 @@ func testPassthroughConfig() *config.OperatorConfig {
 func testPassthroughModel() *llmv1alpha1.PassthroughModel {
 	return &llmv1alpha1.PassthroughModel{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "openrouter",
+			Name:      ptCRName,
 			Namespace: "llm-system",
 		},
 		Spec: llmv1alpha1.PassthroughModelSpec{
@@ -78,13 +91,13 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 	}
 
 	t.Run("backend", func(t *testing.T) {
-		if res.Backend.GetName() != "openrouter-backend" {
+		if res.Backend.GetName() != ptBackendName {
 			t.Errorf("backend name = %q, want openrouter-backend", res.Backend.GetName())
 		}
 		if res.Backend.GetNamespace() != "llm-system" {
 			t.Errorf("backend namespace = %q", res.Backend.GetNamespace())
 		}
-		if res.Backend.GetAPIVersion() != "gateway.envoyproxy.io/v1alpha1" || res.Backend.GetKind() != "Backend" {
+		if res.Backend.GetAPIVersion() != "gateway.envoyproxy.io/v1alpha1" || res.Backend.GetKind() != ptKindBackend {
 			t.Errorf("backend GVK = %s/%s", res.Backend.GetAPIVersion(), res.Backend.GetKind())
 		}
 		eps, _ := specMap(t, res.Backend)["endpoints"].([]interface{})
@@ -117,14 +130,14 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 		}
 		targets, _ := specMap(t, p)["targetRefs"].([]interface{})
 		target, _ := targets[0].(map[string]interface{})
-		if target["kind"] != "Backend" || target["name"] != "openrouter-backend" {
+		if target["kind"] != ptKindBackend || target["name"] != ptBackendName {
 			t.Errorf("targetRef = %v", target)
 		}
 	})
 
 	t.Run("AIServiceBackend", func(t *testing.T) {
 		b := res.AIServiceBackend
-		if b.GetName() != "openrouter" {
+		if b.GetName() != ptCRName {
 			t.Errorf("AIServiceBackend name = %q", b.GetName())
 		}
 		schema, _ := specMap(t, b)["schema"].(map[string]interface{})
@@ -132,7 +145,7 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 			t.Errorf("schema = %v", schema)
 		}
 		ref, _ := specMap(t, b)["backendRef"].(map[string]interface{})
-		if ref["kind"] != "Backend" || ref["name"] != "openrouter-backend" || ref["group"] != "gateway.envoyproxy.io" {
+		if ref["kind"] != ptKindBackend || ref["name"] != ptBackendName || ref["group"] != "gateway.envoyproxy.io" {
 			t.Errorf("backendRef = %v", ref)
 		}
 	})
@@ -152,7 +165,7 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 		}
 		targets, _ := specMap(t, p)["targetRefs"].([]interface{})
 		target, _ := targets[0].(map[string]interface{})
-		if target["kind"] != "AIServiceBackend" || target["name"] != "openrouter" {
+		if target["kind"] != "AIServiceBackend" || target["name"] != ptCRName {
 			t.Errorf("targetRef = %v", target)
 		}
 	})
@@ -176,10 +189,10 @@ func TestBuildPassthroughResourcesKeySecretAndConfigMap(t *testing.T) {
 	}
 	// The key-manager filters API-key metadata ConfigMaps on this label.
 	for _, obj := range []map[string]string{res.APIKeySecret.Labels, res.APIKeyMetadataCM.Labels} {
-		if obj["llm.nebari.dev/model-name"] != "openrouter" {
+		if obj["llm.nebari.dev/model-name"] != ptCRName {
 			t.Errorf("model-name label = %q", obj["llm.nebari.dev/model-name"])
 		}
-		if obj["llm.nebari.dev/model"] != "openrouter" {
+		if obj["llm.nebari.dev/model"] != ptCRName {
 			t.Errorf("model label = %q", obj["llm.nebari.dev/model"])
 		}
 	}
@@ -283,7 +296,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 	t.Run("external parentRef and section", func(t *testing.T) {
 		parents, _ := specMap(t, res.ExternalRoute)["parentRefs"].([]interface{})
 		parent, _ := parents[0].(map[string]interface{})
-		if parent["name"] != "nebari-gateway" || parent["namespace"] != "envoy-gateway-system" {
+		if parent["name"] != "nebari-gateway" || parent["namespace"] != ptGatewayNS {
 			t.Errorf("parentRef = %v", parent)
 		}
 		if parent["sectionName"] != ExternalHTTPSListenerName {
@@ -294,7 +307,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 	t.Run("declared rule lists models and ownedBy on external only", func(t *testing.T) {
 		extRules := routeRules(t, res.ExternalRoute)
 		declared, _ := extRules[0].(map[string]interface{})
-		if declared["modelsOwnedBy"] != "openrouter" {
+		if declared["modelsOwnedBy"] != ptCRName {
 			t.Errorf("external modelsOwnedBy = %v", declared["modelsOwnedBy"])
 		}
 		matches, _ := declared["matches"].([]interface{})
@@ -309,11 +322,11 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 			for _, h := range headers {
 				hm, _ := h.(map[string]interface{})
 				switch hm["name"] {
-				case "Host":
-					if hm["value"] == "llm.example.com" && hm["type"] == "Exact" {
+				case ptHostHeader:
+					if hm["value"] == ptExternalHost && hm["type"] == "Exact" {
 						hostOK = true
 					}
-				case "x-ai-eg-model":
+				case ptModelHeader:
 					seen[hm["value"].(string)] = true
 				}
 			}
@@ -341,7 +354,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 			t.Fatalf("catch-all headers = %d, want 1 (Host only)", len(headers))
 		}
 		hm, _ := headers[0].(map[string]interface{})
-		if hm["name"] != "Host" || hm["value"] != "llm.example.com" {
+		if hm["name"] != ptHostHeader || hm["value"] != ptExternalHost {
 			t.Errorf("catch-all host header = %v", hm)
 		}
 		intRules := routeRules(t, res.InternalRoute)
@@ -358,7 +371,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 		for _, rule := range routeRules(t, res.ExternalRoute) {
 			refs, _ := rule.(map[string]interface{})["backendRefs"].([]interface{})
 			ref, _ := refs[0].(map[string]interface{})
-			if ref["name"] != "openrouter" {
+			if ref["name"] != ptCRName {
 				t.Errorf("backendRef = %v", ref)
 			}
 		}
@@ -380,7 +393,7 @@ func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 		}
 		targets, _ := specMap(t, p)["targetRefs"].([]interface{})
 		target, _ := targets[0].(map[string]interface{})
-		if target["kind"] != "HTTPRoute" || target["name"] != "openrouter-external" {
+		if target["kind"] != ptKindHTTPRoute || target["name"] != "openrouter-external" {
 			t.Errorf("targetRef = %v", target)
 		}
 		auth, _ := specMap(t, p)["apiKeyAuth"].(map[string]interface{})
