@@ -91,7 +91,15 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config)
 	if err != nil {
-		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, nil); statusErr != nil {
+		// Surface the build failure as a condition so `kubectl describe`
+		// explains the Error phase rather than only the reconcile log.
+		buildCond := metav1.Condition{
+			Type:    CondBackendConfigured,
+			Status:  metav1.ConditionFalse,
+			Reason:  "BuildFailed",
+			Message: err.Error(),
+		}
+		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, []metav1.Condition{buildCond}); statusErr != nil {
 			log.Error(statusErr, "failed to update status after build error")
 		}
 		return ctrl.Result{}, fmt.Errorf("building passthrough resources: %w", err)
@@ -108,9 +116,10 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("reconciling api key metadata configmap: %w", err)
 	}
 
-	// Gateway kinds tolerate a missing CRD the same way the LLMModel
-	// reconciler does (log and continue); the failure is surfaced in the
-	// status conditions rather than failing the whole reconcile.
+	// Gateway kinds tolerate a missing CRD: a failed apply does not fail the
+	// whole reconcile. Unlike the LLMModel reconciler (which only logs and
+	// moves on), each failure is captured in a status condition and the
+	// reconcile is requeued so the resources are retried once the CRDs exist.
 	conditions := []metav1.Condition{}
 
 	backendErr := r.applyAll(ctx, log, pm,

@@ -99,14 +99,15 @@ type EndpointToggle struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
-// PassthroughModelPhase represents the current lifecycle phase
-// +kubebuilder:validation:Enum=Pending;Ready;Error
+// PassthroughModelPhase represents the current lifecycle phase. Reconcile
+// completes in a single pass, so there is no intermediate Pending state: the
+// phase settles on Ready or Error every time.
+// +kubebuilder:validation:Enum=Ready;Error
 type PassthroughModelPhase string
 
 const (
-	PassthroughPhasePending PassthroughModelPhase = "Pending"
-	PassthroughPhaseReady   PassthroughModelPhase = "Ready"
-	PassthroughPhaseError   PassthroughModelPhase = "Error"
+	PassthroughPhaseReady PassthroughModelPhase = "Ready"
+	PassthroughPhaseError PassthroughModelPhase = "Error"
 )
 
 // PassthroughModelStatus defines the observed state of PassthroughModel

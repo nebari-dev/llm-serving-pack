@@ -132,6 +132,37 @@ var _ = Describe("PassthroughModel Webhook", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("declared[1]"))
 		})
+
+		It("should reject a PassthroughModel with both endpoints disabled", func() {
+			ns := newManagedNamespace("pt-managed-no-endpoints")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			pm := newBasePassthroughModel("pt-no-endpoints", ns.Name)
+			disabled := false
+			pm.Spec.Endpoints = llmv1alpha1.PassthroughEndpoints{
+				External: llmv1alpha1.EndpointToggle{Enabled: &disabled},
+				Internal: llmv1alpha1.EndpointToggle{Enabled: &disabled},
+			}
+			err := k8sClient.Create(bgCtx, pm)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("both external and internal"))
+		})
+
+		It("should reject a PassthroughModel whose name collides with an existing LLMModel", func() {
+			ns := newManagedNamespace("pt-managed-name-collision")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			model := newBaseLLMModel("shared-name", ns.Name)
+			Expect(k8sClient.Create(bgCtx, model)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
+
+			pm := newBasePassthroughModel("shared-name", ns.Name)
+			err := k8sClient.Create(bgCtx, pm)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("already used by an LLMModel"))
+		})
 	})
 
 	Context("ValidateUpdate", func() {

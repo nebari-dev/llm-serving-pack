@@ -434,11 +434,12 @@ Semantics worth knowing:
   HTTPRoutes would; the webhook validates per-CR only, consistent with the
   LLMModel webhook dropping cross-CR collision checks. Document one catch-all
   per cluster as the supported shape.
-- **Do not reuse an LLMModel name for a PassthroughModel** (or vice versa):
-  both kinds derive their api-keys Secret name as `<name>-api-keys`, so the
-  two controllers would fight over one Secret. The key-manager cache keeps
-  kind-prefixed entries so neither hides the other, but the Secret collision
-  is on the operator's to-fix list.
+- **Names are unique across both kinds.** Both an LLMModel and a
+  PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so
+  sharing a name would make the two controllers fight over one Secret. Both
+  webhooks reject a CR whose name is already taken by the other kind in the
+  same namespace. The key-manager cache additionally keeps kind-prefixed
+  entries as defense in depth.
 - **Status.** Phase is Ready/Error with conditions `BackendConfigured`,
   `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs
   surface as `ApplyFailed` conditions with a one-minute requeue rather than

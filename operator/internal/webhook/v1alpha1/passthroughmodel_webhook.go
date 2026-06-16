@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
 )
 
 // nolint:unused
@@ -119,6 +122,14 @@ func (v *PassthroughModelCustomValidator) validate(ctx context.Context, pm *llmv
 		return nil, err
 	}
 
+	if err := validateEndpoints(pm); err != nil {
+		return nil, err
+	}
+
+	if err := v.validateNoNameCollision(ctx, pm); err != nil {
+		return nil, err
+	}
+
 	return nil, nil
 }
 
@@ -191,6 +202,46 @@ func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
 		return fmt.Errorf("spec.provider.credentialSecretName must not be empty")
 	}
 	return nil
+}
+
+// validateEndpoints rejects a PassthroughModel with both shared endpoints
+// disabled: it would provision provider plumbing but no route, leaving the
+// provider unreachable. Both endpoints default to enabled (nil == enabled),
+// so this only fires when a user explicitly sets both to false.
+func validateEndpoints(pm *llmv1alpha1.PassthroughModel) error {
+	externalEnabled := pm.Spec.Endpoints.External.Enabled == nil || *pm.Spec.Endpoints.External.Enabled
+	internalEnabled := pm.Spec.Endpoints.Internal.Enabled == nil || *pm.Spec.Endpoints.Internal.Enabled
+	if !externalEnabled && !internalEnabled {
+		return fmt.Errorf(
+			"spec.endpoints cannot disable both external and internal; " +
+				"a passthrough with neither endpoint enabled is never reachable",
+		)
+	}
+	return nil
+}
+
+// validateNoNameCollision rejects a PassthroughModel whose name is already
+// taken by an LLMModel in the same namespace. Both kinds derive their
+// api-keys Secret name as "<name>-api-keys", so sharing a name makes the two
+// controllers fight over one Secret and lets the key-manager surface one
+// model's keys under the other. Names must be unique across both kinds.
+func (v *PassthroughModelCustomValidator) validateNoNameCollision(ctx context.Context, pm *llmv1alpha1.PassthroughModel) error {
+	var existing llmv1alpha1.LLMModel
+	err := v.Client.Get(ctx, types.NamespacedName{Name: pm.Name, Namespace: pm.Namespace}, &existing)
+	if err == nil {
+		return fmt.Errorf(
+			"name %q is already used by an LLMModel in namespace %q; PassthroughModel and "+
+				"LLMModel names must be unique across both kinds because they share the "+
+				"api-keys Secret %q",
+			pm.Name, pm.Namespace, reconcilers.APIKeySecretName(pm.Name),
+		)
+	}
+	// NotFound: no collision. NoMatch: the LLMModel CRD is not installed, so
+	// no LLMModel can exist to collide with. Either way, allow.
+	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+		return nil
+	}
+	return fmt.Errorf("checking for name collision with LLMModel %q: %w", pm.Name, err)
 }
 
 // validateModels requires the CR to route something: a catch-all, declared
