@@ -234,7 +234,7 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 // buildTolerations returns the pod tolerations for a model. User-provided
 // tolerations from model.Spec.Advanced.VLLM.Tolerations are always preserved.
 // When the model requests a GPU, a toleration for the nvidia.com/gpu taint is injected
-// automatically so the pod can land on GPU nodes that NIC taints nvidia.com/gpu=true:NoSchedule. 
+// automatically so the pod can land on GPU nodes that NIC taints nvidia.com/gpu=true:NoSchedule.
 // The injected toleration uses operator: Exists, which matches any taint value.
 func buildTolerations(model *llmv1alpha1.LLMModel) []corev1.Toleration {
 	// Copy to avoid mutating the model spec's underlying slice.
