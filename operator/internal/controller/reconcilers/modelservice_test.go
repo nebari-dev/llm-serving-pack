@@ -172,7 +172,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				gpuQ, ok := limits["nvidia.com/gpu"]
+				gpuQ, ok := limits[nvidiaGPUKey]
 				if !ok {
 					t.Fatal("expected nvidia.com/gpu in resource limits")
 				}
@@ -195,7 +195,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				if _, ok := limits["nvidia.com/gpu"]; ok {
+				if _, ok := limits[nvidiaGPUKey]; ok {
 					t.Error("expected no nvidia.com/gpu in resource limits when gpu.count == 0")
 				}
 			},
@@ -316,7 +316,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
 				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
-					{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists},
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpExists},
 				}
 				return m
 			}(),
@@ -330,7 +330,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if len(tolerations) != 1 {
 					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
 				}
-				if tolerations[0].Key != "nvidia.com/gpu" {
+				if tolerations[0].Key != nvidiaGPUKey {
 					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tolerations[0].Key)
 				}
 			},
@@ -353,7 +353,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
 				}
 				tol := tolerations[0]
-				if tol.Key != "nvidia.com/gpu" {
+				if tol.Key != nvidiaGPUKey {
 					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tol.Key)
 				}
 				if tol.Operator != corev1.TolerationOpExists {
@@ -408,7 +408,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					if tol.Key == "dedicated" {
 						hasUser = true
 					}
-					if tol.Key == "nvidia.com/gpu" && tol.Operator == corev1.TolerationOpExists {
+					if tol.Key == nvidiaGPUKey && tol.Operator == corev1.TolerationOpExists {
 						hasGPU = true
 					}
 				}
@@ -426,7 +426,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				m := defaultModel()
 				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
 				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
-					{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule},
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule},
 				}
 				return m
 			}(),
@@ -879,7 +879,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if _, ok := limits[corev1.ResourceMemory]; !ok {
 					t.Error("expected memory in resource limits")
 				}
-				if _, ok := limits["nvidia.com/gpu"]; !ok {
+				if _, ok := limits[nvidiaGPUKey]; !ok {
 					t.Error("expected nvidia.com/gpu in resource limits")
 				}
 			},

@@ -24,9 +24,11 @@ const (
 	// write to.
 	modelDownloaderUserGID int64 = 65532
 
-	// gpuTaintKey is the taint NIC applies to GPU node groups (nvidia.com/gpu=true:NoSchedule).
-	// Pods that request a GPU must tolerate it to schedule onto those nodes.
-	gpuTaintKey = "nvidia.com/gpu"
+	// nvidiaGPUKey is the NVIDIA GPU identifier, used both as the extended resource
+	// the device plugin advertises (in the container's resource limits) and as the
+	// taint key NIC applies to GPU node groups (nvidia.com/gpu=true:NoSchedule).
+	// Pods that request a GPU must tolerate that taint to schedule onto those nodes.
+	nvidiaGPUKey = "nvidia.com/gpu"
 )
 
 // ModelServiceResources holds the Kubernetes resources for serving an LLMModel.
@@ -221,7 +223,7 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 
 	// Add GPU limit if count > 0
 	if model.Spec.Resources.GPU.Count > 0 {
-		limits["nvidia.com/gpu"] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
+		limits[nvidiaGPUKey] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
 	}
 
 	if len(limits) == 0 {
@@ -244,7 +246,7 @@ func buildTolerations(model *llmv1alpha1.LLMModel) []corev1.Toleration {
 	// already specified a toleration for the GPU taint.
 	if model.Spec.Resources.GPU.Count > 0 && !tolerationsGPUTaint(tolerations) {
 		tolerations = append(tolerations, corev1.Toleration{
-			Key:      gpuTaintKey,
+			Key:      nvidiaGPUKey,
 			Operator: corev1.TolerationOpExists,
 			Effect:   corev1.TaintEffectNoSchedule,
 		})
@@ -258,7 +260,7 @@ func buildTolerations(model *llmv1alpha1.LLMModel) []corev1.Toleration {
 // (tolerate-everything) toleration.
 func tolerationsGPUTaint(tolerations []corev1.Toleration) bool {
 	for _, t := range tolerations {
-		if t.Key == gpuTaintKey || (t.Key == "" && t.Operator == corev1.TolerationOpExists) {
+		if t.Key == nvidiaGPUKey || (t.Key == "" && t.Operator == corev1.TolerationOpExists) {
 			return true
 		}
 	}
