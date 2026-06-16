@@ -132,6 +132,68 @@ var testKeys = []secrets.KeyInfo{
 	},
 }
 
+// --- GET /api/me tests ---
+
+func TestGetMe(t *testing.T) {
+	t.Run("returns identity for authenticated user", func(t *testing.T) {
+		user := &UserInfo{
+			Username: "chuck",
+			Name:     "Chuck Norris",
+			Email:    "chuck@example.com",
+			Groups:   []string{"ml-team", "admins"},
+		}
+		h := newHandlerWithMocks(&mockModelLister{}, &mockKeyManager{})
+		rr := callHandler(t, h, http.MethodGet, "/api/me", nil, user)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d (body: %s)", rr.Code, http.StatusOK, rr.Body.String())
+		}
+
+		var resp struct {
+			Username string   `json:"username"`
+			Name     string   `json:"name"`
+			Email    string   `json:"email"`
+			Groups   []string `json:"groups"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decoding response: %v", err)
+		}
+		if resp.Username != "chuck" || resp.Name != "Chuck Norris" || resp.Email != "chuck@example.com" {
+			t.Errorf("identity mismatch: got %+v", resp)
+		}
+		if len(resp.Groups) != 2 {
+			t.Errorf("groups = %v, want 2 entries", resp.Groups)
+		}
+	})
+
+	t.Run("returns empty (non-null) groups when user has none", func(t *testing.T) {
+		h := newHandlerWithMocks(&mockModelLister{}, &mockKeyManager{})
+		rr := callHandler(t, h, http.MethodGet, "/api/me", nil, &UserInfo{Username: "solo"})
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+		}
+		var resp struct {
+			Groups []string `json:"groups"`
+		}
+		if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+			t.Fatalf("decoding response: %v", err)
+		}
+		if resp.Groups == nil {
+			t.Error("groups should serialize as [], got null")
+		}
+	})
+
+	t.Run("returns 401 when no user in context", func(t *testing.T) {
+		h := newHandlerWithMocks(&mockModelLister{}, &mockKeyManager{})
+		rr := callHandler(t, h, http.MethodGet, "/api/me", nil, nil)
+
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", rr.Code, http.StatusUnauthorized)
+		}
+	})
+}
+
 // --- GET /api/models tests ---
 
 func TestGetModels(t *testing.T) {
