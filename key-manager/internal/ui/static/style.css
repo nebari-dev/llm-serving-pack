@@ -3,8 +3,8 @@
    --------------------------------------------------------------------------- */
 :root {
   /* Color */
-  --color-primary: #8232aa;
-  --color-primary-hover: #6f2a91;
+  --color-primary: #022791;
+  --color-primary-hover: #021f74;
   --color-fg-default: #09090b;
   --color-fg-muted: #71717a;
   --color-fg-muted-strong: #3f3f46;
@@ -477,7 +477,7 @@ body {
 .field input[type="text"]:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgba(130, 50, 170, 0.2);
+  box-shadow: 0 0 0 2px rgba(2, 39, 145, 0.2);
 }
 
 .readonly-input {
