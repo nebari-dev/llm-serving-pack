@@ -42,7 +42,7 @@ func defaultInferencePoolConfig() *config.OperatorConfig {
 		ExternalGatewayName: "external-gw",
 		InternalGatewayName: "internal-gw",
 		OIDCIssuerURL:       "https://oidc.example.com",
-		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
 	}
 }
 
@@ -205,7 +205,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if len(containers) != 1 {
 					t.Fatalf("expected 1 container, got %d", len(containers))
 				}
-				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.1-rc.1" {
+				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0" {
 					t.Errorf("expected EPP image, got %q", containers[0].Image)
 				}
 				if containers[0].Name != testPoolEPPLabel {

@@ -1,4 +1,8 @@
-// Resource specs based on llm-d-modelservice chart v0.4.7
+// Resource specs based on llm-d-modelservice chart v0.4.7. NOTE: the
+// llm-d-modelservice Helm chart was deprecated in llm-d v0.7.0 (final
+// release v0.4.9) in favor of a kustomize-based install. These specs have
+// not been re-verified against the post-deprecation layout; the vLLM
+// serving image is bumped to llm-d-cuda:v0.7.0 (CUDA 13.0.2 runtime).
 package reconcilers
 
 import (

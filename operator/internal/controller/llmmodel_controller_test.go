@@ -47,7 +47,7 @@ func testConfig() *config.OperatorConfig {
 		OIDCIssuerURL:       "https://auth.example.com",
 		OIDCGroupsClaim:     "groups",
 		OIDCAudience:        "",
-		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
 		// Empty matches the post-#59 default. The legacy ReferenceGrant
 		// cleanup branch in reconcileDelete checks for non-empty, so
 		// leaving it empty disables that branch (which is what new

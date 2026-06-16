@@ -1,5 +1,7 @@
-// Resource specs based on GIE inferencepool chart v1.4.0 and the EPP deployment
-// template from llm-d-inference-scheduler v0.6.1-rc.1.
+// Resource specs based on GIE inferencepool chart v1.5.0 and the EPP deployment
+// template from llm-d-inference-scheduler v0.8.0 (llm-d release v0.7.0).
+// The InferencePool API (inference.networking.k8s.io/v1) and the
+// EndpointPickerConfig schema are unchanged from v1.4.0/v0.6.1-rc.1.
 package reconcilers
 
 import (
@@ -21,7 +23,7 @@ import (
 )
 
 const (
-	eppImage          = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.1-rc.1"
+	eppImage          = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
 	eppConfigMountDir = "/etc/epp"
 	eppConfigFileName = "epp-config.yaml"
 	eppConfigVolume   = "epp-config"

@@ -23,7 +23,7 @@ func defaultConfig() *config.OperatorConfig {
 		ExternalGatewayName: "external-gw",
 		InternalGatewayName: "internal-gw",
 		OIDCIssuerURL:       "https://oidc.example.com",
-		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
 	}
 }
 
@@ -153,7 +153,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				containers := result.Deployment.Spec.Template.Spec.Containers
-				if containers[0].Image != "ghcr.io/llm-d/llm-d-cuda:v0.6.0" {
+				if containers[0].Image != "ghcr.io/llm-d/llm-d-cuda:v0.7.0" {
 					t.Errorf("expected default image, got %q", containers[0].Image)
 				}
 			},

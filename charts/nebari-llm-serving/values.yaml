@@ -117,7 +117,10 @@ operator:
 
 defaults:
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
+    # llm-d v0.7.0 image. Ships the CUDA 13.0.2 runtime, which requires
+    # NVIDIA driver branch 580+ on GPU nodes (see README infrastructure
+    # requirements).
+    image: ghcr.io/llm-d/llm-d-cuda:v0.7.0
   storage:
     storageClassName: ""
   monitoring:
