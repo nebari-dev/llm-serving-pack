@@ -45,11 +45,11 @@ spec:
     priority: {{ . }}
     {{- end }}
     {{- with .healthCheck }}
-    # Lets the Nebari landing page actively probe the key-manager and show a
-    # Healthy/Unhealthy tile instead of "Unknown". The landing webapi probes
-    # http://<service>.<namespace>:<port><path>.
+    {{- /* Lets the Nebari landing page actively probe the key-manager so its
+       tile shows Healthy/Unhealthy instead of "Unknown"; the landing webapi
+       probes http://<service>.<namespace>:<port><path>. */}}
     healthCheck:
-      enabled: {{ .enabled }}
+      enabled: {{ .enabled | default false }}
       {{- with .path }}
       path: {{ . | quote }}
       {{- end }}
