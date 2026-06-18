@@ -1,0 +1,46 @@
+name: Docs
+on:
+  push:
+    branches: [main]
+    paths: ['docs/site/**', '.github/workflows/docs.yml']
+  pull_request:
+    paths: ['docs/site/**', '.github/workflows/docs.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: docs-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "stable", cache: false }
+      - uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.159.0"
+          extended: true
+      - id: pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - name: Build
+        run: cd docs/site && hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url || 'https://nebari-dev.github.io/nebari-llm-serving-pack/' }}"
+      - name: Upload artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with: { path: docs/site/public }
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
