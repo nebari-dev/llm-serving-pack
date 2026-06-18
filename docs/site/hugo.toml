@@ -3,7 +3,7 @@ languageCode = "en-us"
 title = "LLM Serving Pack"
 enableGitInfo = true
 
-# TODO: theme pinned to the theme-gap-fill branch; re-pin to main/tag after PR #5 merges.
+# Theme imported as a Hugo Module, pinned in go.mod (currently main HEAD; bump to a release tag when one is cut).
 [module]
   [[module.imports]]
     path = "github.com/nebari-dev/nebari-hugo-theme"
