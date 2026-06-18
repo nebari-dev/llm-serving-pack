@@ -16,7 +16,7 @@ All model loading paths - HuggingFace and OCI - mount the model at `/model-cache
 
 ## HuggingFace (default source)
 
-When `model.source` is `huggingface` (or omitted, since HuggingFace is the default), the operator:
+When `model.source` is `huggingface` (or any value other than `oci`, including an empty string when the field is left unset - the operator treats any non-`oci` source as HuggingFace), the operator:
 
 1. Creates a PVC named `<llmmodel-name>-model-storage` in the same namespace
 2. Adds an init container running `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest`
@@ -168,7 +168,7 @@ spec:
     preload: false
 ```
 
-With `preload: false`, no init container is added and no PVC download step occurs. The volume is still mounted at `/model-cache`; you are responsible for ensuring the model files are present when vLLM starts.
+With `preload: false`, no init container is added and no download step occurs. The PVC (for `storage.type: pvc`) is still created and the volume is still mounted at `/model-cache`; you are responsible for ensuring the model files are present when vLLM starts.
 
 ## Architecture context
 
