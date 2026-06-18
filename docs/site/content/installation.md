@@ -1506,7 +1506,7 @@ deploy. Large models (30GB+) can take 10-20 minutes on typical
 network connections. Check the init container logs:
 
 ```bash
-kubectl logs -n nebari-llm-serving-system <model-pod> -c download-model -f
+kubectl logs -n nebari-llm-serving-system <model-pod> -c model-downloader -f
 ```
 
 If the download fails, the pod will restart and retry. For gated
