@@ -33,7 +33,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: foundational            # adjust to your ArgoCD project
 
   sources:
     # Source 1: LLM serving pack Helm chart
@@ -45,6 +45,9 @@ spec:
         values: |
           platform:
             baseDomain: "your-cluster.example.com"
+            # Gateway names below must match the Envoy Gateways in your cluster.
+            # This example points both endpoints at one shared gateway; the chart
+            # default for the internal gateway is "nebari-internal-gateway".
             gateway:
               external:
                 name: nebari-gateway
