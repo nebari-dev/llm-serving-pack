@@ -1300,18 +1300,18 @@ Expected: `llm` in the groups list.
 1. Open `https://<baseDomain>/` in a browser and log in as the test
    user. You should see an "LLM API Keys" tile on the landing page.
 
-   ![Landing page with LLM API Keys tile](install-production-screenshots/landing-page.png)
+   ![Landing page with LLM API Keys tile](/install-production-screenshots/landing-page.png)
 
 2. Click the tile to open the key-manager UI at
    `https://llm-keys.<baseDomain>/`. The model should appear under
    "Available Models".
 
-   ![Key-manager model picker](install-production-screenshots/key-manager-create.png)
+   ![Key-manager model picker](/install-production-screenshots/key-manager-create.png)
 
 3. Select the model, enter a description, and click "Create Key".
    Copy the `sk-...` value - it will not be shown again.
 
-   ![Key created](install-production-screenshots/key-manager-created.png)
+   ![Key created](/install-production-screenshots/key-manager-created.png)
 
 Verify the key was stored:
 
@@ -1351,7 +1351,7 @@ Log into `https://llm-keys.<baseDomain>/` as `outsider@example.com`.
 The "Available Models" section should be empty - the outsider cannot
 see any models and therefore cannot mint an API key.
 
-![Outsider sees no models](install-production-screenshots/outsider-no-models.png)
+![Outsider sees no models](/install-production-screenshots/outsider-no-models.png)
 
 If the outsider somehow obtains a key or constructs a direct API
 call, the key-manager API returns HTTP 403:
