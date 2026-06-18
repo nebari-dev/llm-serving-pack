@@ -1,3 +1,9 @@
 CLAUDE.md
 docs/superpowers/
 .claude/
+
+# Docs (Docusaurus)
+docs/node_modules/
+docs/build/
+docs/.docusaurus/
+docs/.cache-loader/
