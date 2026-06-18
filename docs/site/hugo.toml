@@ -3,8 +3,7 @@ languageCode = "en-us"
 title = "LLM Serving Pack"
 enableGitInfo = true
 
-# Theme pinned to the theme-gap-fill branch (PR #5). RE-PIN to main/tag after merge:
-#   hugo mod get github.com/nebari-dev/nebari-hugo-theme@main
+# TODO: theme pinned to the theme-gap-fill branch; re-pin to main/tag after PR #5 merges.
 [module]
   [[module.imports]]
     path = "github.com/nebari-dev/nebari-hugo-theme"
