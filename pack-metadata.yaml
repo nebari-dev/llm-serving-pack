@@ -9,4 +9,4 @@ nebariapp_integration: full
 scope:
   standalone-supported: yes
 links:
-  docs: https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/docs/install-production.md
+  docs: https://nebari-dev.github.io/nebari-llm-serving-pack/installation/
