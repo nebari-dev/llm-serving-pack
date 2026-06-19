@@ -2,4 +2,252 @@
 title = "Configuration"
 +++
 
-_Page content added in a later task._
+This page is the authoritative reference for every knob the pack exposes.
+It covers the Helm chart values you set at install time, the `LLMModel` custom resource you create per model, and the `NebariApp` fields the chart uses to wire the key-manager UI into the Nebari platform.
+
+All tables are derived directly from the source files:
+- `charts/nebari-llm-serving/values.yaml` - chart values
+- `charts/nebari-llm-serving/crds/llmmodel-crd.yaml` - CRD schema
+
+See the [Architecture](/architecture/) page for how these pieces fit together, and [Installation](/installation/) for initial setup. The [Quickstart](/quickstart/) shows a minimal working example.
+
+---
+
+## Helm values reference
+
+Pass these with `--set key=value` or in a `values.yaml` override file.
+
+### Platform
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `createNamespace` | `true` | Whether the chart provisions the operator namespace and labels it `nebari.dev/managed=true`. Set to `false` when something else owns the namespace (ArgoCD, Terraform, etc.). |
+| `platform.baseDomain` | `""` | **Required.** Base domain for the Nebari deployment (e.g. `your-cluster.example.com`). |
+| `platform.gateway.external.name` | `nebari-gateway` | Name of the external Envoy Gateway resource. |
+| `platform.gateway.external.namespace` | `envoy-gateway-system` | Namespace of the external Envoy Gateway. |
+| `platform.gateway.internal.name` | `nebari-internal-gateway` | Name of the internal Envoy Gateway resource. |
+| `platform.gateway.internal.namespace` | `envoy-gateway-system` | Namespace of the internal Envoy Gateway. |
+| `platform.gateway.manageSharedListeners` | `true` | When `true`, the operator patches HTTPS listeners for `llm.<baseDomain>` and `llm-internal.<baseDomain>` onto the shared Gateways. Set to `false` if a cluster admin owns the listeners out-of-band. |
+| `platform.tls.clusterIssuer` | `letsencrypt-production` | The cert-manager `ClusterIssuer` used to issue the shared TLS certificate. Override when using a staging issuer. |
+
+### Auth / OIDC
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `auth.oidc.issuerURL` | `""` | OIDC issuer URL. When empty, read from a Secret via `secretKeyRef` (the default Nebari integration path). |
+| `auth.oidc.existingSecret` | `""` | Name of the Secret containing the `issuer-url` key. Defaults to `<release-fullname>-oidc-client` when empty. |
+| `auth.oidc.groupsClaim` | `groups` | JWT claim name used to extract group memberships. |
+| `auth.oidc.audience` | `""` | Expected audience value in JWT tokens. |
+| `auth.oidc.cookiePrefix` | `IdToken` | Cookie name prefix used by the OAuth2 proxy sidecar. |
+
+### Envoy AI Gateway
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `envoyAIGateway.install` | `false` | Install the Envoy AI Gateway. Not yet implemented; reserved for future use. |
+
+### Key Manager
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `keyManager.enabled` | `true` | Deploy the key-manager service. |
+| `keyManager.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Container image repository. |
+| `keyManager.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty, keeping chart and image versions in sync. Override only when testing a specific build. |
+| `keyManager.image.pullPolicy` | `Always` | Image pull policy. |
+| `keyManager.auditInterval` | `5m` | How often the key-manager audits API key usage. |
+| `keyManager.oidcUserinfoURL` | `""` | OIDC userinfo endpoint URL for token validation. |
+| `keyManager.nebariApp.enabled` | `true` | Create the `NebariApp` CR that registers the key-manager UI with the Nebari platform. Set to `false` for standalone installations without a Nebari cluster. |
+| `keyManager.nebariApp.hostname` | `""` | Fully qualified hostname for the key-manager UI. Required when `nebariApp.enabled=true` (e.g. `llm-keys.your-cluster.example.com`). |
+| `keyManager.nebariApp.gateway` | `public` | Which Nebari shared gateway to attach the HTTPRoute to. Valid values: `public` or `internal`. |
+| `keyManager.nebariApp.routing.routes[0].pathPrefix` | `/` | Path prefix for the key-manager UI route. |
+| `keyManager.nebariApp.routing.routes[0].pathType` | `PathPrefix` | Path match type. |
+| `keyManager.nebariApp.auth.provisionClient` | `true` | Create a dedicated Keycloak OIDC client for the UI. |
+| `keyManager.nebariApp.auth.scopes` | `[openid, profile, email, groups]` | OIDC scopes requested during login. |
+| `keyManager.nebariApp.landingPage.enabled` | `true` | Show the key-manager on the Nebari landing page. |
+| `keyManager.nebariApp.landingPage.displayName` | `"LLM API Keys"` | Display name on the landing page tile. |
+| `keyManager.nebariApp.landingPage.description` | `"Manage your personal API keys for LLM inference."` | Tile description. |
+| `keyManager.nebariApp.landingPage.category` | `"Platform"` | Tile category grouping. |
+| `keyManager.nebariApp.landingPage.icon` | `"keycloak"` | Tile icon. One of the built-in keys (`jupyter`, `grafana`, `prometheus`, `keycloak`, `argocd`, `kubernetes`) or a URL to a custom image. |
+| `keyManager.nebariApp.landingPage.priority` | `100` | Sort order on the landing page (lower = higher priority). |
+| `keyManager.nebariApp.landingPage.healthCheck.enabled` | `true` | Enable active health probing for the landing page tile. |
+| `keyManager.nebariApp.landingPage.healthCheck.path` | `/` | Probe path. The key-manager serves its SPA at `/` (HTTP 200, unauthenticated). |
+| `keyManager.nebariApp.landingPage.healthCheck.intervalSeconds` | `30` | Probe interval in seconds. |
+| `keyManager.nebariApp.landingPage.healthCheck.timeoutSeconds` | `5` | Probe timeout in seconds. |
+
+### Operator
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `operator.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | Operator container image repository. |
+| `operator.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty. Override only when testing a specific build. |
+| `operator.image.pullPolicy` | `Always` | Image pull policy. |
+
+### Defaults (cluster-wide fallbacks for LLMModel resources)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `defaults.serving.image` | `ghcr.io/llm-d/llm-d-cuda:v0.6.0` | Default vLLM container image applied to all `LLMModel` resources that do not set `serving.image`. |
+| `defaults.storage.storageClassName` | `""` | Default `storageClassName` for PVC-backed model storage. Empty means use the cluster default storage class. |
+| `defaults.monitoring.enabled` | `true` | Default monitoring (PodMonitor) enablement for all `LLMModel` resources. |
+
+---
+
+## LLMModel CRD reference
+
+`LLMModel` is a namespaced custom resource (`llmmodels.llm.nebari.dev`, group `llm.nebari.dev/v1alpha1`). Each instance deploys one model via llm-d and wires it into the pack's routing and access control.
+
+Required fields: `spec.access`, `spec.model`, `spec.resources`.
+
+### spec.model
+
+Specifies which LLM to serve.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.model.name` | string | Yes | Model identifier (e.g. `mistralai/Devstral-Small-2505`). |
+| `spec.model.source` | string | Yes | Where to load the model from. Enum: `huggingface` or `oci`. |
+| `spec.model.authSecretName` | string | No | Name of a Kubernetes Secret containing `HF_TOKEN`. Required for gated HuggingFace models. |
+| `spec.model.image` | string | No | OCI image containing the model. Used when `source: oci`. |
+| `spec.model.preload` | boolean | No | When `true`, uses an init container to download the model before vLLM starts. |
+| `spec.model.revision` | string | No | HuggingFace commit hash or tag to pin for reproducible deployments. |
+
+### spec.model.storage
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.model.storage.type` | string | No | Volume type. Enum: `pvc` (default) or `emptyDir`. |
+| `spec.model.storage.size` | string | No | Storage size (e.g. `200Gi`). Required when `type: pvc`. |
+| `spec.model.storage.storageClassName` | string | No | Overrides `defaults.storage.storageClassName` from the chart values. |
+
+### spec.resources
+
+Specifies compute requirements. `spec.resources.gpu` is required.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.resources.gpu.count` | integer | Yes | Number of GPUs required per replica. |
+| `spec.resources.gpu.type` | string | Yes | GPU type. Default: `nvidia`. |
+| `spec.resources.requests` | map | No | CPU/memory resource requests (standard Kubernetes quantity map). |
+| `spec.resources.limits` | map | No | CPU/memory resource limits (standard Kubernetes quantity map). |
+
+### spec.access
+
+Controls who can call the model's API.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.access.public` | boolean | Yes | When `true`, all authenticated users can access the model regardless of group membership. |
+| `spec.access.groups` | []string | No | OIDC group names that are allowed access. Ignored when `public: true`. |
+
+### spec.serving
+
+Configures the vLLM serving layer. All fields optional.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `spec.serving.replicas` | integer | `1` | Number of serving replicas. |
+| `spec.serving.image` | string | chart default | Container image for the vLLM server. Overrides `defaults.serving.image`. |
+| `spec.serving.tensorParallelism` | integer | `gpu.count` | Tensor parallelism degree. Defaults to the GPU count when not set. |
+| `spec.serving.dataParallelism` | integer | `1` | Data parallelism degree. |
+| `spec.serving.vllmArgs` | []string | - | Additional CLI arguments passed directly to vLLM. |
+| `spec.serving.monitoring.enabled` | boolean | chart default | Create a `PodMonitor` for Prometheus scraping. Overrides `defaults.monitoring.enabled`. |
+
+### spec.endpoints
+
+Controls which network endpoints are created.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `spec.endpoints.external.enabled` | boolean | `true` | Create the external (API-key-authenticated) endpoint at `llm.<baseDomain>`. |
+| `spec.endpoints.external.subdomain` | string | auto | Override the auto-generated subdomain for the external endpoint. |
+| `spec.endpoints.internal.enabled` | boolean | `true` | Create the internal (JWT-authenticated) endpoint at `llm-internal.<baseDomain>`. |
+
+### spec.advanced
+
+Escape hatches for power users. All fields optional.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `spec.advanced.vllm.nodeSelector` | map | Node selector labels for targeting specific node pools. |
+| `spec.advanced.vllm.tolerations` | []Toleration | Kubernetes tolerations for GPU node taints. |
+| `spec.advanced.vllm.affinity` | Affinity | Full Kubernetes affinity rules for pod scheduling. |
+| `spec.advanced.vllm.extraArgs` | []string | Additional CLI arguments appended after `serving.vllmArgs`. |
+| `spec.advanced.vllm.extraEnv` | []EnvVar | Additional environment variables on the vLLM container (supports `value`, `valueFrom`, `secretKeyRef`, etc.). |
+| `spec.advanced.inferencePool.schedulerConfig` | object | EPP scheduler plugin configuration (free-form, `x-kubernetes-preserve-unknown-fields`). |
+
+### Status fields
+
+The operator writes these fields to `status`; they are read-only.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status.phase` | string | Lifecycle phase: `Pending`, `Downloading`, `Starting`, `Ready`, `Degraded`, or `Error`. |
+| `status.replicas.ready` | integer | Current number of ready replicas. |
+| `status.replicas.desired` | integer | Desired number of replicas. |
+| `status.endpoints.external` | string | Actual external endpoint URL once provisioned. |
+| `status.endpoints.internal` | string | Actual internal endpoint URL once provisioned. |
+| `status.modelSize` | string | Actual model size after download. |
+| `status.conditions` | []Condition | Standard Kubernetes conditions (type, status, reason, message). |
+
+---
+
+## NebariApp fields (key-manager)
+
+The chart renders a `NebariApp` CR (API group `reconcilers.nebari.dev/v1`) when `keyManager.nebariApp.enabled=true`. The `nebari-operator` consumes this CR to provision an HTTPRoute, a cert-manager Certificate, a Keycloak OIDC client, and a landing page tile.
+
+The fields below map directly to the chart values in the [Key Manager](#key-manager) section above.
+
+| NebariApp field | Source value | Description |
+|-----------------|-------------|-------------|
+| `spec.hostname` | `keyManager.nebariApp.hostname` | Fully qualified hostname. Required. |
+| `spec.gateway` | `keyManager.nebariApp.gateway` | `public` or `internal`. |
+| `spec.service.name` | (chart-derived) | Service name for the key-manager backend. |
+| `spec.service.port` | `8080` | Fixed service port. |
+| `spec.routing` | `keyManager.nebariApp.routing` | Passed through verbatim. Without this block the operator sets `RoutingReady=False` and skips HTTPRoute and Certificate provisioning. |
+| `spec.auth.enabled` | `true` (fixed) | Authentication always enabled for the key-manager. |
+| `spec.auth.provider` | `keycloak` (fixed) | Auth provider. |
+| `spec.auth.provisionClient` | `keyManager.nebariApp.auth.provisionClient` | When `true`, creates a dedicated Keycloak client and writes credentials to `<nebariapp-name>-oidc-client` Secret. |
+| `spec.auth.scopes` | `keyManager.nebariApp.auth.scopes` | OIDC scopes requested. |
+| `spec.landingPage.enabled` | `keyManager.nebariApp.landingPage.enabled` | Show tile on Nebari landing page. |
+| `spec.landingPage.displayName` | `keyManager.nebariApp.landingPage.displayName` | Tile display name. Required when `enabled: true`. |
+| `spec.landingPage.description` | `keyManager.nebariApp.landingPage.description` | Tile description. |
+| `spec.landingPage.category` | `keyManager.nebariApp.landingPage.category` | Tile category grouping. |
+| `spec.landingPage.icon` | `keyManager.nebariApp.landingPage.icon` | Tile icon key or URL. |
+| `spec.landingPage.priority` | `keyManager.nebariApp.landingPage.priority` | Sort order. |
+| `spec.landingPage.healthCheck.enabled` | `keyManager.nebariApp.landingPage.healthCheck.enabled` | Enable active health probing. |
+| `spec.landingPage.healthCheck.path` | `keyManager.nebariApp.landingPage.healthCheck.path` | Probe path. |
+| `spec.landingPage.healthCheck.intervalSeconds` | `keyManager.nebariApp.landingPage.healthCheck.intervalSeconds` | Probe interval. |
+| `spec.landingPage.healthCheck.timeoutSeconds` | `keyManager.nebariApp.landingPage.healthCheck.timeoutSeconds` | Probe timeout. |
+
+For the full NebariApp CRD schema, see the [nebari-operator](https://github.com/nebari-dev/nebari-operator) repository.
+
+---
+
+## Minimal LLMModel example
+
+The example below is the smallest valid manifest. See [Quickstart](/quickstart/) for an annotated walkthrough and [Shared Storage](/shared-storage/) for PVC options.
+
+```yaml
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: my-model
+  namespace: llm-serving
+spec:
+  access:
+    public: true
+  model:
+    name: mistralai/Devstral-Small-2505
+    source: huggingface
+    authSecretName: hf-token
+    preload: true
+    storage:
+      type: pvc
+      size: 200Gi
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+  serving:
+    replicas: 1
+```
