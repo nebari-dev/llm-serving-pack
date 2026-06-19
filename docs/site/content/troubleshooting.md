@@ -214,16 +214,18 @@ kubectl delete pod -n envoy-gateway-system \
 Check operator logs for the reconciliation error:
 
 ```bash
-kubectl logs -n nebari-operator-system \
-  deploy/nebari-operator-controller-manager --tail=50
+kubectl logs -n nebari-llm-serving-system \
+  deploy/nebari-llm-serving-operator --tail=50
 ```
+
+(The pack's own operator - `nebari-llm-serving-operator` in `nebari-llm-serving-system` - reconciles LLMModels. This is distinct from the upstream Nebari Operator / NIC in `nebari-operator-system`, which only provisions NebariApps.)
 
 Common operator log errors and their fixes:
 
 - `keycloak: connection refused` or `keycloak: 401` - the operator cannot reach Keycloak. Verify the `KEYCLOAK_URL` environment variable and that the `keycloak` namespace pods are healthy:
 
   ```bash
-  kubectl get deploy -n nebari-operator-system nebari-operator-controller-manager \
+  kubectl get deploy -n nebari-llm-serving-system nebari-llm-serving-operator \
     -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
     | grep KEYCLOAK
   ```
