@@ -29,7 +29,7 @@ jobs:
       - name: Build
         run: cd docs/site && hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url || 'https://nebari-dev.github.io/nebari-llm-serving-pack/' }}"
       - name: Check internal links
-        run: bash scripts/check-links.sh
+        run: SKIP_BUILD=1 bash scripts/check-links.sh
       - name: Upload artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
