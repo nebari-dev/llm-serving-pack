@@ -53,7 +53,7 @@ Each job uses `docker/metadata-action` to derive tags automatically:
 |-----------|------------|
 | Any push | `sha-<short SHA>` |
 | Push to `main` branch | branch name (`main`) and `:latest` |
-| Push of a `v*` tag | semantic version from the tag (e.g. `0.1.0-alpha.9`) |
+| Push of a `v*` tag | semantic version from the tag, `v` prefix preserved (e.g. `v0.1.0-alpha.9`) |
 
 The `latest` tag only applies when building from the default branch. Version tags applied on a `v*` push take the form `v{{version}}` as extracted by `docker/metadata-action`'s semver pattern.
 
