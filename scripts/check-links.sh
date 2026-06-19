@@ -81,6 +81,10 @@ while IFS= read -r -d '' html_file; do
             *) continue ;;
         esac
 
+        # Strip any #fragment before resolving to a file (e.g. /page/#section)
+        url="${url%%#*}"
+        [ -z "$url" ] && continue
+
         target=$(resolve_path "$url")
 
         if [ ! -e "$target" ]; then
@@ -99,6 +103,13 @@ done < <(find "$PUBLIC_DIR" -name "*.html" -print0)
 # ---------------------------------------------------------------------------
 EDIT_BASE=$(grep -m1 'editBase' "$SITE_DIR/hugo.toml" | sed 's/.*= *"\(.*\)"/\1/')
 # e.g. https://github.com/nebari-dev/nebari-llm-serving-pack/edit/main/docs/site/content
+
+# A missing editBase would make every edit-link silently skip (false clean).
+# Treat it as a hard error: the site config is expected to define it.
+if [ -z "$EDIT_BASE" ]; then
+    echo "ERROR: editBase not found in $SITE_DIR/hugo.toml - cannot verify edit-links." >&2
+    exit 1
+fi
 
 BROKEN_EDIT=()
 
