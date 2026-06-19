@@ -173,7 +173,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				gpuQ, ok := limits["nvidia.com/gpu"]
+				gpuQ, ok := limits[nvidiaGPUKey]
 				if !ok {
 					t.Fatal("expected nvidia.com/gpu in resource limits")
 				}
@@ -196,7 +196,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				if _, ok := limits["nvidia.com/gpu"]; ok {
+				if _, ok := limits[nvidiaGPUKey]; ok {
 					t.Error("expected no nvidia.com/gpu in resource limits when gpu.count == 0")
 				}
 			},
@@ -317,7 +317,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
 				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
-					{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists},
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpExists},
 				}
 				return m
 			}(),
@@ -331,8 +331,146 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if len(tolerations) != 1 {
 					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
 				}
-				if tolerations[0].Key != "nvidia.com/gpu" {
+				if tolerations[0].Key != nvidiaGPUKey {
 					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tolerations[0].Key)
+				}
+			},
+		},
+		{
+			name: "GPU toleration auto-injected when gpu.count > 0 and no user tolerations",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
+				}
+				tol := tolerations[0]
+				if tol.Key != nvidiaGPUKey {
+					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tol.Key)
+				}
+				if tol.Operator != corev1.TolerationOpExists {
+					t.Errorf("expected toleration operator Exists, got %q", tol.Operator)
+				}
+				if tol.Effect != corev1.TaintEffectNoSchedule {
+					t.Errorf("expected toleration effect NoSchedule, got %q", tol.Effect)
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT injected when gpu.count == 0",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 0, Type: "nvidia"}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 0 {
+					t.Errorf("expected no tolerations when gpu.count == 0, got %v", tolerations)
+				}
+			},
+		},
+		{
+			name: "GPU toleration auto-injected alongside user tolerations",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "foobar", Effect: corev1.TaintEffectNoSchedule},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 2 {
+					t.Fatalf("expected 2 tolerations (user + auto-injected GPU), got %d", len(tolerations))
+				}
+				var hasUser, hasGPU bool
+				for _, tol := range tolerations {
+					if tol.Key == "dedicated" {
+						hasUser = true
+					}
+					if tol.Key == nvidiaGPUKey && tol.Operator == corev1.TolerationOpExists {
+						hasGPU = true
+					}
+				}
+				if !hasUser {
+					t.Error("expected user-provided 'dedicated' toleration to be preserved")
+				}
+				if !hasGPU {
+					t.Error("expected nvidia.com/gpu toleration to be auto-injected")
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT duplicated when user already tolerates nvidia.com/gpu",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration (user-provided, not duplicated), got %d", len(tolerations))
+				}
+				// The user's toleration should be preserved verbatim, not overridden.
+				if tolerations[0].Operator != corev1.TolerationOpEqual || tolerations[0].Value != "true" {
+					t.Errorf("expected user toleration preserved (Equal/true), got %+v", tolerations[0])
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT injected when user tolerates everything (empty-key Exists)",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Operator: corev1.TolerationOpExists},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration (tolerate-everything, not duplicated), got %d", len(tolerations))
+				}
+				// The empty-key Exists toleration already covers the GPU taint,
+				// so no nvidia.com/gpu toleration should be injected.
+				if tolerations[0].Key != "" || tolerations[0].Operator != corev1.TolerationOpExists {
+					t.Errorf("expected user tolerate-everything toleration preserved (empty key/Exists), got %+v", tolerations[0])
 				}
 			},
 		},
@@ -769,7 +907,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if _, ok := limits[corev1.ResourceMemory]; !ok {
 					t.Error("expected memory in resource limits")
 				}
-				if _, ok := limits["nvidia.com/gpu"]; !ok {
+				if _, ok := limits[nvidiaGPUKey]; !ok {
 					t.Error("expected nvidia.com/gpu in resource limits")
 				}
 			},

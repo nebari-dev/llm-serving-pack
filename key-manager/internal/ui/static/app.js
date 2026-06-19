@@ -30,6 +30,44 @@ function clearFieldError(id) {
   $(id).classList.add('hidden');
 }
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// Dialog controller
+// ---------------------------------------------------------------------------
+function openDialog(id) {
+  $(id).classList.remove('hidden');
+}
+
+function closeDialog(id) {
+  $(id).classList.add('hidden');
+}
+
+// Close buttons (× and Cancel) carry data-close="<dialog-id>".
+document.querySelectorAll('[data-close]').forEach((el) => {
+  el.addEventListener('click', () => closeDialog(el.getAttribute('data-close')));
+});
+
+// Close on overlay click and Escape.
+document.querySelectorAll('.dialog-overlay').forEach((overlay) => {
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.classList.add('hidden');
+  });
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.dialog-overlay:not(.hidden)').forEach((o) => o.classList.add('hidden'));
+    closeAllMenus();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // API helpers
 // ---------------------------------------------------------------------------
@@ -51,73 +89,20 @@ async function apiFetch(method, path, body) {
 }
 
 // ---------------------------------------------------------------------------
-// Models section
+// Models (populate the Create dialog's select only)
 // ---------------------------------------------------------------------------
 async function loadModels() {
   try {
     const data = await apiFetch('GET', '/api/models');
     allModels = data.models || [];
-    renderModels(allModels);
     populateModelSelect(allModels);
   } catch (err) {
-    $('models-loading').classList.add('hidden');
-    $('models-container').classList.remove('hidden');
-    $('models-container').innerHTML = '<p class="field-error">Failed to load models: ' + escapeHtml(err.message) + '</p>';
+    showError('Failed to load models: ' + err.message);
   }
-}
-
-function renderModels(models) {
-  $('models-loading').classList.add('hidden');
-  const container = $('models-container');
-  container.classList.remove('hidden');
-
-  if (models.length === 0) {
-    container.innerHTML = '<p class="empty-state">No models accessible to your account.</p>';
-    return;
-  }
-
-  // Group by namespace
-  const byNs = {};
-  for (const m of models) {
-    const ns = m.Namespace || m.namespace || 'default';
-    if (!byNs[ns]) byNs[ns] = [];
-    byNs[ns].push(m);
-  }
-
-  const grid = document.createElement('div');
-  grid.className = 'models-grid';
-
-  for (const [ns, nsModels] of Object.entries(byNs)) {
-    const group = document.createElement('div');
-    group.className = 'namespace-group';
-
-    const heading = document.createElement('h3');
-    heading.textContent = ns;
-    group.appendChild(heading);
-
-    const list = document.createElement('ul');
-    list.className = 'model-list';
-
-    for (const m of nsModels) {
-      const li = document.createElement('li');
-      const name = m.Name || m.name || '';
-      const isPublic = m.Public || m.public || false;
-      li.className = 'model-tag' + (isPublic ? ' public' : '');
-      li.textContent = name;
-      list.appendChild(li);
-    }
-
-    group.appendChild(list);
-    grid.appendChild(group);
-  }
-
-  container.innerHTML = '';
-  container.appendChild(grid);
 }
 
 function populateModelSelect(models) {
   const sel = $('model-select');
-  // Remove all options except the placeholder
   while (sel.options.length > 1) sel.remove(1);
 
   for (const m of models) {
@@ -131,9 +116,11 @@ function populateModelSelect(models) {
 }
 
 // ---------------------------------------------------------------------------
-// Keys section
+// Keys table
 // ---------------------------------------------------------------------------
 async function loadKeys() {
+  $('keys-loading').classList.remove('hidden');
+  $('keys-container').classList.add('hidden');
   try {
     const data = await apiFetch('GET', '/api/keys');
     renderKeys(data.keys || []);
@@ -150,48 +137,41 @@ function renderKeys(keys) {
   container.classList.remove('hidden');
 
   if (keys.length === 0) {
-    container.innerHTML = '<p class="empty-state">No API keys yet. Create one above.</p>';
+    container.innerHTML = '<p class="empty-state">No API keys yet.</p>';
     return;
   }
 
   const table = document.createElement('table');
+  table.className = 'keys-table';
   table.innerHTML = `
     <thead>
       <tr>
+        <th>Name / Description</th>
         <th>Client ID</th>
         <th>Model</th>
-        <th>Namespace</th>
-        <th>Description</th>
         <th>Created</th>
-        <th>Action</th>
+        <th class="cell-action">Action</th>
       </tr>
     </thead>
   `;
 
   const tbody = document.createElement('tbody');
   for (const k of keys) {
-    const tr = document.createElement('tr');
     const clientId = k.clientId || '';
     const modelName = k.modelName || '';
     const ns = k.namespace || '';
     const desc = k.description || '';
-    const created = k.createdAt ? new Date(k.createdAt).toLocaleDateString() : '';
+    const created = k.createdAt ? formatDate(k.createdAt) : '—';
 
+    const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><code>${escapeHtml(clientId)}</code></td>
+      <td class="cell-name">${escapeHtml(desc || '—')}</td>
+      <td class="cell-mono">${escapeHtml(clientId)}</td>
       <td>${escapeHtml(modelName)}</td>
-      <td>${escapeHtml(ns)}</td>
-      <td>${escapeHtml(desc)}</td>
-      <td>${escapeHtml(created)}</td>
-      <td></td>
+      <td class="cell-muted">${escapeHtml(created)}</td>
+      <td class="cell-action"></td>
     `;
-
-    const revokeBtn = document.createElement('button');
-    revokeBtn.className = 'btn-danger';
-    revokeBtn.textContent = 'Revoke';
-    revokeBtn.addEventListener('click', () => revokeKey(ns, modelName, clientId, tr));
-    tr.cells[5].appendChild(revokeBtn);
-
+    tr.cells[4].appendChild(buildActionMenu({ ns, modelName, clientId, desc }));
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -200,26 +180,79 @@ function renderKeys(keys) {
   container.appendChild(table);
 }
 
-async function revokeKey(namespace, modelName, clientId, rowEl) {
-  if (!confirm(`Revoke key "${clientId}" for model "${modelName}"? This cannot be undone.`)) {
-    return;
-  }
-  try {
-    await apiFetch('DELETE', `/api/keys/${encodeURIComponent(namespace)}/${encodeURIComponent(modelName)}/${encodeURIComponent(clientId)}`);
-    rowEl.remove();
-    // If the table body is now empty, re-render the empty state
-    const tbody = document.querySelector('#keys-container tbody');
-    if (tbody && tbody.rows.length === 0) {
-      $('keys-container').innerHTML = '<p class="empty-state">No API keys yet. Create one above.</p>';
-    }
-  } catch (err) {
-    showError('Failed to revoke key: ' + err.message);
-  }
+function formatDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 // ---------------------------------------------------------------------------
-// Create key form
+// Row action menu (kebab dropdown)
 // ---------------------------------------------------------------------------
+function closeAllMenus() {
+  document.querySelectorAll('.menu').forEach((m) => m.remove());
+}
+
+function buildActionMenu(key) {
+  const wrap = document.createElement('div');
+  wrap.className = 'menu-wrap';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-icon';
+  btn.setAttribute('aria-label', 'Key actions');
+  btn.innerHTML = `
+    <svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>
+    </svg>
+  `;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = wrap.querySelector('.menu');
+    closeAllMenus();
+    if (!isOpen) wrap.appendChild(buildMenu(key));
+  });
+
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+function buildMenu(key) {
+  const menu = document.createElement('div');
+  menu.className = 'menu';
+  menu.innerHTML = '<div class="menu-label">Danger</div>';
+
+  const revoke = document.createElement('button');
+  revoke.type = 'button';
+  revoke.className = 'menu-item destructive';
+  revoke.innerHTML = `
+    <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    Revoke
+  `;
+  revoke.addEventListener('click', () => {
+    closeAllMenus();
+    openRevokeDialog(key);
+  });
+
+  menu.appendChild(revoke);
+  return menu;
+}
+
+// Close any open menu when clicking elsewhere.
+document.addEventListener('click', closeAllMenus);
+
+// ---------------------------------------------------------------------------
+// Create key flow
+// ---------------------------------------------------------------------------
+$('create-key-btn').addEventListener('click', () => {
+  clearFieldError('create-error');
+  $('model-select').value = '';
+  $('description-input').value = '';
+  openDialog('create-dialog');
+});
+
 $('create-key-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   clearFieldError('create-error');
@@ -233,78 +266,157 @@ $('create-key-form').addEventListener('submit', async (e) => {
     return;
   }
 
-  const btn = $('create-btn');
+  const btn = $('create-submit-btn');
   btn.disabled = true;
-  btn.textContent = 'Creating...';
+  btn.textContent = 'Creating…';
 
   try {
     const result = await apiFetch('POST', '/api/keys', { modelName, description });
-    showKeyModal(result.apiKey, result.clientId);
-    // Reload the keys list after creating
-    $('keys-loading').classList.remove('hidden');
-    $('keys-container').classList.add('hidden');
+    closeDialog('create-dialog');
+    showCreatedDialog(result.apiKey, result.clientId);
     loadKeys();
-    // Reset form
-    $('model-select').value = '';
-    $('description-input').value = '';
   } catch (err) {
     showFieldError('create-error', 'Failed to create key: ' + err.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Create Key';
+    btn.textContent = 'Create';
   }
 });
 
 // ---------------------------------------------------------------------------
-// Key modal
+// API Key Created dialog
 // ---------------------------------------------------------------------------
-function showKeyModal(apiKey, clientId) {
-  $('modal-key-value').textContent = apiKey;
-  $('modal-client-id').textContent = 'Client ID: ' + clientId;
-  $('key-modal').classList.remove('hidden');
+function showCreatedDialog(apiKey, clientId) {
+  $('created-client-id').value = clientId;
+  $('created-api-key').value = apiKey;
+  $('copy-btn').textContent = 'Copy';
+  openDialog('created-dialog');
 }
 
 $('copy-btn').addEventListener('click', async () => {
-  const key = $('modal-key-value').textContent;
+  const key = $('created-api-key').value;
   try {
     await navigator.clipboard.writeText(key);
     $('copy-btn').textContent = 'Copied!';
     setTimeout(() => { $('copy-btn').textContent = 'Copy'; }, 2000);
   } catch {
-    // Fallback: select the text
-    const range = document.createRange();
-    range.selectNode($('modal-key-value'));
-    window.getSelection().removeAllRanges();
-    window.getSelection().addRange(range);
+    $('created-api-key').select();
   }
 });
 
-$('modal-close-btn').addEventListener('click', () => {
-  $('key-modal').classList.add('hidden');
-  $('modal-key-value').textContent = '';
+$('download-btn').addEventListener('click', () => {
+  const clientId = $('created-client-id').value;
+  const apiKey = $('created-api-key').value;
+  const contents = `Client ID: ${clientId}\nAPI Key: ${apiKey}\n`;
+  const blob = new Blob([contents], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${clientId || 'api-key'}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 });
 
-// Close modal on overlay click
-$('key-modal').addEventListener('click', (e) => {
-  if (e.target === $('key-modal')) {
-    $('key-modal').classList.add('hidden');
-    $('modal-key-value').textContent = '';
-  }
+$('created-done-btn').addEventListener('click', () => {
+  closeDialog('created-dialog');
+  $('created-client-id').value = '';
+  $('created-api-key').value = '';
 });
 
 // ---------------------------------------------------------------------------
-// Utility
+// Revoke flow
 // ---------------------------------------------------------------------------
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+let pendingRevoke = null;
+
+function openRevokeDialog(key) {
+  pendingRevoke = key;
+  const name = key.desc || key.clientId;
+  $('revoke-message').textContent =
+    `This permanently disables "${name}". Any application using this key will immediately lose access. This can't be undone.`;
+  openDialog('revoke-dialog');
 }
+
+$('revoke-confirm-btn').addEventListener('click', async () => {
+  if (!pendingRevoke) return;
+  const { ns, modelName, clientId } = pendingRevoke;
+  const btn = $('revoke-confirm-btn');
+  btn.disabled = true;
+  try {
+    await apiFetch('DELETE', `/api/keys/${encodeURIComponent(ns)}/${encodeURIComponent(modelName)}/${encodeURIComponent(clientId)}`);
+    closeDialog('revoke-dialog');
+    pendingRevoke = null;
+    loadKeys();
+  } catch (err) {
+    closeDialog('revoke-dialog');
+    showError('Failed to revoke key: ' + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Account menu
+// ---------------------------------------------------------------------------
+function userInitials(name, email) {
+  if (name) {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  }
+  if (email) return email.slice(0, 2).toUpperCase();
+  return 'U';
+}
+
+async function loadMe() {
+  try {
+    const me = await apiFetch('GET', '/api/me');
+    const displayName = me.name || me.username || me.email || 'Account';
+    $('account-avatar').textContent = userInitials(me.name || me.username, me.email);
+    $('account-name').textContent = displayName;
+    $('account-menu-name').textContent = me.name || me.username || 'Signed in';
+    const emailEl = $('account-menu-email');
+    if (me.email) {
+      emailEl.textContent = me.email;
+      emailEl.classList.remove('hidden');
+    } else {
+      emailEl.classList.add('hidden');
+    }
+  } catch (err) {
+    // Non-fatal: leave the default "Account" label in place.
+    console.error('failed to load account info:', err);
+  }
+}
+
+function closeAccountMenu() {
+  $('account-menu').classList.add('hidden');
+  $('account-btn').setAttribute('aria-expanded', 'false');
+}
+
+$('account-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeAllMenus();
+  const menu = $('account-menu');
+  const isOpen = !menu.classList.contains('hidden');
+  if (isOpen) {
+    closeAccountMenu();
+  } else {
+    menu.classList.remove('hidden');
+    $('account-btn').setAttribute('aria-expanded', 'true');
+  }
+});
+
+$('signout-btn').addEventListener('click', () => {
+  window.location.href = '/logout';
+});
+
+// Close the account menu when clicking elsewhere.
+document.addEventListener('click', closeAccountMenu);
 
 // ---------------------------------------------------------------------------
 // Initialise
 // ---------------------------------------------------------------------------
+loadMe();
 loadModels();
 loadKeys();

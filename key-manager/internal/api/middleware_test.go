@@ -242,6 +242,46 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 }
 
+func TestParseJWTExtractsNameAndEmail(t *testing.T) {
+	token := makeTestJWT(map[string]interface{}{
+		"preferred_username": "chuck",
+		"name":               "Chuck Norris",
+		"email":              "chuck@example.com",
+		"groups":             []string{"llm"},
+	})
+
+	user, err := parseJWT(token, "groups")
+	if err != nil {
+		t.Fatalf("parseJWT returned error: %v", err)
+	}
+	if user.Username != "chuck" {
+		t.Errorf("username: got %q, want %q", user.Username, "chuck")
+	}
+	if user.Name != "Chuck Norris" {
+		t.Errorf("name: got %q, want %q", user.Name, "Chuck Norris")
+	}
+	if user.Email != "chuck@example.com" {
+		t.Errorf("email: got %q, want %q", user.Email, "chuck@example.com")
+	}
+}
+
+func TestParseJWTMissingNameAndEmailAreEmpty(t *testing.T) {
+	token := makeTestJWT(map[string]interface{}{
+		"preferred_username": "eve",
+	})
+
+	user, err := parseJWT(token, "groups")
+	if err != nil {
+		t.Fatalf("parseJWT returned error: %v", err)
+	}
+	if user.Name != "" {
+		t.Errorf("name: got %q, want empty", user.Name)
+	}
+	if user.Email != "" {
+		t.Errorf("email: got %q, want empty", user.Email)
+	}
+}
+
 func TestUserFromContextReturnsFalseWhenNoUserSet(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	user, ok := UserFromContext(req.Context())

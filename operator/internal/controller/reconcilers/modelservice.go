@@ -16,12 +16,20 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
-// modelDownloaderUserGID matches the uid/gid of the `nonroot` user in the
-// distroless base image used for the model-downloader init container
-// (gcr.io/distroless/cc-debian12:nonroot). Setting fsGroup to this value lets
-// kubelet chown PVC-backed model storage to a group the nonroot user can
-// write to.
-const modelDownloaderUserGID int64 = 65532
+const (
+	// modelDownloaderUserGID matches the uid/gid of the `nonroot` user in the
+	// distroless base image used for the model-downloader init container
+	// (gcr.io/distroless/cc-debian12:nonroot). Setting fsGroup to this value lets
+	// kubelet chown PVC-backed model storage to a group the nonroot user can
+	// write to.
+	modelDownloaderUserGID int64 = 65532
+
+	// nvidiaGPUKey is the NVIDIA GPU identifier, used both as the extended resource
+	// the device plugin advertises (in the container's resource limits) and as the
+	// taint key NIC applies to GPU node groups (nvidia.com/gpu=true:NoSchedule).
+	// Pods that request a GPU must tolerate that taint to schedule onto those nodes.
+	nvidiaGPUKey = "nvidia.com/gpu"
+)
 
 // shmVolumeName is the memory-backed emptyDir mounted at /dev/shm in the vllm
 // container. Kubernetes gives pods a 64Mi /dev/shm by default, which is far
@@ -88,7 +96,7 @@ func buildDeployment(
 		ServiceAccountName: saName,
 		Containers:         []corev1.Container{container},
 		Volumes:            volumes,
-		Tolerations:        model.Spec.Advanced.VLLM.Tolerations,
+		Tolerations:        buildTolerations(model),
 		NodeSelector:       model.Spec.Advanced.VLLM.NodeSelector,
 		Affinity:           model.Spec.Advanced.VLLM.Affinity,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -265,7 +273,7 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 
 	// Add GPU limit if count > 0
 	if model.Spec.Resources.GPU.Count > 0 {
-		limits["nvidia.com/gpu"] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
+		limits[nvidiaGPUKey] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
 	}
 
 	if len(limits) == 0 {
@@ -273,6 +281,40 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 	}
 
 	return limits
+}
+
+// buildTolerations returns the pod tolerations for a model. User-provided
+// tolerations from model.Spec.Advanced.VLLM.Tolerations are always preserved.
+// When the model requests a GPU, a toleration for the nvidia.com/gpu taint is injected
+// automatically so the pod can land on GPU nodes that NIC taints nvidia.com/gpu=true:NoSchedule.
+// The injected toleration uses operator: Exists, which matches any taint value.
+func buildTolerations(model *llmv1alpha1.LLMModel) []corev1.Toleration {
+	// Copy to avoid mutating the model spec's underlying slice.
+	tolerations := append([]corev1.Toleration(nil), model.Spec.Advanced.VLLM.Tolerations...)
+
+	// Only inject for GPU-requesting workloads, and only if the user hasn't
+	// already specified a toleration for the GPU taint.
+	if model.Spec.Resources.GPU.Count > 0 && !tolerationsGPUTaint(tolerations) {
+		tolerations = append(tolerations, corev1.Toleration{
+			Key:      nvidiaGPUKey,
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		})
+	}
+
+	return tolerations
+}
+
+// tolerationsGPUTaint reports whether the given tolerations already cover the
+// nvidia.com/gpu taint, either via an explicit key match or an empty-key
+// (tolerate-everything) toleration.
+func tolerationsGPUTaint(tolerations []corev1.Toleration) bool {
+	for _, t := range tolerations {
+		if t.Key == nvidiaGPUKey || (t.Key == "" && t.Operator == corev1.TolerationOpExists) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildService(model *llmv1alpha1.LLMModel, labels map[string]string) *corev1.Service {

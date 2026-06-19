@@ -114,6 +114,17 @@ keyManager:
       # keycloak, argocd, kubernetes) or a URL to a custom image.
       icon: "keycloak"
       priority: 100
+      # healthCheck - lets the Nebari landing page actively probe the
+      # key-manager so its tile shows Healthy/Unhealthy instead of "Unknown".
+      # The landing webapi probes http://<service>.<namespace>:<port><path>;
+      # the key-manager serves its SPA at "/" (HTTP 200, unauthenticated) while
+      # /api/* is auth-gated, so "/" is the correct probe path. port defaults to
+      # the service port (8080) when omitted.
+      healthCheck:
+        enabled: true
+        path: /
+        intervalSeconds: 30
+        timeoutSeconds: 5
 
 operator:
   image:

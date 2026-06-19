@@ -214,7 +214,10 @@ type VLLMAdvancedSpec struct {
 	// extraEnv are additional environment variables on the vLLM container
 	// +optional
 	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
-	// tolerations for GPU node scheduling
+	// Tolerations are added to the serving pod. When the model requests a GPU,
+	// the operator additionally injects a toleration for the nvidia.com/gpu taint
+	// (operator: Exists, effect: NoSchedule) so the pod can schedule onto tainted
+	// GPU nodes. Specify a toleration with key nvidia.com/gpu here to override it.
 	// +optional
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 	// nodeSelector for targeting specific node pools
