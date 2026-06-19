@@ -447,6 +447,33 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name: "GPU toleration NOT injected when user tolerates everything (empty-key Exists)",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Operator: corev1.TolerationOpExists},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration (tolerate-everything, not duplicated), got %d", len(tolerations))
+				}
+				// The empty-key Exists toleration already covers the GPU taint,
+				// so no nvidia.com/gpu toleration should be injected.
+				if tolerations[0].Key != "" || tolerations[0].Operator != corev1.TolerationOpExists {
+					t.Errorf("expected user tolerate-everything toleration preserved (empty key/Exists), got %+v", tolerations[0])
+				}
+			},
+		},
+		{
 			name: "Advanced nodeSelector on pod spec",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
