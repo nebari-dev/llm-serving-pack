@@ -167,7 +167,7 @@ All models on the cluster share one hostname pair. Clients select a model via th
 
 ### External access (API key)
 
-Generate a key via the key manager UI (`https://llm.<baseDomain>/key-manager`), then:
+Generate a key via the key manager UI, served at the hostname you set in `keyManager.nebariApp.hostname` (e.g. `https://keys.llm.<baseDomain>/`). Then:
 
 ```bash
 curl https://llm.your-cluster.example.com/v1/chat/completions \

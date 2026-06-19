@@ -8,8 +8,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  pages: write
-  id-token: write
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -30,6 +28,8 @@ jobs:
         uses: actions/configure-pages@v5
       - name: Build
         run: cd docs/site && hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url || 'https://nebari-dev.github.io/nebari-llm-serving-pack/' }}"
+      - name: Check internal links
+        run: bash scripts/check-links.sh
       - name: Upload artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
@@ -38,6 +38,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
