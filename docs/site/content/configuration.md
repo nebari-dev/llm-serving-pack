@@ -136,8 +136,10 @@ Controls who can call the model's API.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `spec.access.public` | boolean | Yes | When `true`, all authenticated users can access the model regardless of group membership. |
+| `spec.access.public` | boolean | No (defaults `false`) | When `true`, all authenticated users can access the model regardless of group membership. |
 | `spec.access.groups` | []string | No | OIDC group names that are allowed access. Ignored when `public: true`. |
+
+> The `spec.access` object itself is required, but neither `public` nor `groups` is individually required by the schema. Set `public: true` or list `groups` (or both) - otherwise no one but cluster admins can reach the model.
 
 ### spec.serving
 
