@@ -8,15 +8,15 @@ For a full production-grade setup (air-gapped clusters, HuggingFace token secret
 
 ## Prerequisites
 
-- Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
-- [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
-- NVIDIA GPU Operator installed (auto-discovers GPU nodes). **Note**: nebari-infrastructure-core does not install this automatically yet - see [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until then, install it manually via ArgoCD (see [`examples/nvidia-gpu-operator.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/nvidia-gpu-operator.yaml)).
-- **Envoy Gateway** configured for AI Gateway integration - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. Ready-to-apply example: [`examples/envoy-gateway.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/envoy-gateway.yaml). See [Installation](/installation/) for full wiring details.
-- **Envoy AI Gateway** v0.5.0+ installed. **Note**: the `envoyAIGateway.install` chart flag is not yet implemented ([#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44)). Install manually via ArgoCD (see [`examples/envoy-ai-gateway.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/envoy-ai-gateway.yaml)).
-- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (InferencePool / InferenceModel CRDs)
-- A cert-manager `ClusterIssuer` for the shared TLS certificate (default name: `letsencrypt-production`; override with `platform.tls.clusterIssuer`)
-- DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` pointing at the shared Gateway load balancer
-- A StorageClass that can provision PVCs large enough for your models (EFS, EBS gp3, or equivalent)
+- Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed ([Installation &sect;1](/installation/#1-what-this-runbook-assumes))
+- [nebari-operator](https://github.com/nebari-dev/nebari-operator) running ([Installation &sect;2.7](/installation/#27-confirm-the-nebari-operator-has-the-expected-keycloak-env-vars))
+- NVIDIA GPU Operator installed (auto-discovers GPU nodes). **Note**: nebari-infrastructure-core does not install this automatically yet - see [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until then, install it manually via ArgoCD (see [`examples/nvidia-gpu-operator.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/nvidia-gpu-operator.yaml)). ([Installation &sect;3](/installation/#3-install-nvidia-gpu-operator))
+- **Envoy Gateway** configured for AI Gateway integration - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. Ready-to-apply example: [`examples/envoy-gateway.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/envoy-gateway.yaml). ([Installation &sect;6](/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for full wiring details)
+- **Envoy AI Gateway** v0.5.0+ installed. **Note**: the `envoyAIGateway.install` chart flag is not yet implemented ([#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44)). Install manually via ArgoCD (see [`examples/envoy-ai-gateway.yaml`](https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/examples/envoy-ai-gateway.yaml)). ([Installation &sect;5](/installation/#5-install-the-envoy-ai-gateway-controller))
+- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (InferencePool / InferenceModel CRDs) ([Installation &sect;4](/installation/#4-install-ai-gateway-and-inference-extension-crds))
+- A cert-manager `ClusterIssuer` for the shared TLS certificate (default name: `letsencrypt-production`; override with `platform.tls.clusterIssuer`) ([Installation &sect;2.4](/installation/#24-confirm-the-cluster-issuer-is-ready))
+- DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` pointing at the shared Gateway load balancer ([Installation &sect;2.3](/installation/#23-confirm-dns-resolves-to-the-gateway-lb))
+- A StorageClass that can provision PVCs large enough for your models (EFS, EBS gp3, or equivalent) ([Installation &sect;1](/installation/#1-what-this-runbook-assumes); [sizing guidance](/shared-storage/))
 
 ## Deploy the pack
 
