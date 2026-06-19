@@ -15,11 +15,21 @@ PUBLIC_DIR="$SITE_DIR/public"
 CONTENT_DIR="$SITE_DIR/content"
 
 # ---------------------------------------------------------------------------
-# 1. Build the site
+# 1. Build the site (skip with SKIP_BUILD=1 to check an existing public/ -
+#    e.g. in CI right after the workflow's own build step, so we validate the
+#    exact artifact that gets deployed instead of rebuilding it).
 # ---------------------------------------------------------------------------
-echo "Building site..."
-(cd "$SITE_DIR" && hugo --minify --quiet)
-echo "Build complete."
+if [ -n "${SKIP_BUILD:-}" ]; then
+    if [ ! -d "$PUBLIC_DIR" ]; then
+        echo "ERROR: SKIP_BUILD set but $PUBLIC_DIR does not exist - build the site first." >&2
+        exit 1
+    fi
+    echo "SKIP_BUILD set - checking existing $PUBLIC_DIR."
+else
+    echo "Building site..."
+    (cd "$SITE_DIR" && hugo --minify --quiet)
+    echo "Build complete."
+fi
 
 # ---------------------------------------------------------------------------
 # Derive subpath prefix from baseURL (e.g. /nebari-llm-serving-pack)
