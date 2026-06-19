@@ -1175,7 +1175,11 @@ spec:
                         description: nodeSelector for targeting specific node pools
                         type: object
                       tolerations:
-                        description: tolerations for GPU node scheduling
+                        description: |-
+                          Tolerations are added to the serving pod. When the model requests a GPU,
+                          the operator additionally injects a toleration for the nvidia.com/gpu taint
+                          (operator: Exists, effect: NoSchedule) so the pod can schedule onto tainted
+                          GPU nodes. Specify a toleration with key nvidia.com/gpu here to override it.
                         items:
                           description: |-
                             The pod this Toleration is attached to tolerates any taint that matches
