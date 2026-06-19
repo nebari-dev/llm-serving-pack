@@ -283,7 +283,7 @@ cd key-manager && go test ./...
 
 ## Known Limitations
 
-This pack is in beta (v0.1). The following limitations apply:
+This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations apply:
 
 - **Single-namespace model:** All LLMModels must be in the operator's own namespace. Per-team isolation requires running separate pack installs (one namespace per team). This is a hard constraint imposed by Envoy Gateway's `apiKeyAuth`, which does not support cross-namespace Secret references.
 - **API keys are not continuously tied to group membership.** Keys are issued based on the user's OIDC groups at creation time. If a user later loses group access, existing keys continue to work until the periodic audit runs (default interval: 5 minutes). This is eventual consistency, not real-time revocation.
