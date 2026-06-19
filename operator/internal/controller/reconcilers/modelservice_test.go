@@ -3,6 +3,7 @@ package reconcilers
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -955,6 +956,98 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name:    "deployment strategy is Recreate so GPU-holding pods are torn down before replacements schedule",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				strategy := result.Deployment.Spec.Strategy
+				if strategy.Type != appsv1.RecreateDeploymentStrategyType {
+					t.Errorf("expected deployment strategy %q, got %q", appsv1.RecreateDeploymentStrategyType, strategy.Type)
+				}
+			},
+		},
+		{
+			name: "updateStrategy RollingUpdate opts into rolling updates",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Serving.UpdateStrategy = llmv1alpha1.UpdateStrategyRollingUpdate
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				strategy := result.Deployment.Spec.Strategy
+				if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+					t.Errorf("expected deployment strategy %q, got %q", appsv1.RollingUpdateDeploymentStrategyType, strategy.Type)
+				}
+			},
+		},
+		{
+			name: "memory-backed /dev/shm volume capped at the memory limit",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.Limits = corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse("32Gi"),
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				shm := findVolume(t, result.Deployment.Spec.Template.Spec.Volumes, shmVolumeName)
+				if shm.EmptyDir == nil {
+					t.Fatal("expected shm volume to be an emptyDir")
+				}
+				if shm.EmptyDir.Medium != corev1.StorageMediumMemory {
+					t.Errorf("expected shm emptyDir medium %q, got %q", corev1.StorageMediumMemory, shm.EmptyDir.Medium)
+				}
+				if shm.EmptyDir.SizeLimit == nil {
+					t.Fatal("expected shm sizeLimit to be set when a memory limit exists")
+				}
+				if shm.EmptyDir.SizeLimit.String() != "32Gi" {
+					t.Errorf("expected shm sizeLimit 32Gi, got %s", shm.EmptyDir.SizeLimit.String())
+				}
+				mounts := result.Deployment.Spec.Template.Spec.Containers[0].VolumeMounts
+				foundMount := false
+				for _, m := range mounts {
+					if m.Name == shmVolumeName && m.MountPath == shmMountPath {
+						foundMount = true
+					}
+				}
+				if !foundMount {
+					t.Errorf("expected vllm container to mount %q at %q", shmVolumeName, shmMountPath)
+				}
+			},
+		},
+		{
+			name:    "/dev/shm volume uncapped when no memory limit is set",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				shm := findVolume(t, result.Deployment.Spec.Template.Spec.Volumes, shmVolumeName)
+				if shm.EmptyDir == nil {
+					t.Fatal("expected shm volume to be an emptyDir")
+				}
+				if shm.EmptyDir.SizeLimit != nil {
+					t.Errorf("expected no shm sizeLimit without a memory limit, got %s", shm.EmptyDir.SizeLimit.String())
+				}
+			},
+		},
+		{
 			name:    "pod securityContext sets fsGroup so model-downloader nonroot user can write to PVC",
 			model:   defaultModel(),
 			storage: defaultStorage(),
@@ -990,6 +1083,18 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			tt.check(t, result, err)
 		})
 	}
+}
+
+// findVolume returns the named volume from the pod spec, failing the test if absent.
+func findVolume(t *testing.T, volumes []corev1.Volume, name string) corev1.Volume {
+	t.Helper()
+	for _, v := range volumes {
+		if v.Name == name {
+			return v
+		}
+	}
+	t.Fatalf("expected volume %q in pod spec, got %v", name, volumes)
+	return corev1.Volume{}
 }
 
 // assertArgValue checks that args contains "--flag" followed by "value".

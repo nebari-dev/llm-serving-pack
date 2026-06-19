@@ -50,6 +50,8 @@ spec:
               value: {{ .Values.defaults.storage.storageClassName | quote }}
             - name: LLM_CLUSTER_ISSUER_NAME
               value: {{ .Values.platform.tls.clusterIssuer | quote }}
+            - name: LLM_TLS_SECRET_NAME
+              value: {{ .Values.platform.tls.secretName | default "" | quote }}
             - name: LLM_MANAGE_SHARED_LISTENERS
               value: {{ .Values.platform.gateway.manageSharedListeners | quote }}
             - name: ENABLE_WEBHOOKS
