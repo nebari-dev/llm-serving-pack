@@ -288,12 +288,12 @@ cd key-manager && go test ./...
 This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations apply:
 
 - **Single-namespace model:** All LLMModels must be in the operator's own namespace. Per-team isolation requires running separate pack installs (one namespace per team). This is a hard constraint imposed by Envoy Gateway's `apiKeyAuth`, which does not support cross-namespace Secret references.
-- **API keys are not continuously tied to group membership.** Keys are issued based on the user's OIDC groups at creation time. If a user later loses group access, existing keys continue to work until the periodic audit runs (default interval: 5 minutes). This is eventual consistency, not real-time revocation.
+- **API keys are not continuously tied to group membership.** Keys are issued based on the user's OIDC groups at creation time. If a user later loses group access, existing keys continue to work. The periodic audit that revokes such keys (default interval: 5 minutes) is **off by default** - it only runs when `keyManager.oidcUserinfoURL` is configured, which ships empty. Without it, keys are never revoked on group change. Even when enabled, this is eventual consistency, not real-time revocation.
 - **JWKS path is Keycloak-specific.** The internal endpoint's JWT SecurityPolicy constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`. Non-Keycloak OIDC providers will not work out of the box. Tracked in [#61](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/61).
 - **NVIDIA GPUs only.** AMD and Intel accelerators are not supported in v0.1.
 - **No scale-to-zero.** Idle model pods are not scaled down automatically.
 - **No per-key rate limiting or token quotas.** Rate limiting is applied at the model level via Envoy AI Gateway, not per individual API key.
-- **No API key expiration.** Keys do not expire on a schedule; revocation requires either manual deletion or the audit losing group access.
+- **No API key expiration.** Keys do not expire on a schedule; revocation requires either manual deletion or - only when the audit is enabled via `keyManager.oidcUserinfoURL` - the audit detecting lost group access.
 - **No team-level shared API keys.** Each key is tied to an individual user's identity.
 - **OCI model loading uses init-container copy.** Kubernetes image volumes (alpha/beta) are not used; every pod start copies files from the OCI image to a shared emptyDir. On pods with `storage.type: emptyDir` and `preload: true`, every restart triggers a full re-download.
 - **API key and metadata storage is limited to ~1 MiB per model** (Kubernetes Secret/ConfigMap size limit). This supports several thousand keys per model; it is a known scaling ceiling for v0.1.

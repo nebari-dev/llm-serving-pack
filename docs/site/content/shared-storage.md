@@ -20,25 +20,22 @@ When `model.source` is `huggingface` (or any value other than `oci`, including a
 
 1. Creates a PVC named `<llmmodel-name>-model-storage` in the same namespace
 2. Adds an init container running `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest`
-3. The init container runs `huggingface-cli download <model-name> --local-dir /model-cache`
+3. The init container runs `hf download <model-name> --local-dir /model-cache`
 4. Mounts the PVC at `/model-cache` in both the init container and the vLLM container
 
 The `model-downloader` image is a thin wrapper around the official `huggingface_hub` CLI. It passes all arguments directly to `hf download`.
 
 ### Idempotent downloads and crash recovery
 
-`huggingface-cli download` checksums existing files and only fetches what is missing or corrupted. If a pod dies mid-download, the next pod to acquire the lock resumes from where it left off rather than starting over.
+`hf download` checksums existing files and only fetches what is missing or corrupted. If a pod dies mid-download, the init container on the next pod resumes from where it left off rather than starting over, because the partially downloaded files remain on the PVC.
 
-### Lock mechanism for concurrent replicas
+### Concurrent replicas
 
-When `serving.replicas > 1` and all replicas share the same PVC, multiple init containers could try to download simultaneously. The init container uses a `.locked` file on the PVC to serialize access:
+The operator does not implement a cross-replica download lock - there is no `.locked` file or stale-lock takeover. The init container simply runs `hf download` and lets the Hugging Face Hub client manage the cache.
 
-1. Try to create `.locked` atomically (`noclobber` shell option - fails if file already exists)
-2. If the lock is acquired: run `huggingface-cli download`, then delete `.locked`
-3. If the lock is held by another pod: read the timestamp in `.locked`, wait, and retry
-4. If the lock is older than 1 hour: treat it as stale (pod died holding the lock) and take over
+When `serving.replicas > 1` and all replicas share one PVC, each replica runs its own `model-downloader` init container independently. Because `hf download` is idempotent, replicas that start after the first one finishes just checksum the existing files and exit quickly. There is no operator-level coordination between init containers that start at the same time; concurrent-download safety is whatever the Hugging Face Hub client provides for a shared `--local-dir`.
 
-Because `huggingface-cli download` is idempotent, the second and subsequent replicas that acquire the lock after the first replica finishes will simply checksum files and exit quickly.
+Note that with the default `ReadWriteOnce` access mode (see [PVC access mode](#pvc-access-mode) below), replicas can only share the PVC when scheduled on the same node, so concurrent init containers are confined to one node in that configuration.
 
 ### Gated models and HuggingFace tokens
 

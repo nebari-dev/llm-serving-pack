@@ -185,8 +185,7 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
 - Hostname: `llm.<baseDomain>` (shared; per-model dispatch by `x-ai-eg-model` header)
 - `AIGatewayRoute` for token counting, rate limiting, protocol normalization
 - `SecurityPolicy` with `apiKeyAuth` attached to the generated `HTTPRoute` (same name as the `AIGatewayRoute`), per model
-- `sanitize: true` strips the API key before forwarding to vLLM
-- `forwardClientIDHeader: X-Client-ID` passes the authenticated client ID downstream for logging and flow control
+- Planned (not yet enabled): `sanitize: true` to strip the API key before forwarding to vLLM, and `forwardClientIDHeader: X-Client-ID` to pass the authenticated client ID downstream for logging and flow control. These `apiKeyAuth` fields require Envoy Gateway v1.7+ and are not present in the v1.3 `SecurityPolicy` CRD the pack currently targets, so today the validated `Authorization` header is forwarded to vLLM unchanged.
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
 ### Internal endpoint
@@ -248,7 +247,9 @@ Revocation: remove the entry from the Secret and its corresponding metadata from
 
 ### Known limitation - eventual consistency
 
-API keys are issued based on the user's groups at creation time. If a user later loses group access, existing keys continue to work until the periodic audit revokes them (default: 5-minute interval). For v0.1, this eventual consistency is acceptable and stated explicitly because it is not the same as ongoing group-based authorization.
+API keys are issued based on the user's groups at creation time. If a user later loses group access, existing keys continue to work until the periodic audit revokes them (default interval: 5 minutes). For v0.1, this eventual consistency is acceptable and stated explicitly because it is not the same as ongoing group-based authorization.
+
+The audit is **off by default**. It only runs when the key manager is configured with an OIDC userinfo endpoint (`keyManager.oidcUserinfoURL`, which ships empty). Until you set it, keys are never revoked on group change - a key keeps working until it is explicitly deleted. See [API key audit](#api-key-audit) below.
 
 ### Data model
 
@@ -279,11 +280,13 @@ The key manager runs with a dedicated ServiceAccount. Its RBAC covers two areas:
 
 ### API key audit
 
-The key manager runs a periodic background audit (configurable interval, default 5 minutes) that:
+The key manager can run a periodic background audit (configurable interval, default 5 minutes) that:
 
 1. Lists all API key Secrets in the operator namespace
 2. For each key entry, looks up the creator's current groups via the OIDC userinfo endpoint
 3. If the creator no longer belongs to a group that matches the model's `access.groups`, revokes the key
+
+This audit is a precondition for the eventual-consistency revocation described above, and it is **disabled unless `keyManager.oidcUserinfoURL` is set**. The default `values.yaml` ships it empty, so a default install performs no group-change revocation. Configure the userinfo endpoint (for Keycloak, `https://<keycloak>/realms/<realm>/protocol/openid-connect/userinfo`) to enable it.
 
 ### NebariApp integration
 
@@ -346,4 +349,4 @@ This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.
 
 **Secret isolation**: API key Secrets live in the operator namespace with namespace-scoped RBAC. The key manager and the operator are the only components with access - the operator creates them, the key manager reads and updates them. SecurityPolicies in the same namespace reference them via `apiKeyAuth.credentialRefs` without crossing namespace boundaries.
 
-**Gateway as security boundary**: all model access (external and internal) flows through Envoy Gateway, where auth is enforced via SecurityPolicy. The external endpoint uses `apiKeyAuth` with `sanitize: true` (API keys are stripped before reaching vLLM). The internal endpoint uses JWT validation against the OIDC issuer's JWKS endpoint.
+**Gateway as security boundary**: all model access (external and internal) flows through Envoy Gateway, where auth is enforced via SecurityPolicy. The external endpoint uses `apiKeyAuth` to authenticate requests before they reach vLLM. Key stripping (`sanitize: true`) is planned but not yet enabled - it requires Envoy Gateway v1.7+, so on the currently targeted v1.3 the validated `Authorization` header still reaches vLLM. The internal endpoint uses JWT validation against the OIDC issuer's JWKS endpoint.

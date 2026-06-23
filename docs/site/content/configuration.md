@@ -54,8 +54,8 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `keyManager.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Container image repository. |
 | `keyManager.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty, keeping chart and image versions in sync. Override only when testing a specific build. |
 | `keyManager.image.pullPolicy` | `Always` | Image pull policy. |
-| `keyManager.auditInterval` | `5m` | How often the key-manager audits API key usage. |
-| `keyManager.oidcUserinfoURL` | `""` | OIDC userinfo endpoint URL for token validation. |
+| `keyManager.auditInterval` | `5m` | How often the audit loop checks key owners' current groups (only runs when `oidcUserinfoURL` is set). |
+| `keyManager.oidcUserinfoURL` | `""` | OIDC userinfo endpoint used by the audit loop to re-check a key owner's groups. **Empty (the default) disables the audit entirely**, so keys are never revoked on group change. For Keycloak: `https://<keycloak>/realms/<realm>/protocol/openid-connect/userinfo`. |
 | `keyManager.nebariApp.enabled` | `true` | Create the `NebariApp` CR that registers the key-manager UI with the Nebari platform. Set to `false` for standalone installations without a Nebari cluster. |
 | `keyManager.nebariApp.hostname` | `""` | Fully qualified hostname for the key-manager UI. Required when `nebariApp.enabled=true` (e.g. `llm-keys.your-cluster.example.com`). |
 | `keyManager.nebariApp.gateway` | `public` | Which Nebari shared gateway to attach the HTTPRoute to. Valid values: `public` or `internal`. |
