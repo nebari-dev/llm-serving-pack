@@ -610,6 +610,8 @@ operator:
 defaults:
   serving:
     image: ghcr.io/llm-d/llm-d-cuda:v0.7.0
+  epp:
+    image: ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
   resources:
     requests:
       cpu: "4"

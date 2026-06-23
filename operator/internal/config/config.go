@@ -25,15 +25,21 @@ import (
 // OperatorConfig holds all pack-level configuration parsed from environment variables.
 // It is loaded once at startup and passed to reconcilers.
 type OperatorConfig struct {
-	BaseDomain              string // LLM_BASE_DOMAIN (required)
-	ExternalGatewayName     string // LLM_EXTERNAL_GATEWAY_NAME (required)
-	ExternalGatewayNS       string // LLM_EXTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
-	InternalGatewayName     string // LLM_INTERNAL_GATEWAY_NAME (required)
-	InternalGatewayNS       string // LLM_INTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
-	OIDCIssuerURL           string // LLM_OIDC_ISSUER_URL (required)
-	OIDCGroupsClaim         string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
-	OIDCAudience            string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
-	DefaultServingImage     string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.7.0")
+	BaseDomain          string // LLM_BASE_DOMAIN (required)
+	ExternalGatewayName string // LLM_EXTERNAL_GATEWAY_NAME (required)
+	ExternalGatewayNS   string // LLM_EXTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
+	InternalGatewayName string // LLM_INTERNAL_GATEWAY_NAME (required)
+	InternalGatewayNS   string // LLM_INTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
+	OIDCIssuerURL       string // LLM_OIDC_ISSUER_URL (required)
+	OIDCGroupsClaim     string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
+	OIDCAudience        string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
+	DefaultServingImage string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.7.0")
+	// DefaultEPPImage is the llm-d-inference-scheduler (Endpoint Picker)
+	// image used for every model's EPP Deployment. Configurable so it can
+	// be re-pinned (or pointed at a mirrored/air-gapped registry) without
+	// rebuilding the operator. Default tracks the llm-d release the pack is
+	// pinned to.
+	DefaultEPPImage         string // LLM_DEFAULT_EPP_IMAGE (default: "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0")
 	DefaultStorageClassName string // LLM_DEFAULT_STORAGE_CLASS_NAME (optional, empty = cluster default)
 	// APIKeysNamespace is no longer used to PLACE Secrets - per #59 the
 	// API-key Secrets and metadata ConfigMaps now live in the LLMModel's
@@ -124,6 +130,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		OIDCGroupsClaim:         getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups"),
 		OIDCAudience:            os.Getenv("LLM_OIDC_AUDIENCE"),
 		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.7.0"),
+		DefaultEPPImage:         getEnvOrDefault("LLM_DEFAULT_EPP_IMAGE", "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"),
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
 		APIKeysNamespace:        os.Getenv("LLM_API_KEYS_NAMESPACE"),
 		OperatorNamespace:       os.Getenv("POD_NAMESPACE"),

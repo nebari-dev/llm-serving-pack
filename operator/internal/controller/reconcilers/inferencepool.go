@@ -23,7 +23,6 @@ import (
 )
 
 const (
-	eppImage          = "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0"
 	eppConfigMountDir = "/etc/epp"
 	eppConfigFileName = "epp-config.yaml"
 	eppConfigVolume   = "epp-config"
@@ -66,7 +65,7 @@ func BuildInferencePoolResources(model *llmv1alpha1.LLMModel, cfg *config.Operat
 	if err != nil {
 		return nil, fmt.Errorf("building EPP ConfigMap: %w", err)
 	}
-	eppDeployment := buildEPPDeployment(model, eppName, labels)
+	eppDeployment := buildEPPDeployment(model, eppName, labels, cfg)
 	eppService := buildEPPService(model, eppName, labels)
 	eppSA := buildEPPServiceAccount(eppName, labels)
 	eppRole := buildEPPRole(eppName, labels)
@@ -163,7 +162,7 @@ func buildInferencePool(model *llmv1alpha1.LLMModel, labels map[string]string) *
 	}
 }
 
-func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[string]string) *appsv1.Deployment {
+func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[string]string, cfg *config.OperatorConfig) *appsv1.Deployment {
 	replicas := int32(1)
 
 	// EPP-specific labels extend the standard labels with app.kubernetes.io/name: epp
@@ -186,7 +185,7 @@ func buildEPPDeployment(model *llmv1alpha1.LLMModel, eppName string, labels map[
 
 	container := corev1.Container{
 		Name:  "epp",
-		Image: eppImage,
+		Image: cfg.DefaultEPPImage,
 		Ports: []corev1.ContainerPort{
 			{Name: "grpc", ContainerPort: 9002, Protocol: corev1.ProtocolTCP},
 			{Name: "grpc-health", ContainerPort: 9003, Protocol: corev1.ProtocolTCP},
