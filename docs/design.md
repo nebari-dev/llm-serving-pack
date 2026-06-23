@@ -378,6 +378,89 @@ auth:
 
 The operator combines these pack-level values with each LLMModel's `access.groups` to generate per-model SecurityPolicies. This is generic for any OIDC provider but tested against Keycloak.
 
+## PassthroughModel CRD
+
+Issue [#95](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/95). A
+PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>`
+endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com,
+a remote vLLM) instead of a locally served model. The operator provisions
+gateway plumbing and the same two auth layers served models get; the key-manager
+lists PassthroughModels next to LLMModels so users mint API keys for external
+providers through the same UI.
+
+```yaml
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: openrouter
+  namespace: nebari-llm-serving-system
+spec:
+  provider:
+    hostname: openrouter.ai          # bare hostname, TLS assumed
+    port: 443                        # default
+    schemaVersion: api/v1            # upstream path prefix (default v1)
+    credentialSecretName: openrouter-api-key   # same-namespace Secret, key "apiKey"
+  models:
+    catchAll: true                   # any model id not claimed elsewhere
+    declared:                        # explicit routes, advertised by /v1/models
+      - openai/gpt-5.2
+      - anthropic/claude-opus-4.6
+  access:
+    groups: [llm]                    # same semantics as LLMModel access
+  endpoints:
+    external: {enabled: true}
+    internal: {enabled: true}
+```
+
+Generated resources (all in the CR's namespace, no serving stack):
+
+| Resource | Purpose |
+|---|---|
+| Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
+| BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
+| AIServiceBackend (`<name>`) | OpenAI schema with the provider's path prefix |
+| BackendSecurityPolicy (`<name>-upstream-auth`) | Injects the platform-owned provider API key upstream |
+| AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, external only) and/or Host-only catch-all rule |
+| SecurityPolicy (`<name>-external-auth` / `-internal-auth`) | Same apiKeyAuth / JWT pair as served models |
+| Secret (`<name>-api-keys`) + ConfigMap (`<name>-api-key-metadata`) | Per-provider user API keys, managed by the key-manager |
+
+Semantics worth knowing:
+
+- **Two auth layers.** Users authenticate to the cluster gateway (their own
+  API key externally, Keycloak JWT internally); the gateway injects the
+  platform's provider credential upstream. Users never see the provider key.
+- **Served models win.** Per-LLMModel routes match Host AND `x-ai-eg-model`
+  (two headers) while the catch-all matches Host only, so Gateway API
+  precedence keeps any locally served model id local.
+- **`modelsOwnedBy` is set on the external route only.** The gateway's
+  `/v1/models` endpoint aggregates declared models across every route on the
+  Gateway; declaring on both endpoints lists each model twice.
+- **Catch-all conflicts are not validated.** Two catch-all PassthroughModels
+  on the same gateway race for unclaimed model ids the same way two identical
+  HTTPRoutes would; the webhook validates per-CR only, consistent with the
+  LLMModel webhook dropping cross-CR collision checks. Document one catch-all
+  per cluster as the supported shape.
+- **Names are unique across both kinds.** Both an LLMModel and a
+  PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so
+  sharing a name would make the two controllers fight over one Secret. Both
+  webhooks reject a CR whose name is already taken by the other kind in the
+  same namespace. The key-manager cache additionally keeps kind-prefixed
+  entries as defense in depth.
+- **Status.** Phase is Ready/Error with conditions `BackendConfigured`,
+  `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs
+  surface as `ApplyFailed` conditions with a one-minute requeue rather than
+  failing reconciliation outright. This surface-and-requeue handling is the
+  intended operator-wide convention for a degraded gateway-apply. The older
+  LLMModel reconciler instead logs-and-continues for the same case; converging
+  it onto this convention is tracked as a follow-up.
+- **Generated gateway resources are reconciled on-change-only.** Because the
+  AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`,
+  `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as
+  unstructured objects, `SetupWithManager` registers only
+  `For(&PassthroughModel{})` and does not `Owns(...)` them. If a generated
+  resource is deleted out-of-band, it is not recreated until the next edit to
+  the PassthroughModel CR.
+
 ## Key manager
 
 A small web application behind NebariApp that lets authenticated users generate and manage API keys for models they can access.

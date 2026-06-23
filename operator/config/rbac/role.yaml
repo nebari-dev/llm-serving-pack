@@ -22,6 +22,20 @@ rules:
   - update
   - watch
 - apiGroups:
+  - aigateway.envoyproxy.io
+  resources:
+  - aigatewayroutes
+  - aiservicebackends
+  - backendsecuritypolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
@@ -34,9 +48,35 @@ rules:
   - update
   - watch
 - apiGroups:
+  - gateway.envoyproxy.io
+  resources:
+  - backends
+  - securitypolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - backendtlspolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - llm.nebari.dev
   resources:
   - llmmodels
+  - passthroughmodels
   verbs:
   - create
   - delete
@@ -49,12 +89,14 @@ rules:
   - llm.nebari.dev
   resources:
   - llmmodels/finalizers
+  - passthroughmodels/finalizers
   verbs:
   - update
 - apiGroups:
   - llm.nebari.dev
   resources:
   - llmmodels/status
+  - passthroughmodels/status
   verbs:
   - get
   - patch

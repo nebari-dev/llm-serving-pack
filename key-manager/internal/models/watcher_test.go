@@ -8,8 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
+	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -182,6 +182,137 @@ func TestWatcher_FilterModelsForUser(t *testing.T) {
 			for _, wantName := range tc.wantNames {
 				if !gotNames[wantName] {
 					t.Errorf("expected model %q in result, got: %v", wantName, gotNames)
+				}
+			}
+		})
+	}
+}
+
+func makePassthroughModel(name, namespace, hostname string, public *bool, groups []string) *llmv1alpha1.PassthroughModel {
+	return &llmv1alpha1.PassthroughModel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: llmv1alpha1.PassthroughModelSpec{
+			Provider: llmv1alpha1.ProviderSpec{
+				Hostname:             hostname,
+				CredentialSecretName: "provider-key",
+			},
+			Models: llmv1alpha1.PassthroughModels{CatchAll: true},
+			Access: llmv1alpha1.AccessSpec{
+				Public: public,
+				Groups: groups,
+			},
+		},
+	}
+}
+
+func TestWatcher_SyncIncludesPassthroughModels(t *testing.T) {
+	scheme := buildScheme(t)
+
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		makeLLMModel("gpt-model", "default", "openai/gpt-4", boolPtr(false), []string{"data-team"}),
+		makePassthroughModel("openrouter", "default", "openrouter.ai", boolPtr(false), []string{"llm"}),
+	).Build()
+
+	w := models.NewWatcher(fakeClient)
+	if err := w.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	listed := w.ListModels()
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(listed))
+	}
+
+	var pt *models.ModelInfo
+	for i := range listed {
+		if listed[i].Passthrough {
+			pt = &listed[i]
+		}
+	}
+	if pt == nil {
+		t.Fatal("expected a passthrough entry in the cache")
+	}
+	if pt.Name != "openrouter" || pt.Namespace != "default" {
+		t.Errorf("passthrough identity = %s/%s", pt.Namespace, pt.Name)
+	}
+	if pt.ModelName != "openrouter.ai" {
+		t.Errorf("passthrough ModelName = %q, want provider hostname", pt.ModelName)
+	}
+	if pt.Provider != "openrouter.ai" {
+		t.Errorf("passthrough Provider = %q", pt.Provider)
+	}
+}
+
+func TestWatcher_SyncToleratesSameNameAcrossKinds(t *testing.T) {
+	scheme := buildScheme(t)
+
+	// Same CR name for an LLMModel and a PassthroughModel: discouraged
+	// (their api-keys Secrets would collide) but the cache must not
+	// silently drop one of them.
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		makeLLMModel("shared-name", "default", "org/model", boolPtr(true), nil),
+		makePassthroughModel("shared-name", "default", "openrouter.ai", boolPtr(true), nil),
+	).Build()
+
+	w := models.NewWatcher(fakeClient)
+	if err := w.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+	if got := len(w.ListModels()); got != 2 {
+		t.Fatalf("expected 2 cache entries, got %d", got)
+	}
+}
+
+func TestWatcher_FilterModelsForUserIncludesPassthrough(t *testing.T) {
+	tests := []struct {
+		name       string
+		userGroups []string
+		wantNames  []string
+	}{
+		{
+			name:       "group member sees gated passthrough",
+			userGroups: []string{"llm"},
+			wantNames:  []string{"openrouter", "public-pt"},
+		},
+		{
+			name:       "outsider sees only public passthrough",
+			userGroups: []string{"unrelated"},
+			wantNames:  []string{"public-pt"},
+		},
+		{
+			name:       "no groups sees only public passthrough",
+			userGroups: nil,
+			wantNames:  []string{"public-pt"},
+		},
+	}
+
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		makePassthroughModel("openrouter", "default", "openrouter.ai", boolPtr(false), []string{"llm"}),
+		makePassthroughModel("public-pt", "default", "api.openai.com", boolPtr(true), nil),
+	).Build()
+
+	w := models.NewWatcher(fakeClient)
+	if err := w.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync error: %v", err)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := w.FilterModelsForUser(tt.userGroups)
+			names := map[string]bool{}
+			for _, m := range got {
+				names[m.Name] = true
+			}
+			if len(got) != len(tt.wantNames) {
+				t.Fatalf("got %d models (%v), want %d", len(got), names, len(tt.wantNames))
+			}
+			for _, n := range tt.wantNames {
+				if !names[n] {
+					t.Errorf("expected model %q in result", n)
 				}
 			}
 		})

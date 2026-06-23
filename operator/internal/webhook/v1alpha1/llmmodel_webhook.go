@@ -21,6 +21,8 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -91,6 +93,10 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, err
 	}
 
+	if err := v.validateNoNameCollision(ctx, llmmodel); err != nil {
+		return nil, err
+	}
+
 	// Validate the effective subdomain length even though routing no longer
 	// uses it. The CRD still exposes endpoints.external.subdomain; rejecting
 	// >63-char values at admission time keeps the field a valid DNS label
@@ -104,6 +110,30 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 	warnings := emptyDirPreloadWarnings(llmmodel)
 
 	return warnings, nil
+}
+
+// validateNoNameCollision rejects an LLMModel whose name is already taken by a
+// PassthroughModel in the same namespace. Both kinds derive their api-keys
+// Secret name as "<name>-api-keys", so sharing a name makes the two
+// controllers fight over one Secret and lets the key-manager surface one
+// model's keys under the other. Names must be unique across both kinds.
+func (v *LLMModelCustomValidator) validateNoNameCollision(ctx context.Context, llmmodel *llmv1alpha1.LLMModel) error {
+	var existing llmv1alpha1.PassthroughModel
+	err := v.Client.Get(ctx, types.NamespacedName{Name: llmmodel.Name, Namespace: llmmodel.Namespace}, &existing)
+	if err == nil {
+		return fmt.Errorf(
+			"name %q is already used by a PassthroughModel in namespace %q; LLMModel and "+
+				"PassthroughModel names must be unique across both kinds because they share the "+
+				"api-keys Secret %q",
+			llmmodel.Name, llmmodel.Namespace, reconcilers.APIKeySecretName(llmmodel.Name),
+		)
+	}
+	// NotFound: no collision. NoMatch: the PassthroughModel CRD is not
+	// installed, so none can exist to collide with. Either way, allow.
+	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+		return nil
+	}
+	return fmt.Errorf("checking for name collision with PassthroughModel %q: %w", llmmodel.Name, err)
 }
 
 // validateOperatorNamespace rejects LLMModels created outside the operator's
@@ -145,6 +175,10 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 	}
 
 	if err := validateAccess(llmmodel); err != nil {
+		return nil, err
+	}
+
+	if err := v.validateNoNameCollision(ctx, llmmodel); err != nil {
 		return nil, err
 	}
 
