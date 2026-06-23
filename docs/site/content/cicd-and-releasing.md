@@ -67,7 +67,7 @@ The chart's `values.yaml` does not set a default tag for the operator and key-ma
 
 Two jobs:
 
-1. **`build`** - checks out the full history (`fetch-depth: 0`), installs Hugo 0.159.0 (extended), and runs `hugo --gc --minify`. On pull requests the base URL defaults to `https://nebari-dev.github.io/nebari-llm-serving-pack/`. The built artifact (`docs/site/public`) is uploaded via `actions/upload-pages-artifact` (skipped on PRs).
+1. **`build`** - checks out the full history (`fetch-depth: 0`), installs Go (pinned to `docs/site/go.mod` to resolve the theme module) and Hugo 0.159.0 (extended), and runs `hugo --gc --minify`. On pull requests the base URL defaults to `https://nebari-dev.github.io/nebari-llm-serving-pack/`. It then runs `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the just-built `public/` to validate internal and edit links. The built artifact (`docs/site/public`) is uploaded via `actions/upload-pages-artifact` (skipped on PRs).
 2. **`deploy`** - runs after `build` on non-PR events only; calls `actions/deploy-pages` to publish to GitHub Pages.
 
 The deploy job runs in the `github-pages` environment and requires `pages: write` and `id-token: write` permissions. PRs trigger only the `build` job, giving reviewers a dry-run build check without publishing.

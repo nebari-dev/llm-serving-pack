@@ -37,7 +37,8 @@ fi
 # ---------------------------------------------------------------------------
 BASE_URL=$(grep -m1 'baseURL' "$SITE_DIR/hugo.toml" | sed 's/.*= *"\(.*\)"/\1/')
 # Strip scheme+host: https://nebari-dev.github.io/nebari-llm-serving-pack/
-SUBPATH_PREFIX=$(echo "$BASE_URL" | sed 's|^https\?://[^/]*||' | sed 's|/$||')
+# Use sed -E (portable: GNU and BSD/macOS) - the basic-regex `\?` is GNU-only.
+SUBPATH_PREFIX=$(echo "$BASE_URL" | sed -E 's|^https?://[^/]*||' | sed 's|/$||')
 # e.g. SUBPATH_PREFIX = "/nebari-llm-serving-pack"
 
 # ---------------------------------------------------------------------------
@@ -91,7 +92,10 @@ while IFS= read -r -d '' html_file; do
             *) continue ;;
         esac
 
-        # Strip any #fragment before resolving to a file (e.g. /page/#section)
+        # Strip any #fragment before resolving to a file (e.g. /page/#section).
+        # NOTE: this validates that the target *page* exists, not that the
+        # #anchor within it does - a renamed heading (broken fragment) passes
+        # silently. Fragment validation is out of scope for this checker.
         url="${url%%#*}"
         [ -z "$url" ] && continue
 
@@ -122,11 +126,17 @@ if [ -z "$EDIT_BASE" ]; then
 fi
 
 BROKEN_EDIT=()
+EDIT_LINK_COUNT=0
 
 while IFS= read -r -d '' html_file; do
-    # Extract href values from <a class=edit-link href=...> (minified HTML)
+    # Extract href values from edit-link anchors. Match the whole <a ...> tag
+    # that mentions edit-link anywhere in its attributes, then pull href out of
+    # it - this is robust to attribute order, intervening attributes
+    # (target=_blank), quoting, and multi-class values (class="edit-link btn").
     while IFS= read -r edit_href; do
         [ -z "$edit_href" ] && continue
+
+        EDIT_LINK_COUNT=$((EDIT_LINK_COUNT + 1))
 
         # Strip editBase prefix to get the relative path in content/
         rel="${edit_href#$EDIT_BASE/}"
@@ -139,11 +149,19 @@ while IFS= read -r -d '' html_file; do
             BROKEN_EDIT+=("BROKEN edit-link: $html_file -> $edit_href (expected: $src_file)")
         fi
     done < <(
-        grep -oE 'class=edit-link href=[^[:space:]>]+|class="edit-link"[[:space:]]+href="[^"]*"' "$html_file" \
-            | grep -oE 'href=[^[:space:]>]+' \
+        grep -oE '<a[^>]*edit-link[^>]*>' "$html_file" \
+            | grep -oE 'href="[^"]*"|href=[^[:space:]>]+' \
             | sed 's/^href=//; s/^"//; s/"$//'
     )
 done < <(find "$PUBLIC_DIR" -name "*.html" -print0)
+
+# Every built page carries an edit-link. Zero found across the whole site means
+# the extraction silently matched nothing (theme markup changed) - treat it as a
+# failure rather than a vacuous pass, same rationale as the missing-editBase guard.
+if [ "$EDIT_LINK_COUNT" -eq 0 ]; then
+    echo "ERROR: no edit-links found in any page under $PUBLIC_DIR - the extraction pattern likely no longer matches the theme's markup." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Report results

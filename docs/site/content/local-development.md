@@ -143,14 +143,14 @@ List models (requires a JWT in the `Authorization` header or an identity cookie)
 
 ```bash
 # With a fake JWT (the dev server accepts any token for testing)
-curl -s http://localhost:8080/api/v1/models \
+curl -s http://localhost:8080/api/models \
   -H "Authorization: Bearer fake-jwt-token" | jq .
 ```
 
 Create an API key for the test model:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/keys \
+curl -s -X POST http://localhost:8080/api/keys \
   -H "Authorization: Bearer fake-jwt-token" \
   -H "Content-Type: application/json" \
   -d '{"modelName": "test-model"}' | jq .
