@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -107,6 +108,20 @@ var _ = Describe("PassthroughModel Webhook", func() {
 			err := k8sClient.Create(bgCtx, pm)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("bare hostname"))
+		})
+
+		It("should reject a hostname that includes a port or path", func() {
+			for i, bad := range []string{"openrouter.ai:443", "openrouter.ai/v1", "open router.ai"} {
+				ns := newManagedNamespace(fmt.Sprintf("pt-managed-badhost-%d", i))
+				Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+				DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+				pm := newBasePassthroughModel(fmt.Sprintf("pt-badhost-%d", i), ns.Name)
+				pm.Spec.Provider.Hostname = bad
+				err := k8sClient.Create(bgCtx, pm)
+				Expect(err).To(HaveOccurred(), "expected hostname %q to be rejected", bad)
+				Expect(err.Error()).To(ContainSubstring("bare hostname"))
+			}
 		})
 
 		It("should reject a PassthroughModel that routes nothing", func() {

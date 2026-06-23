@@ -443,7 +443,17 @@ Semantics worth knowing:
 - **Status.** Phase is Ready/Error with conditions `BackendConfigured`,
   `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs
   surface as `ApplyFailed` conditions with a one-minute requeue rather than
-  failing reconciliation outright.
+  failing reconciliation outright. This surface-and-requeue handling is the
+  intended operator-wide convention for a degraded gateway-apply. The older
+  LLMModel reconciler instead logs-and-continues for the same case; converging
+  it onto this convention is tracked as a follow-up.
+- **Generated gateway resources are reconciled on-change-only.** Because the
+  AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`,
+  `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as
+  unstructured objects, `SetupWithManager` registers only
+  `For(&PassthroughModel{})` and does not `Owns(...)` them. If a generated
+  resource is deleted out-of-band, it is not recreated until the next edit to
+  the PassthroughModel CR.
 
 ## Key manager
 

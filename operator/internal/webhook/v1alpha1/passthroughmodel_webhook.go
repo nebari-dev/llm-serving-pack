@@ -198,6 +198,16 @@ func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
 			pm.Spec.Provider.Hostname,
 		)
 	}
+	// The Backend fqdn.hostname must be a bare DNS name: no port (set
+	// spec.provider.port instead), no path, and no embedded whitespace.
+	if strings.ContainsAny(pm.Spec.Provider.Hostname, "/:") ||
+		strings.ContainsAny(pm.Spec.Provider.Hostname, " \t\n\r") {
+		return fmt.Errorf(
+			"spec.provider.hostname must be a bare hostname (got %q); "+
+				"drop any port, path, or whitespace (use spec.provider.port for the port)",
+			pm.Spec.Provider.Hostname,
+		)
+	}
 	if strings.TrimSpace(pm.Spec.Provider.CredentialSecretName) == "" {
 		return fmt.Errorf("spec.provider.credentialSecretName must not be empty")
 	}

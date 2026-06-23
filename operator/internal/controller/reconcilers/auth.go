@@ -222,7 +222,7 @@ func buildJWTSecurityPolicy(name, namespace string, labels map[string]interface{
 
 // isPublic returns true when the model's access policy is explicitly public.
 func isPublic(model *llmv1alpha1.LLMModel) bool {
-	return model.Spec.Access.Public != nil && *model.Spec.Access.Public
+	return isPublicAccess(model.Spec.Access)
 }
 
 // buildGroupAuthorization returns an Envoy Gateway Authorization config that
