@@ -82,22 +82,35 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 }
 
 func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unstructured {
-	name := model.Name + "-external-auth"
+	return buildAPIKeyAuthSecurityPolicy(
+		model.Name+"-external-auth",
+		model.Namespace,
+		labelsToInterface(StandardLabels(model)),
+		model.Name+"-external",
+		APIKeySecretName(model.Name),
+	)
+}
+
+// buildAPIKeyAuthSecurityPolicy renders the SecurityPolicy that gates an
+// external HTTPRoute behind per-user API keys. Shared between the LLMModel
+// and PassthroughModel reconcilers so both endpoint types present the same
+// client UX (Authorization header carrying a key from the api-keys Secret).
+func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName, secretName string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
 			"kind":       "SecurityPolicy",
 			"metadata": map[string]interface{}{
 				"name":      name,
-				"namespace": model.Namespace,
-				"labels":    labelsToInterface(StandardLabels(model)),
+				"namespace": namespace,
+				"labels":    labels,
 			},
 			"spec": map[string]interface{}{
 				"targetRefs": []interface{}{
 					map[string]interface{}{
 						"group": "gateway.networking.k8s.io",
 						"kind":  "HTTPRoute",
-						"name":  model.Name + "-external",
+						"name":  routeName,
 					},
 				},
 				"apiKeyAuth": map[string]interface{}{
@@ -109,7 +122,7 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unst
 						map[string]interface{}{
 							"group": "",
 							"kind":  "Secret",
-							"name":  APIKeySecretName(model.Name),
+							"name":  secretName,
 						},
 					},
 					"extractFrom": []interface{}{
@@ -129,8 +142,22 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unst
 }
 
 func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) *unstructured.Unstructured {
-	name := model.Name + "-internal-auth"
+	return buildJWTSecurityPolicy(
+		model.Name+"-internal-auth",
+		model.Namespace,
+		labelsToInterface(StandardLabels(model)),
+		model.Name+"-internal",
+		cfg,
+		isPublic(model),
+		model.Spec.Access.Groups,
+	)
+}
 
+// buildJWTSecurityPolicy renders the SecurityPolicy that gates an internal
+// HTTPRoute behind Keycloak JWT validation, with group authorization when
+// the access policy is not public. Shared between the LLMModel and
+// PassthroughModel reconcilers.
+func buildJWTSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName string, cfg *config.OperatorConfig, public bool, groups []string) *unstructured.Unstructured {
 	provider := map[string]interface{}{
 		"name":   "oidc",
 		"issuer": cfg.OIDCIssuerURL,
@@ -161,7 +188,7 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 			map[string]interface{}{
 				"group": "gateway.networking.k8s.io",
 				"kind":  "HTTPRoute",
-				"name":  model.Name + "-internal",
+				"name":  routeName,
 			},
 		},
 		"jwt": map[string]interface{}{
@@ -171,12 +198,12 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 		},
 	}
 
-	// When the model is not public, add an authorization block that requires
-	// the JWT's groups claim to contain at least one of the model's allowed
-	// groups. The webhook rejects CRs where Public is false and Groups is
-	// empty, so we never render an Allow rule with no values.
-	if !isPublic(model) {
-		spec["authorization"] = buildGroupAuthorization(model.Spec.Access.Groups, cfg.OIDCGroupsClaim)
+	// When access is not public, add an authorization block that requires
+	// the JWT's groups claim to contain at least one of the allowed groups.
+	// The webhooks reject CRs where Public is false and Groups is empty, so
+	// we never render an Allow rule with no values.
+	if !public {
+		spec["authorization"] = buildGroupAuthorization(groups, cfg.OIDCGroupsClaim)
 	}
 
 	return &unstructured.Unstructured{
@@ -185,8 +212,8 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 			"kind":       "SecurityPolicy",
 			"metadata": map[string]interface{}{
 				"name":      name,
-				"namespace": model.Namespace,
-				"labels":    labelsToInterface(StandardLabels(model)),
+				"namespace": namespace,
+				"labels":    labels,
 			},
 			"spec": spec,
 		},
@@ -195,7 +222,7 @@ func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.Operat
 
 // isPublic returns true when the model's access policy is explicitly public.
 func isPublic(model *llmv1alpha1.LLMModel) bool {
-	return model.Spec.Access.Public != nil && *model.Spec.Access.Public
+	return isPublicAccess(model.Spec.Access)
 }
 
 // buildGroupAuthorization returns an Envoy Gateway Authorization config that

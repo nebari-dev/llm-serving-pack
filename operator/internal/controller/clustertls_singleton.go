@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,7 +37,9 @@ const defaultClusterTLSResyncInterval = 5 * time.Minute
 // resources backing shared-hostname routing:
 //
 //  1. A cert-manager Certificate in the operator's own namespace covering
-//     llm.<baseDomain> and llm-internal.<baseDomain>.
+//     llm.<baseDomain> and llm-internal.<baseDomain>. In
+//     bring-your-own-certificate mode (Config.TLSSecretName set) the
+//     Certificate is deleted instead and the user-provided Secret is used.
 //  2. ReferenceGrants permitting the external and internal Gateways to
 //     consume the resulting Secret across namespaces.
 //  3. HTTPS listeners on the external and internal Gateways pointing at
@@ -115,8 +118,22 @@ func (r *ClusterTLSSingleton) Reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	// 1. Ensure the Certificate.
-	if err := r.ensureCertificate(ctx); err != nil {
+	// 1. Ensure the TLS source. Default mode: an operator-managed
+	// cert-manager Certificate. Bring-your-own-certificate mode
+	// (Config.TLSSecretName set): the user pre-provisions the Secret, so
+	// no Certificate is created and one previously managed by the
+	// operator is deleted - leaving it would let cert-manager keep
+	// renewing a secret nothing references anymore (or, if the user
+	// reused the shared name, fight the user's data).
+	if r.Config.TLSSecretName != "" {
+		if err := r.deleteManagedCertificate(ctx); err != nil {
+			return fmt.Errorf("deleting managed Certificate after switch to user-provided TLS secret: %w", err)
+		}
+		// Missing/invalid user secret is reported but not fatal: the
+		// listeners stay pointed at the named secret so traffic recovers
+		// the moment the user creates or fixes it.
+		r.checkUserSecret(ctx)
+	} else if err := r.ensureCertificate(ctx); err != nil {
 		return fmt.Errorf("ensuring Certificate: %w", err)
 	}
 
@@ -174,8 +191,68 @@ func (r *ClusterTLSSingleton) ensureCertificate(ctx context.Context) error {
 }
 
 func (r *ClusterTLSSingleton) ensureReferenceGrant(ctx context.Context, fromNamespace string) error {
-	desired := reconcilers.BuildSecretReferenceGrant(fromNamespace, r.Config.OperatorNamespace)
+	desired := reconcilers.BuildSecretReferenceGrant(fromNamespace, r.Config.OperatorNamespace, r.sharedSecretName())
 	return r.createOrUpdateUnstructured(ctx, desired)
+}
+
+// sharedSecretName returns the Secret the shared listeners terminate TLS
+// with: the user-provided one in bring-your-own-certificate mode, the
+// cert-manager-rendered one otherwise.
+func (r *ClusterTLSSingleton) sharedSecretName() string {
+	if r.Config.TLSSecretName != "" {
+		return r.Config.TLSSecretName
+	}
+	return reconcilers.SharedTLSSecretName
+}
+
+// deleteManagedCertificate removes the operator-managed shared Certificate,
+// if present. NotFound is the steady state in bring-your-own-certificate
+// mode; a missing cert-manager CRD is also tolerated since BYO-cert
+// clusters may not run cert-manager at all.
+func (r *ClusterTLSSingleton) deleteManagedCertificate(ctx context.Context) error {
+	log := logf.FromContext(ctx).WithName("clustertls-singleton")
+
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	cert.SetName(reconcilers.SharedTLSCertificateName)
+	cert.SetNamespace(r.Config.OperatorNamespace)
+
+	err := r.Client.Delete(ctx, cert)
+	if err == nil {
+		log.Info("deleted operator-managed shared Certificate (user-provided TLS secret is configured)",
+			"certificate", reconcilers.SharedTLSCertificateName, "secret", r.Config.TLSSecretName)
+		return nil
+	}
+	if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		return nil
+	}
+	return err
+}
+
+// checkUserSecret verifies the user-provided Secret exists and is of type
+// kubernetes.io/tls, logging (not failing) on problems. Mirrors the
+// nebari-operator's behaviour for NebariApp routing.tls.secretName: the
+// listener stays attached either way so Envoy picks the secret up as soon
+// as it appears.
+func (r *ClusterTLSSingleton) checkUserSecret(ctx context.Context) {
+	log := logf.FromContext(ctx).WithName("clustertls-singleton")
+
+	secret := &unstructured.Unstructured{}
+	secret.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"})
+	key := types.NamespacedName{Name: r.Config.TLSSecretName, Namespace: r.Config.OperatorNamespace}
+	if err := r.Client.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("user-provided TLS secret not found yet; shared listeners reference it and will serve once it is created",
+				"secret", key)
+			return
+		}
+		log.Error(err, "checking user-provided TLS secret", "secret", key)
+		return
+	}
+	if secretType, _, _ := unstructured.NestedString(secret.Object, "type"); secretType != string("kubernetes.io/tls") {
+		log.Info("user-provided TLS secret has the wrong type; expected kubernetes.io/tls",
+			"secret", key, "type", secretType)
+	}
 }
 
 // createOrUpdateUnstructured creates obj if missing, otherwise patches spec to
@@ -235,7 +312,7 @@ func (r *ClusterTLSSingleton) patchGatewayListener(
 		gw,
 		listenerName,
 		hostname,
-		reconcilers.SharedTLSSecretName,
+		r.sharedSecretName(),
 		r.Config.OperatorNamespace,
 	)
 	if err != nil {

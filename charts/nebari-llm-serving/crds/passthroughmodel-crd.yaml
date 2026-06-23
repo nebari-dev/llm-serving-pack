@@ -1,0 +1,232 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: passthroughmodels.llm.nebari.dev
+spec:
+  group: llm.nebari.dev
+  names:
+    kind: PassthroughModel
+    listKind: PassthroughModelList
+    plural: passthroughmodels
+    singular: passthroughmodel
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .spec.provider.hostname
+      name: Provider
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: PassthroughModel is the Schema for the passthroughmodels API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of PassthroughModel
+            properties:
+              access:
+                description: |-
+                  access controls who may use this provider. Same semantics as
+                  LLMModel: either public must be true or groups must be non-empty.
+                properties:
+                  groups:
+                    description: groups lists OIDC groups that can access this model
+                      (ignored when public is true)
+                    items:
+                      type: string
+                    type: array
+                  public:
+                    description: public makes this model accessible to all authenticated
+                      users regardless of group membership
+                    type: boolean
+                type: object
+              endpoints:
+                description: |-
+                  endpoints toggles the shared external (API key) and internal (JWT)
+                  endpoints. Both default to enabled.
+                properties:
+                  external:
+                    description: external configures the external (API key) endpoint
+                    properties:
+                      enabled:
+                        description: enabled controls whether the endpoint route is
+                          created
+                        type: boolean
+                    type: object
+                  internal:
+                    description: internal configures the internal (JWT) endpoint
+                    properties:
+                      enabled:
+                        description: enabled controls whether the endpoint route is
+                          created
+                        type: boolean
+                    type: object
+                type: object
+              models:
+                description: models selects which model ids route to this provider
+                properties:
+                  catchAll:
+                    description: |-
+                      catchAll routes any model id not claimed by a more specific route
+                      on the shared listener. Served LLMModels always win because their
+                      routes match both the Host and x-ai-eg-model headers.
+                    type: boolean
+                  declared:
+                    description: |-
+                      declared model ids get explicit routes and are advertised by the
+                      gateway's /v1/models endpoint so OpenAI-compatible UIs can build
+                      a model picker.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              provider:
+                description: provider is the upstream OpenAI-compatible endpoint
+                properties:
+                  credentialSecretName:
+                    description: |-
+                      credentialSecretName names a Secret in the PassthroughModel's own
+                      namespace whose "apiKey" key holds the provider API key. The
+                      gateway injects it upstream; end users never see it.
+                    minLength: 1
+                    type: string
+                  hostname:
+                    description: hostname of the provider, e.g. openrouter.ai
+                    minLength: 1
+                    type: string
+                  port:
+                    default: 443
+                    description: port of the provider endpoint (TLS is always used)
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  schemaVersion:
+                    default: v1
+                    description: |-
+                      schemaVersion is the upstream API path prefix passed to the
+                      AIServiceBackend OpenAI schema, e.g. "api/v1" for OpenRouter or
+                      "v1" for api.openai.com.
+                    type: string
+                required:
+                - credentialSecretName
+                - hostname
+                type: object
+            required:
+            - access
+            - provider
+            type: object
+          status:
+            description: status defines the observed state of PassthroughModel
+            properties:
+              conditions:
+                description: conditions represent the current state of the resource
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              endpoints:
+                description: endpoints contains the shared endpoint URLs
+                properties:
+                  external:
+                    type: string
+                  internal:
+                    type: string
+                type: object
+              observedGeneration:
+                description: observedGeneration is the last generation reconciled
+                format: int64
+                type: integer
+              phase:
+                description: phase is the current lifecycle phase
+                enum:
+                - Ready
+                - Error
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

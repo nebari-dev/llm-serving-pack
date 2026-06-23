@@ -114,6 +114,9 @@ var _ = BeforeSuite(func() {
 	err = SetupLLMModelWebhookWithManager(mgr, "")
 	Expect(err).NotTo(HaveOccurred())
 
+	err = SetupPassthroughModelWebhookWithManager(mgr, "")
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:webhook
 
 	go func() {

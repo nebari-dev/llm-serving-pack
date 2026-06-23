@@ -190,6 +190,21 @@ var _ = Describe("LLMModel Webhook", func() {
 			Expect(k8sClient.Create(bgCtx, model)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
 		})
+
+		It("should reject a LLMModel whose name collides with an existing PassthroughModel", func() {
+			ns := newManagedNamespace("test-managed-name-collision")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			pm := newBasePassthroughModel("shared-name", ns.Name)
+			Expect(k8sClient.Create(bgCtx, pm)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, pm) })
+
+			model := newBaseLLMModel("shared-name", ns.Name)
+			err := k8sClient.Create(bgCtx, model)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("already used by a PassthroughModel"))
+		})
 	})
 
 	Context("ValidateUpdate", func() {

@@ -57,6 +57,17 @@ type OperatorConfig struct {
 	// llm-internal.<baseDomain>. HTTP-01 is the assumed challenge type;
 	// wildcards are not supported by this pack.
 	ClusterIssuerName string // LLM_CLUSTER_ISSUER_NAME (default: "letsencrypt-production")
+	// TLSSecretName, when non-empty, switches shared TLS to
+	// bring-your-own-certificate mode: the operator does NOT create a
+	// cert-manager Certificate (and deletes the one it previously
+	// managed, if any). The shared Gateway listeners and ReferenceGrants
+	// point at this pre-provisioned kubernetes.io/tls Secret in
+	// OperatorNamespace instead. The certificate must cover
+	// llm.<baseDomain> and llm-internal.<baseDomain> (two SANs or a
+	// wildcard). Intended for air-gapped / private-CA environments where
+	// ACME issuance is impossible. ClusterIssuerName is ignored while
+	// this is set.
+	TLSSecretName string // LLM_TLS_SECRET_NAME (optional; empty = cert-manager mode)
 	// ManageSharedListeners controls whether the operator patches HTTPS
 	// listeners onto the external and internal shared Gateways. When
 	// false the operator still creates the shared Certificate but leaves
@@ -117,6 +128,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		APIKeysNamespace:        os.Getenv("LLM_API_KEYS_NAMESPACE"),
 		OperatorNamespace:       os.Getenv("POD_NAMESPACE"),
 		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-production"),
+		TLSSecretName:           os.Getenv("LLM_TLS_SECRET_NAME"),
 		ManageSharedListeners:   getEnvBool("LLM_MANAGE_SHARED_LISTENERS", true),
 	}
 

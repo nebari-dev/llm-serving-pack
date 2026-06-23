@@ -1,0 +1,39 @@
+# PassthroughModel routing the shared LLM endpoints to OpenRouter.
+#
+# Prerequisites:
+#   - The pack installed with the AI Gateway (see docs/install-production.md)
+#   - A Secret holding the platform's OpenRouter API key:
+#       kubectl -n nebari-llm-serving-system create secret generic openrouter-api-key \
+#         --from-literal=apiKey='sk-or-v1-...'
+#
+# After it reconciles, any OpenRouter model id works against
+# https://llm.<baseDomain>/v1 with a key minted in the key-manager UI
+# (or against llm-internal.<baseDomain> with a Keycloak bearer token):
+#
+#   curl https://llm.<baseDomain>/v1/chat/completions \
+#     -H "Authorization: Bearer <your-key>" -H "Content-Type: application/json" \
+#     -d '{"model":"openai/gpt-5.2","messages":[{"role":"user","content":"hi"}]}'
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: openrouter
+  namespace: nebari-llm-serving-system
+spec:
+  provider:
+    hostname: openrouter.ai
+    # OpenRouter serves the OpenAI API under /api/v1 (api.openai.com would be "v1").
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    # Route every model id not claimed by a locally served LLMModel.
+    catchAll: true
+    # Declared ids also show up in /v1/models so OpenAI-compatible UIs
+    # (OpenWebUI etc.) can render a model picker.
+    declared:
+      - openai/gpt-5.2
+      - anthropic/claude-opus-4.6
+      - meta-llama/llama-4-maverick
+  access:
+    # Same semantics as LLMModel: public: true, or one or more Keycloak groups.
+    groups:
+      - llm
