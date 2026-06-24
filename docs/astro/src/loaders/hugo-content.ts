@@ -1,4 +1,8 @@
 // docs/astro/src/loaders/hugo-content.ts
+//
+// Reads from docs/site/content/, which is the shared source of truth with the Hugo site.
+// Only `title` is consumed from TOML frontmatter; all other Hugo-only keys (weight, draft,
+// menu, date, etc.) are intentionally ignored so they cannot break Starlight's strict schema.
 import type { Loader } from 'astro/loaders';
 import { parse as parseToml } from 'smol-toml';
 import fs from 'node:fs/promises';
@@ -27,23 +31,27 @@ export function hugoContentLoader(options: Options): Loader {
       const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.md'));
       store.clear();
       for (const file of files) {
-        const filePath = path.join(dir, file);
-        const raw = await fs.readFile(filePath, 'utf-8');
-        const { fm, body } = splitTomlFrontmatter(raw);
-        const id = file === '_index.md' ? 'index' : file.replace(/\.md$/, '');
-        const rewritten = rewriteLinks(body, base);
-        const data = await parseData({ id, data: { title: fm.title ?? id, ...fm } });
-        const rendered = await renderMarkdown(rewritten, {
-          fileURL: pathToFileURL(filePath),
-        });
-        store.set({
-          id,
-          data,
-          body: rewritten,
-          filePath: path.relative(fileURLToPath(config.root), filePath),
-          rendered,
-          digest: generateDigest(rewritten),
-        });
+        try {
+          const filePath = path.join(dir, file);
+          const raw = await fs.readFile(filePath, 'utf-8');
+          const { fm, body } = splitTomlFrontmatter(raw);
+          const id = file === '_index.md' ? 'index' : file.replace(/\.md$/, '');
+          const rewritten = rewriteLinks(body, base);
+          const data = await parseData({ id, data: { title: fm.title ?? id } });
+          const rendered = await renderMarkdown(rewritten, {
+            fileURL: pathToFileURL(filePath),
+          });
+          store.set({
+            id,
+            data,
+            body: rewritten,
+            filePath: path.relative(fileURLToPath(config.root), filePath),
+            rendered,
+            digest: generateDigest(rewritten),
+          });
+        } catch (err) {
+          logger.warn(`hugo-content-loader: skipping ${file} - ${(err as Error).message}`);
+        }
       }
       logger.info(`Loaded ${files.length} Hugo content files from ${options.dir}`);
     },
