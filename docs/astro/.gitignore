@@ -22,3 +22,6 @@ pnpm-debug.log*
 
 # bake-off screenshots (local only)
 bakeoff-screenshots/
+
+# Editor
+.vscode/
