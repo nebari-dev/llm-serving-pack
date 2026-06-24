@@ -1175,7 +1175,11 @@ spec:
                         description: nodeSelector for targeting specific node pools
                         type: object
                       tolerations:
-                        description: tolerations for GPU node scheduling
+                        description: |-
+                          Tolerations are added to the serving pod. When the model requests a GPU,
+                          the operator additionally injects a toleration for the nvidia.com/gpu taint
+                          (operator: Exists, effect: NoSchedule) so the pod can schedule onto tainted
+                          GPU nodes. Specify a toleration with key nvidia.com/gpu here to override it.
                         items:
                           description: |-
                             The pod this Toleration is attached to tolerates any taint that matches
@@ -1357,6 +1361,20 @@ spec:
                       to gpu.count)
                     format: int32
                     type: integer
+                  updateStrategy:
+                    default: Recreate
+                    description: |-
+                      updateStrategy controls how spec changes roll out to serving pods.
+                      Recreate (the default) tears down the old pod before starting the
+                      replacement: model pods hold exclusive resources (the node's GPUs and
+                      a ReadWriteOnce model PVC), so on clusters without spare GPU capacity
+                      a RollingUpdate's surged pod can never schedule and the rollout
+                      deadlocks. Set RollingUpdate for zero-downtime updates on clusters
+                      with enough free GPUs to run old and new pods side by side.
+                    enum:
+                    - Recreate
+                    - RollingUpdate
+                    type: string
                   vllmArgs:
                     description: vllmArgs are additional arguments passed to vLLM
                     items:

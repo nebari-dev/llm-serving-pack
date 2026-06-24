@@ -90,9 +90,11 @@ func BuildSharedCertificate(baseDomain, namespace, clusterIssuerName string) (*u
 
 // BuildSecretReferenceGrant returns a gateway.networking.k8s.io/v1beta1
 // ReferenceGrant that allows Gateways in fromNamespace to reference the
-// shared-TLS Secret in secretNamespace. The Gateway API requires a
-// ReferenceGrant for any cross-namespace Secret reference on a Gateway
-// listener.
+// shared-TLS Secret named secretName in secretNamespace. secretName is
+// SharedTLSSecretName in the default cert-manager mode, or the
+// user-provided Secret name in bring-your-own-certificate mode
+// (Config.TLSSecretName). The Gateway API requires a ReferenceGrant for
+// any cross-namespace Secret reference on a Gateway listener.
 //
 // One ReferenceGrant per source namespace keeps the grants minimally scoped.
 // The ReferenceGrant itself must live in the target namespace (where the
@@ -100,7 +102,7 @@ func BuildSharedCertificate(baseDomain, namespace, clusterIssuerName string) (*u
 //
 // Reference:
 //   - ReferenceGrant spec: https://gateway-api.sigs.k8s.io/api-types/referencegrant/
-func BuildSecretReferenceGrant(fromNamespace, secretNamespace string) *unstructured.Unstructured {
+func BuildSecretReferenceGrant(fromNamespace, secretNamespace, secretName string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.networking.k8s.io/v1beta1",
@@ -122,7 +124,7 @@ func BuildSecretReferenceGrant(fromNamespace, secretNamespace string) *unstructu
 					map[string]interface{}{
 						"group": "",
 						"kind":  "Secret",
-						"name":  SharedTLSSecretName,
+						"name":  secretName,
 					},
 				},
 			},

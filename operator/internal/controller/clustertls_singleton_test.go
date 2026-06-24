@@ -57,6 +57,14 @@ func newFakeClientWithGateway(t *testing.T, extraObjs ...client.Object) client.W
 		schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1beta1", Kind: "ReferenceGrantList"},
 		&unstructured.UnstructuredList{},
 	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"},
+		&unstructured.Unstructured{},
+	)
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "SecretList"},
+		&unstructured.UnstructuredList{},
+	)
 
 	extGW := newGateway(t, "nebari-gateway", "envoy-gateway-system", []interface{}{
 		// Pre-existing unrelated listener - the operator must preserve it.
@@ -370,3 +378,118 @@ func hasListenerNamed(listeners []interface{}, name string) bool {
 // Verify apierrors import is actually used (future-proofing for tests that
 // call into NotFound handling directly).
 var _ = apierrors.IsNotFound
+
+// userProvidedTLSSecret is the bring-your-own-certificate Secret name used
+// across the user-provided-secret tests.
+const userProvidedTLSSecret = "nebari-wildcard-tls"
+
+func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
+	cfg := testOperatorConfig()
+	cfg.TLSSecretName = userProvidedTLSSecret
+
+	// Seed a previously managed Certificate (from cert-manager mode) and the
+	// user-provided Secret to simulate an in-place switchover.
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	cert.SetName(reconcilers.SharedTLSCertificateName)
+	cert.SetNamespace(cfg.OperatorNamespace)
+
+	secret := &unstructured.Unstructured{}
+	secret.SetGroupVersionKind(schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Secret"})
+	secret.SetName(userProvidedTLSSecret)
+	secret.SetNamespace(cfg.OperatorNamespace)
+	_ = unstructured.SetNestedField(secret.Object, "kubernetes.io/tls", "type")
+
+	c := newFakeClientWithGateway(t, cert, secret)
+	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	// The previously managed Certificate must be deleted, not left for
+	// cert-manager to keep renewing.
+	if got := getUnstructured(t, c,
+		schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
+		reconcilers.SharedTLSCertificateName, cfg.OperatorNamespace); got != nil {
+		t.Error("managed Certificate should be deleted when TLSSecretName is set")
+	}
+
+	// The ReferenceGrant must target the user-provided Secret.
+	rg := getUnstructured(t, c,
+		schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1beta1", Kind: "ReferenceGrant"},
+		"nebari-llm-shared-tls-from-envoy-gateway-system", cfg.OperatorNamespace)
+	if rg == nil {
+		t.Fatal("expected ReferenceGrant to be created")
+	}
+	to, _, _ := unstructured.NestedSlice(rg.Object, "spec", "to")
+	if len(to) != 1 {
+		t.Fatalf("expected 1 to entry, got %d", len(to))
+	}
+	toEntry, _ := to[0].(map[string]interface{})
+	if toEntry["name"] != userProvidedTLSSecret {
+		t.Errorf("ReferenceGrant to.name = %v, want %q", toEntry["name"], userProvidedTLSSecret)
+	}
+
+	// Both shared listeners must terminate TLS with the user-provided Secret.
+	for _, tc := range []struct{ gateway, listener string }{
+		{"nebari-gateway", reconcilers.ExternalHTTPSListenerName},
+		{"nebari-internal-gateway", reconcilers.InternalHTTPSListenerName},
+	} {
+		gw := getUnstructured(t, c,
+			schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
+			tc.gateway, "envoy-gateway-system")
+		if gw == nil {
+			t.Fatalf("expected Gateway %s", tc.gateway)
+		}
+		listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+		found := false
+		for _, raw := range listeners {
+			l, _ := raw.(map[string]interface{})
+			if l["name"] != tc.listener {
+				continue
+			}
+			found = true
+			tls, _ := l["tls"].(map[string]interface{})
+			refs, _ := tls["certificateRefs"].([]interface{})
+			if len(refs) != 1 {
+				t.Fatalf("%s: expected 1 certificateRef, got %d", tc.listener, len(refs))
+			}
+			ref, _ := refs[0].(map[string]interface{})
+			if ref["name"] != userProvidedTLSSecret {
+				t.Errorf("%s certificateRef name = %v, want %q", tc.listener, ref["name"], userProvidedTLSSecret)
+			}
+		}
+		if !found {
+			t.Errorf("expected listener %s on Gateway %s", tc.listener, tc.gateway)
+		}
+	}
+}
+
+func TestClusterTLSSingleton_Reconcile_UserProvidedSecret_MissingSecretIsNotAnError(t *testing.T) {
+	cfg := testOperatorConfig()
+	cfg.TLSSecretName = userProvidedTLSSecret
+
+	c := newFakeClientWithGateway(t)
+	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	// The secret does not exist yet; the listeners must still be attached
+	// (Envoy serves as soon as the user creates it) and Reconcile must not
+	// error - mirroring nebari-operator's UserProvidedSecretNotFound
+	// behaviour of reporting without blocking.
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile should tolerate a missing user secret, got: %v", err)
+	}
+
+	if got := getUnstructured(t, c,
+		schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
+		reconcilers.SharedTLSCertificateName, cfg.OperatorNamespace); got != nil {
+		t.Error("no Certificate should be created when TLSSecretName is set")
+	}
+
+	gw := getUnstructured(t, c,
+		schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
+		"nebari-gateway", "envoy-gateway-system")
+	listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+	if !hasListenerNamed(listeners, reconcilers.ExternalHTTPSListenerName) {
+		t.Error("llm-https listener should be attached even while the user secret is missing")
+	}
+}

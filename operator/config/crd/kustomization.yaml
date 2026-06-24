@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/llm.nebari.dev_llmmodels.yaml
+- bases/llm.nebari.dev_passthroughmodels.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

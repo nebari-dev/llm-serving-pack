@@ -3,6 +3,7 @@ package reconcilers
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -172,7 +173,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				gpuQ, ok := limits["nvidia.com/gpu"]
+				gpuQ, ok := limits[nvidiaGPUKey]
 				if !ok {
 					t.Fatal("expected nvidia.com/gpu in resource limits")
 				}
@@ -195,7 +196,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 					t.Fatalf("unexpected error: %v", err)
 				}
 				limits := result.Deployment.Spec.Template.Spec.Containers[0].Resources.Limits
-				if _, ok := limits["nvidia.com/gpu"]; ok {
+				if _, ok := limits[nvidiaGPUKey]; ok {
 					t.Error("expected no nvidia.com/gpu in resource limits when gpu.count == 0")
 				}
 			},
@@ -316,7 +317,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()
 				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
-					{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists},
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpExists},
 				}
 				return m
 			}(),
@@ -330,8 +331,146 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if len(tolerations) != 1 {
 					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
 				}
-				if tolerations[0].Key != "nvidia.com/gpu" {
+				if tolerations[0].Key != nvidiaGPUKey {
 					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tolerations[0].Key)
+				}
+			},
+		},
+		{
+			name: "GPU toleration auto-injected when gpu.count > 0 and no user tolerations",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration, got %d", len(tolerations))
+				}
+				tol := tolerations[0]
+				if tol.Key != nvidiaGPUKey {
+					t.Errorf("expected toleration key nvidia.com/gpu, got %q", tol.Key)
+				}
+				if tol.Operator != corev1.TolerationOpExists {
+					t.Errorf("expected toleration operator Exists, got %q", tol.Operator)
+				}
+				if tol.Effect != corev1.TaintEffectNoSchedule {
+					t.Errorf("expected toleration effect NoSchedule, got %q", tol.Effect)
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT injected when gpu.count == 0",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 0, Type: "nvidia"}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 0 {
+					t.Errorf("expected no tolerations when gpu.count == 0, got %v", tolerations)
+				}
+			},
+		},
+		{
+			name: "GPU toleration auto-injected alongside user tolerations",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "foobar", Effect: corev1.TaintEffectNoSchedule},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 2 {
+					t.Fatalf("expected 2 tolerations (user + auto-injected GPU), got %d", len(tolerations))
+				}
+				var hasUser, hasGPU bool
+				for _, tol := range tolerations {
+					if tol.Key == "dedicated" {
+						hasUser = true
+					}
+					if tol.Key == nvidiaGPUKey && tol.Operator == corev1.TolerationOpExists {
+						hasGPU = true
+					}
+				}
+				if !hasUser {
+					t.Error("expected user-provided 'dedicated' toleration to be preserved")
+				}
+				if !hasGPU {
+					t.Error("expected nvidia.com/gpu toleration to be auto-injected")
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT duplicated when user already tolerates nvidia.com/gpu",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Key: nvidiaGPUKey, Operator: corev1.TolerationOpEqual, Value: "true", Effect: corev1.TaintEffectNoSchedule},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration (user-provided, not duplicated), got %d", len(tolerations))
+				}
+				// The user's toleration should be preserved verbatim, not overridden.
+				if tolerations[0].Operator != corev1.TolerationOpEqual || tolerations[0].Value != "true" {
+					t.Errorf("expected user toleration preserved (Equal/true), got %+v", tolerations[0])
+				}
+			},
+		},
+		{
+			name: "GPU toleration NOT injected when user tolerates everything (empty-key Exists)",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.GPU = llmv1alpha1.GPUSpec{Count: 1, Type: "nvidia"}
+				m.Spec.Advanced.VLLM.Tolerations = []corev1.Toleration{
+					{Operator: corev1.TolerationOpExists},
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				tolerations := result.Deployment.Spec.Template.Spec.Tolerations
+				if len(tolerations) != 1 {
+					t.Fatalf("expected 1 toleration (tolerate-everything, not duplicated), got %d", len(tolerations))
+				}
+				// The empty-key Exists toleration already covers the GPU taint,
+				// so no nvidia.com/gpu toleration should be injected.
+				if tolerations[0].Key != "" || tolerations[0].Operator != corev1.TolerationOpExists {
+					t.Errorf("expected user tolerate-everything toleration preserved (empty key/Exists), got %+v", tolerations[0])
 				}
 			},
 		},
@@ -768,7 +907,7 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 				if _, ok := limits[corev1.ResourceMemory]; !ok {
 					t.Error("expected memory in resource limits")
 				}
-				if _, ok := limits["nvidia.com/gpu"]; !ok {
+				if _, ok := limits[nvidiaGPUKey]; !ok {
 					t.Error("expected nvidia.com/gpu in resource limits")
 				}
 			},
@@ -817,6 +956,98 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name:    "deployment strategy is Recreate so GPU-holding pods are torn down before replacements schedule",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				strategy := result.Deployment.Spec.Strategy
+				if strategy.Type != appsv1.RecreateDeploymentStrategyType {
+					t.Errorf("expected deployment strategy %q, got %q", appsv1.RecreateDeploymentStrategyType, strategy.Type)
+				}
+			},
+		},
+		{
+			name: "updateStrategy RollingUpdate opts into rolling updates",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Serving.UpdateStrategy = llmv1alpha1.UpdateStrategyRollingUpdate
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				strategy := result.Deployment.Spec.Strategy
+				if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType {
+					t.Errorf("expected deployment strategy %q, got %q", appsv1.RollingUpdateDeploymentStrategyType, strategy.Type)
+				}
+			},
+		},
+		{
+			name: "memory-backed /dev/shm volume capped at the memory limit",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Resources.Limits = corev1.ResourceList{
+					corev1.ResourceMemory: resource.MustParse("32Gi"),
+				}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				shm := findVolume(t, result.Deployment.Spec.Template.Spec.Volumes, shmVolumeName)
+				if shm.EmptyDir == nil {
+					t.Fatal("expected shm volume to be an emptyDir")
+				}
+				if shm.EmptyDir.Medium != corev1.StorageMediumMemory {
+					t.Errorf("expected shm emptyDir medium %q, got %q", corev1.StorageMediumMemory, shm.EmptyDir.Medium)
+				}
+				if shm.EmptyDir.SizeLimit == nil {
+					t.Fatal("expected shm sizeLimit to be set when a memory limit exists")
+				}
+				if shm.EmptyDir.SizeLimit.String() != "32Gi" {
+					t.Errorf("expected shm sizeLimit 32Gi, got %s", shm.EmptyDir.SizeLimit.String())
+				}
+				mounts := result.Deployment.Spec.Template.Spec.Containers[0].VolumeMounts
+				foundMount := false
+				for _, m := range mounts {
+					if m.Name == shmVolumeName && m.MountPath == shmMountPath {
+						foundMount = true
+					}
+				}
+				if !foundMount {
+					t.Errorf("expected vllm container to mount %q at %q", shmVolumeName, shmMountPath)
+				}
+			},
+		},
+		{
+			name:    "/dev/shm volume uncapped when no memory limit is set",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				shm := findVolume(t, result.Deployment.Spec.Template.Spec.Volumes, shmVolumeName)
+				if shm.EmptyDir == nil {
+					t.Fatal("expected shm volume to be an emptyDir")
+				}
+				if shm.EmptyDir.SizeLimit != nil {
+					t.Errorf("expected no shm sizeLimit without a memory limit, got %s", shm.EmptyDir.SizeLimit.String())
+				}
+			},
+		},
+		{
 			name:    "pod securityContext sets fsGroup so model-downloader nonroot user can write to PVC",
 			model:   defaultModel(),
 			storage: defaultStorage(),
@@ -852,6 +1083,18 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			tt.check(t, result, err)
 		})
 	}
+}
+
+// findVolume returns the named volume from the pod spec, failing the test if absent.
+func findVolume(t *testing.T, volumes []corev1.Volume, name string) corev1.Volume {
+	t.Helper()
+	for _, v := range volumes {
+		if v.Name == name {
+			return v
+		}
+	}
+	t.Fatalf("expected volume %q in pod spec, got %v", name, volumes)
+	return corev1.Volume{}
 }
 
 // assertArgValue checks that args contains "--flag" followed by "value".

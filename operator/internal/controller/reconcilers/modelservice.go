@@ -16,12 +16,30 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
-// modelDownloaderUserGID matches the uid/gid of the `nonroot` user in the
-// distroless base image used for the model-downloader init container
-// (gcr.io/distroless/cc-debian12:nonroot). Setting fsGroup to this value lets
-// kubelet chown PVC-backed model storage to a group the nonroot user can
-// write to.
-const modelDownloaderUserGID int64 = 65532
+const (
+	// modelDownloaderUserGID matches the uid/gid of the `nonroot` user in the
+	// distroless base image used for the model-downloader init container
+	// (gcr.io/distroless/cc-debian12:nonroot). Setting fsGroup to this value lets
+	// kubelet chown PVC-backed model storage to a group the nonroot user can
+	// write to.
+	modelDownloaderUserGID int64 = 65532
+
+	// nvidiaGPUKey is the NVIDIA GPU identifier, used both as the extended resource
+	// the device plugin advertises (in the container's resource limits) and as the
+	// taint key NIC applies to GPU node groups (nvidia.com/gpu=true:NoSchedule).
+	// Pods that request a GPU must tolerate that taint to schedule onto those nodes.
+	nvidiaGPUKey = "nvidia.com/gpu"
+)
+
+// shmVolumeName is the memory-backed emptyDir mounted at /dev/shm in the vllm
+// container. Kubernetes gives pods a 64Mi /dev/shm by default, which is far
+// too small for vLLM: with tensor parallelism > 1 the worker processes
+// exchange tensors through POSIX shared memory (and NCCL's SHM transport uses
+// it too), so a default-sized /dev/shm makes multi-GPU models hang or crash
+// during engine startup.
+const shmVolumeName = "shm"
+
+const shmMountPath = "/dev/shm"
 
 // ModelServiceResources holds the Kubernetes resources for serving an LLMModel.
 type ModelServiceResources struct {
@@ -69,12 +87,16 @@ func buildDeployment(
 
 	container := buildVLLMContainer(model, storage, cfg)
 
+	volumes := make([]corev1.Volume, 0, len(storage.Volumes)+1)
+	volumes = append(volumes, storage.Volumes...)
+	volumes = append(volumes, buildShmVolume(model))
+
 	fsGroupChangePolicy := corev1.FSGroupChangeOnRootMismatch
 	podSpec := corev1.PodSpec{
 		ServiceAccountName: saName,
 		Containers:         []corev1.Container{container},
-		Volumes:            storage.Volumes,
-		Tolerations:        model.Spec.Advanced.VLLM.Tolerations,
+		Volumes:            volumes,
+		Tolerations:        buildTolerations(model),
 		NodeSelector:       model.Spec.Advanced.VLLM.NodeSelector,
 		Affinity:           model.Spec.Advanced.VLLM.Affinity,
 		SecurityContext: &corev1.PodSecurityContext{
@@ -87,6 +109,18 @@ func buildDeployment(
 		podSpec.InitContainers = []corev1.Container{*storage.InitContainer}
 	}
 
+	// Default to Recreate, not RollingUpdate: the old pod holds the node's
+	// GPUs (and a ReadWriteOnce model PVC), so a surged replacement pod can
+	// never schedule on a cluster without spare GPU capacity and the rollout
+	// deadlocks until someone deletes the old ReplicaSet by hand. Recreate
+	// tears the old pod down first, accepting brief downtime over a wedged
+	// rollout. Clusters with free GPUs can opt back into RollingUpdate via
+	// spec.serving.updateStrategy.
+	strategyType := appsv1.RecreateDeploymentStrategyType
+	if model.Spec.Serving.UpdateStrategy == llmv1alpha1.UpdateStrategyRollingUpdate {
+		strategyType = appsv1.RollingUpdateDeploymentStrategyType
+	}
+
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   model.Name,
@@ -94,6 +128,9 @@ func buildDeployment(
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
+			Strategy: appsv1.DeploymentStrategy{
+				Type: strategyType,
+			},
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app.kubernetes.io/instance": model.Name,
@@ -111,6 +148,23 @@ func buildDeployment(
 	return dep, nil
 }
 
+// buildShmVolume returns the memory-backed emptyDir backing the vllm
+// container's /dev/shm. When the model declares a memory limit, the volume is
+// capped at that limit; tmpfs pages count toward the container's memory
+// limit anyway, so the cap reserves nothing extra while keeping the kubelet's
+// enforcement (evict on overrun) predictable. Without a memory limit the
+// volume is left uncapped, like docker run --shm-size on a host.
+func buildShmVolume(model *llmv1alpha1.LLMModel) corev1.Volume {
+	emptyDir := &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory}
+	if mem, ok := model.Spec.Resources.Limits[corev1.ResourceMemory]; ok {
+		emptyDir.SizeLimit = ptr.To(mem)
+	}
+	return corev1.Volume{
+		Name:         shmVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: emptyDir},
+	}
+}
+
 func buildVLLMContainer(
 	model *llmv1alpha1.LLMModel,
 	storage *StorageResult,
@@ -123,6 +177,10 @@ func buildVLLMContainer(
 
 	args := buildVLLMArgs(model, storage)
 	limits := buildResourceLimits(model)
+
+	mounts := make([]corev1.VolumeMount, 0, len(storage.VolumeMounts)+1)
+	mounts = append(mounts, storage.VolumeMounts...)
+	mounts = append(mounts, corev1.VolumeMount{Name: shmVolumeName, MountPath: shmMountPath})
 
 	port8000 := intstr.FromString("http")
 
@@ -138,7 +196,7 @@ func buildVLLMContainer(
 			Requests: model.Spec.Resources.Requests,
 		},
 		Env:          model.Spec.Advanced.VLLM.ExtraEnv,
-		VolumeMounts: storage.VolumeMounts,
+		VolumeMounts: mounts,
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -215,7 +273,7 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 
 	// Add GPU limit if count > 0
 	if model.Spec.Resources.GPU.Count > 0 {
-		limits["nvidia.com/gpu"] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
+		limits[nvidiaGPUKey] = *resource.NewQuantity(int64(model.Spec.Resources.GPU.Count), resource.DecimalSI)
 	}
 
 	if len(limits) == 0 {
@@ -223,6 +281,40 @@ func buildResourceLimits(model *llmv1alpha1.LLMModel) corev1.ResourceList {
 	}
 
 	return limits
+}
+
+// buildTolerations returns the pod tolerations for a model. User-provided
+// tolerations from model.Spec.Advanced.VLLM.Tolerations are always preserved.
+// When the model requests a GPU, a toleration for the nvidia.com/gpu taint is injected
+// automatically so the pod can land on GPU nodes that NIC taints nvidia.com/gpu=true:NoSchedule.
+// The injected toleration uses operator: Exists, which matches any taint value.
+func buildTolerations(model *llmv1alpha1.LLMModel) []corev1.Toleration {
+	// Copy to avoid mutating the model spec's underlying slice.
+	tolerations := append([]corev1.Toleration(nil), model.Spec.Advanced.VLLM.Tolerations...)
+
+	// Only inject for GPU-requesting workloads, and only if the user hasn't
+	// already specified a toleration for the GPU taint.
+	if model.Spec.Resources.GPU.Count > 0 && !tolerationsGPUTaint(tolerations) {
+		tolerations = append(tolerations, corev1.Toleration{
+			Key:      nvidiaGPUKey,
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		})
+	}
+
+	return tolerations
+}
+
+// tolerationsGPUTaint reports whether the given tolerations already cover the
+// nvidia.com/gpu taint, either via an explicit key match or an empty-key
+// (tolerate-everything) toleration.
+func tolerationsGPUTaint(tolerations []corev1.Toleration) bool {
+	for _, t := range tolerations {
+		if t.Key == nvidiaGPUKey || (t.Key == "" && t.Operator == corev1.TolerationOpExists) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildService(model *llmv1alpha1.LLMModel, labels map[string]string) *corev1.Service {

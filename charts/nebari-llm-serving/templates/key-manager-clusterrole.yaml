@@ -7,6 +7,6 @@ metadata:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["llm.nebari.dev"]
-    resources: ["llmmodels"]
+    resources: ["llmmodels", "passthroughmodels"]
     verbs: ["get", "list", "watch"]
 {{- end }}
