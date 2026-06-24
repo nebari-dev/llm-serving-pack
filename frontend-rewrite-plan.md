@@ -104,17 +104,22 @@ services under one host — would let us skip the nginx `/api` proxy.
 - [x] `QueryClientProvider` + `ThemeProvider` wired in `main.tsx`
 - [x] Tests: `api.test.ts`, `useApiKeys.test.tsx`; gate green (11 tests)
 
-### Phase 4 — Components (feature parity)
-Each component gets its own PascalCase dir + co-located test + `index.ts` barrel.
-- [ ] `Topbar` (logo, account dropdown: name/email, theme submenu light/dark/system, Sign out → `/logout`)
-- [ ] `KeysCard` (table + loading/empty/error states + Create button)
-- [ ] `KeyRowActions` (kebab → Revoke)
-- [ ] `CreateKeyDialog` (model select + description + validation)
-- [ ] `KeyCreatedDialog` (client ID, one-time key, copy, download `.txt`, warning)
-- [ ] `RevokeKeyDialog` (destructive confirm)
-- [ ] `ErrorBanner` / toast
-- [ ] shadcn primitives added: button, dialog, table, select, input, label,
-      dropdown-menu, alert, card, avatar, sonner
+### Phase 4 — Components (feature parity) ✅
+Each component gets its own PascalCase dir + `index.ts` barrel.
+- [x] `Topbar` (logo, account dropdown: name/email, theme radio light/dark/system, Sign out → `/logout`)
+- [x] `KeysCard` (table + loading/empty/error states + Create button)
+- [x] `KeyRowActions` (kebab → Revoke, destructive)
+- [x] `CreateKeyDialog` (model select + description + validation)
+- [x] `KeyCreatedDialog` (client ID, one-time key, copy w/ feedback, download `.txt`, warning)
+- [x] `RevokeKeyDialog` (destructive confirm)
+- [x] `ErrorBanner` (dismissible, driven by `errorAtom`)
+- [x] shadcn primitives in `components/ui/`: button, card, table, dropdown-menu, avatar,
+      input, badge (copied from nebari-landing) + dialog, select, label, alert (shadcn CLI)
+- [x] Dialogs driven by `dialogAtom`; `lib/format.ts` (date + initials); `App.tsx` composes the page
+- [x] Tests: `App.test.tsx`, `KeysCard.test.tsx`, `src/test/render.tsx` provider helper; gate green (14 tests)
+
+> Not yet done: visual verification against a **live backend** + Figma comparison. Deferred to
+> Phase 6 (local dev brings up the API) / Phase 7 (polish). The build, type-check, and tests pass.
 
 ### Phase 5 — Serve separately (Docker + Helm + CI)
 - [ ] `frontend/Dockerfile` (node build → nginx; SPA `try_files`; `location /api` +
