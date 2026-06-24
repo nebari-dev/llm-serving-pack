@@ -29,6 +29,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `platform.gateway.internal.namespace` | `envoy-gateway-system` | Namespace of the internal Envoy Gateway. |
 | `platform.gateway.manageSharedListeners` | `true` | When `true`, the operator patches HTTPS listeners for `llm.<baseDomain>` and `llm-internal.<baseDomain>` onto the shared Gateways. Set to `false` if a cluster admin owns the listeners out-of-band. |
 | `platform.tls.clusterIssuer` | `letsencrypt-production` | The cert-manager `ClusterIssuer` used to issue the shared TLS certificate. Override when using a staging issuer. |
+| `platform.tls.secretName` | `""` | Bring-your-own-certificate mode. When set, no cert-manager Certificate is created; the operator expects a pre-provisioned `kubernetes.io/tls` Secret of this name in the operator namespace. Use for air-gapped or private-CA clusters where ACME issuance is not possible. cert-manager is not required when this is set. |
 
 ### Auth / OIDC
 
@@ -149,6 +150,7 @@ Configures the vLLM serving layer. All fields optional.
 |-------|------|---------|-------------|
 | `spec.serving.replicas` | integer | `1` | Number of serving replicas. |
 | `spec.serving.image` | string | chart default | Container image for the vLLM server. Overrides `defaults.serving.image`. |
+| `spec.serving.updateStrategy` | string | `Recreate` | Deployment rollout strategy: `Recreate` (default) or `RollingUpdate`. `Recreate` is the default because model pods hold exclusive GPUs and a ReadWriteOnce PVC; on clusters without spare GPU capacity a rolling update deadlocks until the old pod is removed. Set to `RollingUpdate` only when the cluster has enough free GPUs to run old and new pods simultaneously. |
 | `spec.serving.tensorParallelism` | integer | `gpu.count` | Tensor parallelism degree. Defaults to the GPU count when not set. |
 | `spec.serving.dataParallelism` | integer | `1` | Data parallelism degree. |
 | `spec.serving.vllmArgs` | []string | - | Additional CLI arguments passed directly to vLLM. |

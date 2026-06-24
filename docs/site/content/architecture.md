@@ -128,9 +128,15 @@ LLMModel CR applied
 
 The controller is event-driven and idempotent. Each reconciliation evaluates current state and takes the next appropriate action. When waiting for async operations (model download, pod startup), the controller requeues with a delay rather than blocking.
 
-### Spec updates and rolling restarts
+### Spec updates and restarts
 
-When a running `LLMModel`'s spec changes, the operator updates the corresponding resources in place. For changes that affect the vLLM Deployment (image, `vllmArgs`, resources, replicas), the operator updates the Deployment spec and Kubernetes handles the rolling restart. For changes to access groups or endpoints, the operator updates SecurityPolicies and routes without touching the Deployment.
+When a running `LLMModel`'s spec changes, the operator updates the corresponding resources in place. For changes that affect the vLLM Deployment (image, `vllmArgs`, resources, replicas), the operator updates the Deployment spec and Kubernetes restarts the pods. For changes to access groups or endpoints, the operator updates SecurityPolicies and routes without touching the Deployment.
+
+The Deployment's rollout strategy is controlled by `spec.serving.updateStrategy` (`Recreate`, the default, or `RollingUpdate`). The default is `Recreate` because model pods hold exclusive resources - the node's GPUs and a ReadWriteOnce model PVC - so on clusters without spare GPU capacity a rolling update's surged replacement pod can never schedule while the old pod is alive, deadlocking the rollout until the old ReplicaSet is deleted by hand. `Recreate` tears down the old pod first, trading brief downtime for a rollout that always completes. Clusters with enough free GPUs to run old and new pods side by side can set `RollingUpdate` for zero-downtime updates.
+
+### /dev/shm for tensor parallelism
+
+Every model pod mounts a memory-backed emptyDir at `/dev/shm` in the vLLM container. Kubernetes defaults `/dev/shm` to 64Mi, which is far too small for vLLM with `tensorParallelism > 1`: the worker processes exchange tensors through POSIX shared memory (and NCCL's SHM transport uses it too), so multi-GPU engines hang or crash during startup on the default size. The volume is capped at the model's memory limit when one is set; tmpfs pages count toward the container's memory limit regardless, so the cap reserves no extra memory.
 
 Changes to `model.name`, `model.source`, `model.storage`, or `model.revision` require a new model download. The operator stores a hash of these fields as an annotation (`llm.nebari.dev/model-config-hash`) on the Deployment. When the hash changes, the operator deletes the existing Deployment and recreates it, re-entering the `Downloading` phase.
 
@@ -154,7 +160,7 @@ Use this pattern for any future cluster-wide concern; do not co-locate cluster-w
 
 The singleton reconciler:
 
-1. Ensures a `cert-manager.io/v1 Certificate` in the operator namespace named `nebari-llm-shared-tls`, with `dnsNames` set to the two shared hostnames and `issuerRef` pointing at the `ClusterIssuer` from `platform.tls.clusterIssuer`.
+1. Ensures a `cert-manager.io/v1 Certificate` in the operator namespace named `nebari-llm-shared-tls`, with `dnsNames` set to the two shared hostnames and `issuerRef` pointing at the `ClusterIssuer` from `platform.tls.clusterIssuer`. In bring-your-own-certificate mode (`platform.tls.secretName` set), no Certificate is created - the operator instead expects a pre-provisioned `kubernetes.io/tls` Secret of that name in its namespace, deletes any Certificate it previously managed, and the listeners and ReferenceGrants below reference the user Secret. This is the path for air-gapped or private-CA clusters where ACME issuance is not possible; cert-manager is not required at all in this mode.
 2. Ensures a `ReferenceGrant` in the operator namespace for each distinct Gateway namespace, permitting Gateways there to consume the shared Secret.
 3. Patches HTTPS listeners named `llm-https` and `llm-internal-https` onto the external and internal Gateways. Pre-existing listeners for the base domain, Argo CD, Keycloak, or anything else on the shared Gateway are preserved; only the two operator-named listeners are managed.
 
@@ -227,6 +233,58 @@ auth:
 ```
 
 The operator combines these pack-level values with each `LLMModel`'s `access.groups` to generate per-model SecurityPolicies.
+
+---
+
+## PassthroughModel CRD
+
+Issue [#95](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
+
+```yaml
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: openrouter
+  namespace: nebari-llm-serving-system
+spec:
+  provider:
+    hostname: openrouter.ai          # bare hostname, TLS assumed
+    port: 443                        # default
+    schemaVersion: api/v1            # upstream path prefix (default v1)
+    credentialSecretName: openrouter-api-key   # same-namespace Secret, key "apiKey"
+  models:
+    catchAll: true                   # any model id not claimed elsewhere
+    declared:                        # explicit routes, advertised by /v1/models
+      - openai/gpt-5.2
+      - anthropic/claude-opus-4.6
+  access:
+    groups: [llm]                    # same semantics as LLMModel access
+  endpoints:
+    external: {enabled: true}
+    internal: {enabled: true}
+```
+
+Generated resources (all in the CR's namespace, no serving stack):
+
+| Resource | Purpose |
+|---|---|
+| Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
+| BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
+| AIServiceBackend (`<name>`) | OpenAI schema with the provider's path prefix |
+| BackendSecurityPolicy (`<name>-upstream-auth`) | Injects the platform-owned provider API key upstream |
+| AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, external only) and/or Host-only catch-all rule |
+| SecurityPolicy (`<name>-external-auth` / `-internal-auth`) | Same apiKeyAuth / JWT pair as served models |
+| Secret (`<name>-api-keys`) + ConfigMap (`<name>-api-key-metadata`) | Per-provider user API keys, managed by the key-manager |
+
+Semantics worth knowing:
+
+- **Two auth layers.** Users authenticate to the cluster gateway (their own API key externally, Keycloak JWT internally); the gateway injects the platform's provider credential upstream. Users never see the provider key.
+- **Served models win.** Per-LLMModel routes match Host AND `x-ai-eg-model` (two headers) while the catch-all matches Host only, so Gateway API precedence keeps any locally served model id local.
+- **`modelsOwnedBy` is set on the external route only.** The gateway's `/v1/models` endpoint aggregates declared models across every route on the Gateway; declaring on both endpoints lists each model twice.
+- **Catch-all conflicts are not validated.** Two catch-all PassthroughModels on the same gateway race for unclaimed model ids the same way two identical HTTPRoutes would; the webhook validates per-CR only, consistent with the LLMModel webhook dropping cross-CR collision checks. Document one catch-all per cluster as the supported shape.
+- **Names are unique across both kinds.** Both an LLMModel and a PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so sharing a name would make the two controllers fight over one Secret. Both webhooks reject a CR whose name is already taken by the other kind in the same namespace. The key-manager cache also keeps kind-prefixed entries as defense in depth.
+- **Status.** Phase is `Ready`/`Error` with conditions `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs surface as `ApplyFailed` conditions with a one-minute requeue rather than failing reconciliation outright. This surface-and-requeue handling is the intended operator-wide convention for a degraded gateway-apply. The older LLMModel reconciler instead logs-and-continues for the same case; converging it onto this convention is tracked as a follow-up.
+- **Generated gateway resources are reconciled on-change-only.** Because the AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`, `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as unstructured objects, `SetupWithManager` registers only `For(&PassthroughModel{})` and does not `Owns(...)` them. If a generated resource is deleted out-of-band, it is not recreated until the next edit to the PassthroughModel CR.
 
 ---
 
