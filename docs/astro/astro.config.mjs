@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
+import rehypeMermaid from 'rehype-mermaid';
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
@@ -49,5 +50,10 @@ export default defineConfig({
       ],
     }),
   ],
+  markdown: {
+    // syntaxHighlight false on mermaid so the plugin sees raw graph source.
+    syntaxHighlight: { type: 'shiki', excludeLangs: ['mermaid'] },
+    rehypePlugins: [[rehypeMermaid, { strategy: 'inline-svg' }]],
+  },
   vite: { plugins: [tailwindcss()] },
 });
