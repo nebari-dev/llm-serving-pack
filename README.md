@@ -2,7 +2,7 @@
 
 A [Nebari](https://github.com/nebari-dev/nebari-infrastructure-core) software pack for serving LLMs. Deploys a Kubernetes operator that manages LLM model serving via [llm-d](https://llm-d.ai), with per-model access control, API key management, and Envoy AI Gateway integration for token counting and rate limiting.
 
-**Documentation:** [https://nebari-dev.github.io/nebari-llm-serving-pack/](https://nebari-dev.github.io/nebari-llm-serving-pack/)
+**Documentation:** [https://packs.nebari.dev/llm-serving-pack/](https://packs.nebari.dev/llm-serving-pack/)
 
 ## What this does
 
@@ -21,7 +21,7 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 - Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
 - NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin). **Note**: nebari-infrastructure-core does not install this automatically yet - tracked in [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until that is done, install it manually as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
-- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Ready-to-apply example in [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml); see the [Installation guide](https://nebari-dev.github.io/nebari-llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
+- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Ready-to-apply example in [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml); see the [Installation guide](https://packs.nebari.dev/llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
 - Envoy AI Gateway installed (v0.5.0+). **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) installed (InferencePool / InferenceModel CRDs).
 - A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-production`; override with `platform.tls.clusterIssuer` in the chart values.
@@ -248,7 +248,7 @@ The pack expects the following to be available on the cluster:
 
 ## Development
 
-See the [Local Development guide](https://nebari-dev.github.io/nebari-llm-serving-pack/local-development/) for a full walkthrough of the local dev environment.
+See the [Local Development guide](https://packs.nebari.dev/llm-serving-pack/local-development/) for a full walkthrough of the local dev environment.
 
 ```bash
 # Create kind cluster with all dependencies

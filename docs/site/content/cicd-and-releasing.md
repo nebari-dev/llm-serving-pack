@@ -67,10 +67,9 @@ The chart's `values.yaml` does not set a default tag for the operator and key-ma
 
 Two jobs:
 
-1. **`build`** - checks out the full history (`fetch-depth: 0`), installs Go (pinned to `docs/site/go.mod` to resolve the theme module) and Hugo 0.159.0 (extended), and runs `hugo --gc --minify`. On pull requests the base URL defaults to `https://nebari-dev.github.io/nebari-llm-serving-pack/`. It then runs `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the just-built `public/` to validate internal and edit links. The built artifact (`docs/site/public`) is uploaded via `actions/upload-pages-artifact` (skipped on PRs).
-2. **`deploy`** - runs after `build` on non-PR events only; calls `actions/deploy-pages` to publish to GitHub Pages.
+A single **`docs`** job: checks out the full history (`fetch-depth: 0`), installs Go (pinned to `docs/site/go.mod` to resolve the theme module) and Hugo 0.159.0 (extended), computes the correct `baseURL` (production: `https://packs.nebari.dev/llm-serving-pack/`; preview: `https://<alias>.llm-serving-pack.pages.dev/`), and runs `hugo --gc --minify`. It then runs `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the just-built `public/` to validate internal and edit links.
 
-The deploy job runs in the `github-pages` environment and requires `pages: write` and `id-token: write` permissions. PRs trigger only the `build` job, giving reviewers a dry-run build check without publishing.
+For non-fork PRs and pushes to `main`, the job deploys to Cloudflare Pages via `cloudflare/wrangler-action`. On pull requests from the same repo, a sticky comment is posted with the preview URL (`pages-deployment-alias-url`). Fork PRs run the build and link-check but skip deploy (secrets are unavailable).
 
 ### Add to Project (`add-to-project.yaml`)
 

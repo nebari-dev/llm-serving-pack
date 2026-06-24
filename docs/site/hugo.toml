@@ -1,4 +1,4 @@
-baseURL = "https://nebari-dev.github.io/nebari-llm-serving-pack/"
+baseURL = "https://packs.nebari.dev/llm-serving-pack/"
 languageCode = "en-us"
 title = "LLM Serving Pack"
 enableGitInfo = true
