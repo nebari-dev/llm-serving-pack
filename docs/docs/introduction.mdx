@@ -1,0 +1,18 @@
+---
+title: Introduction
+description: Documentation for the Nebari LLM Serving Pack, a Kubernetes operator for serving LLMs via llm-d, with per-model OIDC access control, API key management, and Envoy AI Gateway integration.
+slug: /
+sidebar_position: 1
+last_update:
+  date: 2026-06-18
+---
+
+# Nebari LLM Serving Pack
+
+A Kubernetes operator for serving LLMs via [llm-d](https://github.com/llm-d/llm-d), with per-model OIDC access control, API key management, and Envoy AI Gateway integration. Deploy the pack once via ArgoCD, then declare models as `LLMModel` custom resources.
+
+## Documentation
+
+- [Getting Started](getting-started) — Set up a local development cluster with kind to test the operator, key manager, and reconciler logic without a full Nebari deployment
+- [Production Install](install-production) — Step-by-step runbook for installing on a Nebari cluster managed by ArgoCD (validated on AWS/EKS)
+- [Design](design) — Architecture, CRD spec, dual-endpoint auth model, and component overview
