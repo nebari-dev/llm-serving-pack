@@ -8,5 +8,6 @@ product_owner: null
 nebariapp_integration: full
 scope:
   standalone-supported: yes
+docs_site: true
 links:
-  docs: https://nebari-dev.github.io/nebari-llm-serving-pack/
+  docs: https://packs.nebari.dev/llm-serving-pack/
