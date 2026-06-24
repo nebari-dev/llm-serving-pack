@@ -1,5 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 
+import { initKeycloak } from "@/auth/keycloak";
+
 // jsdom under this vitest version does not expose a functional Web Storage on
 // the default origin, and never implements matchMedia. Provide deterministic
 // in-memory stand-ins so hooks that read theme preference work under test.
@@ -46,3 +48,13 @@ if (typeof window.matchMedia !== "function") {
     }),
   });
 }
+
+// Inject a fake authenticated Keycloak session so api.ts can attach a bearer
+// token without redirecting to a real Keycloak. initKeycloak() honors this shim
+// outside production builds.
+window.__PW_E2E_AUTH__ = {
+  authenticated: true,
+  token: "test-token",
+  idTokenParsed: { name: "Test User", email: "test@example.com", preferred_username: "test" },
+};
+await initKeycloak();

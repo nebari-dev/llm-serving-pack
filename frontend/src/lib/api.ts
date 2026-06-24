@@ -1,3 +1,5 @@
+import { getToken } from "@/auth/keycloak";
+
 /** Error thrown for any non-2xx response, carrying the HTTP status. */
 export class ApiError extends Error {
   readonly status: number;
@@ -10,15 +12,30 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const opts: RequestInit = {
-    method,
-    headers: { "Content-Type": "application/json" },
+  // Auth is SPA-managed Keycloak: attach the current access token as a bearer
+  // on every call. getToken() refreshes it first if it is near expiry.
+  const exec = async () => {
+    const token = await getToken();
+    const opts: RequestInit = {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    };
+    if (body !== undefined) {
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(path, opts);
   };
-  if (body !== undefined) {
-    opts.body = JSON.stringify(body);
+
+  // The token can expire between getToken() and the server receiving it; on a
+  // 401, force a refresh and retry once.
+  let resp = await exec();
+  if (resp.status === 401) {
+    resp = await exec();
   }
 
-  const resp = await fetch(path, opts);
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new ApiError(resp.status, `${method} ${path} failed (${resp.status}): ${text.trim()}`);

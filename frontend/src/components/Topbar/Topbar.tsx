@@ -1,7 +1,8 @@
 import { ChevronDown, Monitor, Moon, Sun } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import type { ReactNode } from "react";
-
+import { signOut } from "@/auth/keycloak";
+import { useUser } from "@/auth/user";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -11,17 +12,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { isThemeMode, type ThemeMode } from "@/hooks/useThemePreference";
 import { userInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/providers/ThemeProvider";
 
 export function Topbar() {
-  const { data: user } = useCurrentUser();
+  const { user } = useUser();
   const { themeMode, setThemeMode } = useTheme();
 
-  const displayName = user?.name || user?.username || user?.email || "Account";
+  const displayName = user?.name || user?.email || "Account";
 
   return (
     <header className="flex h-[60px] w-full items-center justify-between border-border border-b bg-background px-10">
@@ -38,7 +38,7 @@ export function Topbar() {
           >
             <Avatar className="h-8 w-8">
               <AvatarFallback className="bg-primary font-semibold text-primary-foreground text-sm">
-                {userInitials(user?.name || user?.username, user?.email)}
+                {userInitials(user?.name, user?.email)}
               </AvatarFallback>
             </Avatar>
             <span className="font-medium text-foreground text-sm">{displayName}</span>
@@ -48,9 +48,7 @@ export function Topbar() {
 
         <DropdownMenuContent align="end" className="w-72">
           <div className="border-b px-3 py-2">
-            <p className="font-medium text-foreground text-sm">
-              {user?.name || user?.username || "Signed in"}
-            </p>
+            <p className="font-medium text-foreground text-sm">{user?.name || "Signed in"}</p>
             {user?.email ? <p className="text-muted-foreground text-xs">{user.email}</p> : null}
           </div>
 
@@ -77,8 +75,8 @@ export function Topbar() {
 
           <DropdownMenuSeparator />
 
-          <DropdownMenuItem asChild className="cursor-pointer">
-            <a href="/logout">Sign out</a>
+          <DropdownMenuItem className="cursor-pointer" onClick={() => signOut()}>
+            Sign out
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

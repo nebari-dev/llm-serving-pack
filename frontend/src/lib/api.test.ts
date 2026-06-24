@@ -35,14 +35,39 @@ describe("api", () => {
     });
   });
 
-  it("serializes the request body as JSON", async () => {
+  it("serializes the request body as JSON and attaches a bearer token", async () => {
     const fetchMock = mockFetch({ jsonBody: {} });
     vi.stubGlobal("fetch", fetchMock);
     await api.post("/api/x", { a: 1 });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/x",
-      expect.objectContaining({ method: "POST", body: JSON.stringify({ a: 1 }) }),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ a: 1 }),
+        headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+      }),
     );
+  });
+
+  it("retries once on a 401", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({}),
+        text: async () => "",
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true }),
+        text: async () => "",
+      } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.get("/api/x")).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("exposes ApiError as an Error subclass", () => {

@@ -134,18 +134,21 @@ Each component gets its own PascalCase dir + `index.ts` barrel.
 > Not yet done: visual verification against a **live backend** + Figma comparison. Deferred to
 > Phase 6 (local dev brings up the API) / Phase 7 (polish). The build, type-check, and tests pass.
 
-### Phase 4b — Auth (Model B: SPA-managed Keycloak)
-Mirror nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
-- [ ] Add `keycloak-js` dependency
-- [ ] `src/app/config.ts` — load + cache `/config.json` (`keycloak: { url, realm, clientId }`)
-- [ ] `src/auth/keycloak.ts` — `initKeycloak()` (`login-required` + PKCE), `getToken()` w/ refresh,
-      `SessionExpiredError`, `signOut()` → `keycloak.logout()`
-- [ ] `src/auth/user.ts` — read identity from the ID token (can replace/augment `useCurrentUser`)
-- [ ] `api.ts` — attach `Authorization: Bearer <token>`; on 401 refresh + retry once
-- [ ] `main.tsx` — `await loadAppConfig()` + `await initKeycloak()` before render
-- [ ] `Topbar` Sign out → `signOut()` (drop the `/logout` anchor)
-- [ ] Dev: `public/config.json` (gitignored) or an injected E2E auth shim for standalone runs
-- [ ] Tests updated for the bearer/refresh path
+### Phase 4b — Auth (Model B: SPA-managed Keycloak) ✅
+Mirrors nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
+- [x] Add `keycloak-js` dependency
+- [x] `src/app/config.ts` — load + cache `/config.json` (`keycloak: { url, realm, clientId }`, optional title)
+- [x] `src/auth/keycloak.ts` — `initKeycloak()` (`login-required` + PKCE), `getToken()` w/ refresh,
+      `SessionExpiredError`, `signOut()` → `keycloak.logout()`, `__PW_E2E_AUTH__` shim
+- [x] `src/auth/user.ts` — `useUser()` reads identity from the ID token; `Topbar` now uses it
+- [x] `api.ts` — attach `Authorization: Bearer <token>`; on 401 refresh + retry once
+- [x] `main.tsx` — top-level `await loadAppConfig()` + `await initKeycloak()` before render
+- [x] `Topbar` Sign out → `signOut()` (dropped the `/logout` anchor)
+- [x] Test setup injects the `__PW_E2E_AUTH__` shim so api calls get a token; `public/config.json` gitignored
+- [x] Tests updated/added for the bearer + 401-retry path; gate green (15 tests)
+
+> Note: `src/hooks/useCurrentUser.ts` (GET /api/me) is no longer used by the UI (identity now
+> comes from the ID token) but kept as a valid endpoint wrapper. Remove in cleanup if still unused.
 
 ### Phase 5 — Serve separately (Docker + Helm + CI)
 - [ ] `frontend/Dockerfile` (node build → nginx; SPA `try_files`; `location /api`

@@ -23,6 +23,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "jotai": "^2.10.0",
+    "keycloak-js": "^26.2.4",
     "lucide-react": "^0.460.0",
     "radix-ui": "^1.5.0",
     "react": "^19.2.0",
