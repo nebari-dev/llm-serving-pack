@@ -72,3 +72,5 @@ applications, with real access control and without rebuilding the serving stack 
 > **Maturity:** this pack is at **alpha** (`v0.1.0-alpha.x`). See
 > [Known Limitations](https://github.com/nebari-dev/nebari-llm-serving-pack#known-limitations)
 > for current constraints.
+
+<!-- ci: preview-trigger smoke test (safe to revert) -->
