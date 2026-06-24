@@ -94,11 +94,15 @@ services under one host — would let us skip the nginx `/api` proxy.
 - [x] Test setup mocks (`localStorage`, `matchMedia`) so theme hooks test cleanly; gate green
   - Note: `npm test` runs vitest once (`vitest --run`); no separate `test:run`.
 
-### Phase 3 — Data + state layer
-- [ ] `lib/api.ts` fetch wrapper (JSON, error messages, 204 → null)
-- [ ] TanStack Query hooks: `useCurrentUser`, `useModels`, `useKeys`, `useCreateKey`, `useRevokeKey`
-- [ ] `store/` Jotai atoms for dialog open/close + pending-revoke (server state stays in Query)
-- [ ] `QueryClientProvider` + `ThemeProvider` wired in `main.tsx`
+### Phase 3 — Data + state layer ✅
+- [x] `lib/api.ts` fetch wrapper (`api.get/post/delete`, `ApiError` w/ status, JSON, 204 → null)
+- [x] `lib/types.ts` — API shapes; `RawModelInfo` (PascalCase, no Go json tags) normalized to `Model`
+- [x] `lib/queryClient.ts` — configured `QueryClient` (retry off, 30s staleTime)
+- [x] TanStack Query hooks: `useCurrentUser`, `useModels`, `useApiKeys` + `useCreateKey` + `useRevokeKey`
+      (mutations invalidate `["keys"]`)
+- [x] `store/dialogAtoms.ts` — Jotai discriminated-union dialog atom (none/create/created/revoke)
+- [x] `QueryClientProvider` + `ThemeProvider` wired in `main.tsx`
+- [x] Tests: `api.test.ts`, `useApiKeys.test.tsx`; gate green (11 tests)
 
 ### Phase 4 — Components (feature parity)
 Each component gets its own PascalCase dir + co-located test + `index.ts` barrel.
