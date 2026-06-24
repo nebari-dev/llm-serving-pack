@@ -4,6 +4,10 @@ import starlight from '@astrojs/starlight';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
 import rehypeMermaid from 'rehype-mermaid';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
@@ -25,6 +29,9 @@ export default defineConfig({
         './src/styles/nebari-tokens.css',
         './src/styles/starlight-theme.css',
       ],
+      components: {
+        SocialIcons: './src/components/SocialIcons.astro',
+      },
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/nebari-dev/nebari-llm-serving-pack' },
       ],
@@ -55,5 +62,12 @@ export default defineConfig({
     syntaxHighlight: { type: 'shiki', excludeLangs: ['mermaid'] },
     rehypePlugins: [[rehypeMermaid, { strategy: 'inline-svg' }]],
   },
-  vite: { plugins: [tailwindcss()] },
+  vite: {
+    plugins: [tailwindcss()],
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, './src'),
+      },
+    },
+  },
 });
