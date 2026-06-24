@@ -86,10 +86,13 @@ services under one host — would let us skip the nginx `/api` proxy.
 - [x] `vite.config.ts` with `@` alias + `/api` (and `/logout`) dev proxy → `http://localhost:8080`
 - [x] Quality gate green: `npm run build`, `npm run test:run`, `npm run check` all pass
 
-### Phase 2 — Theming
-- [ ] Copy nebari-landing tokens into `src/app/index.css` (light/dark, `@custom-variant dark`)
-- [ ] Copy `useThemePreference.ts` + `ThemeContext.tsx` (+ `useLocalStorageState`); system default
-- [ ] Align `components.json` baseColor/aliases to the tokens
+### Phase 2 — Theming ✅
+- [x] Copy nebari-landing tokens into `src/index.css` (light/dark, `@theme inline`, `@custom-variant dark`)
+- [x] Copy `useThemePreference.ts` + `useLocalStorageState.ts`; add `ThemeProvider` (`src/providers/ThemeProvider/`); system default
+- [x] `ThemeProvider` wired into `main.tsx`
+- [x] `components.json` baseColor/aliases aligned (style `radix-vega`, css `src/index.css`)
+- [x] Test setup mocks (`localStorage`, `matchMedia`) so theme hooks test cleanly; gate green
+  - Note: `npm test` runs vitest once (`vitest --run`); no separate `test:run`.
 
 ### Phase 3 — Data + state layer
 - [ ] `lib/api.ts` fetch wrapper (JSON, error messages, 204 → null)
