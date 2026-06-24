@@ -7,7 +7,8 @@
     "start": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "test": "vitest run"
   },
   "dependencies": {
     "@astrojs/react": "^6.0.0",
@@ -25,5 +26,8 @@
     "sharp": "^0.34.5",
     "smol-toml": "^1.7.0",
     "tailwindcss": "^4.3.1"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
   }
 }
