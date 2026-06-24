@@ -1,7 +1,10 @@
 import { defineCollection } from 'astro:content';
-import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
+import { hugoContentLoader } from './loaders/hugo-content';
 
 export const collections = {
-	docs: defineCollection({ loader: docsLoader(), schema: docsSchema() }),
+  docs: defineCollection({
+    loader: hugoContentLoader({ dir: '../site/content' }),
+    schema: docsSchema(),
+  }),
 };
