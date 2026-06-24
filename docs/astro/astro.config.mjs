@@ -32,9 +32,6 @@ export default defineConfig({
       components: {
         SocialIcons: './src/components/SocialIcons.astro',
       },
-      social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/nebari-dev/nebari-llm-serving-pack' },
-      ],
       sidebar: [
         {
           label: 'Documentation',
