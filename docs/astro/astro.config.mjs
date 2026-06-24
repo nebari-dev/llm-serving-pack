@@ -13,6 +13,11 @@ export default defineConfig({
       title: 'LLM Serving Pack',
       description:
         'Kubernetes operator for serving LLMs on Nebari via llm-d, with per-model OIDC access control, API key management, and Envoy AI Gateway integration.',
+      logo: {
+        light: './src/assets/logo.svg',
+        dark: './src/assets/logo-dark.svg',
+        replacesTitle: false,
+      },
       customCss: [
         '@fontsource-variable/geist',
         '@fontsource/ibm-plex-mono',
