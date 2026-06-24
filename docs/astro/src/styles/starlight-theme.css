@@ -1,0 +1,19 @@
+/* Map nebari-design tokens (defined in nebari-tokens.css) onto Starlight's
+   CSS custom properties. Starlight derives both light and dark UI from these. */
+:root {
+  --sl-font: 'Geist Variable', system-ui, sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Accent = nebari primary magenta */
+  --sl-color-accent-low: var(--primary-magenta-100);
+  --sl-color-accent: var(--primary-magenta-600);
+  --sl-color-accent-high: var(--primary-magenta-800);
+}
+
+/* Dark theme: Starlight sets data-theme="dark" on <html>. nebari dark tokens
+   live under .dark, so re-point accents to the brighter magenta stop. */
+:root[data-theme='dark'] {
+  --sl-color-accent-low: var(--primary-magenta-900);
+  --sl-color-accent: var(--primary-magenta-500);
+  --sl-color-accent-high: var(--primary-magenta-200);
+}
