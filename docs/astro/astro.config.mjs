@@ -27,6 +27,26 @@ export default defineConfig({
       social: [
         { icon: 'github', label: 'GitHub', href: 'https://github.com/nebari-dev/nebari-llm-serving-pack' },
       ],
+      sidebar: [
+        {
+          label: 'Documentation',
+          items: [
+            { label: 'Quickstart', slug: 'quickstart' },
+            { label: 'Installation', slug: 'installation' },
+            { label: 'Local Development', slug: 'local-development' },
+            { label: 'Shared Storage', slug: 'shared-storage' },
+            { label: 'Troubleshooting', slug: 'troubleshooting' },
+          ],
+        },
+        {
+          label: 'Reference',
+          items: [
+            { label: 'Configuration', slug: 'configuration' },
+            { label: 'Architecture', slug: 'architecture' },
+            { label: 'CI/CD and Releasing', slug: 'cicd-and-releasing' },
+          ],
+        },
+      ],
     }),
   ],
   vite: { plugins: [tailwindcss()] },
