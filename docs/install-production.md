@@ -1739,3 +1739,125 @@ kubectl rollout restart deploy/ai-gateway-controller -n envoy-ai-gateway-system
 
 Confirm recovery: the controller logs should show only the live
 model's `InferencePool` being reconciled, with no panic.
+
+## 14. Per-user token usage in Langfuse
+
+This feature attributes LLM token usage to the API-key owner who made
+each request, visible per-user in a self-hosted Langfuse instance.
+
+**Scope:** This covers the **external (API-key) access path only.**
+The internal JWT path is not traced to Langfuse in this version.
+
+### 14.1 How it works
+
+The pipeline has four stages:
+
+1. **Envoy Gateway credential forwarding.** The operator's external
+   `SecurityPolicy` sets `apiKeyAuth.forwardClientIDHeader: x-client-id`
+   and `apiKeyAuth.sanitize: true`. When Envoy Gateway matches a
+   presented API key it forwards the matched credential's name — the
+   key-manager **clientID** (e.g. `user-chuck-1`) — downstream as the
+   `x-client-id` header. `sanitize: true` strips the raw API key from
+   the request before it is proxied upstream. **These fields require
+   Envoy Gateway v1.7+**; the `examples/envoy-gateway.yaml` pin and
+   `dev/Makefile` were bumped to v1.7.0. Older Envoy Gateway will
+   reject the SecurityPolicy.
+
+2. **Header → span attribute mapping.** The AI Gateway controller value
+   `controller.spanRequestHeaderAttributes: "x-client-id:user.id"`
+   (set in `examples/envoy-ai-gateway.yaml`) maps the forwarded header
+   onto the OpenInference GenAI span as the `user.id` attribute. The
+   extProc OpenInference tracer already records token usage on that
+   span.
+
+3. **OTLP export to Langfuse.** The extProc exports OTLP directly to
+   Langfuse — there is no OTel Collector in the path. The endpoint and
+   credentials are read from a Secret named
+   `langfuse-otlp-credentials` in the `envoy-ai-gateway-system`
+   namespace via these extProc env vars:
+
+   | Env var | Secret key |
+   |---|---|
+   | `OTEL_TRACES_EXPORTER=otlp` | (literal) |
+   | `OTEL_SERVICE_NAME` | (literal) |
+   | `OTEL_EXPORTER_OTLP_ENDPOINT` | `endpoint` |
+   | `OTEL_EXPORTER_OTLP_HEADERS` | `otlp-headers` |
+
+4. **Langfuse ingestion.** Langfuse ingests OTLP at
+   `/api/public/otel`, reads token usage from the span, and uses
+   `user.id` to populate its per-user view.
+
+**Granularity note:** `user.id` is the verbatim clientID
+(e.g. `user-chuck-1`), which means attribution is **per-key**, not
+per-human-aggregated. Because clientIDs embed the username, the data
+is still effectively per-user and groupable in Langfuse, but a user
+with multiple keys will appear as multiple distinct user IDs. True
+per-user rollup across keys is a deferred follow-up.
+
+### 14.2 Deploying self-hosted Langfuse
+
+Langfuse is deployed via ArgoCD using `examples/langfuse.yaml` (chart
+`langfuse/langfuse` 1.5.36). The chart bundles Postgres, ClickHouse,
+Redis, and MinIO; PVCs use the default StorageClass (Longhorn on
+standard Nebari clusters). This is a single-replica v1 deployment —
+HA, external datastores, and backup configuration are out of scope.
+
+**Prerequisites:**
+
+- A `langfuse-app-secrets` Kubernetes Secret must exist before ArgoCD
+  syncs the application. The exact `kubectl create secret generic`
+  command (with all required keys) is in the comment header of
+  `examples/langfuse.yaml` — follow that file rather than duplicating
+  the command here.
+
+**DNS:** The UI is exposed via a `NebariApp` at
+`langfuse.<baseDomain>` with Keycloak OIDC and a landing-page tile.
+A `langfuse.<baseDomain>` DNS record is required; a wildcard CNAME on
+the base domain covers it.
+
+### 14.3 Langfuse project-key bootstrap
+
+OTLP authentication uses a Langfuse **project's** public and secret
+API keys. These keys only exist after a project is created in the UI,
+so this one-time bootstrap must be performed before the extProc can
+export traces.
+
+1. Sign in to `https://langfuse.<baseDomain>`, create an organization
+   and a project.
+
+2. Navigate to **Project Settings → API Keys → Create**. Copy the
+   public key (`pk-lf-...`) and secret key (`sk-lf-...`).
+
+3. Compute the Base64 Basic-auth header value:
+
+   ```bash
+   printf 'pk-lf-...:sk-lf-...' | base64
+   ```
+
+4. Create the credentials Secret using the template in
+   `examples/langfuse-otlp-credentials.example.yaml`. Set:
+
+   - `endpoint: https://langfuse.<baseDomain>/api/public/otel`
+   - `otlp-headers: Authorization=Basic <base64-value>`
+
+   Apply it to the `envoy-ai-gateway-system` namespace.
+
+5. Roll the extProc so it picks up the new env vars:
+
+   ```bash
+   kubectl rollout restart deploy \
+     -n envoy-ai-gateway-system \
+     -l app.kubernetes.io/name=ai-gateway-extproc
+   ```
+
+> **Note:** Automating project and API-key creation (e.g. via the
+> Langfuse management API) is a deliberate follow-up and is not part
+> of v1.
+
+### 14.4 Verification
+
+1. Mint an API key via the key-manager UI (see section 11.2).
+2. Call the external endpoint with that key (see section 11.3).
+3. Open `https://langfuse.<baseDomain>`, navigate to **Traces**, and
+   confirm a trace appears with non-zero input/output token usage
+   attributed to the clientID (`user-<name>-N`) of the key you minted.
