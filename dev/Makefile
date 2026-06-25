@@ -1,6 +1,6 @@
 CLUSTER_NAME ?= llm-serving-test
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager apply-test-model logs-operator logs-key-manager clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -49,6 +49,14 @@ deploy-key-manager: ## Deploy key manager
 	kubectl apply -f manifests/key-manager.yaml
 	kubectl -n llm-operator-system rollout status deployment/llm-key-manager --timeout=60s
 
+deploy-keycloak: ## Deploy dev Keycloak (imports the nebari realm)
+	kubectl create namespace keycloak --dry-run=client -o yaml | kubectl apply -f -
+	kubectl create configmap keycloak-realm-import -n keycloak \
+		--from-file=realm-nebari.json=keycloak/realm-nebari.json \
+		--dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -f manifests/keycloak.yaml
+	kubectl -n keycloak rollout status deployment/keycloak --timeout=180s
+
 apply-test-model: ## Apply test model
 	kubectl apply -f manifests/test-model.yaml
 
@@ -57,5 +65,14 @@ logs-operator: ## Tail operator logs
 
 logs-key-manager: ## Tail key manager logs
 	kubectl -n llm-operator-system logs -f deployment/llm-key-manager
+
+logs-keycloak: ## Tail Keycloak logs
+	kubectl -n keycloak logs -f deployment/keycloak
+
+pf-key-manager: ## Port-forward key-manager API to localhost:8080
+	kubectl -n llm-operator-system port-forward svc/llm-key-manager 8080:8080
+
+pf-keycloak: ## Port-forward Keycloak to localhost:8180
+	kubectl -n keycloak port-forward svc/keycloak 8180:8080
 
 clean: teardown ## Alias for teardown

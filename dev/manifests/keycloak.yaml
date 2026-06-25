@@ -1,0 +1,86 @@
+---
+# Dev-only Keycloak for local frontend auth (Model B: SPA-managed Keycloak).
+#
+# Runs in `start-dev` mode (no TLS, ephemeral H2 DB) and imports the `nebari`
+# realm from a ConfigMap. The ConfigMap is rendered from
+# dev/keycloak/realm-nebari.json by `make deploy-keycloak` (kept as a standalone
+# JSON file so it stays lintable and reusable). NOT for production.
+#
+# Reach it from the host with:
+#   kubectl -n keycloak port-forward svc/keycloak 8180:8080
+# which matches frontend/public/config.json (url: http://localhost:8180,
+# realm: nebari, clientId: nebari-frontend-spa). Login as testuser / testuser.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.2
+          args: ["start-dev", "--import-realm"]
+          env:
+            # Bootstrap admin for the master realm (KC 26+ env var names).
+            # Console at http://localhost:8180/admin once port-forwarded.
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: "admin"
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: "admin"
+            # start-dev derives the issuer from the request host, so accessing
+            # via localhost:8180 yields iss=http://localhost:8180/realms/nebari,
+            # matching what keycloak-js builds from config.json.
+            - name: KC_HTTP_ENABLED
+              value: "true"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /realms/nebari
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: realm-import
+          configMap:
+            name: keycloak-realm-import
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
