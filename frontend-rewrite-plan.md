@@ -166,9 +166,22 @@ Mirrors nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
 - [ ] CI: `lint-frontend` + test job (biome + vitest) in `lint.yaml` / `test.yaml`
 
 ### Phase 6 — Local dev
+- [x] Dev Keycloak in the kind cluster: `dev/manifests/keycloak.yaml` (`start-dev
+      --import-realm`) + `dev/keycloak/realm-nebari.json` (realm `nebari`, public
+      PKCE client `nebari-frontend-spa`, groups mapper, `testuser`/`testuser`);
+      `make deploy-keycloak` renders the realm ConfigMap + deploys; `make
+      pf-keycloak` (8180) / `pf-key-manager` (8080) port-forward helpers
 - [ ] Wire `frontend/` into `dev/` (Makefile / manifests) alongside the backend
 - [ ] Document Vite `/api` proxy + local `config.json` + how Keycloak/bearer auth is
       stubbed for standalone runs (E2E auth shim or a real Keycloak)
+
+> Inner loop: `cd dev && make setup build-images load-images deploy deploy-keycloak`,
+> then `make pf-keycloak` + `make pf-key-manager` (separate terminals), then
+> `cd frontend && npm run dev`. `frontend/public/config.json` already points at
+> `http://localhost:8180` / realm `nebari` / client `nebari-frontend-spa`. Mint a
+> token without the browser via the client's direct-access grant:
+> `curl -d client_id=nebari-frontend-spa -d username=testuser -d password=testuser
+> -d grant_type=password http://localhost:8180/realms/nebari/protocol/openid-connect/token`
 
 ### Phase 7 — Quality gate, cleanup, docs
 - [ ] `npm run build && npm run test:run && npm run check` all pass
