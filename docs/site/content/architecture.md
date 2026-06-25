@@ -294,7 +294,7 @@ A small web application behind `NebariApp` that lets authenticated users generat
 
 ### How it works
 
-1. User hits the key manager UI at `keys.llm.<baseDomain>`
+1. User hits the key manager UI at `llm-keys.<baseDomain>`
 2. Keycloak/OIDC login via `NebariApp` auth
 3. Key manager watches all `LLMModel` CRs, filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`)
 4. User sees only models they can access
@@ -352,11 +352,11 @@ This audit is a precondition for the eventual-consistency revocation described a
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
 metadata:
-  name: llm-key-manager
+  name: nebari-llm-serving-key-manager
 spec:
-  hostname: keys.llm.<baseDomain>
+  hostname: llm-keys.<baseDomain>   # set via keyManager.nebariApp.hostname (no default)
   service:
-    name: llm-key-manager
+    name: nebari-llm-serving-key-manager
     port: 8080
   routing:
     routes:

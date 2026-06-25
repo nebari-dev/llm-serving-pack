@@ -6,7 +6,7 @@ This page documents every GitHub Actions workflow in the repository, the contain
 
 ## Workflows
 
-The repository has five workflows located in `.github/workflows/`.
+The repository has six workflows located in `.github/workflows/`.
 
 ### Test (`test.yaml`)
 
@@ -65,11 +65,15 @@ The chart's `values.yaml` does not set a default tag for the operator and key-ma
 
 **Triggers:** push to `main` when files under `docs/site/**` or the workflow file itself change; pull requests that touch the same paths; manual `workflow_dispatch`.
 
-Two jobs:
-
 A single **`docs`** job: checks out the full history (`fetch-depth: 0`), installs Go (pinned to `docs/site/go.mod` to resolve the theme module) and Hugo 0.159.0 (extended), computes the correct `baseURL` (production: `https://packs.nebari.dev/llm-serving-pack/`; preview: `https://<alias>.llm-serving-pack.pages.dev/`), and runs `hugo --gc --minify`. It then runs `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the just-built `public/` to validate internal and edit links.
 
 For non-fork PRs and pushes to `main`, the job deploys to Cloudflare Pages via `cloudflare/wrangler-action`. On pull requests from the same repo, a sticky comment is posted with the preview URL (`pages-deployment-alias-url`). Fork PRs run the build and link-check but skip deploy (secrets are unavailable).
+
+### Docs preview cleanup (`docs-preview-cleanup.yml`)
+
+**Triggers:** a pull request closing (merged or not).
+
+When a PR closes, this workflow deletes the Cloudflare Pages **preview** deployments for that PR's branch (via the Pages API, matched by branch and filtered to the preview environment). Direct Upload deploys are not tied to the git branch lifecycle, so without this, preview deployments would linger after the branch is gone. Fork PRs are skipped (no preview, no secrets).
 
 ### Add to Project (`add-to-project.yaml`)
 

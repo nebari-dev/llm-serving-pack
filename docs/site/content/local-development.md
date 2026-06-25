@@ -20,7 +20,7 @@ Install the following tools before proceeding:
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [helm](https://helm.sh/docs/intro/install/) v3.12+
 - [Docker](https://docs.docker.com/get-docker/) (or compatible container runtime)
-- [Go](https://go.dev/doc/install) 1.22+ (for building the operator and key manager)
+- [Go](https://go.dev/doc/install) 1.25+ (the key manager requires 1.25; the operator requires 1.24 - each builds with the version pinned in its own `go.mod`)
 
 ## 1. Clone the repo
 

@@ -48,7 +48,7 @@ spec:
   sources:
     # Source 1: LLM serving pack Helm chart
     - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: v0.1.0-alpha.7
+      targetRevision: v0.1.0-alpha.9
       path: charts/nebari-llm-serving
       helm:
         releaseName: nebari-llm-serving
