@@ -75,6 +75,40 @@ spec:
     chart: ai-gateway-helm
     repoURL: oci://docker.io/envoyproxy
     targetRevision: v0.5.0
+    helm:
+      values: |
+        # GenAI distributed tracing -> self-hosted Langfuse (OTLP).
+        #
+        # controller.spanRequestHeaderAttributes maps an HTTP request header to
+        # an OTel span attribute (format "header:attribute"). We copy the
+        # x-client-id header onto the GenAI span as user.id. That header is the
+        # matched API-key clientID (e.g. "user-chuck-1"), forwarded by
+        # apiKeyAuth.forwardClientIDHeader on the operator-generated external
+        # SecurityPolicy. Langfuse then attributes token usage per API-key owner
+        # (per-key granularity; see docs/install-production.md).
+        #
+        # The extProc OpenInference tracer exports OTLP to Langfuse. The endpoint
+        # and Basic-auth header are read from the langfuse-otlp-credentials
+        # Secret, which MUST exist in this namespace (envoy-ai-gateway-system).
+        # See examples/langfuse-otlp-credentials.example.yaml.
+        controller:
+          spanRequestHeaderAttributes: "x-client-id:user.id"
+        extProc:
+          extraEnvVars:
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            - name: OTEL_SERVICE_NAME
+              value: "nebari-llm-ai-gateway"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-otlp-credentials
+                  key: endpoint
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: langfuse-otlp-credentials
+                  key: otlp-headers
 
   destination:
     server: https://kubernetes.default.svc
