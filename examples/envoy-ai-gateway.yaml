@@ -87,10 +87,9 @@ spec:
         # SecurityPolicy. Langfuse then attributes token usage per API-key owner
         # (per-key granularity; see docs/install-production.md).
         #
-        # The extProc OpenInference tracer exports OTLP to Langfuse. The endpoint
-        # and Basic-auth header are read from the langfuse-otlp-credentials
-        # Secret, which MUST exist in this namespace (envoy-ai-gateway-system).
-        # See examples/langfuse-otlp-credentials.example.yaml.
+        # The extProc OpenInference tracer exports OTLP to Langfuse, configured
+        # via the extProc.extraEnvVars below (see the chart-limitation note
+        # there: the OTLP endpoint + auth header must be literal values).
         controller:
           spanRequestHeaderAttributes: "x-client-id:user.id"
         extProc:
@@ -99,16 +98,23 @@ spec:
               value: "otlp"
             - name: OTEL_SERVICE_NAME
               value: "nebari-llm-ai-gateway"
+            # IMPORTANT: ai-gateway-helm v0.5.0 serializes extProc.extraEnvVars
+            # into a single --extProcExtraEnvVars CLI arg and only honors a
+            # literal `value:` — `valueFrom`/secretKeyRef renders as nil
+            # (verified on a live cluster). So the endpoint and the Basic-auth
+            # header MUST be literals here.
+            #
+            # SECURITY: OTEL_EXPORTER_OTLP_HEADERS contains the Langfuse project
+            # secret key (base64 of "pk-...:sk-..."). With this chart there is
+            # no secretKeyRef option, so it lands in the Helm values (i.e. in
+            # your GitOps repo). Keep that repo private and/or encrypt this app
+            # with SOPS/sealed-secrets. Upstream support for secret refs here is
+            # a follow-up (ai-gateway-helm would need to stop flattening
+            # extraEnvVars into a CLI arg).
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-otlp-credentials
-                  key: endpoint
+              value: "https://langfuse.REPLACE-baseDomain/api/public/otel"
             - name: OTEL_EXPORTER_OTLP_HEADERS
-              valueFrom:
-                secretKeyRef:
-                  name: langfuse-otlp-credentials
-                  key: otlp-headers
+              value: "Authorization=Basic REPLACE-base64-of-pk:sk"
 
   destination:
     server: https://kubernetes.default.svc

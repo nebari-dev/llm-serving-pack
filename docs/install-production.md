@@ -1771,17 +1771,22 @@ The pipeline has four stages:
    span.
 
 3. **OTLP export to Langfuse.** The extProc exports OTLP directly to
-   Langfuse — there is no OTel Collector in the path. The endpoint and
-   credentials are read from a Secret named
-   `langfuse-otlp-credentials` in the `envoy-ai-gateway-system`
-   namespace via these extProc env vars:
+   Langfuse — there is no OTel Collector in the path. Tracing is
+   configured through `extProc.extraEnvVars` in
+   `examples/envoy-ai-gateway.yaml`: `OTEL_TRACES_EXPORTER=otlp`,
+   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`
+   (`https://langfuse.<baseDomain>/api/public/otel`), and
+   `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic <base64(pk:sk)>`).
 
-   | Env var | Secret key |
-   |---|---|
-   | `OTEL_TRACES_EXPORTER=otlp` | (literal) |
-   | `OTEL_SERVICE_NAME` | (literal) |
-   | `OTEL_EXPORTER_OTLP_ENDPOINT` | `endpoint` |
-   | `OTEL_EXPORTER_OTLP_HEADERS` | `otlp-headers` |
+   > **Chart limitation (verified on a live cluster):** `ai-gateway-helm`
+   > v0.5.0 flattens `extProc.extraEnvVars` into a single
+   > `--extProcExtraEnvVars` CLI arg and only honors a literal `value:` —
+   > `valueFrom`/`secretKeyRef` renders as `nil`. So these must be literal
+   > values in the Helm values, **including the Basic-auth header that
+   > contains the Langfuse project secret key.** Keep your GitOps repo
+   > private and/or encrypt this Application with SOPS or sealed-secrets.
+   > Secret-ref injection here is a follow-up that needs an upstream chart
+   > change.
 
 4. **Langfuse ingestion.** Langfuse ingests OTLP at
    `/api/public/otel`, reads token usage from the span, and uses
@@ -1834,13 +1839,16 @@ export traces.
    printf 'pk-lf-...:sk-lf-...' | base64
    ```
 
-4. Create the credentials Secret using the template in
-   `examples/langfuse-otlp-credentials.example.yaml`. Set:
+4. Set the literal values in `examples/envoy-ai-gateway.yaml`
+   (`extProc.extraEnvVars`) and re-sync the app:
 
-   - `endpoint: https://langfuse.<baseDomain>/api/public/otel`
-   - `otlp-headers: Authorization=Basic <base64-value>`
+   - `OTEL_EXPORTER_OTLP_ENDPOINT: https://langfuse.<baseDomain>/api/public/otel`
+   - `OTEL_EXPORTER_OTLP_HEADERS: Authorization=Basic <base64-value>`
 
-   Apply it to the `envoy-ai-gateway-system` namespace.
+   (See the chart-limitation note in §14.1 — these cannot be a
+   `secretKeyRef`.) After updating, roll the extProc so it picks up the
+   new controller args:
+   `kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
 
 5. Roll the extProc so it picks up the new env vars:
 
