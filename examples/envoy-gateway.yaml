@@ -42,7 +42,7 @@ spec:
   source:
     chart: gateway-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v1.7.0       # v1.7+ REQUIRED for apiKeyAuth.forwardClientIDHeader/sanitize (per-user tracing); pin to a tested patch
+    targetRevision: v1.6.2       # apiKeyAuth.forwardClientIDHeader/sanitize (per-user tracing) need v1.5.1+; v1.6.2 is the validated pin
     helm:
       releaseName: envoy-gateway
       values: |

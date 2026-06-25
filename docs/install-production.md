@@ -1759,9 +1759,9 @@ The pipeline has four stages:
    key-manager **clientID** (e.g. `user-chuck-1`) — downstream as the
    `x-client-id` header. `sanitize: true` strips the raw API key from
    the request before it is proxied upstream. **These fields require
-   Envoy Gateway v1.7+**; the `examples/envoy-gateway.yaml` pin and
-   `dev/Makefile` were bumped to v1.7.0. Older Envoy Gateway will
-   reject the SecurityPolicy.
+   Envoy Gateway v1.5.1+** (verified present in v1.6.2, the pack's
+   pinned version; absent in v1.3). Older Envoy Gateway will reject or
+   ignore the fields.
 
 2. **Header → span attribute mapping.** The AI Gateway controller value
    `controller.spanRequestHeaderAttributes: "x-client-id:user.id"`

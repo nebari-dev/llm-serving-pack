@@ -236,9 +236,9 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			},
 		},
 		// NOTE: forwardClientIDHeader and sanitize are now rendered on the external
-		// SecurityPolicy. Both fields require Envoy Gateway v1.7+. Operators must
-		// ensure their Envoy Gateway install meets this minimum; the SecurityPolicy
-		// will be rejected by older CRDs.
+		// SecurityPolicy. Both fields require Envoy Gateway v1.5.1+ (present in the
+		// pack's pinned v1.6.2; absent in v1.3). Operators on an older Envoy Gateway
+		// must upgrade or the fields are rejected/ignored by the SecurityPolicy CRD.
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
 			model: defaultAuthModel(),

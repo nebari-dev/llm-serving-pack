@@ -15,7 +15,7 @@ setup: ## Create kind cluster and install dependencies
 	# GIE CRDs (v1.4.0, includes graduated k8s.io group)
 	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.4.0/manifests.yaml
 	# Envoy Gateway
-	helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.7.0 -n envoy-gateway-system --create-namespace
+	helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.6.2 -n envoy-gateway-system --create-namespace
 	kubectl -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# Envoy AI Gateway
 	helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version v0.5.0 -n envoy-ai-gateway-system --create-namespace

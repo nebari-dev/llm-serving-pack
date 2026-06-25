@@ -136,7 +136,8 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 					// e.g. "user-chuck-1") downstream so the AI Gateway tracer can stamp
 					// it onto the GenAI span as user.id for per-user usage in Langfuse.
 					// sanitize removes the extracted API key from the request before
-					// it is proxied upstream. Both require Envoy Gateway v1.7+.
+					// it is proxied upstream. Both require Envoy Gateway v1.5.1+
+					// (present in the pack's pinned v1.6.2; absent in v1.3).
 					"forwardClientIDHeader": "x-client-id",
 					"sanitize":              true,
 				},
