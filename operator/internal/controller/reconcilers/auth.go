@@ -132,9 +132,13 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 							},
 						},
 					},
-					// TODO: Add sanitize:true and forwardClientIDHeader when minimum
-					// Envoy Gateway version is bumped to v1.7+ (these fields are not
-					// in v1.3 SecurityPolicy CRD)
+					// Forward the matched credential's name (the key-manager clientID,
+					// e.g. "user-chuck-1") downstream so the AI Gateway tracer can stamp
+					// it onto the GenAI span as user.id for per-user usage in Langfuse.
+					// sanitize removes the extracted API key from the request before
+					// it is proxied upstream. Both require Envoy Gateway v1.7+.
+					"forwardClientIDHeader": "x-client-id",
+					"sanitize":              true,
 				},
 			},
 		},
