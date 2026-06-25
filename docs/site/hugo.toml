@@ -3,7 +3,7 @@ languageCode = "en-us"
 title = "LLM Serving Pack"
 enableGitInfo = true
 
-# Theme imported as a Hugo Module, pinned to a release tag in go.mod (currently v0.1.1).
+# Theme imported as a Hugo Module, pinned to a release tag in go.mod (currently v0.2.0).
 [module]
   [[module.imports]]
     path = "github.com/nebari-dev/nebari-hugo-theme"
@@ -23,6 +23,7 @@ enableGitInfo = true
   home = ["HTML", "RSS", "JSON"]
 
 [params]
+  logoLink = "https://packs.nebari.dev/"
   description = "Kubernetes operator for serving LLMs on Nebari via llm-d, with per-model OIDC access control, API key management, and Envoy AI Gateway integration."
   repo = "https://github.com/nebari-dev/nebari-llm-serving-pack"
   editBase = "https://github.com/nebari-dev/nebari-llm-serving-pack/edit/main/docs/site/content"
