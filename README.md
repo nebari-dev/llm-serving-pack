@@ -201,7 +201,8 @@ response = client.chat.completions.create(
 | `auth.oidc.issuerURL` | OIDC issuer URL (static value, or read from Secret if empty) | `""` |
 | `auth.oidc.groupsClaim` | JWT claim containing group memberships | `groups` |
 | `auth.oidc.audience` | Expected JWT audience (empty = no audience check) | `""` |
-| `defaults.serving.image` | Default vLLM serving image | `ghcr.io/llm-d/llm-d-cuda:v0.6.0` |
+| `defaults.serving.image` | Default vLLM serving image | `ghcr.io/llm-d/llm-d-cuda:v0.7.0` |
+| `defaults.epp.image` | Endpoint Picker (llm-d-inference-scheduler) image | `ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0` |
 | `defaults.storage.storageClassName` | Default StorageClass for model PVCs (empty = cluster default) | `""` |
 | `defaults.monitoring.enabled` | Enable PodMonitor for Prometheus scraping | `true` |
 | `keyManager.enabled` | Deploy the key manager web UI | `true` |
@@ -240,6 +241,7 @@ Admin applies LLMModel CR
 The pack expects the following to be available on the cluster:
 
 - **GPU Operator**: The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/overview.html) must be installed so that GPU nodes advertise `nvidia.com/gpu` as an allocatable resource. If your nodes use a pre-installed NVIDIA driver AMI (like AWS `AL2023_x86_64_NVIDIA`), configure the operator with `driver.enabled=false` and `toolkit.enabled=false`.
+- **NVIDIA driver 580+**: The default serving image (`llm-d-cuda:v0.7.0`, from llm-d v0.7.0) ships the CUDA 13.0.2 runtime and requires NVIDIA driver branch 580 or later on every GPU node. Nodes on an older driver must be upgraded first, or vLLM will fail to start.
 - **Storage**: A StorageClass capable of provisioning PVCs sized for your models. EFS (`efs.csi.aws.com`) is recommended on AWS for its ReadWriteMany support and independence from node disk size. Set the StorageClass name via `defaults.storage.storageClassName`.
 - **Gateway**: Envoy Gateway with the Gateway API and AI Gateway extensions. Typically deployed by nebari-infrastructure-core.
 - **OIDC provider**: Keycloak or any OIDC-compliant provider for auth. The pack reads the issuer URL from either the Helm value or a Kubernetes Secret provisioned by the nebari-operator.

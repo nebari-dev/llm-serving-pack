@@ -67,7 +67,7 @@ spec:
       memory: "64Gi"
 
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
+    image: ghcr.io/llm-d/llm-d-cuda:v0.7.0
     replicas: 1
     tensorParallelism: 2             # defaults to gpu.count
     dataParallelism: 1
@@ -609,7 +609,9 @@ operator:
 
 defaults:
   serving:
-    image: ghcr.io/llm-d/llm-d-cuda:v0.6.0
+    image: ghcr.io/llm-d/llm-d-cuda:v0.7.0
+  epp:
+    image: ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0
   resources:
     requests:
       cpu: "4"
@@ -761,8 +763,8 @@ nebari-llm-serving-pack/
       controller/
         llmmodel_controller.go
         resources/
-          modelservice.go          # based on llm-d-modelservice chart v0.4.7
-          inferencepool.go         # based on GIE inferencepool chart v1.4.0
+          modelservice.go          # based on llm-d-modelservice chart v0.4.7 (deprecated in llm-d v0.7.0)
+          inferencepool.go         # based on GIE inferencepool chart v1.5.0
           routing.go
           auth.go
           storage.go
