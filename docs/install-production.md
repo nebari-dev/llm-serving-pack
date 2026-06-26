@@ -1772,10 +1772,14 @@ The pipeline has four stages:
    `gen_ai_client_token_usage` (input and output token counts) on every
    request.
 
-3. **Scrape into Mimir.** The gateway proxy pod already carries the
-   `prometheus.io/scrape` annotation, so the LGTM OpenTelemetry Collector
-   scrapes `gen_ai_*` metrics from the proxy's `/stats/prometheus` endpoint
-   and writes them to Mimir. No gateway-side OTLP export is configured.
+3. **Scrape into Mimir.** The `gen_ai_*` metrics are exposed on the extProc
+   sidecar's own admin port — `:1064` at `/metrics` — **not** on envoy's
+   `:19001 /stats/prometheus`. The proxy pod's default `prometheus.io/scrape`
+   annotation only covers `:19001`, and annotation-based discovery scrapes a
+   single port, so a **dedicated scrape job** targeting the gateway proxy pods
+   on `:1064` must be added to the LGTM OpenTelemetry Collector (see §14.2).
+   That job writes the `gen_ai_*` series to Mimir. No gateway-side OTLP export
+   is configured.
 
 4. **Grafana table.** The pack ships a dashboard ConfigMap (labeled
    `grafana_dashboard: "1"`) that the Grafana sidecar auto-loads. Its
@@ -1797,20 +1801,58 @@ per-user rollup across keys is a deferred follow-up.
 
 ### 14.2 What you deploy
 
-Nothing extra beyond the pack and a healthy AI Gateway:
+Three pieces — the metric label, the scrape job, and the dashboard:
 
-- The metric label comes from the one-line `controller.metricsRequestHeaderAttributes`
-  value in `examples/envoy-ai-gateway.yaml` (already set). After changing
-  it, roll the gateway proxy so the new controller args take effect:
-  `kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
-- The dashboard ships as a chart-managed ConfigMap, controlled by
-  `observability.dashboard.enabled` (default `true`) and placed in
-  `observability.dashboard.namespace` (default `monitoring`). Set the
-  namespace to wherever your LGTM Grafana sidecar watches for dashboards.
+**1. Metric label** — the one-line `controller.metricsRequestHeaderAttributes`
+value in `examples/envoy-ai-gateway.yaml` (already set). The controller passes
+this to the extProc sidecar as `-metricsRequestHeaderAttributes`, so the
+sidecar must be (re)created after the value changes. Roll the gateway proxy
+(the extProc is injected into it), which re-injects the sidecar with the new
+flag:
+`kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
 
-**Prerequisites:** the LGTM pack (Grafana + Mimir) installed with the
-collector scraping the gateway proxy, and Mimir retention ≥ 30 days
-(the LGTM default).
+**2. Scrape job for `:1064`** — add a scrape job to the LGTM OpenTelemetry
+Collector so the `gen_ai_*` metrics on the extProc admin port reach Mimir. The
+collector config is single-owner (see ADR-0005 in nebari-infrastructure-core);
+add this to the collector-override ConfigMap rather than editing the base. The
+job discovers the gateway proxy pods and rewrites the scrape target to `:1064`:
+
+```yaml
+# OpenTelemetry Collector prometheus receiver — scrape extProc gen_ai metrics.
+receivers:
+  prometheus/ai-gateway-genai:
+    config:
+      scrape_configs:
+        - job_name: ai-gateway-genai
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [envoy-gateway-system]
+          relabel_configs:
+            # keep only the Envoy AI Gateway proxy pods
+            - source_labels:
+                - __meta_kubernetes_pod_label_gateway_envoyproxy_io_owning_gateway_name
+              regex: nebari-gateway
+              action: keep
+            # scrape the extProc admin port, not envoy's :19001
+            - source_labels: [__address__]
+              regex: (.+?)(?::\d+)?
+              target_label: __address__
+              replacement: ${1}:1064
+```
+
+Then add `prometheus/ai-gateway-genai` to the collector's `metrics` pipeline
+`receivers:` list so it flows through the existing `otlphttp/mimir` exporter.
+
+**3. Dashboard** — ships as a chart-managed ConfigMap, controlled by
+`observability.dashboard.enabled` (default `true`) and placed in
+`observability.dashboard.namespace` (default `monitoring`). Set the namespace
+to wherever your LGTM Grafana sidecar watches for dashboards.
+
+**Prerequisites:** the LGTM pack (Grafana + Mimir) installed with the OTel
+collector forwarding to Mimir, and Mimir retention ≥ 30 days (the LGTM
+default).
 
 ### 14.3 Verification
 

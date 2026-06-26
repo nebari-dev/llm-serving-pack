@@ -85,10 +85,15 @@ spec:
         # user.id (Prometheus label `user_id`). That header is the matched
         # API-key clientID (e.g. "user-chuck-1"), forwarded by
         # apiKeyAuth.forwardClientIDHeader on the operator-generated external
-        # SecurityPolicy. The metric is already scraped into Mimir by the LGTM
-        # collector (the proxy pod carries prometheus.io/scrape), so a Grafana
-        # table can sum tokens per user. See docs/install-production.md §14 and
-        # the chart's observability.dashboard value.
+        # SecurityPolicy.
+        #
+        # COLLECTION: the gen_ai_* metrics are exposed on the extproc sidecar's
+        # admin port (:1064 /metrics), NOT on envoy's :19001 /stats/prometheus.
+        # The proxy pod's default prometheus.io/scrape annotation targets :19001
+        # only, so a DEDICATED scrape job for :1064 must be added to the LGTM
+        # OTel collector (see docs/install-production.md §14.2 for the
+        # scrape_config). Then a Grafana table sums tokens per user.
+        # See also the chart's observability.dashboard value.
         controller:
           metricsRequestHeaderAttributes: "x-client-id:user.id"
 
