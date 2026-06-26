@@ -118,7 +118,7 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 		if p.GetName() != "openrouter-backend-tls" {
 			t.Errorf("tls policy name = %q", p.GetName())
 		}
-		if p.GetAPIVersion() != "gateway.networking.k8s.io/v1alpha3" || p.GetKind() != "BackendTLSPolicy" {
+		if p.GetAPIVersion() != "gateway.networking.k8s.io/v1" || p.GetKind() != "BackendTLSPolicy" {
 			t.Errorf("tls policy GVK = %s/%s", p.GetAPIVersion(), p.GetKind())
 		}
 		validation, _ := specMap(t, p)["validation"].(map[string]interface{})

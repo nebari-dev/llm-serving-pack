@@ -33,3 +33,17 @@ webhooks:
         operations: ["CREATE", "UPDATE"]
         resources: ["llmmodels"]
     sideEffects: None
+  - name: vpassthroughmodel-v1alpha1.kb.io
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      service:
+        name: llm-operator-webhook-service
+        namespace: llm-operator-system
+        path: /validate-llm-nebari-dev-v1alpha1-passthroughmodel
+    failurePolicy: Fail
+    rules:
+      - apiGroups: ["llm.nebari.dev"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["passthroughmodels"]
+    sideEffects: None
