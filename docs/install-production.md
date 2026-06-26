@@ -1740,13 +1740,16 @@ kubectl rollout restart deploy/ai-gateway-controller -n envoy-ai-gateway-system
 Confirm recovery: the controller logs should show only the live
 model's `InferencePool` being reconciled, with no panic.
 
-## 14. Per-user token usage in Langfuse
+## 14. Per-user token usage in Grafana
 
 This feature attributes LLM token usage to the API-key owner who made
-each request, visible per-user in a self-hosted Langfuse instance.
+each request and renders it as a Grafana table — one row per user, total
+tokens used in the last 30 days — built entirely on the LGTM pack
+(Grafana + Mimir) already running in the cluster. No Langfuse, no extra
+datastores, no secrets in your GitOps repo.
 
-**Scope:** This covers the **external (API-key) access path only.**
-The internal JWT path is not traced to Langfuse in this version.
+**Scope:** This covers the **external (API-key) access path only.** The
+internal JWT path is not attributed in this version.
 
 ### 14.1 How it works
 
@@ -1754,118 +1757,77 @@ The pipeline has four stages:
 
 1. **Envoy Gateway credential forwarding.** The operator's external
    `SecurityPolicy` sets `apiKeyAuth.forwardClientIDHeader: x-client-id`
-   and `apiKeyAuth.sanitize: true`. When Envoy Gateway matches a
-   presented API key it forwards the matched credential's name — the
-   key-manager **clientID** (e.g. `user-chuck-1`) — downstream as the
-   `x-client-id` header. `sanitize: true` strips the raw API key from
-   the request before it is proxied upstream. **These fields require
-   Envoy Gateway v1.5.1+** (verified present in v1.6.2, the pack's
-   pinned version; absent in v1.3). Older Envoy Gateway will reject or
-   ignore the fields.
+   and `apiKeyAuth.sanitize: true`. When Envoy Gateway matches a presented
+   API key it forwards the matched credential's name — the key-manager
+   **clientID** (e.g. `user-chuck-1`) — downstream as the `x-client-id`
+   header. `sanitize: true` strips the raw API key from the request before
+   it is proxied upstream. **These fields require Envoy Gateway v1.5.1+**
+   (verified present in v1.6.2, the pack's pinned version; absent in v1.3).
 
-2. **Header → span attribute mapping.** The AI Gateway controller value
-   `controller.spanRequestHeaderAttributes: "x-client-id:user.id"`
+2. **Header → metric label mapping.** The AI Gateway controller value
+   `controller.metricsRequestHeaderAttributes: "x-client-id:user.id"`
    (set in `examples/envoy-ai-gateway.yaml`) maps the forwarded header
-   onto the OpenInference GenAI span as the `user.id` attribute. The
-   extProc OpenInference tracer already records token usage on that
-   span.
+   onto the GenAI token-usage metric as the `user.id` attribute, which
+   Prometheus exposes as the label `user_id`. The extProc already records
+   `gen_ai_client_token_usage` (input and output token counts) on every
+   request.
 
-3. **OTLP export to Langfuse.** The extProc exports OTLP directly to
-   Langfuse — there is no OTel Collector in the path. Tracing is
-   configured through `extProc.extraEnvVars` in
-   `examples/envoy-ai-gateway.yaml`: `OTEL_TRACES_EXPORTER=otlp`,
-   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`
-   (`https://langfuse.<baseDomain>/api/public/otel`), and
-   `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic <base64(pk:sk)>`).
+3. **Scrape into Mimir.** The gateway proxy pod already carries the
+   `prometheus.io/scrape` annotation, so the LGTM OpenTelemetry Collector
+   scrapes `gen_ai_*` metrics from the proxy's `/stats/prometheus` endpoint
+   and writes them to Mimir. No gateway-side OTLP export is configured.
 
-   > **Chart limitation (verified on a live cluster):** `ai-gateway-helm`
-   > v0.5.0 flattens `extProc.extraEnvVars` into a single
-   > `--extProcExtraEnvVars` CLI arg and only honors a literal `value:` —
-   > `valueFrom`/`secretKeyRef` renders as `nil`. So these must be literal
-   > values in the Helm values, **including the Basic-auth header that
-   > contains the Langfuse project secret key.** Keep your GitOps repo
-   > private and/or encrypt this Application with SOPS or sealed-secrets.
-   > Secret-ref injection here is a follow-up that needs an upstream chart
-   > change.
+4. **Grafana table.** The pack ships a dashboard ConfigMap (labeled
+   `grafana_dashboard: "1"`) that the Grafana sidecar auto-loads. Its
+   single Table panel runs:
 
-4. **Langfuse ingestion.** Langfuse ingests OTLP at
-   `/api/public/otel`, reads token usage from the span, and uses
-   `user.id` to populate its per-user view.
+   ```promql
+   sum by (user_id) (increase(gen_ai_client_token_usage_sum{user_id!=""}[30d]))
+   ```
 
-**Granularity note:** `user.id` is the verbatim clientID
-(e.g. `user-chuck-1`), which means attribution is **per-key**, not
-per-human-aggregated. Because clientIDs embed the username, the data
-is still effectively per-user and groupable in Langfuse, but a user
-with multiple keys will appear as multiple distinct user IDs. True
+   Summing across `gen_ai_token_type` (input + output) yields total tokens
+   per user over the last 30 days; `user_id != ""` drops unattributed
+   (e.g. internal) traffic.
+
+**Granularity note:** `user_id` is the verbatim clientID (e.g.
+`user-chuck-1`), so attribution is **per-key**, not per-human-aggregated.
+Because clientIDs embed the username, the data is still effectively
+per-user, but a user with multiple keys appears as multiple rows. True
 per-user rollup across keys is a deferred follow-up.
 
-### 14.2 Deploying self-hosted Langfuse
+### 14.2 What you deploy
 
-Langfuse is deployed via ArgoCD using `examples/langfuse.yaml` (chart
-`langfuse/langfuse` 1.5.36). The chart bundles Postgres, ClickHouse,
-Redis, and MinIO; PVCs use the default StorageClass (Longhorn on
-standard Nebari clusters). This is a single-replica v1 deployment —
-HA, external datastores, and backup configuration are out of scope.
+Nothing extra beyond the pack and a healthy AI Gateway:
 
-**Prerequisites:**
+- The metric label comes from the one-line `controller.metricsRequestHeaderAttributes`
+  value in `examples/envoy-ai-gateway.yaml` (already set). After changing
+  it, roll the gateway proxy so the new controller args take effect:
+  `kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
+- The dashboard ships as a chart-managed ConfigMap, controlled by
+  `observability.dashboard.enabled` (default `true`) and placed in
+  `observability.dashboard.namespace` (default `monitoring`). Set the
+  namespace to wherever your LGTM Grafana sidecar watches for dashboards.
 
-- A `langfuse-app-secrets` Kubernetes Secret must exist before ArgoCD
-  syncs the application. The exact `kubectl create secret generic`
-  command (with all required keys) is in the comment header of
-  `examples/langfuse.yaml` — follow that file rather than duplicating
-  the command here.
+**Prerequisites:** the LGTM pack (Grafana + Mimir) installed with the
+collector scraping the gateway proxy, and Mimir retention ≥ 30 days
+(the LGTM default).
 
-**DNS:** The UI is exposed via a `NebariApp` at
-`langfuse.<baseDomain>` with Keycloak OIDC and a landing-page tile.
-A `langfuse.<baseDomain>` DNS record is required; a wildcard CNAME on
-the base domain covers it.
-
-### 14.3 Langfuse project-key bootstrap
-
-OTLP authentication uses a Langfuse **project's** public and secret
-API keys. These keys only exist after a project is created in the UI,
-so this one-time bootstrap must be performed before the extProc can
-export traces.
-
-1. Sign in to `https://langfuse.<baseDomain>`, create an organization
-   and a project.
-
-2. Navigate to **Project Settings → API Keys → Create**. Copy the
-   public key (`pk-lf-...`) and secret key (`sk-lf-...`).
-
-3. Compute the Base64 Basic-auth header value:
-
-   ```bash
-   printf 'pk-lf-...:sk-lf-...' | base64
-   ```
-
-4. Set the literal values in `examples/envoy-ai-gateway.yaml`
-   (`extProc.extraEnvVars`) and re-sync the app:
-
-   - `OTEL_EXPORTER_OTLP_ENDPOINT: https://langfuse.<baseDomain>/api/public/otel`
-   - `OTEL_EXPORTER_OTLP_HEADERS: Authorization=Basic <base64-value>`
-
-   (See the chart-limitation note in §14.1 — these cannot be a
-   `secretKeyRef`.) After updating, roll the extProc so it picks up the
-   new controller args:
-   `kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
-
-5. Roll the extProc so it picks up the new env vars:
-
-   ```bash
-   kubectl rollout restart deploy \
-     -n envoy-ai-gateway-system \
-     -l app.kubernetes.io/name=ai-gateway-extproc
-   ```
-
-> **Note:** Automating project and API-key creation (e.g. via the
-> Langfuse management API) is a deliberate follow-up and is not part
-> of v1.
-
-### 14.4 Verification
+### 14.3 Verification
 
 1. Mint an API key via the key-manager UI (see section 11.2).
-2. Call the external endpoint with that key (see section 11.3).
-3. Open `https://langfuse.<baseDomain>`, navigate to **Traces**, and
-   confirm a trace appears with non-zero input/output token usage
-   attributed to the clientID (`user-<name>-N`) of the key you minted.
+2. Call the external endpoint with that key a few times (see section 11.3).
+3. Query Mimir directly to confirm the labeled metric landed:
+
+   ```promql
+   sum by (user_id) (increase(gen_ai_client_token_usage_sum{user_id!=""}[30d]))
+   ```
+
+   Expect a row whose `user_id` is the clientID of the key you minted
+   (`user-<name>-N`) with a non-zero token count.
+4. Open Grafana, find the **LLM Per-User Token Usage** dashboard, and
+   confirm the table renders the same row. The dashboard appears without a
+   Grafana restart (the sidecar loads the ConfigMap live).
+
+> **Note:** Per-model and input/output split breakdowns, time-series/rate
+> panels, alerting, and cost estimation are deliberate follow-ups and are
+> not part of v1.
