@@ -10,10 +10,13 @@ GIE_VERSION ?= v1.4.0
 ENVOY_GATEWAY_VERSION ?= v1.6.7
 AI_GATEWAY_VERSION ?= v0.5.0
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager apply-test-model apply-passthrough-model create-openrouter-secret ui logs-operator logs-key-manager clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui logs-operator logs-key-manager clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
+run-dev: ## One-command UI dev environment: cluster + models + port-forward + hot-reload UI server (needs dev/.env with OPENROUTER_API_KEY)
+	./run-dev.sh
 
 setup: ## Create kind cluster and install dependencies
 	kind create cluster --name $(CLUSTER_NAME)

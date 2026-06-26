@@ -218,6 +218,10 @@ The UI loads without a login and can mint and revoke keys for any model the
 in the Helm chart); it is off by default and must never be enabled in a real
 deployment.
 
+> **Working on the UI itself?** Use `make run-dev` instead of the steps above:
+> one command brings up the cluster, three models, the port-forward, and a
+> hot-reloading dev server. See [ui-development.md](ui-development.md).
+
 ## 11. Cleanup
 
 When you are done, delete the kind cluster:
