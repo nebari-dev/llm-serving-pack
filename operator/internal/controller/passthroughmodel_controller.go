@@ -29,9 +29,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -356,8 +360,33 @@ func boolOrDefaultStatus(b *bool) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	managedByOperator := predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetLabels()["app.kubernetes.io/managed-by"] == "nebari-llm-operator"
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llmv1alpha1.PassthroughModel{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.mapAPIKeySecretToModel),
+			builder.WithPredicates(managedByOperator),
+		).
 		Named("passthroughmodel").
 		Complete(r)
+}
+
+// mapAPIKeySecretToModel enqueues a reconcile for the PassthroughModel that owns
+// an api-keys Secret. It ignores Secrets that are not passthrough api-keys
+// Secrets (served-model Secrets carry app.kubernetes.io/name=llmmodel).
+func (r *PassthroughModelReconciler) mapAPIKeySecretToModel(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels["app.kubernetes.io/name"] != "passthroughmodel" {
+		return nil
+	}
+	name := labels["llm.nebari.dev/model-name"]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
+	}}
 }
