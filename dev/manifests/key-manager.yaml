@@ -11,7 +11,7 @@ metadata:
   name: llm-key-manager-models
 rules:
   - apiGroups: ["llm.nebari.dev"]
-    resources: ["llmmodels"]
+    resources: ["llmmodels", "passthroughmodels"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
