@@ -1,0 +1,22 @@
+{{- if .Values.observability.dashboard.enabled }}
+# Per-user LLM token-usage Grafana dashboard.
+#
+# Labeled `grafana_dashboard: "1"` so the LGTM pack's grafana-sc-dashboard
+# sidecar auto-loads it (no Grafana restart needed). Placed in the monitoring
+# namespace (observability.dashboard.namespace) where the sidecar watches,
+# which differs from this chart's release namespace, so the namespace is set
+# explicitly. The panel sums gen_ai_client_token_usage per user_id over 30d;
+# the user_id label is populated by the AI Gateway's
+# metricsRequestHeaderAttributes mapping of the forwarded x-client-id header.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-token-usage-dashboard
+  namespace: {{ .Values.observability.dashboard.namespace }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  per-user-token-usage.json: |-
+    {{- .Files.Get "dashboards/per-user-token-usage.json" | nindent 4 }}
+{{- end }}
