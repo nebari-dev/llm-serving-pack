@@ -3,6 +3,7 @@ package reconcilers
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
@@ -54,14 +55,54 @@ func defaultAuthConfig() *config.OperatorConfig {
 	}
 }
 
+func TestClientIDsFromSecret(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		secret *corev1.Secret
+		want   []string
+	}{
+		{name: "nil secret", secret: nil, want: []string{}},
+		{
+			name:   "empty data",
+			secret: &corev1.Secret{Data: map[string][]byte{}},
+			want:   []string{},
+		},
+		{
+			name: "keys returned sorted",
+			secret: &corev1.Secret{Data: map[string][]byte{
+				"user-chuck-2": []byte("k2"),
+				"user-alice-1": []byte("k1"),
+				"user-chuck-1": []byte("k0"),
+			}},
+			want: []string{"user-alice-1", "user-chuck-1", "user-chuck-2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ClientIDsFromSecret(tt.secret)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("index %d: got %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
 	tests := []struct {
-		name  string
-		model *llmv1alpha1.LLMModel
-		cfg   *config.OperatorConfig
-		check func(t *testing.T, result *AuthResources, err error)
+		name      string
+		model     *llmv1alpha1.LLMModel
+		cfg       *config.OperatorConfig
+		clientIDs []string
+		check     func(t *testing.T, result *AuthResources, err error)
 	}{
 		{
 			name:  "API key Secret: correct name and namespace",
@@ -214,8 +255,86 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 			},
 		},
-		// NOTE: sanitize and forwardClientIDHeader are Envoy Gateway v1.7+ features.
-		// Tests for these fields will be added when minimum EG version is bumped.
+		{
+			name:      "External SecurityPolicy: sets forwardClientIDHeader and sanitize",
+			model:     defaultAuthModel(),
+			cfg:       defaultAuthConfig(),
+			clientIDs: []string{"user-chuck-1"},
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
+				if apiKeyAuth["forwardClientIDHeader"] != "x-llm-client-id" {
+					t.Errorf("expected forwardClientIDHeader=x-llm-client-id, got %v", apiKeyAuth["forwardClientIDHeader"])
+				}
+				if apiKeyAuth["sanitize"] != true {
+					t.Errorf("expected sanitize=true, got %v", apiKeyAuth["sanitize"])
+				}
+			},
+		},
+		{
+			name:      "External SecurityPolicy: authorization allow-list is exactly this model's client IDs",
+			model:     defaultAuthModel(),
+			cfg:       defaultAuthConfig(),
+			clientIDs: []string{"user-alice-1", "user-chuck-2"},
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				authz, ok := spec["authorization"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected authorization block on external SecurityPolicy")
+				}
+				if authz["defaultAction"] != "Deny" {
+					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
+				}
+				rules := authz["rules"].([]interface{})
+				if len(rules) != 1 {
+					t.Fatalf("expected 1 rule, got %d", len(rules))
+				}
+				principal := rules[0].(map[string]interface{})["principal"].(map[string]interface{})
+				headers := principal["headers"].([]interface{})
+				hm := headers[0].(map[string]interface{})
+				if hm["name"] != "x-llm-client-id" {
+					t.Errorf("expected header name x-llm-client-id, got %v", hm["name"])
+				}
+				values := hm["values"].([]interface{})
+				if len(values) != 2 || values[0] != "user-alice-1" || values[1] != "user-chuck-2" {
+					t.Errorf("expected values=[user-alice-1 user-chuck-2], got %v", values)
+				}
+				// A foreign client ID must NOT be in the allow-list.
+				for _, v := range values {
+					if v == "user-bob-9" {
+						t.Errorf("foreign client id leaked into allow-list: %v", values)
+					}
+				}
+			},
+		},
+		{
+			name:      "External SecurityPolicy: zero client IDs renders deny-all with no allow rule",
+			model:     defaultAuthModel(),
+			cfg:       defaultAuthConfig(),
+			clientIDs: nil,
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				authz, ok := spec["authorization"].(map[string]interface{})
+				if !ok {
+					t.Fatal("expected authorization block even with zero client IDs")
+				}
+				if authz["defaultAction"] != "Deny" {
+					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
+				}
+				if _, present := authz["rules"]; present {
+					t.Errorf("expected no rules key for zero client IDs, got %v", authz["rules"])
+				}
+			},
+		},
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
 			model: defaultAuthModel(),
@@ -578,7 +697,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := BuildAuthResources(tt.model, tt.cfg)
+			result, err := BuildAuthResources(tt.model, tt.cfg, tt.clientIDs)
 			tt.check(t, result, err)
 		})
 	}

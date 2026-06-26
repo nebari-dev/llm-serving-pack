@@ -32,9 +32,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -124,7 +128,11 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// 6. Reconcile auth resources (Secret + ConfigMap, both in the model's namespace)
 	var authResources *reconcilers.AuthResources
 	if r.Config != nil {
-		authResources, err = reconcilers.BuildAuthResources(model, r.Config)
+		clientIDs, err := r.apiKeyClientIDs(ctx, model)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
+		}
+		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
@@ -260,6 +268,22 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// apiKeyClientIDs reads the model's api-keys Secret and returns its client IDs
+// (data-key names). A missing Secret (first reconcile, before it is created)
+// yields no client IDs, which renders a deny-all external authorization until a
+// key is minted.
+func (r *LLMModelReconciler) apiKeyClientIDs(ctx context.Context, model *llmv1alpha1.LLMModel) ([]string, error) {
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: reconcilers.APIKeySecretName(model.Name), Namespace: model.Namespace}
+	if err := r.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return reconcilers.ClientIDsFromSecret(secret), nil
 }
 
 // reconcileAuthSecretAndConfigMap creates or updates the API-key Secret and
@@ -739,11 +763,37 @@ func (r *LLMModelReconciler) createOrUpdateUnstructured(
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *LLMModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	managedByOperator := predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetLabels()["app.kubernetes.io/managed-by"] == "nebari-llm-operator"
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llmv1alpha1.LLMModel{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.mapAPIKeySecretToModel),
+			builder.WithPredicates(managedByOperator),
+		).
 		Named("llmmodel").
 		Complete(r)
+}
+
+// mapAPIKeySecretToModel enqueues a reconcile for the LLMModel that owns an
+// api-keys Secret, so minting or revoking a key re-renders the external
+// authorization allow-list. It ignores Secrets that are not LLMModel api-keys
+// Secrets (passthrough Secrets carry app.kubernetes.io/name=passthroughmodel).
+func (r *LLMModelReconciler) mapAPIKeySecretToModel(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels["app.kubernetes.io/name"] != "llmmodel" {
+		return nil
+	}
+	name := labels["llm.nebari.dev/model-name"]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
+	}}
 }

@@ -29,9 +29,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -89,7 +93,11 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config)
+	clientIDs, err := r.apiKeyClientIDs(ctx, pm)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
+	}
+	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config, clientIDs)
 	if err != nil {
 		// Surface the build failure as a condition so `kubectl describe`
 		// explains the Error phase rather than only the reconcile log.
@@ -163,6 +171,21 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// apiKeyClientIDs reads the passthrough model's api-keys Secret and returns its
+// client IDs (data-key names). A missing Secret yields no client IDs (deny-all
+// external authorization until a key is minted).
+func (r *PassthroughModelReconciler) apiKeyClientIDs(ctx context.Context, pm *llmv1alpha1.PassthroughModel) ([]string, error) {
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: reconcilers.APIKeySecretName(pm.Name), Namespace: pm.Namespace}
+	if err := r.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return reconcilers.ClientIDsFromSecret(secret), nil
 }
 
 // reconcileDelete cleans up the auth resources (no owner references) and
@@ -337,8 +360,33 @@ func boolOrDefaultStatus(b *bool) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	managedByOperator := predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetLabels()["app.kubernetes.io/managed-by"] == "nebari-llm-operator"
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llmv1alpha1.PassthroughModel{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.mapAPIKeySecretToModel),
+			builder.WithPredicates(managedByOperator),
+		).
 		Named("passthroughmodel").
 		Complete(r)
+}
+
+// mapAPIKeySecretToModel enqueues a reconcile for the PassthroughModel that owns
+// an api-keys Secret. It ignores Secrets that are not passthrough api-keys
+// Secrets (served-model Secrets carry app.kubernetes.io/name=llmmodel).
+func (r *PassthroughModelReconciler) mapAPIKeySecretToModel(_ context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels["app.kubernetes.io/name"] != "passthroughmodel" {
+		return nil
+	}
+	name := labels["llm.nebari.dev/model-name"]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
+	}}
 }
