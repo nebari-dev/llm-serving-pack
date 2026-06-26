@@ -11,6 +11,14 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
+// apiKeyClientIDHeader is the request header Envoy Gateway populates with the
+// authenticated API key's client ID (the api-keys Secret data-key name). The
+// per-route authorization rule matches this header against the model's own
+// client IDs so a key minted for one model cannot call another. The api_key_auth
+// filter (order 6) runs before the RBAC/authorization filter (order 301), so the
+// header is present when authorization evaluates.
+const apiKeyClientIDHeader = "x-llm-client-id"
+
 // AuthResources holds all auth-related resources for an LLMModel. All
 // resources live in the LLMModel's own namespace - the operator no longer
 // uses a separate api-keys namespace because Envoy Gateway's
@@ -29,7 +37,7 @@ type AuthResources struct {
 // BuildAuthResources is a pure function that computes all auth-related Kubernetes resources
 // for the given LLMModel: API key Secret, metadata ConfigMap, and SecurityPolicies.
 // All resources are placed in the LLMModel's own namespace.
-func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*AuthResources, error) {
+func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig, clientIDs []string) (*AuthResources, error) {
 	result := &AuthResources{}
 
 	labels := authResourceLabels(model)
@@ -38,7 +46,7 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 	result.APIKeyMetadataCM = buildAPIKeyMetadataConfigMap(model, labels)
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
-		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model)
+		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model, clientIDs)
 	}
 
 	if boolOrDefault(model.Spec.Endpoints.Internal.Enabled, true) {
@@ -101,13 +109,14 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 	}
 }
 
-func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unstructured {
+func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, clientIDs []string) *unstructured.Unstructured {
 	return buildAPIKeyAuthSecurityPolicy(
 		model.Name+"-external-auth",
 		model.Namespace,
 		labelsToInterface(StandardLabels(model)),
 		model.Name+"-external",
 		APIKeySecretName(model.Name),
+		clientIDs,
 	)
 }
 
@@ -115,7 +124,7 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel) *unstructured.Unst
 // external HTTPRoute behind per-user API keys. Shared between the LLMModel
 // and PassthroughModel reconcilers so both endpoint types present the same
 // client UX (Authorization header carrying a key from the api-keys Secret).
-func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName, secretName string) *unstructured.Unstructured {
+func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName, secretName string, clientIDs []string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
@@ -152,13 +161,53 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 							},
 						},
 					},
-					// TODO: Add sanitize:true and forwardClientIDHeader when minimum
-					// Envoy Gateway version is bumped to v1.7+ (these fields are not
-					// in v1.3 SecurityPolicy CRD)
+					// forwardClientIDHeader surfaces the matched credential's
+					// client ID to the authorization filter (and upstream).
+					// sanitize strips the API key before the backend sees it.
+					"forwardClientIDHeader": apiKeyClientIDHeader,
+					"sanitize":              true,
+				},
+				// Authentication (apiKeyAuth) is pooled per listener: any valid
+				// key on the shared listener authenticates. Authorization is
+				// per-route and is what scopes a key to its model: deny by
+				// default, allow only this model's client IDs.
+				"authorization": buildAPIKeyAuthorization(clientIDs),
+			},
+		},
+	}
+}
+
+// buildAPIKeyAuthorization returns a deny-by-default authorization block that
+// allows only the given client IDs (matched on the forwarded client-ID header).
+// With no client IDs it returns deny-all (no Allow rule), which is correct for a
+// model that has no keys minted yet: every request, including one bearing a key
+// valid for a different model on the shared listener, is denied.
+func buildAPIKeyAuthorization(clientIDs []string) map[string]interface{} {
+	authz := map[string]interface{}{
+		"defaultAction": "Deny",
+	}
+	if len(clientIDs) == 0 {
+		return authz
+	}
+	values := make([]interface{}, 0, len(clientIDs))
+	for _, id := range clientIDs {
+		values = append(values, id)
+	}
+	authz["rules"] = []interface{}{
+		map[string]interface{}{
+			"name":   "allow-model-clients",
+			"action": "Allow",
+			"principal": map[string]interface{}{
+				"headers": []interface{}{
+					map[string]interface{}{
+						"name":   apiKeyClientIDHeader,
+						"values": values,
+					},
 				},
 			},
 		},
 	}
+	return authz
 }
 
 func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) *unstructured.Unstructured {

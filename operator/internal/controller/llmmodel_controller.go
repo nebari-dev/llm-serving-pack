@@ -124,7 +124,11 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// 6. Reconcile auth resources (Secret + ConfigMap, both in the model's namespace)
 	var authResources *reconcilers.AuthResources
 	if r.Config != nil {
-		authResources, err = reconcilers.BuildAuthResources(model, r.Config)
+		clientIDs, err := r.apiKeyClientIDs(ctx, model)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
+		}
+		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
@@ -260,6 +264,22 @@ func (r *LLMModelReconciler) reconcileDelete(ctx context.Context, model *llmv1al
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// apiKeyClientIDs reads the model's api-keys Secret and returns its client IDs
+// (data-key names). A missing Secret (first reconcile, before it is created)
+// yields no client IDs, which renders a deny-all external authorization until a
+// key is minted.
+func (r *LLMModelReconciler) apiKeyClientIDs(ctx context.Context, model *llmv1alpha1.LLMModel) ([]string, error) {
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: reconcilers.APIKeySecretName(model.Name), Namespace: model.Namespace}
+	if err := r.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return reconcilers.ClientIDsFromSecret(secret), nil
 }
 
 // reconcileAuthSecretAndConfigMap creates or updates the API-key Secret and
