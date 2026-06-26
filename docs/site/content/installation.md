@@ -40,6 +40,14 @@ In addition you need:
   AL2023 NVIDIA AMI is the validated baseline. The NVIDIA device
   plugin will be installed in section 3, so the node will not yet
   show `nvidia.com/gpu` in its capacity.
+- **NVIDIA driver 580 or later** on every GPU node. As of llm-d
+  v0.7.0 the serving images (`llm-d-cuda:v0.7.0`) ship the CUDA 13.0.2
+  runtime, which requires driver branch 580+. Nodes on an older driver
+  must be upgraded before deploying this pack, or the vLLM container
+  will fail to start with a CUDA driver/runtime version mismatch.
+  Confirm with `nvidia-smi` on the node (or
+  `kubectl exec` into the GPU operator's driver/validator pod): the
+  "Driver Version" must be `>= 580`.
 - **DNS zone control over `<baseDomain>`** with a wildcard CNAME
   pointing every `*.<baseDomain>` at the Gateway's load balancer.
   HTTP-01 ACME challenges will run against `llm.<baseDomain>` and
@@ -170,6 +178,14 @@ GPU node group runs the AL2023 NVIDIA AMI which already ships the
 kernel driver, so all that is needed is the container toolkit and the
 device plugin. The NVIDIA GPU Operator chart installs both, plus
 node-feature-discovery so GPU nodes get the right labels.
+
+> **Driver version (llm-d v0.7.0):** the AMI's pre-installed driver must
+> be branch 580 or later, because the `llm-d-cuda:v0.7.0` serving images
+> use the CUDA 13.0.2 runtime. If your AMI ships an older driver, either
+> use a newer AMI or let the GPU Operator manage the driver
+> (`driver.enabled=true`) pinned to a 580+ branch. Verify after the
+> operator is up with `kubectl logs -n nvidia-gpu-operator <driver-or-validator-pod>`
+> or `nvidia-smi` on the node.
 
 ### 3.0 k3s / on-prem GPU nodes (host-managed driver + toolkit)
 
@@ -1134,7 +1150,7 @@ The model goes through `Pending` -> `Starting` -> `Ready`. Reaching
 2. The model-downloader init container completes: the first run for
    a 17 GB model takes 3-7 minutes depending on Hugging Face
    throughput.
-3. The vLLM image (`ghcr.io/llm-d/llm-d-cuda:v0.6.0`, ~5 GB) is
+3. The vLLM image (`ghcr.io/llm-d/llm-d-cuda:v0.7.0`, ~5 GB) is
    pulled to the GPU node. First pull is the slow one; subsequent
    pulls are cached.
 4. vLLM loads the safetensors shards onto the GPU and finishes
