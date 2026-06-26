@@ -4,10 +4,12 @@ This guide walks through setting up a local development environment using [kind]
 
 > **Scope of this dev path.** The local `kind` setup exercises the
 > operator, key manager, CRD, webhook, and reconciler logic against a
-> real Kubernetes API. It does **not** install Envoy AI Gateway or
-> wire up the `ext_proc` filter that production uses for per-model
-> dispatch, and it uses a mock vLLM instead of real model-serving
-> pods. For end-to-end inference testing with the full routing layer,
+> real Kubernetes API, with Envoy Gateway and the Envoy AI Gateway
+> `ext_proc` extension wired up. Served `LLMModel`s use a mock vLLM
+> instead of real model-serving pods, so there is no GPU inference.
+> External-provider `PassthroughModel`s route to the real provider, so
+> end-to-end inference works against, for example, OpenRouter (see
+> "Test an external provider" below). For a full GPU serving deployment
 > use a real cluster as documented in
 > [`install-production.md`](install-production.md).
 
@@ -41,10 +43,14 @@ This creates a kind cluster named `llm-serving-test` and installs:
 - cert-manager (for webhook TLS)
 - Gateway API CRDs
 - Gateway API Inference Extension CRDs
-- Envoy Gateway
 - Envoy AI Gateway
-- The `LLMModel` CRD
+- Envoy Gateway, wired with the AI Gateway `ext_proc` extension (`dev/eg-extension-values.yaml`)
+- The `LLMModel` and `PassthroughModel` CRDs
 - Test `GatewayClass` and `Gateway` resources
+
+Dependency versions are pinned at the top of `dev/Makefile`. They move as a
+set: Envoy AI Gateway v0.5.x requires Envoy Gateway v1.6.x and Gateway API
+v1.4.0 (see the [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/)).
 
 The setup takes a few minutes. You can watch progress in the terminal output.
 
@@ -159,7 +165,60 @@ The response includes the generated key. Keys are stored as Kubernetes Secrets i
 kubectl -n llm-operator-system get secrets -l llm.nebari.dev/model
 ```
 
-## 9. Cleanup
+## 9. Test an external provider (PassthroughModel)
+
+A `PassthroughModel` routes the shared endpoints to an external OpenAI-compatible
+provider rather than a locally served model. This path runs end to end on kind
+because the provider does the inference. These steps use OpenRouter and assume a
+real OpenRouter API key.
+
+Create the provider credential and apply the example model:
+
+```bash
+make create-openrouter-secret OPENROUTER_API_KEY=sk-or-v1-...
+make apply-passthrough-model
+kubectl -n llm-operator-system get passthroughmodel openrouter -w
+```
+
+Once it reports `Ready`, reach it through the gateway. The external endpoint
+(`llm.local`) uses API-key auth, so inject a client key into the api-keys Secret
+to skip the key-manager:
+
+```bash
+kubectl -n llm-operator-system patch secret openrouter-api-keys --type merge \
+  -p '{"stringData":{"localtester":"sk-localtest-abc123"}}'
+
+SVC=$(kubectl -n envoy-gateway-system get svc \
+  -l gateway.envoyproxy.io/owning-gateway-name=nebari-gateway -o name | head -1)
+kubectl -n envoy-gateway-system port-forward "$SVC" 8443:443 &
+
+curl -k https://llm.local:8443/v1/chat/completions \
+  --resolve llm.local:8443:127.0.0.1 \
+  -H "Authorization: Bearer sk-localtest-abc123" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
+```
+
+The internal endpoint (`llm-internal.local`) always requires a real Keycloak
+JWT, even when access is public, so it is not reachable on a bare kind cluster.
+
+## 10. Open the key-manager UI (dev mode)
+
+The deployed key-manager runs in dev mode on kind: it bypasses auth and injects a
+fixed identity (user `dev`, groups `["llm"]`), because there is no Keycloak or
+gateway OIDC layer in front of it. Forward its port and open the UI:
+
+```bash
+make ui   # serves http://localhost:8080
+```
+
+The UI loads without a login and can mint and revoke keys for any model the
+`dev` identity's groups grant access to. Dev mode is controlled by
+`LLM_DEV_MODE` on the key-manager Deployment (and `keyManager.devMode.enabled`
+in the Helm chart); it is off by default and must never be enabled in a real
+deployment.
+
+## 11. Cleanup
 
 When you are done, delete the kind cluster:
 

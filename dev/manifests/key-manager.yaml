@@ -91,6 +91,16 @@ spec:
               value: "IdToken"
             - name: LLM_LISTEN_ADDR
               value: ":8080"
+            # Dev mode: there is no Keycloak or gateway OIDC layer on the kind
+            # cluster, so bypass auth and inject a fixed identity. The UI and
+            # /api/* then work behind a plain `make ui` port-forward. Never set
+            # this in a real deployment. See nebari-dev/llm-serving-pack#114.
+            - name: LLM_DEV_MODE
+              value: "true"
+            - name: LLM_DEV_USER
+              value: "dev"
+            - name: LLM_DEV_GROUPS
+              value: "llm"
           resources:
             limits:
               cpu: 200m

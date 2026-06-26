@@ -48,6 +48,17 @@ spec:
             - name: LLM_OIDC_USERINFO_URL
               value: {{ .Values.keyManager.oidcUserinfoURL | quote }}
             {{- end }}
+            {{- if .Values.keyManager.devMode.enabled }}
+            # Dev mode: bypasses auth and injects a fixed identity so the UI
+            # works on a local cluster with no Keycloak. Never enable in a real
+            # deployment. See nebari-dev/llm-serving-pack#114.
+            - name: LLM_DEV_MODE
+              value: "true"
+            - name: LLM_DEV_USER
+              value: {{ .Values.keyManager.devMode.user | quote }}
+            - name: LLM_DEV_GROUPS
+              value: {{ .Values.keyManager.devMode.groups | join "," | quote }}
+            {{- end }}
           resources:
             limits:
               cpu: 200m
