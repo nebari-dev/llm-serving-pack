@@ -1830,7 +1830,10 @@ receivers:
               namespaces:
                 names: [envoy-gateway-system]
           relabel_configs:
-            # keep only the Envoy AI Gateway proxy pods
+            # keep only the Envoy AI Gateway proxy pods. The regex must match
+            # your shared gateway's name (platform.gateway.external.name in the
+            # chart values; "nebari-gateway" by default). Use ".+" to scrape the
+            # extProc on every Envoy Gateway proxy regardless of name.
             - source_labels:
                 - __meta_kubernetes_pod_label_gateway_envoyproxy_io_owning_gateway_name
               regex: nebari-gateway
