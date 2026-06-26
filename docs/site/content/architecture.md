@@ -37,7 +37,7 @@ An optional key manager service gives users a web UI to generate API keys for ex
 - Usage billing or cost chargeback
 - Scale-to-zero autoscaling
 - Per-key rate limiting or token quotas
-- API key expiration (periodic audit revokes keys when group membership changes)
+- API key expiration and group-change revocation (the periodic audit is scaffolded, but the userinfo lookup it depends on is a stub, so no key is revoked yet)
 - Team-level shared API keys
 - Kubernetes image volumes for OCI models (init-container copy is the baseline)
 
@@ -303,11 +303,11 @@ A small web application behind `NebariApp` that lets authenticated users generat
 
 Revocation: remove the entry from the Secret and its corresponding metadata from the ConfigMap. Effect is immediate.
 
-### Known limitation - eventual consistency
+### Known limitation - group-change revocation not yet implemented
 
-API keys are issued based on the user's groups at creation time. If a user later loses group access, existing keys continue to work until the periodic audit revokes them (default interval: 5 minutes). For v0.1, this eventual consistency is acceptable and stated explicitly because it is not the same as ongoing group-based authorization.
+API keys are issued based on the user's groups at creation time. If a user later loses group access, existing keys continue to work - they are not tied to ongoing group membership.
 
-The audit is **off by default**. It only runs when the key manager is configured with an OIDC userinfo endpoint (`keyManager.oidcUserinfoURL`, which ships empty). Until you set it, keys are never revoked on group change - a key keeps working until it is explicitly deleted. See [API key audit](#api-key-audit) below.
+Automatic revocation on group change is **planned but not implemented in v0.1**. A periodic audit loop is scaffolded (default interval: 5 minutes), but the OIDC userinfo lookup it depends on is a stub that always returns an error pending token exchange (`key-manager/cmd/main.go`), so the auditor skips revocation as a fail-safe. Setting `keyManager.oidcUserinfoURL` starts the loop but does not enable revocation - no key is ever revoked on group change today. A key keeps working until it is explicitly deleted. See [API key audit](#api-key-audit) below.
 
 ### Data model
 
@@ -338,13 +338,13 @@ The key manager runs with a dedicated ServiceAccount. Its RBAC covers two areas:
 
 ### API key audit
 
-The key manager can run a periodic background audit (configurable interval, default 5 minutes) that:
+The key manager has a scaffolded periodic background audit (configurable interval, default 5 minutes) intended to:
 
-1. Lists all API key Secrets in the operator namespace
-2. For each key entry, looks up the creator's current groups via the OIDC userinfo endpoint
-3. If the creator no longer belongs to a group that matches the model's `access.groups`, revokes the key
+1. List all API key Secrets in the operator namespace
+2. For each key entry, look up the creator's current groups via the OIDC userinfo endpoint
+3. If the creator no longer belongs to a group that matches the model's `access.groups`, revoke the key
 
-This audit is a precondition for the eventual-consistency revocation described above, and it is **disabled unless `keyManager.oidcUserinfoURL` is set**. The default `values.yaml` ships it empty, so a default install performs no group-change revocation. Configure the userinfo endpoint (for Keycloak, `https://<keycloak>/realms/<realm>/protocol/openid-connect/userinfo`) to enable it.
+**This is not functional in v0.1.** The audit loop only starts when `keyManager.oidcUserinfoURL` is set (the default `values.yaml` ships it empty), but even then step 2 cannot complete: the userinfo lookup is a stub that always returns an error pending OIDC token exchange (`key-manager/cmd/main.go`), so the auditor skips revocation as a fail-safe. Setting the URL therefore does **not** enable group-change revocation - it remains planned work. No key is revoked on group change in the current release.
 
 ### NebariApp integration
 
