@@ -1,6 +1,8 @@
 package reconcilers
 
 import (
+	"sort"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -44,6 +46,23 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 	}
 
 	return result, nil
+}
+
+// ClientIDsFromSecret returns the sorted data-key names of an api-keys Secret.
+// Each data-key name is an Envoy Gateway client ID (one per minted API key;
+// the key-manager writes secret.Data[clientID] = apiKey). The list is sorted so
+// SecurityPolicy rendering is deterministic across reconciles. A nil or
+// dataless Secret yields an empty slice.
+func ClientIDsFromSecret(secret *corev1.Secret) []string {
+	if secret == nil {
+		return []string{}
+	}
+	ids := make([]string, 0, len(secret.Data))
+	for k := range secret.Data {
+		ids = append(ids, k)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // authResourceLabels returns the labels applied to the API-key Secret and

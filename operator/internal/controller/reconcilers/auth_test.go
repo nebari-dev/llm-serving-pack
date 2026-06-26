@@ -3,6 +3,7 @@ package reconcilers
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
@@ -51,6 +52,45 @@ func defaultAuthConfig() *config.OperatorConfig {
 		// pure-build tests are not entangled with the legacy-cleanup
 		// branch.
 		APIKeysNamespace: "",
+	}
+}
+
+func TestClientIDsFromSecret(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		secret *corev1.Secret
+		want   []string
+	}{
+		{name: "nil secret", secret: nil, want: []string{}},
+		{
+			name:   "empty data",
+			secret: &corev1.Secret{Data: map[string][]byte{}},
+			want:   []string{},
+		},
+		{
+			name: "keys returned sorted",
+			secret: &corev1.Secret{Data: map[string][]byte{
+				"user-chuck-2": []byte("k2"),
+				"user-alice-1": []byte("k1"),
+				"user-chuck-1": []byte("k0"),
+			}},
+			want: []string{"user-alice-1", "user-chuck-1", "user-chuck-2"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ClientIDsFromSecret(tt.secret)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("index %d: got %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
