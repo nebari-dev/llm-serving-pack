@@ -77,44 +77,20 @@ spec:
     targetRevision: v0.5.0
     helm:
       values: |
-        # GenAI distributed tracing -> self-hosted Langfuse (OTLP).
+        # Per-user token usage as a Grafana metric label (no Langfuse, no OTLP).
         #
-        # controller.spanRequestHeaderAttributes maps an HTTP request header to
-        # an OTel span attribute (format "header:attribute"). We copy the
-        # x-client-id header onto the GenAI span as user.id. That header is the
-        # matched API-key clientID (e.g. "user-chuck-1"), forwarded by
+        # controller.metricsRequestHeaderAttributes maps an HTTP request header
+        # onto a label on the GenAI token-usage metric (format "header:label").
+        # We copy the x-client-id header onto gen_ai_client_token_usage as
+        # user.id (Prometheus label `user_id`). That header is the matched
+        # API-key clientID (e.g. "user-chuck-1"), forwarded by
         # apiKeyAuth.forwardClientIDHeader on the operator-generated external
-        # SecurityPolicy. Langfuse then attributes token usage per API-key owner
-        # (per-key granularity; see docs/install-production.md).
-        #
-        # The extProc OpenInference tracer exports OTLP to Langfuse, configured
-        # via the extProc.extraEnvVars below (see the chart-limitation note
-        # there: the OTLP endpoint + auth header must be literal values).
+        # SecurityPolicy. The metric is already scraped into Mimir by the LGTM
+        # collector (the proxy pod carries prometheus.io/scrape), so a Grafana
+        # table can sum tokens per user. See docs/install-production.md §14 and
+        # the chart's observability.dashboard value.
         controller:
-          spanRequestHeaderAttributes: "x-client-id:user.id"
-        extProc:
-          extraEnvVars:
-            - name: OTEL_TRACES_EXPORTER
-              value: "otlp"
-            - name: OTEL_SERVICE_NAME
-              value: "nebari-llm-ai-gateway"
-            # IMPORTANT: ai-gateway-helm v0.5.0 serializes extProc.extraEnvVars
-            # into a single --extProcExtraEnvVars CLI arg and only honors a
-            # literal `value:` — `valueFrom`/secretKeyRef renders as nil
-            # (verified on a live cluster). So the endpoint and the Basic-auth
-            # header MUST be literals here.
-            #
-            # SECURITY: OTEL_EXPORTER_OTLP_HEADERS contains the Langfuse project
-            # secret key (base64 of "pk-...:sk-..."). With this chart there is
-            # no secretKeyRef option, so it lands in the Helm values (i.e. in
-            # your GitOps repo). Keep that repo private and/or encrypt this app
-            # with SOPS/sealed-secrets. Upstream support for secret refs here is
-            # a follow-up (ai-gateway-helm would need to stop flattening
-            # extraEnvVars into a CLI arg).
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "https://langfuse.REPLACE-baseDomain/api/public/otel"
-            - name: OTEL_EXPORTER_OTLP_HEADERS
-              value: "Authorization=Basic REPLACE-base64-of-pk:sk"
+          metricsRequestHeaderAttributes: "x-client-id:user.id"
 
   destination:
     server: https://kubernetes.default.svc
