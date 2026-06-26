@@ -199,8 +199,8 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
   own api-keys Secret. A key minted for one model therefore returns 403 against
   any other model on the listener. The operator re-renders the allow-list when
   the key-manager mints or revokes a key, so a newly minted key activates within
-  about a minute.
-- `forwardClientIDHeader: x-llm-client-id` passes the authenticated client ID downstream for logging and GIE flow control
+  about a minute. The forwarded `x-llm-client-id` header also reaches the
+  backend, where it serves request attribution and GIE flow control.
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
 ### Internal endpoint
