@@ -1,0 +1,193 @@
+#!/usr/bin/env bash
+# check-links.sh - Internal link checker for the docs Hugo site.
+# Builds the site, then verifies:
+#   1. Every internal href/src in public/**/*.html resolves to an existing file
+#      under docs/site/public/.
+#   2. Every .edit-link href points to a source file that exists under
+#      docs/site/content/.
+# Exits 0 (LINKS_OK) on success; exits 1 and lists offenders on failure.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SITE_DIR="$REPO_ROOT/docs/site"
+PUBLIC_DIR="$SITE_DIR/public"
+CONTENT_DIR="$SITE_DIR/content"
+
+# ---------------------------------------------------------------------------
+# 1. Build the site (skip with SKIP_BUILD=1 to check an existing public/ -
+#    e.g. in CI right after the workflow's own build step, so we validate the
+#    exact artifact that gets deployed instead of rebuilding it).
+# ---------------------------------------------------------------------------
+if [ -n "${SKIP_BUILD:-}" ]; then
+    if [ ! -d "$PUBLIC_DIR" ]; then
+        echo "ERROR: SKIP_BUILD set but $PUBLIC_DIR does not exist - build the site first." >&2
+        exit 1
+    fi
+    echo "SKIP_BUILD set - checking existing $PUBLIC_DIR."
+else
+    echo "Building site..."
+    (cd "$SITE_DIR" && hugo --minify --quiet)
+    echo "Build complete."
+fi
+
+# ---------------------------------------------------------------------------
+# Derive subpath prefix from baseURL (e.g. /nebari-llm-serving-pack)
+# baseURL = "https://host/subpath/" -> subpath prefix = "/subpath"
+# ---------------------------------------------------------------------------
+BASE_URL=$(grep -m1 'baseURL' "$SITE_DIR/hugo.toml" | sed 's/.*= *"\(.*\)"/\1/')
+# Strip scheme+host: https://nebari-dev.github.io/nebari-llm-serving-pack/
+# Use sed -E (portable: GNU and BSD/macOS) - the basic-regex `\?` is GNU-only.
+SUBPATH_PREFIX=$(echo "$BASE_URL" | sed -E 's|^https?://[^/]*||' | sed 's|/$||')
+# e.g. SUBPATH_PREFIX = "/nebari-llm-serving-pack"
+
+# ---------------------------------------------------------------------------
+# Helper: resolve a URL path to a filesystem path under public/
+# Returns the path string; caller checks existence.
+# ---------------------------------------------------------------------------
+resolve_path() {
+    local href="$1"
+
+    # Strip the subpath prefix if present
+    if [ -n "$SUBPATH_PREFIX" ]; then
+        href="${href#$SUBPATH_PREFIX}"
+    fi
+
+    # Empty after stripping means it was just the subpath root -> /
+    [ -z "$href" ] && href="/"
+
+    # Trailing slash or bare dir -> index.html
+    if [[ "$href" == */ ]]; then
+        echo "$PUBLIC_DIR${href}index.html"
+    else
+        echo "$PUBLIC_DIR$href"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 2. Walk every HTML file and check internal links
+# ---------------------------------------------------------------------------
+BROKEN_LINKS=()
+
+while IFS= read -r -d '' html_file; do
+    # Extract href=... and src=... values (minified HTML, no quotes around values)
+    # Match both quoted (href="...") and unquoted (href=...) forms.
+    while IFS= read -r url; do
+        # Skip empty
+        [ -z "$url" ] && continue
+
+        # Skip external URLs
+        case "$url" in
+            http://*|https://*) continue ;;
+        esac
+
+        # Skip anchors only (#...) and mailto:
+        case "$url" in
+            \#*|mailto:*) continue ;;
+        esac
+
+        # Only process absolute paths (starting with /) or paths starting with subpath
+        case "$url" in
+            /*) ;;
+            *) continue ;;
+        esac
+
+        # Strip any #fragment before resolving to a file (e.g. /page/#section).
+        # NOTE: this validates that the target *page* exists, not that the
+        # #anchor within it does - a renamed heading (broken fragment) passes
+        # silently. Fragment validation is out of scope for this checker.
+        url="${url%%#*}"
+        [ -z "$url" ] && continue
+
+        target=$(resolve_path "$url")
+
+        if [ ! -e "$target" ]; then
+            BROKEN_LINKS+=("BROKEN: $html_file -> $url (resolved: $target)")
+        fi
+    done < <(
+        grep -oE 'href=[^[:space:]>]+|src=[^[:space:]>]+' "$html_file" \
+            | sed 's/^href=//; s/^src=//' \
+            | sed 's/^"//; s/"$//' \
+            | sed "s/^'//; s/'$//"
+    )
+done < <(find "$PUBLIC_DIR" -name "*.html" -print0)
+
+# ---------------------------------------------------------------------------
+# 3. Check .edit-link hrefs -> content/ source files
+# ---------------------------------------------------------------------------
+EDIT_BASE=$(grep -m1 'editBase' "$SITE_DIR/hugo.toml" | sed 's/.*= *"\(.*\)"/\1/')
+# e.g. https://github.com/nebari-dev/nebari-llm-serving-pack/edit/main/docs/site/content
+
+# A missing editBase would make every edit-link silently skip (false clean).
+# Treat it as a hard error: the site config is expected to define it.
+if [ -z "$EDIT_BASE" ]; then
+    echo "ERROR: editBase not found in $SITE_DIR/hugo.toml - cannot verify edit-links." >&2
+    exit 1
+fi
+
+BROKEN_EDIT=()
+EDIT_LINK_COUNT=0
+
+while IFS= read -r -d '' html_file; do
+    # Extract href values from edit-link anchors. Match the whole <a ...> tag
+    # that mentions edit-link anywhere in its attributes, then pull href out of
+    # it - this is robust to attribute order, intervening attributes
+    # (target=_blank), quoting, and multi-class values (class="edit-link btn").
+    while IFS= read -r edit_href; do
+        [ -z "$edit_href" ] && continue
+
+        EDIT_LINK_COUNT=$((EDIT_LINK_COUNT + 1))
+
+        # Strip editBase prefix to get the relative path in content/
+        rel="${edit_href#$EDIT_BASE/}"
+
+        # If nothing was stripped, something is wrong - skip
+        [ "$rel" = "$edit_href" ] && continue
+
+        src_file="$CONTENT_DIR/$rel"
+        if [ ! -f "$src_file" ]; then
+            BROKEN_EDIT+=("BROKEN edit-link: $html_file -> $edit_href (expected: $src_file)")
+        fi
+    done < <(
+        grep -oE '<a[^>]*edit-link[^>]*>' "$html_file" \
+            | grep -oE 'href="[^"]*"|href=[^[:space:]>]+' \
+            | sed 's/^href=//; s/^"//; s/"$//'
+    )
+done < <(find "$PUBLIC_DIR" -name "*.html" -print0)
+
+# Every built page carries an edit-link. Zero found across the whole site means
+# the extraction silently matched nothing (theme markup changed) - treat it as a
+# failure rather than a vacuous pass, same rationale as the missing-editBase guard.
+if [ "$EDIT_LINK_COUNT" -eq 0 ]; then
+    echo "ERROR: no edit-links found in any page under $PUBLIC_DIR - the extraction pattern likely no longer matches the theme's markup." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Report results
+# ---------------------------------------------------------------------------
+FAILED=0
+
+if [ ${#BROKEN_LINKS[@]} -gt 0 ]; then
+    echo ""
+    echo "Internal link failures (${#BROKEN_LINKS[@]}):"
+    for msg in "${BROKEN_LINKS[@]}"; do
+        echo "  $msg"
+    done
+    FAILED=1
+fi
+
+if [ ${#BROKEN_EDIT[@]} -gt 0 ]; then
+    echo ""
+    echo "Edit-link failures (${#BROKEN_EDIT[@]}):"
+    for msg in "${BROKEN_EDIT[@]}"; do
+        echo "  $msg"
+    done
+    FAILED=1
+fi
+
+if [ $FAILED -eq 1 ]; then
+    exit 1
+fi
+
+echo "LINKS_OK"

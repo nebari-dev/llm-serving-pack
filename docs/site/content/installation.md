@@ -1,11 +1,13 @@
-# Production Install (ArgoCD + Nebari)
++++
+title = "Installation"
++++
 
 This runbook walks through installing the Nebari LLM serving pack onto a
 fresh Nebari cluster managed by ArgoCD. The validation that produced this
 runbook ran on AWS (NIC + EKS); the steps are written so they should
 work on any cloud where NIC supports a foundational deploy, but only AWS
 has been exercised end-to-end so far. For local development against
-`kind` see [`getting-started.md`](getting-started.md) instead.
+`kind` see [Local Development](/local-development/) instead.
 
 > **What "fresh" means here:** every command in this document was run, in
 > order, against a brand-new Nebari Infrastructure Core (NIC) deployment
@@ -753,6 +755,8 @@ Expected: the rendered config shows the `extensionManager` block with
 
 ## 7. Keycloak prereqs
 
+> **Beta documentation gate:** This section covers the auth setup that the pack requires before it will reconcile any `LLMModel`. Both the Keycloak group (7.2) and the operator environment check (7.1) must pass before proceeding to section 8.
+
 The pack expects two things on the Keycloak side:
 
 - A group whose name matches whatever you put in
@@ -873,7 +877,7 @@ spec:
   project: foundational
   source:
     repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-    targetRevision: v0.1.0-alpha.8
+    targetRevision: v0.1.0-alpha.9
     path: charts/nebari-llm-serving
     helm:
       releaseName: nebari-llm-serving
@@ -1138,7 +1142,7 @@ repo; treat them as data-plane content the pack consumes.
 kubectl get llmmodel -n nebari-llm-serving-system -w
 ```
 
-The model goes through `Pending` → `Starting` → `Ready`. Reaching
+The model goes through `Pending` -> `Starting` -> `Ready`. Reaching
 `Ready` requires:
 
 1. The PVC is bound (Longhorn provisions a volume of the requested
@@ -1371,6 +1375,17 @@ covering `https://llm-keys.<baseDomain>/oauth2/callback`.
 
 ### 10.9 SecurityPolicy OIDC endpoints (browser-facing vs back-channel)
 
+> **Beta documentation gate - dual-endpoint auth:** The pack uses two
+> different Keycloak URL forms for the SecurityPolicy OIDC config.
+> Browser-facing endpoints (`authorizationEndpoint`, `endSessionEndpoint`)
+> must use the public `https://keycloak.<baseDomain>/...` URL so that
+> browser redirects resolve. Back-channel endpoints (`tokenEndpoint`,
+> `issuer`) use the in-cluster `http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/...`
+> URL for performance and to avoid hairpinning through the public Gateway.
+> This split is implemented in nebari-operator >= v0.1.0-alpha.19. If
+> your cluster has an older operator, section 12.2 documents the
+> workaround.
+
 ```bash
 kubectl get securitypolicy -n nebari-llm-serving-system nebari-llm-serving-key-manager-security \
   -o jsonpath='{.spec.oidc.provider}' | python3 -m json.tool
@@ -1392,9 +1407,9 @@ your NIC operator is older than `v0.1.0-alpha.19`; bump it.
 In a fresh browser session (incognito works well to avoid stale
 cookies), open:
 
-- `https://<baseDomain>/` → NIC landing page should render with a
+- `https://<baseDomain>/` -> NIC landing page should render with a
   tile for `nebari-llm-serving-key-manager`.
-- `https://llm-keys.<baseDomain>/` → Keycloak login screen, then
+- `https://llm-keys.<baseDomain>/` -> Keycloak login screen, then
   the key-manager UI for users in the `llm` group.
 
 If the browser dead-ends on `keycloak-keycloakx-http.keycloak.svc.cluster.local`,
@@ -1467,18 +1482,18 @@ Expected: `llm` in the groups list.
 1. Open `https://<baseDomain>/` in a browser and log in as the test
    user. You should see an "LLM API Keys" tile on the landing page.
 
-   ![Landing page with LLM API Keys tile](install-production-screenshots/landing-page.png)
+   ![Landing page with LLM API Keys tile](/install-production-screenshots/landing-page.png)
 
 2. Click the tile to open the key-manager UI at
    `https://llm-keys.<baseDomain>/`. The model should appear under
    "Available Models".
 
-   ![Key-manager model picker](install-production-screenshots/key-manager-create.png)
+   ![Key-manager model picker](/install-production-screenshots/key-manager-create.png)
 
 3. Select the model, enter a description, and click "Create Key".
    Copy the `sk-...` value - it will not be shown again.
 
-   ![Key created](install-production-screenshots/key-manager-created.png)
+   ![Key created](/install-production-screenshots/key-manager-created.png)
 
 Verify the key was stored:
 
@@ -1518,7 +1533,7 @@ Log into `https://llm-keys.<baseDomain>/` as `outsider@example.com`.
 The "Available Models" section should be empty - the outsider cannot
 see any models and therefore cannot mint an API key.
 
-![Outsider sees no models](install-production-screenshots/outsider-no-models.png)
+![Outsider sees no models](/install-production-screenshots/outsider-no-models.png)
 
 If the outsider somehow obtains a key or constructs a direct API
 call, the key-manager API returns HTTP 403:
@@ -1619,6 +1634,8 @@ issue will be filed once the root cause is confirmed.
 
 ## 13. Troubleshooting
 
+For extended troubleshooting guidance see [Troubleshooting](/troubleshooting/).
+
 ### `direct_response: 500` on `/v1/chat/completions`
 
 The Envoy proxy is returning a 500 before the request reaches the
@@ -1675,7 +1692,7 @@ deploy. Large models (30GB+) can take 10-20 minutes on typical
 network connections. Check the init container logs:
 
 ```bash
-kubectl logs -n nebari-llm-serving-system <model-pod> -c download-model -f
+kubectl logs -n nebari-llm-serving-system <model-pod> -c model-downloader -f
 ```
 
 If the download fails, the pod will restart and retry. For gated

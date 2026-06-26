@@ -1,4 +1,4 @@
-name: nebari-llm-serving-pack
+name: llm-serving-pack
 display_name: LLM Serving Pack
 description: Kubernetes operator for serving LLMs via llm-d, with per-model OIDC access control, API key management, and Envoy AI Gateway integration.
 level: alpha
@@ -8,5 +8,6 @@ product_owner: null
 nebariapp_integration: full
 scope:
   standalone-supported: yes
+docs_site: true
 links:
-  docs: https://github.com/nebari-dev/nebari-llm-serving-pack/blob/main/docs/install-production.md
+  docs: https://packs.nebari.dev/llm-serving-pack/
