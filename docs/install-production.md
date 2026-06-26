@@ -1839,11 +1839,19 @@ receivers:
             - source_labels: [__address__]
               regex: (.+?)(?::\d+)?
               target_label: __address__
-              replacement: ${1}:1064
+              replacement: $${1}:1064
 ```
 
 Then add `prometheus/ai-gateway-genai` to the collector's `metrics` pipeline
 `receivers:` list so it flows through the existing `otlphttp/mimir` exporter.
+
+> **OTel escaping gotcha (verified):** the relabel `replacement` is `$${1}`,
+> not `${1}`. The OpenTelemetry Collector expands `${...}` as an environment
+> variable at config-load time, so an unescaped `${1}` crashes the collector
+> with `environment variable "1" has invalid name`. Doubling the dollar sign
+> (`$${1}`) passes a literal `${1}` through to the Prometheus relabel engine.
+> (In a *raw* Prometheus `scrape_config` — not via the OTel collector — use the
+> normal `${1}`.)
 
 **3. Dashboard** — ships as a chart-managed ConfigMap, controlled by
 `observability.dashboard.enabled` (default `true`) and placed in
