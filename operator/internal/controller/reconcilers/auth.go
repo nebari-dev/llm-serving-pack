@@ -133,11 +133,14 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 						},
 					},
 					// Forward the matched credential's name (the key-manager clientID,
-					// e.g. "user-chuck-1") downstream so the AI Gateway tracer can stamp
-					// it onto the GenAI span as user.id for per-user usage in Langfuse.
-					// sanitize removes the extracted API key from the request before
-					// it is proxied upstream. Both require Envoy Gateway v1.5.1+
-					// (present in the pack's pinned v1.6.2; absent in v1.3).
+					// e.g. "user-chuck-1") downstream as the x-client-id header. The
+					// AI Gateway controller copies this header onto the GenAI
+					// token-usage metric as the label user.id (via
+					// controller.metricsRequestHeaderAttributes), which surfaces in
+					// Grafana as per-user token usage. sanitize removes the extracted
+					// API key from the request before it is proxied upstream. Both
+					// require Envoy Gateway v1.5.1+ (present in the pack's pinned
+					// v1.6.2; absent in v1.3).
 					"forwardClientIDHeader": "x-client-id",
 					"sanitize":              true,
 				},
