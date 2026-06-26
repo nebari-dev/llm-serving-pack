@@ -69,7 +69,7 @@ All resources live in the `LLMModel`'s own namespace, which (per the validating 
 | InferencePool + EPP | Intelligent inference scheduling |
 | AIGatewayRoute (external) | External endpoint with token counting, rate limiting |
 | AIGatewayRoute (internal) | Internal endpoint with token counting, rate limiting |
-| SecurityPolicy (external) | apiKeyAuth referencing the per-model Secret in the same namespace |
+| SecurityPolicy (external) | apiKeyAuth referencing the per-model Secret (same namespace) plus a deny-by-default authorization allow-list of that model's client IDs |
 | SecurityPolicy (internal) | JWT validation with group claim matching against `access.groups` |
 | Secret (API keys) | Per-model API key store (created by operator, data managed by key manager) |
 | ConfigMap (key metadata) | Per-model metadata for API keys (creator, timestamp, description) |
@@ -177,7 +177,7 @@ The `endpoints.external.subdomain` field on `LLMModel` is currently unused at th
 
 ## Dual endpoint auth
 
-Each `LLMModel` gets two endpoints with different auth mechanisms. A NetworkPolicy on model pods ensures all traffic flows through the Gateway.
+Each `LLMModel` gets two endpoints with different auth mechanisms. Access control is enforced at the gateway level by SecurityPolicies bound per-route: Keycloak JWT plus group authorization on the internal endpoint, and API-key authentication plus a per-model client-ID authorization allow-list on the external endpoint. (Models share one hostname and are dispatched by the `x-ai-eg-model` header, so isolation comes from the per-route policies, not from per-model hostnames.) A NetworkPolicy on model pods ensures all traffic flows through the Gateway.
 
 ### External endpoint
 
@@ -190,7 +190,17 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
 - Hostname: `llm.<baseDomain>` (shared; per-model dispatch by `x-ai-eg-model` header)
 - `AIGatewayRoute` for token counting, rate limiting, protocol normalization
 - `SecurityPolicy` with `apiKeyAuth` attached to the generated `HTTPRoute` (same name as the `AIGatewayRoute`), per model
-- Planned (not yet enabled): `sanitize: true` to strip the API key before forwarding to vLLM, and `forwardClientIDHeader: X-Client-ID` to pass the authenticated client ID downstream for logging and flow control. These `apiKeyAuth` fields require Envoy Gateway v1.7+ and are not present in the v1.3 `SecurityPolicy` CRD the pack currently targets, so today the validated `Authorization` header is forwarded to vLLM unchanged.
+- `sanitize: true` strips the API key before forwarding to vLLM
+- Per-model scoping is enforced by an `authorization` block on the external
+  SecurityPolicy, not by authentication. API-key authentication is pooled across
+  the shared listener (any valid key authenticates), so the SecurityPolicy adds
+  `apiKeyAuth.forwardClientIDHeader: x-llm-client-id` and a deny-by-default
+  `authorization` rule that allows only the client IDs present in that model's
+  own api-keys Secret. A key minted for one model therefore returns 403 against
+  any other model on the listener. The operator re-renders the allow-list when
+  the key-manager mints or revokes a key, so a newly minted key activates within
+  about a minute.
+- `forwardClientIDHeader: x-llm-client-id` passes the authenticated client ID downstream for logging and GIE flow control
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
 ### Internal endpoint
@@ -406,4 +416,4 @@ This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.
 
 **Secret isolation**: API key Secrets live in the operator namespace with namespace-scoped RBAC. The key manager and the operator are the only components with access - the operator creates them, the key manager reads and updates them. SecurityPolicies in the same namespace reference them via `apiKeyAuth.credentialRefs` without crossing namespace boundaries.
 
-**Gateway as security boundary**: all model access (external and internal) flows through Envoy Gateway, where auth is enforced via SecurityPolicy. The external endpoint uses `apiKeyAuth` to authenticate requests before they reach vLLM. Key stripping (`sanitize: true`) is planned but not yet enabled - it requires Envoy Gateway v1.7+, so on the currently targeted v1.3 the validated `Authorization` header still reaches vLLM. The internal endpoint uses JWT validation against the OIDC issuer's JWKS endpoint.
+**Gateway as security boundary**: all model access (external and internal) flows through Envoy Gateway, where auth is enforced via SecurityPolicy. The external endpoint uses `apiKeyAuth` with `sanitize: true` (API keys are stripped before reaching vLLM) plus a per-model authorization allow-list, so a key is accepted only by the model it was minted for. The internal endpoint uses JWT validation against the OIDC issuer's JWKS endpoint.
