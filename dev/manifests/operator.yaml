@@ -147,6 +147,16 @@ spec:
             - containerPort: 9443
               name: webhook-server
               protocol: TCP
+          # The validating webhook binds 9443 only after controller-runtime
+          # loads the mounted serving cert. Gate readiness on that port so
+          # `kubectl rollout status` in `make deploy` does not return before the
+          # webhook can accept PassthroughModel creates (the manager's /readyz
+          # is only a ping and goes green before the webhook is serving).
+          readinessProbe:
+            tcpSocket:
+              port: 9443
+            initialDelaySeconds: 2
+            periodSeconds: 2
           volumeMounts:
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs

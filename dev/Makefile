@@ -10,6 +10,14 @@ GIE_VERSION ?= v1.4.0
 ENVOY_GATEWAY_VERSION ?= v1.6.7
 AI_GATEWAY_VERSION ?= v0.5.0
 
+# Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side,
+# which conflicts with the standalone install in `setup` (owned by a different
+# field manager). Force ownership so the chart wins. Helm 3 has no server-side
+# apply and skips already-present crds/, so it neither needs nor accepts this
+# flag - keep it empty there. Empty when helm is missing (setup fails later).
+HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v?([0-9]+).*/\1/')
+HELM_FORCE_CONFLICTS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--force-conflicts,)
+
 .PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui logs-operator logs-key-manager clean help
 
 help: ## Show this help
@@ -19,12 +27,16 @@ run-dev: ## One-command UI dev environment: cluster + models + port-forward + ho
 	./run-dev.sh
 
 setup: ## Create kind cluster and install dependencies
-	kind create cluster --name $(CLUSTER_NAME)
+	# Idempotent: skip creation if the cluster already exists so a setup that
+	# died midway can be re-run without `make teardown` first.
+	@kind get clusters | grep -qx $(CLUSTER_NAME) || kind create cluster --name $(CLUSTER_NAME)
 	# cert-manager
 	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
 	kubectl -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
-	# Gateway API CRDs
-	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
+	# Gateway API CRDs. Server-side apply so the field ownership matches the
+	# eg chart's own SSA on Helm 4, letting it cleanly take co-ownership with
+	# --force-conflicts (see HELM_FORCE_CONFLICTS above) instead of erroring.
+	kubectl apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	# GIE CRDs (includes the graduated inference.networking.k8s.io group)
 	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/$(GIE_VERSION)/manifests.yaml
 	# Envoy AI Gateway first: envoy-gateway's extensionManager below points at
@@ -36,7 +48,7 @@ setup: ## Create kind cluster and install dependencies
 	# Envoy Gateway, wired with the AI Gateway ext_proc extension (enableBackend,
 	# extensionManager, backendResources). Without this the per-model routing
 	# layer 404s and passthrough upstreams never get a TLS transport socket.
-	helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace -f eg-extension-values.yaml
+	helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(HELM_FORCE_CONFLICTS) -f eg-extension-values.yaml
 	kubectl -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# CRDs (served LLMModels and external-provider PassthroughModels)
 	kubectl apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml

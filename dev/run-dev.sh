@@ -45,7 +45,20 @@ echo "==> applying OpenRouter credential and dev models..."
 kubectl -n "$NS" create secret generic openrouter-api-key \
   --from-literal=apiKey="$OPENROUTER_API_KEY" \
   --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl apply -f manifests/dev-models.yaml >/dev/null
+# The operator's validating webhook gates PassthroughModel creates and isn't
+# guaranteed to be serving the instant `make deploy`'s rollout returns (it waits
+# on the cert mount). Retry so a momentary "connection refused" doesn't trip
+# `set -e` and abort the whole run.
+for attempt in $(seq 1 30); do
+  kubectl apply -f manifests/dev-models.yaml >/dev/null 2>&1 && break
+  if [[ $attempt -eq 30 ]]; then
+    echo "ERROR: operator webhook never became ready" >&2
+    kubectl apply -f manifests/dev-models.yaml >&2 || true
+    exit 1
+  fi
+  echo "==> operator webhook not ready yet, retrying ($attempt)..."
+  sleep 2
+done
 for m in claude-sonnet-45 gemini-25-flash llama-33-70b; do
   kubectl -n "$NS" wait passthroughmodel/$m --for=jsonpath='{.status.phase}'=Ready --timeout=90s
 done
@@ -55,14 +68,18 @@ cleanup() {
   echo
   echo "==> shutting down..."
   [[ -n "${PF_PID:-}" ]] && kill "$PF_PID" 2>/dev/null || true
+  [[ -n "${PF_LOG:-}" ]] && rm -f "$PF_LOG"
 }
 trap cleanup EXIT INT TERM
 
+# Fresh temp file per run: a fixed path could carry "Forwarding from" from a
+# crashed prior run and make the readiness check below pass instantly.
+PF_LOG="$(mktemp)"
 echo "==> port-forwarding key-manager to localhost:${KM_PORT}..."
-kubectl -n "$NS" port-forward svc/llm-key-manager "${KM_PORT}:8080" >/tmp/km-portforward.log 2>&1 &
+kubectl -n "$NS" port-forward svc/llm-key-manager "${KM_PORT}:8080" >"$PF_LOG" 2>&1 &
 PF_PID=$!
 for _ in $(seq 1 20); do
-  if grep -q "Forwarding from" /tmp/km-portforward.log 2>/dev/null; then break; fi
+  if grep -q "Forwarding from" "$PF_LOG" 2>/dev/null; then break; fi
   sleep 0.5
 done
 
