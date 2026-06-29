@@ -54,7 +54,6 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			ExternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
-			SharedExternalHostname(cfg.BaseDomain),
 		)
 	}
 
@@ -68,7 +67,6 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			InternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
-			SharedInternalHostname(cfg.BaseDomain),
 		)
 	}
 
@@ -82,7 +80,6 @@ func buildAIGatewayRoute(
 	listenerSectionName string,
 	poolName string,
 	modelName string,
-	hostname string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -103,8 +100,8 @@ func buildAIGatewayRoute(
 				// SecurityPolicy bound to this HTTPRoute catches traffic
 				// bound for unrelated hostnames (key-manager UI, argocd,
 				// keycloak, base domain). Regression seen in alpha.3/alpha.4;
-				// the Host header matcher on the first rule narrowed that
-				// rule but had no effect on the catch-all.
+				// sectionName is the sole mechanism that contains this (model
+				// rules match only x-ai-eg-model, no Host matcher).
 				"parentRefs": []interface{}{
 					map[string]interface{}{
 						"name":        gatewayName,
@@ -114,27 +111,20 @@ func buildAIGatewayRoute(
 				},
 				"rules": []interface{}{
 					map[string]interface{}{
-						// Match on BOTH the shared hostname (Host header) AND the
-						// `x-ai-eg-model` header. With sectionName scoping
-						// on parentRefs above, the Host match is defence in
-						// depth: it guarantees the rule only fires for the
-						// intended FQDN even if a future refactor loosens
-						// parent attachment.
+						// Match on the `x-ai-eg-model` header for per-model dispatch on the
+						// shared listener. The Envoy AI Gateway extproc derives this value from
+						// the request body's `model` field before HTTPRoute matching runs.
 						//
-						// The x-ai-eg-model match gives us per-model dispatch
-						// once a request lands on a shared listener. The
-						// Envoy AI Gateway extproc filter derives the value
-						// from the request body's `model` field before
-						// HTTPRoute matching runs. Both matches are ANDed
-						// (per Gateway API spec).
+						// We match ONLY x-ai-eg-model, not Host: sectionName on parentRefs
+						// already scopes this route to the llm-https listener (whose own
+						// hostname is the FQDN), so a Host matcher was redundant. Critically,
+						// the Envoy AI Gateway v0.5 controller does not register a model whose
+						// match rule carries any header beyond x-ai-eg-model - the extra Host
+						// matcher made every request 404 "model not configured in the Gateway"
+						// (nebari-dev/llm-serving-pack#116).
 						"matches": []interface{}{
 							map[string]interface{}{
 								"headers": []interface{}{
-									map[string]interface{}{
-										"type":  "Exact",
-										"name":  "Host",
-										"value": hostname,
-									},
 									map[string]interface{}{
 										"type":  "Exact",
 										"name":  "x-ai-eg-model",
