@@ -314,24 +314,19 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 		if len(matches) != 2 {
 			t.Fatalf("declared matches = %d, want 2", len(matches))
 		}
-		// Every declared match carries Host AND x-ai-eg-model exact headers.
+		// Every declared match carries ONLY the x-ai-eg-model exact header - no
+		// Host matcher (removed for AI Gateway v0.5 model registration; #116).
 		seen := map[string]bool{}
 		for _, m := range matches {
 			headers, _ := m.(map[string]interface{})["headers"].([]interface{})
-			var hostOK bool
 			for _, h := range headers {
 				hm, _ := h.(map[string]interface{})
-				switch hm["name"] {
-				case ptHostHeader:
-					if hm["value"] == ptExternalHost && hm["type"] == "Exact" {
-						hostOK = true
-					}
-				case ptModelHeader:
+				if hm["name"] == ptHostHeader {
+					t.Errorf("declared match must not carry a Host header: %v", m)
+				}
+				if hm["name"] == ptModelHeader {
 					seen[hm["value"].(string)] = true
 				}
-			}
-			if !hostOK {
-				t.Errorf("declared match missing exact Host header: %v", m)
 			}
 		}
 		if !seen["openai/gpt-5.2"] || !seen["anthropic/claude-opus-4.6"] {
