@@ -1799,6 +1799,18 @@ Because clientIDs embed the username, the data is still effectively
 per-user, but a user with multiple keys appears as multiple rows. True
 per-user rollup across keys is a deferred follow-up.
 
+> **Streaming caveat (verified on a live cluster):** for **streaming**
+> requests (`"stream": true`), the token-usage metric is recorded **only if
+> the client sends `stream_options: {"include_usage": true}`** — that is what
+> makes the model emit the final usage chunk the extProc reads from. Streaming
+> requests without it complete normally (HTTP 200) but contribute **zero** to
+> the per-user totals. Non-streaming requests always carry `usage` and are
+> always counted. There is no gateway-side way to force `include_usage`, so
+> document this for users/SDKs, or treat streaming-without-usage traffic as a
+> known undercount. (Tested: 10 streaming requests with `include_usage`
+> incremented the metric by exactly their usage; 5 without it incremented by
+> nothing.)
+
 ### 14.2 What you deploy
 
 Three pieces — the metric label, the scrape job, and the dashboard:
