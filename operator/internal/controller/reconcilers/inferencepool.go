@@ -315,6 +315,16 @@ func buildEPPRole(eppName string, labels map[string]string) *rbacv1.Role {
 				Verbs:     []string{"get", "list", "watch"},
 			},
 			{
+				// The llm-d inference scheduler (EPP) v0.8.x watches these GIE
+				// resources; without RBAC the informers never sync and the EPP
+				// crash-loops ("failed waiting for *v1alpha2.InferenceObjective
+				// Informer to sync"), so the served model never gets a healthy
+				// upstream.
+				APIGroups: []string{"inference.networking.x-k8s.io"},
+				Resources: []string{"inferenceobjectives", "inferencemodelrewrites", "inferencepools", "inferencepoolimports"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
 				APIGroups: []string{""},
 				Resources: []string{"pods"},
 				Verbs:     []string{"get", "list", "watch"},
