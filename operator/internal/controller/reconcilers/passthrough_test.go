@@ -85,7 +85,7 @@ func routeRules(t *testing.T, route *unstructured.Unstructured) []interface{} {
 
 func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 	pm := testPassthroughModel()
-	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil)
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 
 func TestBuildPassthroughResourcesKeySecretAndConfigMap(t *testing.T) {
 	pm := testPassthroughModel()
-	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil)
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestBuildPassthroughResourcesRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := testPassthroughModel()
 			tt.mutate(pm)
-			res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil)
+			res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 			if err != nil {
 				t.Fatalf("BuildPassthroughResources returned error: %v", err)
 			}
@@ -288,7 +288,7 @@ func TestBuildPassthroughResourcesRoutes(t *testing.T) {
 func TestBuildPassthroughRouteDetails(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
-	res, err := BuildPassthroughResources(pm, cfg, nil)
+	res, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
-	res, err := BuildPassthroughResources(pm, cfg, nil)
+	res, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 	t.Run("public access drops authorization", func(t *testing.T) {
 		pub := testPassthroughModel()
 		pub.Spec.Access = llmv1alpha1.AccessSpec{Public: ptr.To(true)}
-		pubRes, err := BuildPassthroughResources(pub, cfg, nil)
+		pubRes, err := BuildPassthroughResources(pub, cfg, nil, []string{APIKeySecretName(pub.Name)})
 		if err != nil {
 			t.Fatalf("BuildPassthroughResources returned error: %v", err)
 		}
@@ -442,7 +442,7 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
 
-	withKeys, err := BuildPassthroughResources(pm, cfg, []string{"user-chuck-1"})
+	withKeys, err := BuildPassthroughResources(pm, cfg, []string{"user-chuck-1"}, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 		t.Errorf("expected values=[user-chuck-1], got %v", values)
 	}
 
-	noKeys, err := BuildPassthroughResources(pm, cfg, nil)
+	noKeys, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}

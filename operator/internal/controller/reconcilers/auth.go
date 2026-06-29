@@ -37,7 +37,7 @@ type AuthResources struct {
 // BuildAuthResources is a pure function that computes all auth-related Kubernetes resources
 // for the given LLMModel: API key Secret, metadata ConfigMap, and SecurityPolicies.
 // All resources are placed in the LLMModel's own namespace.
-func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig, clientIDs []string) (*AuthResources, error) {
+func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig, clientIDs []string, credentialSecretNames []string) (*AuthResources, error) {
 	result := &AuthResources{}
 
 	labels := authResourceLabels(model)
@@ -46,7 +46,7 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig,
 	result.APIKeyMetadataCM = buildAPIKeyMetadataConfigMap(model, labels)
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
-		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model, clientIDs)
+		result.ExternalSecurityPolicy = buildExternalSecurityPolicy(model, clientIDs, credentialSecretNames)
 	}
 
 	if boolOrDefault(model.Spec.Endpoints.Internal.Enabled, true) {
@@ -109,13 +109,13 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 	}
 }
 
-func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, clientIDs []string) *unstructured.Unstructured {
+func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, clientIDs []string, credentialSecretNames []string) *unstructured.Unstructured {
 	return buildAPIKeyAuthSecurityPolicy(
 		model.Name+"-external-auth",
 		model.Namespace,
 		labelsToInterface(StandardLabels(model)),
 		model.Name+"-external",
-		APIKeySecretName(model.Name),
+		credentialSecretNames,
 		clientIDs,
 	)
 }
@@ -124,7 +124,21 @@ func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, clientIDs []string
 // external HTTPRoute behind per-user API keys. Shared between the LLMModel
 // and PassthroughModel reconcilers so both endpoint types present the same
 // client UX (Authorization header carrying a key from the api-keys Secret).
-func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName, secretName string, clientIDs []string) *unstructured.Unstructured {
+func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]interface{}, routeName string, credentialSecretNames []string, clientIDs []string) *unstructured.Unstructured {
+	// credentialRefs pools EVERY model's api-keys Secret on the shared
+	// listener, not just this model's. EG's api_key_auth filter runs before
+	// the AI Gateway ext_proc resolves the model, so authentication happens on
+	// whichever catch-all route wins; pooling lets any valid key authenticate
+	// there, and the per-route authorization block below scopes it to this
+	// model. All Secrets are same-namespace (#59). See #116.
+	credRefs := make([]interface{}, 0, len(credentialSecretNames))
+	for _, secretName := range credentialSecretNames {
+		credRefs = append(credRefs, map[string]interface{}{
+			"group": "",
+			"kind":  "Secret",
+			"name":  secretName,
+		})
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
@@ -147,13 +161,7 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 					// any cross-namespace credentialRef (and does not honor
 					// ReferenceGrant for this field). The Secret lives in the
 					// same namespace as this SecurityPolicy by design.
-					"credentialRefs": []interface{}{
-						map[string]interface{}{
-							"group": "",
-							"kind":  "Secret",
-							"name":  secretName,
-						},
-					},
+					"credentialRefs": credRefs,
 					"extractFrom": []interface{}{
 						map[string]interface{}{
 							"headers": []interface{}{
