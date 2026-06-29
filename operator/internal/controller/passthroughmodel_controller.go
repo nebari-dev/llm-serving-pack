@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -97,7 +98,11 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
 	}
-	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config, clientIDs)
+	credentialSecretNames, err := apiKeySecretNamesWith(ctx, r.Client, pm.Namespace, reconcilers.APIKeySecretName(pm.Name))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing api key secrets: %w", err)
+	}
+	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config, clientIDs, credentialSecretNames)
 	if err != nil {
 		// Surface the build failure as a condition so `kubectl describe`
 		// explains the Error phase rather than only the reconcile log.
@@ -374,19 +379,24 @@ func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapAPIKeySecretToModel enqueues a reconcile for the PassthroughModel that owns
-// an api-keys Secret. It ignores Secrets that are not passthrough api-keys
-// Secrets (served-model Secrets carry app.kubernetes.io/name=llmmodel).
-func (r *PassthroughModelReconciler) mapAPIKeySecretToModel(_ context.Context, obj client.Object) []reconcile.Request {
-	labels := obj.GetLabels()
-	if labels["app.kubernetes.io/name"] != "passthroughmodel" {
+// mapAPIKeySecretToModel enqueues ALL PassthroughModels when any
+// operator-managed api-keys Secret changes. The pooled credentialRefs (every
+// model's Secret) and the per-model authorization allow-list both depend on the
+// full set of api-keys Secrets, so any mint/revoke or model add/remove
+// re-reconciles every passthrough model. Churn is bounded by model count.
+func (r *PassthroughModelReconciler) mapAPIKeySecretToModel(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !strings.HasSuffix(obj.GetName(), "-api-keys") {
 		return nil
 	}
-	name := labels["llm.nebari.dev/model-name"]
-	if name == "" {
+	var models llmv1alpha1.PassthroughModelList
+	if err := r.List(ctx, &models, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
-	return []reconcile.Request{{
-		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
-	}}
+	reqs := make([]reconcile.Request, 0, len(models.Items))
+	for i := range models.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name: models.Items[i].Name, Namespace: models.Items[i].Namespace,
+		}})
+	}
+	return reqs
 }

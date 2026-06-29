@@ -45,7 +45,7 @@ func PassthroughStandardLabels(pm *llmv1alpha1.PassthroughModel) map[string]stri
 // BuildPassthroughResources is a pure function that computes every resource
 // for the given PassthroughModel. No serving, storage, or scheduling
 // resources are involved; the provider serves the models, we route to it.
-func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig, clientIDs []string) (*PassthroughResources, error) {
+func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig, clientIDs []string, credentialSecretNames []string) (*PassthroughResources, error) {
 	labels := PassthroughStandardLabels(pm)
 	authLabels := map[string]string{}
 	for k, v := range labels {
@@ -97,7 +97,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			pm.Namespace,
 			labelsToInterface(labels),
 			pm.Name+"-external",
-			APIKeySecretName(pm.Name),
+			credentialSecretNames,
 			clientIDs,
 		)
 	}

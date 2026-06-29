@@ -98,11 +98,12 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		model     *llmv1alpha1.LLMModel
-		cfg       *config.OperatorConfig
-		clientIDs []string
-		check     func(t *testing.T, result *AuthResources, err error)
+		name                  string
+		model                 *llmv1alpha1.LLMModel
+		cfg                   *config.OperatorConfig
+		clientIDs             []string
+		credentialSecretNames []string
+		check                 func(t *testing.T, result *AuthResources, err error)
 	}{
 		{
 			name:  "API key Secret: correct name and namespace",
@@ -692,12 +693,49 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 			},
 		},
+		{
+			name:                  "External SecurityPolicy: credentialRefs pools all Secrets; authz scopes to own client IDs",
+			model:                 defaultAuthModel(),
+			cfg:                   defaultAuthConfig(),
+			clientIDs:             []string{"user-alice-1"},
+			credentialSecretNames: []string{"a-api-keys", "b-api-keys", "my-model-api-keys"},
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
+				refs := apiKeyAuth["credentialRefs"].([]interface{})
+				if len(refs) != 3 {
+					t.Fatalf("expected 3 pooled credentialRefs, got %d", len(refs))
+				}
+				gotNames := map[string]bool{}
+				for _, r := range refs {
+					gotNames[r.(map[string]interface{})["name"].(string)] = true
+				}
+				for _, want := range []string{"a-api-keys", "b-api-keys", "my-model-api-keys"} {
+					if !gotNames[want] {
+						t.Errorf("credentialRefs missing %q (have %v)", want, gotNames)
+					}
+				}
+				// Pooled authn, but authorization still scopes to THIS model's own client IDs.
+				authz := spec["authorization"].(map[string]interface{})
+				vals := authz["rules"].([]interface{})[0].(map[string]interface{})["principal"].(map[string]interface{})["headers"].([]interface{})[0].(map[string]interface{})["values"].([]interface{})
+				if len(vals) != 1 || vals[0] != "user-alice-1" {
+					t.Errorf("authz allow-list should be own client IDs [user-alice-1], got %v", vals)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			result, err := BuildAuthResources(tt.model, tt.cfg, tt.clientIDs)
+			creds := tt.credentialSecretNames
+			if creds == nil {
+				creds = []string{APIKeySecretName(tt.model.Name)}
+			}
+			result, err := BuildAuthResources(tt.model, tt.cfg, tt.clientIDs, creds)
 			tt.check(t, result, err)
 		})
 	}

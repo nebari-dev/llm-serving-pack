@@ -20,6 +20,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -132,7 +134,11 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
 		}
-		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs)
+		credentialSecretNames, err := apiKeySecretNamesWith(ctx, r.Client, model.Namespace, reconcilers.APIKeySecretName(model.Name))
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("listing api key secrets: %w", err)
+		}
+		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs, credentialSecretNames)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
@@ -780,20 +786,50 @@ func (r *LLMModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapAPIKeySecretToModel enqueues a reconcile for the LLMModel that owns an
-// api-keys Secret, so minting or revoking a key re-renders the external
-// authorization allow-list. It ignores Secrets that are not LLMModel api-keys
-// Secrets (passthrough Secrets carry app.kubernetes.io/name=passthroughmodel).
-func (r *LLMModelReconciler) mapAPIKeySecretToModel(_ context.Context, obj client.Object) []reconcile.Request {
-	labels := obj.GetLabels()
-	if labels["app.kubernetes.io/name"] != "llmmodel" {
+// apiKeySecretNamesWith returns the names of all operator-managed api-keys
+// Secrets in the namespace (every model's Secret), guaranteeing ownName is
+// present, sorted for deterministic rendering. These pool into each external
+// SecurityPolicy's apiKeyAuth.credentialRefs so any valid key authenticates on
+// the shared listener; the per-model authorization block then scopes it (#116).
+func apiKeySecretNamesWith(ctx context.Context, c client.Reader, namespace, ownName string) ([]string, error) {
+	var list corev1.SecretList
+	if err := c.List(ctx, &list, client.InNamespace(namespace),
+		client.MatchingLabels{"app.kubernetes.io/managed-by": "nebari-llm-operator"}); err != nil {
+		return nil, err
+	}
+	set := map[string]struct{}{ownName: {}}
+	for i := range list.Items {
+		if strings.HasSuffix(list.Items[i].Name, "-api-keys") {
+			set[list.Items[i].Name] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// mapAPIKeySecretToModel enqueues ALL LLMModels when any operator-managed
+// api-keys Secret changes. Both the per-model authorization allow-list (a
+// model's own keys) and the pooled credentialRefs (every model's Secret)
+// depend on the full set of api-keys Secrets, so a key mint/revoke or a model
+// being added/removed must re-reconcile every model. Churn is bounded by model
+// count; scoping key-mint updates to the owning model is a possible follow-up.
+func (r *LLMModelReconciler) mapAPIKeySecretToModel(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !strings.HasSuffix(obj.GetName(), "-api-keys") {
 		return nil
 	}
-	name := labels["llm.nebari.dev/model-name"]
-	if name == "" {
+	var models llmv1alpha1.LLMModelList
+	if err := r.List(ctx, &models, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
-	return []reconcile.Request{{
-		NamespacedName: types.NamespacedName{Name: name, Namespace: obj.GetNamespace()},
-	}}
+	reqs := make([]reconcile.Request, 0, len(models.Items))
+	for i := range models.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+			Name: models.Items[i].Name, Namespace: models.Items[i].Namespace,
+		}})
+	}
+	return reqs
 }
