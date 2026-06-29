@@ -1,0 +1,35 @@
+# Envoy Gateway Helm values that wire in the Envoy AI Gateway ext_proc
+# extension. Mirrors docs/install-production.md section 6.1, which sources
+# these from envoyproxy/ai-gateway's manifests/envoy-gateway-values.yaml.
+#
+# - extensionApis.enableBackend lets HTTPRoutes reference InferencePool.
+# - extensionManager points envoy-gateway at the AI Gateway controller's XDS
+#   extension server (port 1063) so it inserts the ext_proc filter.
+# - backendResources lists the non-builtin backend kinds the extension handles.
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener: { includeAll: true }
+            route: { includeAll: true }
+            cluster: { includeAll: true }
+            secret: { includeAll: true }
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1

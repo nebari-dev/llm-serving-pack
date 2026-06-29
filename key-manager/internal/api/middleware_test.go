@@ -44,12 +44,12 @@ func handlerThatChecksUser(t *testing.T) http.Handler {
 
 func TestAuthMiddleware(t *testing.T) {
 	tests := []struct {
-		name           string
-		cfg            AuthConfig
-		setupRequest   func(r *http.Request)
-		wantStatus     int
-		wantUsername   string
-		wantGroups     []string
+		name         string
+		cfg          AuthConfig
+		setupRequest func(r *http.Request)
+		wantStatus   int
+		wantUsername string
+		wantGroups   []string
 	}{
 		{
 			name: "bearer JWT in Authorization header extracts username and groups",
@@ -236,6 +236,78 @@ func TestAuthMiddleware(t *testing.T) {
 							t.Errorf("groups[%d]: got %q, want %q", i, gotGroups[i], tc.wantGroups[i])
 						}
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestAuthMiddlewareDevMode(t *testing.T) {
+	devIdentity := UserInfo{
+		Username: "dev",
+		Name:     "Dev User",
+		Email:    "dev@local",
+		Groups:   []string{"llm"},
+	}
+
+	tests := []struct {
+		name         string
+		setupRequest func(r *http.Request)
+		wantUsername string
+		wantGroups   []string
+	}{
+		{
+			name:         "no token injects the dev identity instead of returning 401",
+			setupRequest: func(r *http.Request) {},
+			wantUsername: "dev",
+			wantGroups:   []string{"llm"},
+		},
+		{
+			name: "a supplied bearer token is ignored in favor of the dev identity",
+			setupRequest: func(r *http.Request) {
+				token := makeTestJWT(map[string]interface{}{
+					"preferred_username": "alice",
+					"groups":             []string{"admins"},
+				})
+				r.Header.Set("Authorization", "Bearer "+token)
+			},
+			wantUsername: "dev",
+			wantGroups:   []string{"llm"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := AuthConfig{
+				GroupsClaim:  "groups",
+				CookiePrefix: "IdToken",
+				DevMode:      true,
+				DevIdentity:  devIdentity,
+			}
+			handler := AuthMiddleware(cfg)(handlerThatChecksUser(t))
+
+			req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+			tc.setupRequest(req)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+			}
+			if got := rec.Header().Get("X-Username"); got != tc.wantUsername {
+				t.Errorf("username: got %q, want %q", got, tc.wantUsername)
+			}
+			var gotGroups []string
+			if err := json.Unmarshal([]byte(rec.Header().Get("X-Groups")), &gotGroups); err != nil {
+				t.Fatalf("failed to parse groups header: %v", err)
+			}
+			if len(gotGroups) != len(tc.wantGroups) {
+				t.Fatalf("groups: got %v, want %v", gotGroups, tc.wantGroups)
+			}
+			for i := range gotGroups {
+				if gotGroups[i] != tc.wantGroups[i] {
+					t.Errorf("groups[%d]: got %q, want %q", i, gotGroups[i], tc.wantGroups[i])
 				}
 			}
 		})

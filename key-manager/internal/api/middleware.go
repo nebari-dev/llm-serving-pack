@@ -35,6 +35,14 @@ type AuthConfig struct {
 	// CookiePrefix is the prefix for the IdToken cookie (default: "IdToken").
 	// The middleware accepts any cookie whose name starts with this prefix.
 	CookiePrefix string
+	// DevMode disables token extraction and injects DevIdentity into every
+	// request. It exists so the UI can run on a local cluster that has no
+	// Keycloak or gateway OIDC layer in front of it. It is off by default and
+	// must never be enabled in a real deployment.
+	DevMode bool
+	// DevIdentity is the user injected into the request context when DevMode
+	// is on. Ignored when DevMode is false.
+	DevIdentity UserInfo
 }
 
 // AuthMiddleware returns HTTP middleware that extracts user identity from JWT.
@@ -52,6 +60,15 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Dev mode: skip token handling entirely and inject a fixed
+			// identity so the UI works without an OIDC provider in front.
+			if cfg.DevMode {
+				devUser := cfg.DevIdentity
+				ctx := context.WithValue(r.Context(), userContextKey, &devUser)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			token, err := extractToken(r, cfg.CookiePrefix)
 			if err != nil {
 				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)

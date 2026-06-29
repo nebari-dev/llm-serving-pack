@@ -29,6 +29,15 @@ rules:
   - apiGroups: ["llm.nebari.dev"]
     resources: ["llmmodels/finalizers"]
     verbs: ["update"]
+  - apiGroups: ["llm.nebari.dev"]
+    resources: ["passthroughmodels"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["llm.nebari.dev"]
+    resources: ["passthroughmodels/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["llm.nebari.dev"]
+    resources: ["passthroughmodels/finalizers"]
+    verbs: ["update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -48,10 +57,14 @@ rules:
     resources: ["inferencepools"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["aigateway.envoyproxy.io"]
-    resources: ["aigatewayroutes"]
+    resources: ["aigatewayroutes", "aiservicebackends", "backendsecuritypolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.envoyproxy.io"]
-    resources: ["securitypolicies"]
+    resources: ["securitypolicies", "backends"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PassthroughModel provider TLS validation toward the external provider.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["backendtlspolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["referencegrants"]
@@ -59,6 +72,15 @@ rules:
   - apiGroups: ["monitoring.coreos.com"]
     resources: ["podmonitors"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Shared-TLS reconciler: issues the cert covering llm/llm-internal via the
+  # selfsigned-issuer ClusterIssuer (see cert-manager-config.yaml) and patches
+  # HTTPS listeners onto the shared Gateways.
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get", "list", "watch", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -95,7 +117,7 @@ spec:
           imagePullPolicy: Never
           env:
             - name: LLM_BASE_DOMAIN
-              value: "llm.local"
+              value: "local"
             - name: LLM_EXTERNAL_GATEWAY_NAME
               value: "nebari-gateway"
             - name: LLM_EXTERNAL_GATEWAY_NAMESPACE
@@ -104,8 +126,13 @@ spec:
               value: "nebari-internal-gateway"
             - name: LLM_INTERNAL_GATEWAY_NAMESPACE
               value: "envoy-gateway-system"
+            # Issue the shared llm.local / llm-internal.local cert via the
+            # local self-signed ClusterIssuer (cert-manager-config.yaml) so the
+            # operator can patch HTTPS listeners onto the gateways with no ACME.
+            - name: LLM_CLUSTER_ISSUER_NAME
+              value: "selfsigned-issuer"
             - name: LLM_OIDC_ISSUER_URL
-              value: "https://keycloak.llm.local/realms/nebari"
+              value: "https://keycloak.local/realms/nebari"
             - name: LLM_OIDC_GROUPS_CLAIM
               value: "groups"
             - name: ENABLE_WEBHOOKS
@@ -120,6 +147,16 @@ spec:
             - containerPort: 9443
               name: webhook-server
               protocol: TCP
+          # The validating webhook binds 9443 only after controller-runtime
+          # loads the mounted serving cert. Gate readiness on that port so
+          # `kubectl rollout status` in `make deploy` does not return before the
+          # webhook can accept PassthroughModel creates (the manager's /readyz
+          # is only a ping and goes green before the webhook is serving).
+          readinessProbe:
+            tcpSocket:
+              port: 9443
+            initialDelaySeconds: 2
+            periodSeconds: 2
           volumeMounts:
             - name: cert
               mountPath: /tmp/k8s-webhook-server/serving-certs
