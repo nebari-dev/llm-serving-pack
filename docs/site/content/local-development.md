@@ -25,8 +25,8 @@ Install the following tools before proceeding:
 ## 1. Clone the repo
 
 ```bash
-git clone https://github.com/nebari-dev/nebari-llm-serving-pack
-cd nebari-llm-serving-pack
+git clone https://github.com/nebari-dev/llm-serving-pack
+cd llm-serving-pack
 ```
 
 ## 2. Create the dev cluster
@@ -95,7 +95,7 @@ Apply the test `LLMModel` resource, which uses the mock vLLM image:
 make apply-test-model
 ```
 
-This creates an `LLMModel` named `test-model` in the `llm-operator-system` namespace. The operator reconciles it and creates the supporting resources. Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) all LLMModels must live in the operator's own namespace - the validating webhook rejects anywhere else.
+This creates an `LLMModel` named `test-model` in the `llm-operator-system` namespace. The operator reconciles it and creates the supporting resources. Per [#59](https://github.com/nebari-dev/llm-serving-pack/issues/59) all LLMModels must live in the operator's own namespace - the validating webhook rejects anywhere else.
 
 ## 6. Watch reconciliation
 
@@ -129,7 +129,7 @@ The operator creates:
 - A `Service` for the deployment
 - An `InferencePool` for intelligent request scheduling
 - `AIGatewayRoute` resources for external (API key) and internal (JWT) access
-- `SecurityPolicy` resources for auth enforcement (the API-key Secret they reference is co-located in this same namespace; see [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) for why)
+- `SecurityPolicy` resources for auth enforcement (the API-key Secret they reference is co-located in this same namespace; see [#59](https://github.com/nebari-dev/llm-serving-pack/issues/59) for why)
 
 ## 8. Test the key manager API
 

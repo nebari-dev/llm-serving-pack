@@ -18,7 +18,7 @@
 #
 # This manual installation is a workaround until the chart's
 # envoyAIGateway.install flag is implemented:
-#   https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44
+#   https://github.com/nebari-dev/llm-serving-pack/issues/44
 #
 # References:
 #   - https://aigateway.envoyproxy.io/docs/getting-started/installation/

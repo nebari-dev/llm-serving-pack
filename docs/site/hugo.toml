@@ -25,8 +25,8 @@ enableGitInfo = true
 [params]
   logoLink = "https://packs.nebari.dev/"
   description = "Kubernetes operator for serving LLMs on Nebari via llm-d, with per-model OIDC access control, API key management, and Envoy AI Gateway integration."
-  repo = "https://github.com/nebari-dev/nebari-llm-serving-pack"
-  editBase = "https://github.com/nebari-dev/nebari-llm-serving-pack/edit/main/docs/site/content"
+  repo = "https://github.com/nebari-dev/llm-serving-pack"
+  editBase = "https://github.com/nebari-dev/llm-serving-pack/edit/main/docs/site/content"
   search = true
 
   [[params.tabs]]

@@ -26,7 +26,7 @@ spec:
     #
     # Pin a tagged release. Chart AppVersion drives the operator and
     # key-manager image tags, so pinning the chart pins the images too.
-    - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
+    - repoURL: https://github.com/nebari-dev/llm-serving-pack.git
       targetRevision: v0.1.0-alpha.7
       path: charts/nebari-llm-serving
       helm:

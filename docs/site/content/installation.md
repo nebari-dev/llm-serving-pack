@@ -876,7 +876,7 @@ metadata:
 spec:
   project: foundational
   source:
-    repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
+    repoURL: https://github.com/nebari-dev/llm-serving-pack.git
     targetRevision: v0.1.0-alpha.9
     path: charts/nebari-llm-serving
     helm:

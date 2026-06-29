@@ -5,8 +5,9 @@
 // frozen - it still cuts releases:
 // https://github.com/llm-d-incubation/llm-d-modelservice (tags are named
 // llm-d-modelservice-vX.Y.Z). The "diff the upstream chart on each release"
-// maintenance contract in docs/design.md therefore still has a target; diff
-// these specs against the latest llm-d-modelservice-* tag when re-verifying.
+// maintenance contract in the Architecture docs therefore still has a target
+// (https://packs.nebari.dev/llm-serving-pack/architecture/); diff these specs
+// against the latest llm-d-modelservice-* tag when re-verifying.
 // The vLLM serving image is bumped to llm-d-cuda:v0.7.0 (CUDA 13.0.2 runtime).
 package reconcilers
 

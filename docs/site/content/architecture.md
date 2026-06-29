@@ -208,7 +208,7 @@ In-cluster app -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> 
 - JWT validation: verifies signature against the OIDC issuer's JWKS endpoint, checks audience, extracts groups from the configured claim, validates group membership against the model's `access.groups`
 - No browser redirects - pure bearer token validation for service-to-service calls
 
-**JWKS endpoint resolution note:** the operator currently constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`, the Keycloak convention. A non-Keycloak OIDC provider will not work out of the box even though the surrounding config fields are provider-agnostic. The long-term fix is to fetch the OIDC discovery document and read `jwks_uri`; until that lands, treat the internal SecurityPolicy JWKS path as Keycloak-only. Tracked in issue [#61](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/61).
+**JWKS endpoint resolution note:** the operator currently constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`, the Keycloak convention. A non-Keycloak OIDC provider will not work out of the box even though the surrounding config fields are provider-agnostic. The long-term fix is to fetch the OIDC discovery document and read `jwks_uri`; until that lands, treat the internal SecurityPolicy JWKS path as Keycloak-only. Tracked in issue [#61](https://github.com/nebari-dev/llm-serving-pack/issues/61).
 
 **JWT availability:** in Nebari, JupyterHub injects tokens into user pods. For other in-cluster services, the application must handle OIDC login and forward the resulting token. If a service cannot obtain a JWT, use the external endpoint with an API key instead.
 
@@ -238,7 +238,7 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 ## PassthroughModel CRD
 
-Issue [#95](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
+Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
 
 ```yaml
 apiVersion: llm.nebari.dev/v1alpha1
@@ -385,7 +385,7 @@ Both external and internal endpoints use `AIGatewayRoute`, giving both paths tok
 
 All pack components - the operator, the key manager, the `LLMModel` CRs, the model pods, the API-key Secrets, and the Envoy Gateway SecurityPolicies that reference them - live in **a single namespace per pack install**. The validating webhook rejects `LLMModel` CRs created in any other namespace.
 
-This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.credentialRefs` rejects cross-namespace Secret references and does not honor `ReferenceGrant` for that field. Co-locating the Secret with the SecurityPolicy is the only way to make `apiKeyAuth` work. The earlier multi-namespace design (one operator watching `llm-data-science`, `llm-engineering`, etc., with a dedicated `llm-api-keys` namespace bridged via `ReferenceGrant`) hit this wall and is no longer how the pack is laid out. See [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59).
+This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.credentialRefs` rejects cross-namespace Secret references and does not honor `ReferenceGrant` for that field. Co-locating the Secret with the SecurityPolicy is the only way to make `apiKeyAuth` work. The earlier multi-namespace design (one operator watching `llm-data-science`, `llm-engineering`, etc., with a dedicated `llm-api-keys` namespace bridged via `ReferenceGrant`) hit this wall and is no longer how the pack is laid out. See [#59](https://github.com/nebari-dev/llm-serving-pack/issues/59).
 
 **Per-team isolation**: achieved by running multiple pack installs (one per team's operator namespace), not by a single operator watching multiple namespaces.
 

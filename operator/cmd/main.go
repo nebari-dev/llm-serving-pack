@@ -221,7 +221,7 @@ func main() {
 		// Deployment; the webhook uses it to enforce that LLMModels are
 		// created in the operator's namespace so their API-key Secrets land
 		// in the same namespace as the SecurityPolicies that reference them.
-		// See https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59.
+		// See https://github.com/nebari-dev/llm-serving-pack/issues/59.
 		operatorNamespace := os.Getenv("POD_NAMESPACE")
 		if err := webhookv1alpha1.SetupLLMModelWebhookWithManager(mgr, operatorNamespace); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "LLMModel")

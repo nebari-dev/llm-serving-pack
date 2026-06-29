@@ -34,6 +34,13 @@ jobs:
             echo "url=https://packs.nebari.dev/${PACK_SLUG}/" >> "$GITHUB_OUTPUT"
             echo "branch=main" >> "$GITHUB_OUTPUT"
           else
+            # Preview baseURL is reconstructed here from the branch name, NOT read
+            # from Cloudflare's deploy output (steps.deploy.outputs.pages-deployment-alias-url),
+            # because the build runs before the deploy. If Cloudflare's own alias
+            # generation diverges from this tr/sed (e.g. the 63-char DNS-label cap on
+            # a long branch name, or different sanitization), the built preview's
+            # absolute links will point at the wrong host. Preview-only; production
+            # (the main branch above) uses the fixed packs.nebari.dev URL and is unaffected.
             ALIAS=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
             echo "url=https://${ALIAS}.${PACK_SLUG}.pages.dev/" >> "$GITHUB_OUTPUT"
             echo "branch=${HEAD_REF}" >> "$GITHUB_OUTPUT"
