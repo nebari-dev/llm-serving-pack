@@ -10,8 +10,7 @@ jobs:
   add-to-project:
     runs-on: ubuntu-latest
     steps:
-      # https://github.com/actions/add-to-project/releases/tag/v2.0.0
-      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd
+      - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
           project-url: ${{ vars.PROJECT_BOARD_URL }}
           github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
