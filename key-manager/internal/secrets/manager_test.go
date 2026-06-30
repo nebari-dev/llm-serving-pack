@@ -173,19 +173,19 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 			name:         "first key for user is -1",
 			username:     "chuck",
 			existingKeys: []string{},
-			wantClientID: "user-chuck-1",
+			wantClientID: "user-chuck-my-model-1",
 		},
 		{
 			name:         "second key for user is -2",
 			username:     "chuck",
-			existingKeys: []string{"user-chuck-1"},
-			wantClientID: "user-chuck-2",
+			existingKeys: []string{"user-chuck-my-model-1"},
+			wantClientID: "user-chuck-my-model-2",
 		},
 		{
 			name:         "third key for user is -3",
 			username:     "chuck",
-			existingKeys: []string{"user-chuck-1", "user-chuck-2"},
-			wantClientID: "user-chuck-3",
+			existingKeys: []string{"user-chuck-my-model-1", "user-chuck-my-model-2"},
+			wantClientID: "user-chuck-my-model-3",
 		},
 	}
 
@@ -222,6 +222,46 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
 			}
 		})
+	}
+}
+
+// TestCreateKey_ClientIDUniqueAcrossModels is a regression test for the
+// per-model API-key scoping bug: a single user minting one key for each of two
+// models must get DISTINCT client IDs. Before the fix the sequence was counted
+// per-model, so the first key of every model was "user-<name>-1"; once the
+// operator pooled every model's api-keys Secret into each model's
+// SecurityPolicy credentialRefs, those duplicate client IDs collided - one
+// model's key authenticated/authorized for another, and the user's other keys
+// failed to authenticate at all.
+func TestCreateKey_ClientIDUniqueAcrossModels(t *testing.T) {
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			makeSecret("model-a", testNamespace),
+			makeConfigMap("model-a", testNamespace),
+			makeSecret("model-b", testNamespace),
+			makeConfigMap("model-b", testNamespace),
+		).
+		Build()
+
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	a, err := mgr.CreateKey(context.Background(), "model-a", "chuck", "test")
+	if err != nil {
+		t.Fatalf("CreateKey model-a: %v", err)
+	}
+	b, err := mgr.CreateKey(context.Background(), "model-b", "chuck", "test")
+	if err != nil {
+		t.Fatalf("CreateKey model-b: %v", err)
+	}
+	if a.ClientID == b.ClientID {
+		t.Errorf("client IDs collide across models: model-a=%q model-b=%q (must be unique)", a.ClientID, b.ClientID)
+	}
+	if a.ClientID != "user-chuck-model-a-1" {
+		t.Errorf("model-a clientID = %q, want user-chuck-model-a-1", a.ClientID)
+	}
+	if b.ClientID != "user-chuck-model-b-1" {
+		t.Errorf("model-b clientID = %q, want user-chuck-model-b-1", b.ClientID)
 	}
 }
 
@@ -472,26 +512,26 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 		{
 			name:           "email username gets @ replaced with -at- and a hash suffix",
 			username:       "alice@example.com",
-			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-1",
+			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-my-model-1",
 			wantCreatorRaw: "alice@example.com",
 		},
 		{
 			name:           "plain alphanumeric username is unchanged",
 			username:       "chuck",
-			wantClientID:   "user-chuck-1",
+			wantClientID:   "user-chuck-my-model-1",
 			wantCreatorRaw: "chuck",
 		},
 		{
 			name:             "sequence increments using sanitized prefix",
 			username:         "alice@example.com",
-			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-2",
+			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-my-model-2",
 			wantCreatorRaw:   "alice@example.com",
-			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-1"},
+			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-my-model-1"},
 		},
 		{
 			name:           "raw alice-at-example.com does NOT collide with alice@example.com",
 			username:       "alice-at-example.com",
-			wantClientID:   "user-alice-at-example.com-1", // already valid -> no hash suffix
+			wantClientID:   "user-alice-at-example.com-my-model-1", // already valid -> no hash suffix
 			wantCreatorRaw: "alice-at-example.com",
 		},
 	}

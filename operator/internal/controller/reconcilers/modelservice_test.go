@@ -233,6 +233,27 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name:    "vllm container sets an explicit command (serving image entrypoint is the CUDA wrapper, no default CMD)",
+			model:   defaultModel(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				cmd := result.Deployment.Spec.Template.Spec.Containers[0].Command
+				want := []string{"python3", "-m", "vllm.entrypoints.openai.api_server"}
+				if len(cmd) != len(want) {
+					t.Fatalf("expected vllm command %v, got %v", want, cmd)
+				}
+				for i := range want {
+					if cmd[i] != want[i] {
+						t.Errorf("vllm command[%d] = %q, want %q", i, cmd[i], want[i])
+					}
+				}
+			},
+		},
+		{
 			name: "tensorParallelism explicit value used",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()

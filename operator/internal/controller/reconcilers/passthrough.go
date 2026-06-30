@@ -45,7 +45,7 @@ func PassthroughStandardLabels(pm *llmv1alpha1.PassthroughModel) map[string]stri
 // BuildPassthroughResources is a pure function that computes every resource
 // for the given PassthroughModel. No serving, storage, or scheduling
 // resources are involved; the provider serves the models, we route to it.
-func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig) (*PassthroughResources, error) {
+func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig, clientIDs []string, credentialSecretNames []string) (*PassthroughResources, error) {
 	labels := PassthroughStandardLabels(pm)
 	authLabels := map[string]string{}
 	for k, v := range labels {
@@ -97,7 +97,8 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			pm.Namespace,
 			labelsToInterface(labels),
 			pm.Name+"-external",
-			APIKeySecretName(pm.Name),
+			credentialSecretNames,
+			clientIDs,
 		)
 	}
 
@@ -261,7 +262,7 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 // buildPassthroughRoute renders the AIGatewayRoute for one endpoint of a
 // PassthroughModel. Rule order matters only for readability: Gateway API
 // precedence (more header matches wins) is what keeps served LLMModels,
-// whose routes match Host AND x-ai-eg-model, ahead of the catch-all rule.
+// whose routes match x-ai-eg-model, ahead of the catch-all rule.
 //
 // sectionName scoping is load-bearing for the same reason as in
 // buildAIGatewayRoute: the AI Gateway controller appends a catch-all
@@ -290,7 +291,6 @@ func buildPassthroughRoute(
 		for _, id := range pm.Spec.Models.Declared {
 			matches = append(matches, map[string]interface{}{
 				"headers": []interface{}{
-					hostHeader,
 					map[string]interface{}{
 						"type":  "Exact",
 						"name":  "x-ai-eg-model",
@@ -311,6 +311,11 @@ func buildPassthroughRoute(
 	}
 
 	if pm.Spec.Models.CatchAll {
+		// The catch-all rule (opt-in; catchAll defaults false) keeps the Host
+		// matcher. It carries no x-ai-eg-model header, so it is not a
+		// model-registration rule and is not affected by the AI Gateway v0.5
+		// issue fixed for the declared-model rules (#116). Left as-is because
+		// the catch-all path has no end-to-end test on EG v1.6.7 yet.
 		rules = append(rules, map[string]interface{}{
 			"matches": []interface{}{
 				map[string]interface{}{

@@ -67,9 +67,11 @@ func modelHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) strin
 	return v
 }
 
-// hostHeaderMatchValue returns the value of the Host header matcher on the
-// first rule of the given AIGatewayRoute, or fails the test.
-func hostHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string {
+// hostMatcherPresent reports whether the first rule of the given AIGatewayRoute
+// has a Host header matcher. Routes must NOT carry one: the Envoy AI Gateway
+// v0.5 controller will not register a model whose match rule has any header
+// beyond x-ai-eg-model (see buildAIGatewayRoute; nebari-dev/llm-serving-pack#116).
+func hostMatcherPresent(t *testing.T, route *unstructured.Unstructured) bool {
 	t.Helper()
 	if route == nil {
 		t.Fatal("expected route to be non-nil")
@@ -83,15 +85,10 @@ func hostHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string
 	for _, h := range headers {
 		header, _ := h.(map[string]interface{})
 		if header["name"] == "Host" {
-			v, ok := header["value"].(string)
-			if !ok {
-				t.Fatalf("expected Host header value to be a string, got %T", header["value"])
-			}
-			return v
+			return true
 		}
 	}
-	t.Fatalf("did not find a Host header matcher in %v", headers)
-	return ""
+	return false
 }
 
 func defaultRoutingModel() *llmv1alpha1.LLMModel {
@@ -302,32 +299,28 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 			},
 		},
 		{
-			name:  "External: rule has Host matcher for shared external hostname (scopes route to shared listener)",
+			name:  "External: rule has NO Host matcher (removed for AI Gateway v0.5 model registration; #116)",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				got := hostHeaderMatchValue(t, result.ExternalRoute)
-				want := "llm.example.com"
-				if got != want {
-					t.Errorf("expected external Host match %q, got %q", want, got)
+				if hostMatcherPresent(t, result.ExternalRoute) {
+					t.Error("external route must not carry a Host matcher; sectionName scopes it to the llm-https listener and a Host matcher breaks AI Gateway v0.5 model registration")
 				}
 			},
 		},
 		{
-			name:  "Internal: rule has Host matcher for shared internal hostname",
+			name:  "Internal: rule has NO Host matcher",
 			model: defaultRoutingModel(),
 			cfg:   defaultRoutingConfig(),
 			check: func(t *testing.T, result *RoutingResources, err error) {
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
-				got := hostHeaderMatchValue(t, result.InternalRoute)
-				want := "llm-internal.example.com"
-				if got != want {
-					t.Errorf("expected internal Host match %q, got %q", want, got)
+				if hostMatcherPresent(t, result.InternalRoute) {
+					t.Error("internal route must not carry a Host matcher")
 				}
 			},
 		},

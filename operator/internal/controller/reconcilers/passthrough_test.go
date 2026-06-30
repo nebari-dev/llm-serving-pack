@@ -85,7 +85,7 @@ func routeRules(t *testing.T, route *unstructured.Unstructured) []interface{} {
 
 func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 	pm := testPassthroughModel()
-	res, err := BuildPassthroughResources(pm, testPassthroughConfig())
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 
 func TestBuildPassthroughResourcesKeySecretAndConfigMap(t *testing.T) {
 	pm := testPassthroughModel()
-	res, err := BuildPassthroughResources(pm, testPassthroughConfig())
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestBuildPassthroughResourcesRoutes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := testPassthroughModel()
 			tt.mutate(pm)
-			res, err := BuildPassthroughResources(pm, testPassthroughConfig())
+			res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
 			if err != nil {
 				t.Fatalf("BuildPassthroughResources returned error: %v", err)
 			}
@@ -288,7 +288,7 @@ func TestBuildPassthroughResourcesRoutes(t *testing.T) {
 func TestBuildPassthroughRouteDetails(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
-	res, err := BuildPassthroughResources(pm, cfg)
+	res, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -314,24 +314,19 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 		if len(matches) != 2 {
 			t.Fatalf("declared matches = %d, want 2", len(matches))
 		}
-		// Every declared match carries Host AND x-ai-eg-model exact headers.
+		// Every declared match carries ONLY the x-ai-eg-model exact header - no
+		// Host matcher (removed for AI Gateway v0.5 model registration; #116).
 		seen := map[string]bool{}
 		for _, m := range matches {
 			headers, _ := m.(map[string]interface{})["headers"].([]interface{})
-			var hostOK bool
 			for _, h := range headers {
 				hm, _ := h.(map[string]interface{})
-				switch hm["name"] {
-				case ptHostHeader:
-					if hm["value"] == ptExternalHost && hm["type"] == "Exact" {
-						hostOK = true
-					}
-				case ptModelHeader:
+				if hm["name"] == ptHostHeader {
+					t.Errorf("declared match must not carry a Host header: %v", m)
+				}
+				if hm["name"] == ptModelHeader {
 					seen[hm["value"].(string)] = true
 				}
-			}
-			if !hostOK {
-				t.Errorf("declared match missing exact Host header: %v", m)
 			}
 		}
 		if !seen["openai/gpt-5.2"] || !seen["anthropic/claude-opus-4.6"] {
@@ -381,7 +376,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
-	res, err := BuildPassthroughResources(pm, cfg)
+	res, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources returned error: %v", err)
 	}
@@ -432,7 +427,7 @@ func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 	t.Run("public access drops authorization", func(t *testing.T) {
 		pub := testPassthroughModel()
 		pub.Spec.Access = llmv1alpha1.AccessSpec{Public: ptr.To(true)}
-		pubRes, err := BuildPassthroughResources(pub, cfg)
+		pubRes, err := BuildPassthroughResources(pub, cfg, nil, []string{APIKeySecretName(pub.Name)})
 		if err != nil {
 			t.Fatalf("BuildPassthroughResources returned error: %v", err)
 		}
@@ -440,4 +435,38 @@ func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 			t.Error("public access must not render an authorization block")
 		}
 	})
+}
+
+func TestBuildPassthroughExternalAuthorization(t *testing.T) {
+	t.Parallel()
+	pm := testPassthroughModel()
+	cfg := testPassthroughConfig()
+
+	withKeys, err := BuildPassthroughResources(pm, cfg, []string{"user-chuck-1"}, []string{APIKeySecretName(pm.Name)})
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+	spec := withKeys.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+	apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
+	if apiKeyAuth["forwardClientIDHeader"] != "x-llm-client-id" || apiKeyAuth["sanitize"] != true {
+		t.Errorf("expected forwardClientIDHeader/sanitize set, got %v", apiKeyAuth)
+	}
+	authz := spec["authorization"].(map[string]interface{})
+	if authz["defaultAction"] != "Deny" {
+		t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
+	}
+	rules := authz["rules"].([]interface{})
+	values := rules[0].(map[string]interface{})["principal"].(map[string]interface{})["headers"].([]interface{})[0].(map[string]interface{})["values"].([]interface{})
+	if len(values) != 1 || values[0] != "user-chuck-1" {
+		t.Errorf("expected values=[user-chuck-1], got %v", values)
+	}
+
+	noKeys, err := BuildPassthroughResources(pm, cfg, nil, []string{APIKeySecretName(pm.Name)})
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+	authzNo := noKeys.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})["authorization"].(map[string]interface{})
+	if _, present := authzNo["rules"]; present {
+		t.Errorf("expected deny-all (no rules) for zero client IDs, got %v", authzNo["rules"])
+	}
 }
