@@ -187,12 +187,20 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		return nil, err
 	}
 
-	// Count existing keys for this user to determine the sequence number.
-	// The sanitized username is used both for the data-key prefix and for the
-	// composed clientID so the count and the new clientID stay in sync.
+	// Count existing keys for this (user, model) to determine the sequence
+	// number. The clientID is scoped by BOTH username and model: the operator
+	// pools every model's api-keys Secret into each model's SecurityPolicy
+	// credentialRefs (model-scoped auth), and forwards the matched data key as
+	// the x-llm-client-id used for per-model authorization. A clientID that
+	// repeats across models - e.g. "user-<name>-1" for the first key of every
+	// model - collides in that pooled set, so one model's key both
+	// authenticates and authorizes for another, and the user's other keys fail
+	// to authenticate at all (only one value survives per duplicated key).
+	// Including the model keeps each clientID globally unique.
 	// KeyInfo.Creator below preserves the raw username for ownership checks.
 	safeUsername := sanitizeUsernameForKey(username)
-	userPrefix := "user-" + safeUsername + "-"
+	safeModel := sanitizeUsernameForKey(modelName)
+	userPrefix := "user-" + safeUsername + "-" + safeModel + "-"
 	count := 0
 	for k := range secret.Data {
 		if strings.HasPrefix(k, userPrefix) {
@@ -200,7 +208,7 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		}
 	}
 	sequence := count + 1
-	clientID := fmt.Sprintf("user-%s-%d", safeUsername, sequence)
+	clientID := fmt.Sprintf("user-%s-%s-%d", safeUsername, safeModel, sequence)
 
 	apiKey, err := generateAPIKey()
 	if err != nil {
