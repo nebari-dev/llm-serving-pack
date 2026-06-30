@@ -1739,3 +1739,160 @@ kubectl rollout restart deploy/ai-gateway-controller -n envoy-ai-gateway-system
 
 Confirm recovery: the controller logs should show only the live
 model's `InferencePool` being reconciled, with no panic.
+
+## 14. Per-user token usage in Grafana
+
+This feature attributes LLM token usage to the API-key owner who made
+each request and renders it as a Grafana table — one row per user, total
+tokens used in the last 30 days — built entirely on the LGTM pack
+(Grafana + Mimir) already running in the cluster. No Langfuse, no extra
+datastores, no secrets in your GitOps repo.
+
+**Scope:** This covers the **external (API-key) access path only.** The
+internal JWT path is not attributed in this version.
+
+### 14.1 How it works
+
+The pipeline has four stages:
+
+1. **Envoy Gateway credential forwarding.** The operator's external
+   `SecurityPolicy` sets `apiKeyAuth.forwardClientIDHeader: x-client-id`
+   and `apiKeyAuth.sanitize: true`. When Envoy Gateway matches a presented
+   API key it forwards the matched credential's name — the key-manager
+   **clientID** (e.g. `user-chuck-1`) — downstream as the `x-client-id`
+   header. `sanitize: true` strips the raw API key from the request before
+   it is proxied upstream. **These fields require Envoy Gateway v1.5.1+**
+   (verified present in v1.6.2, the pack's pinned version; absent in v1.3).
+
+2. **Header → metric label mapping.** The AI Gateway controller value
+   `controller.metricsRequestHeaderAttributes: "x-client-id:user.id"`
+   (set in `examples/envoy-ai-gateway.yaml`) maps the forwarded header
+   onto the GenAI token-usage metric as the `user.id` attribute, which
+   Prometheus exposes as the label `user_id`. The extProc already records
+   `gen_ai_client_token_usage` (input and output token counts) on every
+   request.
+
+3. **Scrape into Mimir.** The `gen_ai_*` metrics are exposed on the extProc
+   sidecar's own admin port — `:1064` at `/metrics` — **not** on envoy's
+   `:19001 /stats/prometheus`. The proxy pod's default `prometheus.io/scrape`
+   annotation only covers `:19001`, and annotation-based discovery scrapes a
+   single port, so a **dedicated scrape job** targeting the gateway proxy pods
+   on `:1064` must be added to the LGTM OpenTelemetry Collector (see §14.2).
+   That job writes the `gen_ai_*` series to Mimir. No gateway-side OTLP export
+   is configured.
+
+4. **Grafana table.** The pack ships a dashboard ConfigMap (labeled
+   `grafana_dashboard: "1"`) that the Grafana sidecar auto-loads. Its
+   single Table panel runs:
+
+   ```promql
+   sum by (user_id) (increase(gen_ai_client_token_usage_sum{user_id!=""}[30d]))
+   ```
+
+   Summing across `gen_ai_token_type` (input + output) yields total tokens
+   per user over the last 30 days; `user_id != ""` drops unattributed
+   (e.g. internal) traffic.
+
+**Granularity note:** `user_id` is the verbatim clientID (e.g.
+`user-chuck-1`), so attribution is **per-key**, not per-human-aggregated.
+Because clientIDs embed the username, the data is still effectively
+per-user, but a user with multiple keys appears as multiple rows. True
+per-user rollup across keys is a deferred follow-up.
+
+> **Streaming caveat (verified on a live cluster):** for **streaming**
+> requests (`"stream": true`), the token-usage metric is recorded **only if
+> the client sends `stream_options: {"include_usage": true}`** — that is what
+> makes the model emit the final usage chunk the extProc reads from. Streaming
+> requests without it complete normally (HTTP 200) but contribute **zero** to
+> the per-user totals. Non-streaming requests always carry `usage` and are
+> always counted. There is no gateway-side way to force `include_usage`, so
+> document this for users/SDKs, or treat streaming-without-usage traffic as a
+> known undercount. (Tested: 10 streaming requests with `include_usage`
+> incremented the metric by exactly their usage; 5 without it incremented by
+> nothing.)
+
+### 14.2 What you deploy
+
+Three pieces — the metric label, the scrape job, and the dashboard:
+
+**1. Metric label** — the one-line `controller.metricsRequestHeaderAttributes`
+value in `examples/envoy-ai-gateway.yaml` (already set). The controller passes
+this to the extProc sidecar as `-metricsRequestHeaderAttributes`, so the
+sidecar must be (re)created after the value changes. Roll the gateway proxy
+(the extProc is injected into it), which re-injects the sidecar with the new
+flag:
+`kubectl rollout restart deploy -n envoy-gateway-system <gateway-proxy-deploy>`.
+
+**2. Scrape job for `:1064`** — add a scrape job to the LGTM OpenTelemetry
+Collector so the `gen_ai_*` metrics on the extProc admin port reach Mimir. The
+collector config is single-owner (see ADR-0005 in nebari-infrastructure-core);
+add this to the collector-override ConfigMap rather than editing the base. The
+job discovers the gateway proxy pods and rewrites the scrape target to `:1064`:
+
+```yaml
+# OpenTelemetry Collector prometheus receiver — scrape extProc gen_ai metrics.
+receivers:
+  prometheus/ai-gateway-genai:
+    config:
+      scrape_configs:
+        - job_name: ai-gateway-genai
+          metrics_path: /metrics
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [envoy-gateway-system]
+          relabel_configs:
+            # keep only the Envoy AI Gateway proxy pods. The regex must match
+            # your shared gateway's name (platform.gateway.external.name in the
+            # chart values; "nebari-gateway" by default). Use ".+" to scrape the
+            # extProc on every Envoy Gateway proxy regardless of name.
+            - source_labels:
+                - __meta_kubernetes_pod_label_gateway_envoyproxy_io_owning_gateway_name
+              regex: nebari-gateway
+              action: keep
+            # scrape the extProc admin port, not envoy's :19001
+            - source_labels: [__address__]
+              regex: (.+?)(?::\d+)?
+              target_label: __address__
+              replacement: $${1}:1064
+```
+
+Then add `prometheus/ai-gateway-genai` to the collector's `metrics` pipeline
+`receivers:` list so it flows through the existing `otlphttp/mimir` exporter.
+
+> **OTel escaping gotcha (verified):** the relabel `replacement` is `$${1}`,
+> not `${1}`. The OpenTelemetry Collector expands `${...}` as an environment
+> variable at config-load time, so an unescaped `${1}` crashes the collector
+> with `environment variable "1" has invalid name`. Doubling the dollar sign
+> (`$${1}`) passes a literal `${1}` through to the Prometheus relabel engine.
+> (In a *raw* Prometheus `scrape_config` — not via the OTel collector — use the
+> normal `${1}`.)
+
+**3. Dashboard** — ships as a chart-managed ConfigMap, controlled by
+`observability.dashboard.enabled` (default `true`) and placed in
+`observability.dashboard.namespace` (default `monitoring`). Set the namespace
+to wherever your LGTM Grafana sidecar watches for dashboards.
+
+**Prerequisites:** the LGTM pack (Grafana + Mimir) installed with the OTel
+collector forwarding to Mimir, and Mimir retention ≥ 30 days (the LGTM
+default).
+
+### 14.3 Verification
+
+1. Mint an API key via the key-manager UI (see section 11.2).
+2. Call the external endpoint with that key a few times (see section 11.3).
+3. Query Mimir directly to confirm the labeled metric landed:
+
+   ```promql
+   sum by (user_id) (increase(gen_ai_client_token_usage_sum{user_id!=""}[30d]))
+   ```
+
+   Expect a row whose `user_id` is the clientID of the key you minted
+   (`user-<name>-N`) with a non-zero token count.
+4. Open Grafana, find the **LLM Per-User Token Usage** dashboard, and
+   confirm the table renders the same row. The dashboard appears without a
+   Grafana restart (the sidecar loads the ConfigMap live).
+
+> **Note:** Per-model and input/output split breakdowns, time-series/rate
+> panels, alerting, and cost estimation are deliberate follow-ups and are
+> not part of v1.

@@ -152,3 +152,20 @@ defaults:
     storageClassName: ""
   monitoring:
     enabled: true
+
+# observability.dashboard provisions a Grafana dashboard showing per-user
+# LLM token usage (one row per API-key owner, total tokens over 30 days),
+# built on the LGTM pack already running in the cluster. The dashboard is
+# shipped as a ConfigMap labeled `grafana_dashboard: "1"`, which the Grafana
+# sidecar (grafana-sc-dashboard) auto-loads. Requires the AI Gateway value
+# controller.metricsRequestHeaderAttributes: "x-client-id:user.id" (see
+# examples/envoy-ai-gateway.yaml) so the gen_ai_client_token_usage metric
+# carries the user_id label.
+observability:
+  dashboard:
+    # enabled: provision the per-user token-usage dashboard ConfigMap.
+    enabled: true
+    # namespace: where the LGTM Grafana sidecar watches for dashboard
+    # ConfigMaps. Must match the namespace Grafana runs in. Defaults to the
+    # standard Nebari LGTM namespace.
+    namespace: monitoring

@@ -214,8 +214,31 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 			},
 		},
-		// NOTE: sanitize and forwardClientIDHeader are Envoy Gateway v1.7+ features.
-		// Tests for these fields will be added when minimum EG version is bumped.
+		{
+			name:  "External SecurityPolicy: apiKeyAuth forwards clientID and sanitizes",
+			model: defaultAuthModel(),
+			cfg:   defaultAuthConfig(),
+			check: func(t *testing.T, result *AuthResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if result.ExternalSecurityPolicy == nil {
+					t.Fatal("expected ExternalSecurityPolicy to be non-nil")
+				}
+				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
+				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
+				if got := apiKeyAuth["forwardClientIDHeader"]; got != "x-client-id" {
+					t.Errorf("expected forwardClientIDHeader=x-client-id, got %v", got)
+				}
+				if got := apiKeyAuth["sanitize"]; got != true {
+					t.Errorf("expected sanitize=true, got %v", got)
+				}
+			},
+		},
+		// NOTE: forwardClientIDHeader and sanitize are now rendered on the external
+		// SecurityPolicy. Both fields require Envoy Gateway v1.5.1+ (present in the
+		// pack's pinned v1.6.2; absent in v1.3). Operators on an older Envoy Gateway
+		// must upgrade or the fields are rejected/ignored by the SecurityPolicy CRD.
 		{
 			name:  "External SecurityPolicy: extractFrom headers includes Authorization",
 			model: defaultAuthModel(),
