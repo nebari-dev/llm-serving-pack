@@ -35,6 +35,8 @@
   },
   "devDependencies": {
     "playwright": "^1.61.1",
+    "remark": "^15.0.1",
+    "unist-util-visit": "^5.1.0",
     "vitest": "^4.1.9"
   }
 }
