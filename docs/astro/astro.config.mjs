@@ -6,12 +6,14 @@ import tailwindcss from '@tailwindcss/vite';
 import rehypeMermaid from 'rehype-mermaid';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import remarkBaseLinks from './src/plugins/remark-base-links';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
   base: process.env.BASE || '/',
+  site: process.env.SITE,
   integrations: [
     react(),
     starlight({
@@ -57,6 +59,7 @@ export default defineConfig({
   markdown: {
     // syntaxHighlight false on mermaid so the plugin sees raw graph source.
     syntaxHighlight: { type: 'shiki', excludeLangs: ['mermaid'] },
+    remarkPlugins: [[remarkBaseLinks, { base: process.env.BASE || '/' }]],
     rehypePlugins: [[rehypeMermaid, { strategy: 'inline-svg' }]],
   },
   vite: {
