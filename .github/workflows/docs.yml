@@ -2,50 +2,85 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ['docs/site/**', '.github/workflows/docs.yml']
+    paths: ['docs/astro/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/site/**', '.github/workflows/docs.yml']
+    paths: ['docs/astro/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: write
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  PACK_SLUG: llm-serving-pack
 jobs:
-  build:
+  docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: actions/setup-go@v5
-        # Pin to docs/site/go.mod so the workflow Go version can't drift from
-        # the module's `go` directive (Go is only used to resolve the Hugo theme).
-        with: { go-version-file: docs/site/go.mod, cache: false }
-      - uses: peaceiris/actions-hugo@v3
+      - uses: actions/setup-node@v4
         with:
-          hugo-version: "0.159.0"
-          extended: true
-      - id: pages
-        if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@v5
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: docs/astro/package-lock.json
+
+      - name: Install deps
+        working-directory: docs/astro
+        run: npm ci
+
+      - name: Install Playwright (mermaid rendering)
+        working-directory: docs/astro
+        run: npx playwright install --with-deps chromium
+
+      - name: Unit tests
+        working-directory: docs/astro
+        run: npm test
+
+      - name: Compute site, base, and deploy branch
+        id: base
+        env:
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "site=https://packs.nebari.dev" >> "$GITHUB_OUTPUT"
+            echo "base=/${PACK_SLUG}/" >> "$GITHUB_OUTPUT"
+            echo "branch=main" >> "$GITHUB_OUTPUT"
+          else
+            ALIAS=$(printf '%s' "$HEAD_REF" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+            echo "site=https://${ALIAS}.${PACK_SLUG}.pages.dev" >> "$GITHUB_OUTPUT"
+            echo "base=/" >> "$GITHUB_OUTPUT"
+            echo "branch=${HEAD_REF}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build
-        run: cd docs/site && hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url || 'https://nebari-dev.github.io/nebari-llm-serving-pack/' }}"
+        working-directory: docs/astro
+        env:
+          SITE: ${{ steps.base.outputs.site }}
+          BASE: ${{ steps.base.outputs.base }}
+        run: npm run build
+
       - name: Check internal links
+        env:
+          BASE: ${{ steps.base.outputs.base }}
         run: SKIP_BUILD=1 bash scripts/check-links.sh
-      - name: Upload artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v3
-        with: { path: docs/site/public }
-  deploy:
-    if: github.event_name != 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+
+      # Fork PRs cannot read secrets; skip deploy there (build + link-check still gate).
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/astro/dist --project-name=${{ env.PACK_SLUG }} --branch=${{ steps.base.outputs.branch }}
+
+      - name: Comment preview URL
+        if: ${{ github.event_name == 'pull_request' && steps.deploy.outcome == 'success' }}
+        uses: thollander/actions-comment-pull-request@v3
+        with:
+          comment-tag: docs-preview
+          message: |
+            📄 **Docs preview** for `${{ github.event.pull_request.head.ref }}`:
+            ${{ steps.deploy.outputs.pages-deployment-alias-url }}
