@@ -10,6 +10,10 @@ const REF = process.env.HUGO_REF || 'origin/docs-site';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const docsDir = path.join(repoRoot, 'docs/astro/src/content/docs');
 
+// cicd-and-releasing.md is intentionally updated to document the Astro docs workflow
+// (not byte-identical to the Hugo source by design, user-approved) and is therefore
+// excluded from this parity check.
+
 // migrated file (in src/content/docs) -> hugo source basename (in docs/site/content)
 const MAP = {
   'index.md': '_index.md',
@@ -20,7 +24,6 @@ const MAP = {
   'troubleshooting.md': 'troubleshooting.md',
   'configuration.md': 'configuration.md',
   'architecture.md': 'architecture.md',
-  'cicd-and-releasing.md': 'cicd-and-releasing.md',
 };
 
 // Strip a leading TOML (+++) or YAML (---) frontmatter block; return the body.
