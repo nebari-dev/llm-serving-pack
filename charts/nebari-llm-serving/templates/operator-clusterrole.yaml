@@ -41,6 +41,13 @@ rules:
   - apiGroups: ["inference.networking.k8s.io"]
     resources: ["inferencepools"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # The operator creates a per-model EPP Role granting these
+  # inference.networking.x-k8s.io permissions (see reconcilers/inferencepool.go).
+  # RBAC privilege-escalation prevention requires the operator to already hold
+  # any permission it grants, so it must carry them here too.
+  - apiGroups: ["inference.networking.x-k8s.io"]
+    resources: ["inferenceobjectives", "inferencemodelrewrites", "inferencepools", "inferencepoolimports"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["aigateway.envoyproxy.io"]
     resources: ["aigatewayroutes", "aiservicebackends", "backendsecuritypolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
