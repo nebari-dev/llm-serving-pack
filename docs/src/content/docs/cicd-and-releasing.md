@@ -62,9 +62,9 @@ The chart's `values.yaml` does not set a default tag for the operator and key-ma
 
 ### Docs (`docs.yml`)
 
-**Triggers:** push to `main` and pull requests touching `docs/astro/**`, `scripts/check-links.sh`, or the workflow file itself; manual `workflow_dispatch`.
+**Triggers:** push to `main` and pull requests touching `docs/**`, `scripts/check-links.sh`, or the workflow file itself; manual `workflow_dispatch`.
 
-A single **`docs`** job on Node 22 (npm cache keyed on `docs/astro/package-lock.json`): runs `npm ci`, installs Playwright Chromium (needed to render Mermaid diagrams to SVG at build time), runs `npm test`, then computes the correct `site` and `base` values (production: `https://packs.nebari.dev` + `/llm-serving-pack/`; preview: `https://<alias>.llm-serving-pack.pages.dev` + `/`). It then runs `npm run build` and validates internal links by running `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the built `docs/astro/dist`.
+A single **`docs`** job on Node 22 (npm cache keyed on `docs/package-lock.json`): runs `npm ci`, installs Playwright Chromium (needed to render Mermaid diagrams to SVG at build time), runs `npm test`, then computes the correct `site` and `base` values (production: `https://packs.nebari.dev` + `/llm-serving-pack/`; preview: `https://<alias>.llm-serving-pack.pages.dev` + `/`). It then runs `npm run build` and validates internal links by running `scripts/check-links.sh` (with `SKIP_BUILD=1`) against the built `docs/dist`.
 
 For non-fork PRs and pushes to `main`, the job deploys to Cloudflare Pages via `cloudflare/wrangler-action`. On pull requests from the same repo, a sticky comment is posted with the preview URL (`pages-deployment-alias-url`). Fork PRs run the build and link-check but skip deploy (secrets are unavailable).
 

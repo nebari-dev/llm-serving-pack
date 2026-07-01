@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # check-links.sh - Internal link checker for the Astro/Starlight docs site.
-# Verifies every internal href/src in docs/astro/dist/**/*.html resolves to an
+# Verifies every internal href/src in docs/dist/**/*.html resolves to an
 # existing file under dist/. Derives the sub-path prefix from BASE (default "/").
 # Exits 0 (LINKS_OK) on success; exits 1 and lists offenders on failure.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIST_DIR="$REPO_ROOT/docs/astro/dist"
+DIST_DIR="$REPO_ROOT/docs/dist"
 
 # Build unless SKIP_BUILD=1 (CI sets SKIP_BUILD after its own build step so we
 # validate the exact deployed artifact).
@@ -15,7 +15,7 @@ if [ -n "${SKIP_BUILD:-}" ]; then
     echo "SKIP_BUILD set - checking existing $DIST_DIR."
 else
     echo "Building site..."
-    (cd "$REPO_ROOT/docs/astro" && npm run build)
+    (cd "$REPO_ROOT/docs" && npm run build)
 fi
 
 # Sub-path prefix from BASE: "/llm-serving-pack/" -> "/llm-serving-pack"; "/" -> "".

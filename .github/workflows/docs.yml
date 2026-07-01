@@ -2,9 +2,9 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ['docs/astro/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/astro/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'scripts/check-links.sh', '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,18 +24,18 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: docs/astro/package-lock.json
+          cache-dependency-path: docs/package-lock.json
 
       - name: Install deps
-        working-directory: docs/astro
+        working-directory: docs
         run: npm ci
 
       - name: Install Playwright (mermaid rendering)
-        working-directory: docs/astro
+        working-directory: docs
         run: npx playwright install --with-deps chromium
 
       - name: Unit tests
-        working-directory: docs/astro
+        working-directory: docs
         run: npm test
 
       - name: Compute site, base, and deploy branch
@@ -55,7 +55,7 @@ jobs:
           fi
 
       - name: Build
-        working-directory: docs/astro
+        working-directory: docs
         env:
           SITE: ${{ steps.base.outputs.site }}
           BASE: ${{ steps.base.outputs.base }}
@@ -74,7 +74,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/astro/dist --project-name=${{ env.PACK_SLUG }} --branch=${{ steps.base.outputs.branch }}
+          command: pages deploy docs/dist --project-name=${{ env.PACK_SLUG }} --branch=${{ steps.base.outputs.branch }}
 
       - name: Comment preview URL
         if: ${{ github.event_name == 'pull_request' && steps.deploy.outcome == 'success' }}

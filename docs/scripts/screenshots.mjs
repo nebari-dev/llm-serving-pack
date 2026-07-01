@@ -1,4 +1,4 @@
-// docs/astro/scripts/screenshots.mjs
+// docs/scripts/screenshots.mjs
 import { chromium } from 'playwright';
 import { mkdir } from 'node:fs/promises';
 

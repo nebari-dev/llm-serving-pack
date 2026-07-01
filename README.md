@@ -283,6 +283,26 @@ cd operator && make test
 cd key-manager && go test ./...
 ```
 
+### Documentation site
+
+The docs site is an [Astro](https://astro.build) + [Starlight](https://starlight.astro.build) project living in [`docs/`](docs/). The common tasks are wrapped in the root `Makefile` (run `make help` to list them):
+
+```bash
+make docs             # dev server with hot reload at http://localhost:4321
+make docs-build       # build the static site into docs/dist
+make docs-preview     # serve the built site to preview the production build
+make docs-test        # run the unit tests (vitest)
+make docs-check-links # build, then verify every internal link resolves
+```
+
+**Add a page:** create a Markdown file under `docs/src/content/docs/`, then add a `sidebar` entry for it in [`docs/astro.config.mjs`](docs/astro.config.mjs). Pages use standard Starlight frontmatter and support Mermaid diagrams (rendered to SVG at build time).
+
+**Add or remove a component:** shared UI lives in `docs/src/components/` (Astro and React). The shadcn-style primitives under `docs/src/components/ui/` are tracked in `docs/components.json`; edit that directory and reference the component from a page or another component.
+
+**Images:** put images in `docs/src/assets/` and reference them with a relative path (for example `../../assets/foo.png`) so Astro optimizes, hashes, and base-path-corrects them at build time. Only genuinely static files such as `favicon.svg` belong in `docs/public/`.
+
+The site is built and deployed to Cloudflare Pages by [`.github/workflows/docs.yml`](.github/workflows/docs.yml); the [CI/CD and Releasing](docs/src/content/docs/cicd-and-releasing.md) page documents the pipeline.
+
 ## Known Limitations
 
 This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations apply:

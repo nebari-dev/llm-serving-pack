@@ -8,17 +8,19 @@ import path from 'node:path';
 
 const REF = process.env.HUGO_REF || 'origin/docs-site';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const docsDir = path.join(repoRoot, 'docs/astro/src/content/docs');
+const docsDir = path.join(repoRoot, 'docs/src/content/docs');
 
-// cicd-and-releasing.md is intentionally updated to document the Astro docs workflow
-// (not byte-identical to the Hugo source by design, user-approved) and is therefore
-// excluded from this parity check.
+// Two files are intentionally excluded from this parity check:
+//   - cicd-and-releasing.md documents the Astro docs workflow (not byte-identical to
+//     the Hugo source by design, user-approved).
+//   - installation.md has its screenshot references rewritten from /public absolute
+//     paths to Astro src/assets imports (PR #120 review), so its body diverges from
+//     the frozen Hugo source by design.
 
 // migrated file (in src/content/docs) -> hugo source basename (in docs/site/content)
 const MAP = {
   'index.md': '_index.md',
   'quickstart.md': 'quickstart.md',
-  'installation.md': 'installation.md',
   'local-development.md': 'local-development.md',
   'shared-storage.md': 'shared-storage.md',
   'troubleshooting.md': 'troubleshooting.md',
