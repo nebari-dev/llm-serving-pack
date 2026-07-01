@@ -94,6 +94,27 @@ func hostHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) string
 	return ""
 }
 
+// ruleRequestTimeout returns the spec.rules[0].timeouts.request value of the
+// given AIGatewayRoute and whether a timeouts block is present on the rule.
+func ruleRequestTimeout(t *testing.T, route *unstructured.Unstructured) (string, bool) {
+	t.Helper()
+	if route == nil {
+		t.Fatal("expected route to be non-nil")
+	}
+	spec, _ := route.Object["spec"].(map[string]interface{})
+	rules, _ := spec["rules"].([]interface{})
+	if len(rules) == 0 {
+		t.Fatalf("expected at least one rule, got %v", spec["rules"])
+	}
+	rule, _ := rules[0].(map[string]interface{})
+	timeouts, ok := rule["timeouts"].(map[string]interface{})
+	if !ok {
+		return "", false
+	}
+	v, _ := timeouts["request"].(string)
+	return v, true
+}
+
 func defaultRoutingModel() *llmv1alpha1.LLMModel {
 	return &llmv1alpha1.LLMModel{
 		ObjectMeta: metav1.ObjectMeta{
@@ -502,6 +523,56 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 					}
 					if labels["llm.nebari.dev/model"] != testAuthModelName {
 						t.Errorf("%s: expected model label my-model, got %q", route.name, labels["llm.nebari.dev/model"])
+					}
+				}
+			},
+		},
+		{
+			name:  "RouteRequestTimeout set: both routes carry timeouts.request on their rule",
+			model: defaultRoutingModel(),
+			cfg: func() *config.OperatorConfig {
+				c := defaultRoutingConfig()
+				c.RouteRequestTimeout = "600s"
+				return c
+			}(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				for _, route := range []struct {
+					name string
+					r    *unstructured.Unstructured
+				}{
+					{"external", result.ExternalRoute},
+					{"internal", result.InternalRoute},
+				} {
+					got, ok := ruleRequestTimeout(t, route.r)
+					if !ok {
+						t.Fatalf("%s: expected a timeouts block on the rule, got none", route.name)
+					}
+					if got != "600s" {
+						t.Errorf("%s: expected timeouts.request 600s, got %q", route.name, got)
+					}
+				}
+			},
+		},
+		{
+			name:  "RouteRequestTimeout empty: routes omit timeouts (defer to gateway default)",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(), // RouteRequestTimeout is ""
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				for _, route := range []struct {
+					name string
+					r    *unstructured.Unstructured
+				}{
+					{"external", result.ExternalRoute},
+					{"internal", result.InternalRoute},
+				} {
+					if _, ok := ruleRequestTimeout(t, route.r); ok {
+						t.Errorf("%s: expected no timeouts block when RouteRequestTimeout is empty", route.name)
 					}
 				}
 			},
