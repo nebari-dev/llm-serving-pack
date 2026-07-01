@@ -286,7 +286,7 @@ var _ = Describe("LLMModel Webhook", func() {
 		var validator *LLMModelCustomValidator
 
 		BeforeEach(func() {
-			validator = &LLMModelCustomValidator{Client: k8sClient}
+			validator = &LLMModelCustomValidator{Reader: k8sClient}
 		})
 
 		It("should return a warning when storage is emptyDir and preload is true", func() {
