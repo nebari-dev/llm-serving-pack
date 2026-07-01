@@ -46,6 +46,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"POD_NAMESPACE":                  "llm-serving",
 				"LLM_CLUSTER_ISSUER_NAME":        "my-issuer",
 				"LLM_MANAGE_SHARED_LISTENERS":    "false",
+				"LLM_ROUTE_REQUEST_TIMEOUT":      "300s",
 			},
 			wantErr: false,
 			wantConfig: &OperatorConfig{
@@ -63,6 +64,7 @@ func TestLoadFromEnv(t *testing.T) {
 				OperatorNamespace:     "llm-serving",
 				ClusterIssuerName:     "my-issuer",
 				ManageSharedListeners: false,
+				RouteRequestTimeout:   "300s",
 			},
 		},
 		{
@@ -198,6 +200,32 @@ func TestLoadFromEnv(t *testing.T) {
 				ManageSharedListeners: true,
 			},
 		},
+		{
+			name: "invalid LLM_ROUTE_REQUEST_TIMEOUT - returns error mentioning the var",
+			envVars: map[string]string{
+				"LLM_BASE_DOMAIN":           "example.com",
+				"LLM_EXTERNAL_GATEWAY_NAME": "external-gw",
+				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
+				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
+				"LLM_ROUTE_REQUEST_TIMEOUT": "banana",
+			},
+			wantErr:     true,
+			errContains: []string{"LLM_ROUTE_REQUEST_TIMEOUT"},
+		},
+		{
+			name: "unitless LLM_ROUTE_REQUEST_TIMEOUT - returns error (Gateway API needs a unit)",
+			envVars: map[string]string{
+				"LLM_BASE_DOMAIN":           "example.com",
+				"LLM_EXTERNAL_GATEWAY_NAME": "external-gw",
+				"LLM_INTERNAL_GATEWAY_NAME": "internal-gw",
+				"LLM_OIDC_ISSUER_URL":       "https://auth.example.com",
+				"POD_NAMESPACE":             "llm-serving",
+				"LLM_ROUTE_REQUEST_TIMEOUT": "600",
+			},
+			wantErr:     true,
+			errContains: []string{"LLM_ROUTE_REQUEST_TIMEOUT"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -218,6 +246,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"POD_NAMESPACE",
 				"LLM_CLUSTER_ISSUER_NAME",
 				"LLM_MANAGE_SHARED_LISTENERS",
+				"LLM_ROUTE_REQUEST_TIMEOUT",
 			}
 			for _, v := range allVars {
 				t.Setenv(v, "")
@@ -289,6 +318,9 @@ func TestLoadFromEnv(t *testing.T) {
 			}
 			if got.ManageSharedListeners != tt.wantConfig.ManageSharedListeners {
 				t.Errorf("ManageSharedListeners = %v, want %v", got.ManageSharedListeners, tt.wantConfig.ManageSharedListeners)
+			}
+			if got.RouteRequestTimeout != tt.wantConfig.RouteRequestTimeout {
+				t.Errorf("RouteRequestTimeout = %q, want %q", got.RouteRequestTimeout, tt.wantConfig.RouteRequestTimeout)
 			}
 		})
 	}

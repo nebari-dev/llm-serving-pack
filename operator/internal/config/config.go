@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -79,6 +80,18 @@ type OperatorConfig struct {
 	// false the operator still creates the shared Certificate but leaves
 	// listener management to the cluster admin (runbook). Default true.
 	ManageSharedListeners bool // LLM_MANAGE_SHARED_LISTENERS (default: "true")
+	// RouteRequestTimeout is the HTTP request timeout stamped onto every
+	// AIGatewayRoute the operator generates (spec.rules[].timeouts.request),
+	// for both the external llm.<baseDomain> and internal
+	// llm-internal.<baseDomain> endpoints. The Envoy AI Gateway propagates it
+	// to the HTTPRoute it renders and Envoy enforces it as the upstream
+	// response timeout. Empty leaves the field unset so the gateway's own 60s
+	// default applies - which is too short for many LLM generations and,
+	// because an explicit route timeout always wins, is not overridable by a
+	// BackendTrafficPolicy. The Helm chart leaves this empty by default. Set
+	// it to a Gateway API duration string such as "600s" or "10m" to raise
+	// the timeout; invalid values are rejected at operator startup.
+	RouteRequestTimeout string // LLM_ROUTE_REQUEST_TIMEOUT (optional; empty = gateway 60s default)
 }
 
 // getEnvOrDefault returns the value of the environment variable named by key,
@@ -105,6 +118,13 @@ func getEnvBool(key string, defaultVal bool) bool {
 		return false
 	}
 }
+
+// gatewayAPIDurationRE matches the Gateway API Duration format (GEP-2257)
+// required by AIGatewayRoute spec.rules[].timeouts.request. time.ParseDuration
+// is not a substitute: it accepts units the CRD rejects (ns, us), allows
+// decimals, and treats bare numbers differently, so it would disagree with the
+// API server's own validation of the value.
+var gatewayAPIDurationRE = regexp.MustCompile(`^([0-9]{1,5}(h|m|s|ms)){1,4}$`)
 
 // LoadFromEnv reads configuration from environment variables and returns an
 // OperatorConfig. It returns a descriptive error listing all missing required
@@ -137,10 +157,15 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-production"),
 		TLSSecretName:           os.Getenv("LLM_TLS_SECRET_NAME"),
 		ManageSharedListeners:   getEnvBool("LLM_MANAGE_SHARED_LISTENERS", true),
+		RouteRequestTimeout:     os.Getenv("LLM_ROUTE_REQUEST_TIMEOUT"),
 	}
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+
+	if cfg.RouteRequestTimeout != "" && !gatewayAPIDurationRE.MatchString(cfg.RouteRequestTimeout) {
+		return nil, fmt.Errorf("LLM_ROUTE_REQUEST_TIMEOUT %q is not a valid Gateway API duration string (e.g. 600s, 10m)", cfg.RouteRequestTimeout)
 	}
 
 	return cfg, nil

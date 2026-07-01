@@ -55,6 +55,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			model.Name,
 			model.Spec.Model.Name,
 			SharedExternalHostname(cfg.BaseDomain),
+			cfg.RouteRequestTimeout,
 		)
 	}
 
@@ -69,6 +70,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			model.Name,
 			model.Spec.Model.Name,
 			SharedInternalHostname(cfg.BaseDomain),
+			cfg.RouteRequestTimeout,
 		)
 	}
 
@@ -83,7 +85,58 @@ func buildAIGatewayRoute(
 	poolName string,
 	modelName string,
 	hostname string,
+	requestTimeout string,
 ) *unstructured.Unstructured {
+	rule := map[string]interface{}{
+		// Match on BOTH the shared hostname (Host header) AND the
+		// `x-ai-eg-model` header. With sectionName scoping on the route's
+		// parentRefs (set below), the Host match is defence in depth: it
+		// guarantees the rule only fires for the intended FQDN even if a
+		// future refactor loosens parent attachment.
+		//
+		// The x-ai-eg-model match gives us per-model dispatch once a request
+		// lands on a shared listener. The Envoy AI Gateway extproc filter
+		// derives the value from the request body's `model` field before
+		// HTTPRoute matching runs. Both matches are ANDed (per Gateway API
+		// spec).
+		"matches": []interface{}{
+			map[string]interface{}{
+				"headers": []interface{}{
+					map[string]interface{}{
+						"type":  "Exact",
+						"name":  "Host",
+						"value": hostname,
+					},
+					map[string]interface{}{
+						"type":  "Exact",
+						"name":  "x-ai-eg-model",
+						"value": modelName,
+					},
+				},
+			},
+		},
+		"backendRefs": []interface{}{
+			map[string]interface{}{
+				"group": "inference.networking.k8s.io",
+				"kind":  "InferencePool",
+				"name":  poolName,
+			},
+		},
+	}
+
+	// requestTimeout, when set, becomes spec.rules[].timeouts.request on the
+	// AIGatewayRoute. The Envoy AI Gateway copies it onto the HTTPRoute it
+	// renders; left unset, the gateway injects its own 60s default, which is
+	// too short for many LLM generations (long completions, reasoning models,
+	// large prompts, cold model loads). The route timeout is the only
+	// effective lever here: an explicit HTTPRoute timeout takes precedence
+	// over a BackendTrafficPolicy, so a policy attachment cannot raise it.
+	if requestTimeout != "" {
+		rule["timeouts"] = map[string]interface{}{
+			"request": requestTimeout,
+		}
+	}
+
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
@@ -112,46 +165,7 @@ func buildAIGatewayRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
-				"rules": []interface{}{
-					map[string]interface{}{
-						// Match on BOTH the shared hostname (Host header) AND the
-						// `x-ai-eg-model` header. With sectionName scoping
-						// on parentRefs above, the Host match is defence in
-						// depth: it guarantees the rule only fires for the
-						// intended FQDN even if a future refactor loosens
-						// parent attachment.
-						//
-						// The x-ai-eg-model match gives us per-model dispatch
-						// once a request lands on a shared listener. The
-						// Envoy AI Gateway extproc filter derives the value
-						// from the request body's `model` field before
-						// HTTPRoute matching runs. Both matches are ANDed
-						// (per Gateway API spec).
-						"matches": []interface{}{
-							map[string]interface{}{
-								"headers": []interface{}{
-									map[string]interface{}{
-										"type":  "Exact",
-										"name":  "Host",
-										"value": hostname,
-									},
-									map[string]interface{}{
-										"type":  "Exact",
-										"name":  "x-ai-eg-model",
-										"value": modelName,
-									},
-								},
-							},
-						},
-						"backendRefs": []interface{}{
-							map[string]interface{}{
-								"group": "inference.networking.k8s.io",
-								"kind":  "InferencePool",
-								"name":  poolName,
-							},
-						},
-					},
-				},
+				"rules": []interface{}{rule},
 			},
 		},
 	}

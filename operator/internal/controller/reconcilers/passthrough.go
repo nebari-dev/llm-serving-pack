@@ -268,6 +268,11 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 // "route-not-found" rule to every generated HTTPRoute, and without
 // sectionName that rule (and the SecurityPolicies bound to this route)
 // would catch traffic for unrelated listeners on the shared Gateway.
+//
+// The 120s request timeout on the rules below is fixed and intentionally
+// independent of defaults.routing.requestTimeout (which configures LLMModel
+// routes): passthrough traffic fronts external providers with a different
+// latency profile. Revisit if it should become configurable.
 func buildPassthroughRoute(
 	name string,
 	pm *llmv1alpha1.PassthroughModel,
