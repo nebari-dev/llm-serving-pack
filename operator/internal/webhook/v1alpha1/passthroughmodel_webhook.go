@@ -48,7 +48,7 @@ var passthroughmodellog = logf.Log.WithName("passthroughmodel-resource")
 func SetupPassthroughModelWebhookWithManager(mgr ctrl.Manager, operatorNamespace string) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&llmv1alpha1.PassthroughModel{}).
 		WithValidator(&PassthroughModelCustomValidator{
-			Client:            mgr.GetClient(),
+			Reader:            mgr.GetAPIReader(),
 			OperatorNamespace: operatorNamespace,
 		}).
 		Complete()
@@ -62,7 +62,11 @@ func SetupPassthroughModelWebhookWithManager(mgr ctrl.Manager, operatorNamespace
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type PassthroughModelCustomValidator struct {
-	Client            client.Client
+	// Reader is an uncached, direct API reader. The validation reads below
+	// (namespace label and LLMModel name-collision) must observe authoritative
+	// state: a cache-backed client can miss an object created moments earlier
+	// and would then admit a colliding resource. See validateNoNameCollision.
+	Reader            client.Reader
 	OperatorNamespace string // pod namespace; PassthroughModels must live here. Empty disables the check.
 }
 
@@ -155,7 +159,7 @@ func (v *PassthroughModelCustomValidator) validateOperatorNamespace(namespace st
 // validateNamespaceLabel checks that the namespace carries nebari.dev/managed=true.
 func (v *PassthroughModelCustomValidator) validateNamespaceLabel(ctx context.Context, namespaceName string) error {
 	var ns corev1.Namespace
-	if err := v.Client.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
+	if err := v.Reader.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
 		return fmt.Errorf("failed to get namespace %q: %w", namespaceName, err)
 	}
 
@@ -237,7 +241,7 @@ func validateEndpoints(pm *llmv1alpha1.PassthroughModel) error {
 // model's keys under the other. Names must be unique across both kinds.
 func (v *PassthroughModelCustomValidator) validateNoNameCollision(ctx context.Context, pm *llmv1alpha1.PassthroughModel) error {
 	var existing llmv1alpha1.LLMModel
-	err := v.Client.Get(ctx, types.NamespacedName{Name: pm.Name, Namespace: pm.Namespace}, &existing)
+	err := v.Reader.Get(ctx, types.NamespacedName{Name: pm.Name, Namespace: pm.Namespace}, &existing)
 	if err == nil {
 		return fmt.Errorf(
 			"name %q is already used by an LLMModel in namespace %q; PassthroughModel and "+
