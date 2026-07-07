@@ -36,10 +36,21 @@ spec:
                   fieldPath: metadata.namespace
             - name: LLM_OIDC_GROUPS_CLAIM
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
-            - name: LLM_AUTH_COOKIE_PREFIX
-              value: {{ .Values.auth.oidc.cookiePrefix | quote }}
             - name: LLM_LISTEN_ADDR
               value: ":8080"
+            {{- if not .Values.keyManager.devMode.enabled }}
+            # Model B: the key-manager validates the SPA's bearer token against
+            # Keycloak's JWKS. LLM_KEYCLOAK_URL is the URL used to fetch JWKS
+            # (defaults to the SPA's external Keycloak URL; override with an
+            # in-cluster URL to skip the round-trip through the gateway).
+            # LLM_KEYCLOAK_ISSUER_URL is the URL embedded in tokens as `iss`.
+            - name: LLM_KEYCLOAK_URL
+              value: {{ .Values.keyManager.keycloak.url | default .Values.frontend.keycloak.url | quote }}
+            - name: LLM_KEYCLOAK_REALM
+              value: {{ .Values.keyManager.keycloak.realm | default .Values.frontend.keycloak.realm | quote }}
+            - name: LLM_KEYCLOAK_ISSUER_URL
+              value: {{ .Values.keyManager.keycloak.issuerURL | default .Values.frontend.keycloak.url | quote }}
+            {{- end }}
             {{- if .Values.keyManager.auditInterval }}
             - name: LLM_AUDIT_INTERVAL
               value: {{ .Values.keyManager.auditInterval | quote }}

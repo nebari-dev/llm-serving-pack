@@ -11,25 +11,27 @@ The repository has six workflows located in `.github/workflows/`.
 
 **Triggers:** push to `main`, pull requests targeting `main`.
 
-Runs two parallel jobs:
+Runs three parallel jobs:
 
 | Job | Component | Command |
 |-----|-----------|---------|
 | `test-operator` | `operator/` | `make test` |
 | `test-key-manager` | `key-manager/` | `go test ./...` |
+| `test-frontend` | `frontend/` | `npm test` (vitest) |
 
-Both jobs set up Go from the component's own `go.mod`/`go.sum`, so each component pins its Go version independently.
+The two Go jobs set up Go from the component's own `go.mod`/`go.sum`, so each component pins its Go version independently. The `test-frontend` job runs on Node with the `frontend/` npm lockfile.
 
 ### Lint (`lint.yaml`)
 
 **Triggers:** push to `main`, pull requests targeting `main`.
 
-Runs three parallel jobs:
+Runs four parallel jobs:
 
 | Job | Component | Tool |
 |-----|-----------|------|
 | `lint-operator` | `operator/` | `golangci-lint` v2.4.0 |
 | `lint-key-manager` | `key-manager/` | `golangci-lint` v2.4.0 |
+| `lint-frontend` | `frontend/` | `biome` (`npm run check`) |
 | `lint-helm` | `charts/nebari-llm-serving/` | `helm lint` |
 
 The Helm lint job runs `helm lint charts/nebari-llm-serving/` against the chart without any value overrides, so `platform.baseDomain` defaults to empty and any chart template that gates on it must handle the empty case.
@@ -38,13 +40,16 @@ The Helm lint job runs `helm lint charts/nebari-llm-serving/` against the chart 
 
 **Triggers:** push to `main`, push of any `v*` tag, manual `workflow_dispatch`.
 
-Builds and pushes three images to GitHub Container Registry (`ghcr.io`) under the prefix `ghcr.io/nebari-dev/nebari-llm-serving-pack`:
+Builds and pushes four images to GitHub Container Registry (`ghcr.io`) under the prefix `ghcr.io/nebari-dev/nebari-llm-serving-pack`:
 
 | Image | Build context | Dockerfile |
 |-------|--------------|------------|
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | `operator/` | `operator/Dockerfile` |
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | `model-downloader/` | `model-downloader/Dockerfile` |
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | `.` (repo root) | `key-manager/Dockerfile` |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | `frontend/` | `frontend/Dockerfile` |
+
+The `build-frontend` job (React SPA → nginx) is added alongside the existing image jobs.
 
 Each job uses `docker/metadata-action` to derive tags automatically:
 
@@ -58,7 +63,7 @@ The `latest` tag only applies when building from the default branch. Version tag
 
 Authentication to GHCR uses the workflow's automatic `GITHUB_TOKEN` with `packages: write` permission.
 
-The chart's `values.yaml` does not set a default tag for the operator and key-manager images; it leaves `tag: ""` and falls back to `.Chart.AppVersion` at render time. This means `helm install` without a tag override pulls whatever image version matches the chart's `appVersion`.
+The chart's `values.yaml` does not set a default tag for the operator, key-manager, and frontend images; it leaves `tag: ""` and falls back to `.Chart.AppVersion` at render time. This means `helm install` without a tag override pulls whatever image version matches the chart's `appVersion`.
 
 ### Docs (`docs.yml`)
 
@@ -82,22 +87,23 @@ A single job uses `actions/add-to-project` to automatically add newly opened iss
 
 ## Container Images
 
-The three images built by `build-images.yaml` and their roles in the pack:
+The four images built by `build-images.yaml` and their roles in the pack:
 
 | Image | Purpose |
 |-------|---------|
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | Kubernetes controller that reconciles `LLMModel` CRs |
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | Init container that downloads model weights into a PVC before the serving pod starts |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Web service and UI for managing per-user API keys |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager REST API for managing per-user API keys |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | LLM serving pack React UI (nginx) - serves the SPA and proxies `/api` to the key-manager |
 
-A fourth image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving image. Its version is set in `values.yaml` under `defaults.serving.image` and is not built by this repository. See the [llm-d project](https://github.com/llm-d/llm-d) for its release history.
+A fifth image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving image. Its version is set in `values.yaml` under `defaults.serving.image` and is not built by this repository. See the [llm-d project](https://github.com/llm-d/llm-d) for its release history.
 
 ## Chart Versioning
 
 The Helm chart lives at `charts/nebari-llm-serving/` and has two version fields in `Chart.yaml`:
 
 - **`version`** - the chart packaging version (SemVer). Helm uses this for `helm repo` indexing and upgrade resolution.
-- **`appVersion`** - the application version string, which the chart uses as the default image tag for the operator and key-manager when no explicit tag override is given.
+- **`appVersion`** - the application version string, which the chart uses as the default image tag for the operator, key-manager, and frontend when no explicit tag override is given.
 
 Both fields are kept in sync; every release bumps them together to the same value (e.g. `0.1.0-alpha.9`). The current version is `0.1.0-alpha.9`.
 

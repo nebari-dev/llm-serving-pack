@@ -85,9 +85,9 @@ All PVCs should be `Bound`. If any is `Pending`, check your `storageClass` setti
 
 ## Key-manager returns 403 - user not in the allowed Keycloak group
 
-**Symptom:** A user logs into `https://llm-keys.<baseDomain>/` successfully (Keycloak authentication succeeds) but sees no models listed, or receives an HTTP 403 when trying to create an API key.
+**Symptom:** A user opens `https://llm-keys.<baseDomain>/` and the SPA's keycloak-js PKCE login succeeds (Keycloak authentication works), but they see no models listed, or receive an HTTP 403 when trying to create an API key.
 
-**Likely cause:** The user's Keycloak account is not a member of the group named in `LLMModel.spec.access.groups` (default: `llm`). The key manager checks group membership from the `groups` claim in the user's JWT on every request.
+**Likely cause:** The user's Keycloak account is not a member of the group named in `LLMModel.spec.access.groups` (default: `llm`). The key manager validates the bearer token on every `/api` request and checks group membership from the `groups` claim.
 
 **Fix:**
 

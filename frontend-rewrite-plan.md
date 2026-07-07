@@ -25,10 +25,15 @@ Tracking issue: **#92 — Rebuild the LLM Serving Pack UI with React + TypeScrip
   `Authorization: Bearer <token>` on every `/api` call (refresh on 401, retry
   once, else redirect to login). Keycloak `{ url, realm, clientId }` is loaded
   at runtime from **`/config.json`** (Helm-rendered, mounted into nginx — no
-  rebuild to change). The gateway shifts from oauth2-proxy cookie injection to
-  an Envoy **JWT `SecurityPolicy`** that validates the bearer; the key-manager
-  middleware already accepts `Authorization: Bearer` and parses claims (Envoy
-  validates the signature upstream) — so the Go backend is unchanged.
+  rebuild to change). **Correction to the original plan:** auth is **not**
+  enforced at the gateway. The `NebariApp` uses `enforceAtGateway: false` +
+  `spaClient.enabled: true` (the operator provisions a public PKCE client), so
+  there is no Envoy JWT `SecurityPolicy` and no oauth2-proxy sidecar. Instead the
+  **key-manager validates the bearer in-process** against the Keycloak realm's
+  JWKS (RSA signature + `exp` with 30s leeway + exact `iss` match; audience not
+  checked), reading identity/groups from the claims — a real backend change,
+  mirroring nebari-landing. It is configured by `LLM_KEYCLOAK_URL`,
+  `LLM_KEYCLOAK_REALM`, and `LLM_KEYCLOAK_ISSUER_URL`.
 
 ## Reference template — nebari-landing (`~/repos/nebari-landing`)
 
@@ -79,9 +84,12 @@ API under one host for simplicity and so the JWT `SecurityPolicy` covers both.
 **Deployment approach:** the **nginx frontend container is the service the
 NebariApp targets**; nginx serves the SPA + `/config.json` and reverse-proxies
 `/api/*` to the key-manager ClusterIP (`:8080`). The Go key-manager drops static
-serving and becomes API-only. The gateway enforces an Envoy **JWT
-`SecurityPolicy`** (validates the bearer) instead of injecting an `IdToken`
-cookie; key-manager parses the already-validated bearer.
+serving and becomes API-only. **As built (corrected):** the gateway does **not**
+enforce auth (`enforceAtGateway: false`, public `spaClient`) — there is no Envoy
+JWT `SecurityPolicy`. The **key-manager validates the bearer itself** against
+Keycloak's JWKS, so it now verifies the signature (previously it only parsed
+claims). The key-manager Service stays internal-only and is never exposed
+through the gateway.
 
 Login/logout are driven by `keycloak-js` in the SPA (redirect to Keycloak), so
 the old `/logout` proxy route is replaced by `keycloak.logout()`.
@@ -150,20 +158,22 @@ Mirrors nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
 > Note: `src/hooks/useCurrentUser.ts` (GET /api/me) is no longer used by the UI (identity now
 > comes from the ID token) but kept as a valid endpoint wrapper. Remove in cleanup if still unused.
 
-### Phase 5 — Serve separately (Docker + Helm + CI)
-- [ ] `frontend/Dockerfile` (node build → nginx; SPA `try_files`; `location /api`
+### Phase 5 — Serve separately (Docker + Helm + CI) ✅
+- [x] `frontend/Dockerfile` (node build → nginx; SPA `try_files`; `location /api`
       `proxy_pass` to key-manager service)
-- [ ] `frontend/nginx.conf` — also serves `/config.json` (Helm-rendered, mounted)
-- [ ] Gut `key-manager/internal/ui/` (remove `embed.go` + `static/`); drop file
-      server / SPA route from `cmd/main.go` → key-manager becomes API-only
-- [ ] Helm: new `frontend` Deployment + Service (nginx :80, backend URL via env)
-- [ ] Helm: render `/config.json` (ConfigMap from `frontend.keycloak.*` values) into nginx
-- [ ] Repoint `key-manager-nebariapp.yaml` `service:` at the frontend service
-- [ ] Gateway: switch NebariApp auth from cookie injection to a JWT `SecurityPolicy`
-      validating the bearer (Model B)
-- [ ] Add `frontend.image.*` + `frontend.keycloak.*` to `values.yaml`
-- [ ] CI: `build-frontend` job in `build-images.yaml`
-- [ ] CI: `lint-frontend` + test job (biome + vitest) in `lint.yaml` / `test.yaml`
+- [x] `frontend/nginx.conf` — also serves `/config.json` (Helm-rendered, mounted)
+- [x] Gut `key-manager/internal/ui/` (remove `embed.go` + `static/`); drop file
+      server / SPA route from `cmd/main.go` → key-manager is API-only
+- [x] Helm: new `frontend` Deployment + Service + config ConfigMap
+- [x] Helm: render `/config.json` (ConfigMap from `frontend.keycloak.*` values) into nginx
+- [x] Repoint `key-manager-nebariapp.yaml` `service:` at the frontend service
+- [x] Gateway auth is **Model B without a gateway `SecurityPolicy`**: NebariApp
+      `enforceAtGateway: false` + `spaClient.enabled: true`; the **key-manager**
+      validates the bearer against Keycloak JWKS (`LLM_KEYCLOAK_*` env). (Not the
+      original Envoy JWT `SecurityPolicy` plan.)
+- [x] Add `frontend.image.*` + `frontend.keycloak.*` (and `keyManager.keycloak.*`) to `values.yaml`
+- [x] CI: `build-frontend` job in `build-images.yaml`
+- [x] CI: `lint-frontend` (biome) + `test-frontend` (vitest) jobs in `lint.yaml` / `test.yaml`
 
 ### Phase 6 — Local dev
 - [x] Dev Keycloak in the kind cluster: `dev/manifests/keycloak.yaml` (`start-dev
@@ -171,8 +181,12 @@ Mirrors nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
       PKCE client `nebari-frontend-spa`, groups mapper, `testuser`/`testuser`);
       `make deploy-keycloak` renders the realm ConfigMap + deploys; `make
       pf-keycloak` (8180) / `pf-key-manager` (8080) port-forward helpers
-- [ ] Wire `frontend/` into `dev/` (Makefile / manifests) alongside the backend
-- [ ] Document Vite `/api` proxy + local `config.json` + how Keycloak/bearer auth is
+- [x] Wire `frontend/` into `dev/`: `cd dev && ./run-dev.sh` (also `make run-dev`
+      / `make ui`) brings up the kind cluster + dev-mode key-manager
+      (`LLM_DEV_MODE=true`) + Vite dev server at :5173 with `VITE_DEV_NO_AUTH=true`,
+      proxying `/api/*` to the port-forwarded key-manager on :8080. The old
+      `go:embed` static UI and the `dev/uidev` Go live-reload server are removed.
+- [x] Document Vite `/api` proxy + local `config.json` + how Keycloak/bearer auth is
       stubbed for standalone runs (E2E auth shim or a real Keycloak)
 
 > Inner loop: `cd dev && make setup build-images load-images deploy deploy-keycloak`,
@@ -184,21 +198,25 @@ Mirrors nebari-landing's `src/auth/*`, `src/api/client.ts`, `src/app/config.ts`.
 > -d grant_type=password http://localhost:8180/realms/nebari/protocol/openid-connect/token`
 
 ### Phase 7 — Quality gate, cleanup, docs
-- [ ] `npm run build && npm run test:run && npm run check` all pass
-- [ ] Remove old vanilla files only after parity confirmed
-- [ ] Refresh `docs/install-production-screenshots/*` + README / getting-started UI references
+- [x] `npm run build && npm run test:run && npm run check` all pass
+- [x] Remove old vanilla files (`key-manager/internal/ui/`, `dev/uidev`) after parity confirmed
+- [x] Refresh README / getting-started UI references (screenshots unchanged)
 
 ---
 
-## Open items to confirm during build
+## Open items — resolved during build
 
-- [ ] Can `NebariApp` route two services under one host? (Would enable the fallback
-      and let us drop the nginx `/api` proxy.) Default assumes **no**.
-- [ ] Confirm the key-manager ClusterIP service name/port the nginx proxy targets.
-- [ ] Confirm the gateway supports a JWT `SecurityPolicy` for the key-manager host
-      (Model B) and where the Keycloak realm/clientId for the serving pack come from.
-- [ ] Decide whether key-manager should validate the bearer signature itself, or keep
-      trusting the gateway (current middleware does not verify signatures).
+- [x] `NebariApp` routes a **single** service under the host (the frontend nginx),
+      which reverse-proxies `/api/*` to the key-manager — so the nginx `/api` proxy
+      stays. (No two-services-per-host routing needed.)
+- [x] The nginx proxy targets the internal key-manager ClusterIP Service on `:8080`
+      over in-cluster DNS; that Service is never exposed through the gateway.
+- [x] Gateway does **not** use a JWT `SecurityPolicy` for the key-manager host.
+      Auth is `enforceAtGateway: false` + a public `spaClient`; the SPA reads
+      `keycloak.{url,realm,clientId}` from `/config.json` (from `frontend.keycloak.*`).
+- [x] **Decided: the key-manager validates the bearer signature itself** against
+      Keycloak JWKS (`LLM_KEYCLOAK_*`), rather than trusting the gateway. This was a
+      real backend change (the middleware now verifies signatures).
 
 ---
 
