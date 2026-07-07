@@ -267,7 +267,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				}
 				spec := result.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
 				apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
-				if apiKeyAuth["forwardClientIDHeader"] != "x-llm-client-id" {
+				if apiKeyAuth["forwardClientIDHeader"] != apiKeyClientIDHeader {
 					t.Errorf("expected forwardClientIDHeader=x-llm-client-id, got %v", apiKeyAuth["forwardClientIDHeader"])
 				}
 				if apiKeyAuth["sanitize"] != true {
@@ -289,7 +289,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if !ok {
 					t.Fatal("expected authorization block on external SecurityPolicy")
 				}
-				if authz["defaultAction"] != "Deny" {
+				if authz["defaultAction"] != authzActionDeny {
 					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
 				}
 				rules := authz["rules"].([]interface{})
@@ -299,7 +299,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				principal := rules[0].(map[string]interface{})["principal"].(map[string]interface{})
 				headers := principal["headers"].([]interface{})
 				hm := headers[0].(map[string]interface{})
-				if hm["name"] != "x-llm-client-id" {
+				if hm["name"] != apiKeyClientIDHeader {
 					t.Errorf("expected header name x-llm-client-id, got %v", hm["name"])
 				}
 				values := hm["values"].([]interface{})
@@ -328,7 +328,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if !ok {
 					t.Fatal("expected authorization block even with zero client IDs")
 				}
-				if authz["defaultAction"] != "Deny" {
+				if authz["defaultAction"] != authzActionDeny {
 					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
 				}
 				if _, present := authz["rules"]; present {
@@ -538,7 +538,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if !ok {
 					t.Fatal("expected authorization block on internal SecurityPolicy")
 				}
-				if authz["defaultAction"] != "Deny" {
+				if authz["defaultAction"] != authzActionDeny {
 					t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
 				}
 				rules := authz["rules"].([]interface{})
@@ -546,7 +546,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 					t.Fatalf("expected 1 rule, got %d", len(rules))
 				}
 				rule := rules[0].(map[string]interface{})
-				if rule["action"] != "Allow" {
+				if rule["action"] != authzActionAllow {
 					t.Errorf("expected action=Allow, got %v", rule["action"])
 				}
 				principal := rule["principal"].(map[string]interface{})

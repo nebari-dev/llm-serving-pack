@@ -419,7 +419,7 @@ func TestBuildPassthroughResourcesSecurityPolicies(t *testing.T) {
 		if !ok {
 			t.Fatal("expected authorization block for non-public access")
 		}
-		if authz["defaultAction"] != "Deny" {
+		if authz["defaultAction"] != authzActionDeny {
 			t.Errorf("defaultAction = %v", authz["defaultAction"])
 		}
 	})
@@ -448,11 +448,11 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 	}
 	spec := withKeys.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})
 	apiKeyAuth := spec["apiKeyAuth"].(map[string]interface{})
-	if apiKeyAuth["forwardClientIDHeader"] != "x-llm-client-id" || apiKeyAuth["sanitize"] != true {
+	if apiKeyAuth["forwardClientIDHeader"] != apiKeyClientIDHeader || apiKeyAuth["sanitize"] != true {
 		t.Errorf("expected forwardClientIDHeader/sanitize set, got %v", apiKeyAuth)
 	}
 	authz := spec["authorization"].(map[string]interface{})
-	if authz["defaultAction"] != "Deny" {
+	if authz["defaultAction"] != authzActionDeny {
 		t.Errorf("expected defaultAction=Deny, got %v", authz["defaultAction"])
 	}
 	rules := authz["rules"].([]interface{})

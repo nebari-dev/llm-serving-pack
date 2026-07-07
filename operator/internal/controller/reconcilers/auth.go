@@ -19,6 +19,15 @@ import (
 // header is present when authorization evaluates.
 const apiKeyClientIDHeader = "x-llm-client-id"
 
+// authzActionAllow and authzActionDeny are the Envoy Gateway SecurityPolicy
+// authorization action values. Both the external (API-key) and internal (JWT)
+// policies default to Deny and add a single Allow rule scoped to the model's
+// own principals.
+const (
+	authzActionAllow = "Allow"
+	authzActionDeny  = "Deny"
+)
+
 // AuthResources holds all auth-related resources for an LLMModel. All
 // resources live in the LLMModel's own namespace - the operator no longer
 // uses a separate api-keys namespace because Envoy Gateway's
@@ -192,7 +201,7 @@ func buildAPIKeyAuthSecurityPolicy(name, namespace string, labels map[string]int
 // valid for a different model on the shared listener, is denied.
 func buildAPIKeyAuthorization(clientIDs []string) map[string]interface{} {
 	authz := map[string]interface{}{
-		"defaultAction": "Deny",
+		"defaultAction": authzActionDeny,
 	}
 	if len(clientIDs) == 0 {
 		return authz
@@ -204,7 +213,7 @@ func buildAPIKeyAuthorization(clientIDs []string) map[string]interface{} {
 	authz["rules"] = []interface{}{
 		map[string]interface{}{
 			"name":   "allow-model-clients",
-			"action": "Allow",
+			"action": authzActionAllow,
 			"principal": map[string]interface{}{
 				"headers": []interface{}{
 					map[string]interface{}{
@@ -311,11 +320,11 @@ func buildGroupAuthorization(groups []string, groupsClaim string) map[string]int
 		values = append(values, g)
 	}
 	return map[string]interface{}{
-		"defaultAction": "Deny",
+		"defaultAction": authzActionDeny,
 		"rules": []interface{}{
 			map[string]interface{}{
 				"name":   "allow-groups",
-				"action": "Allow",
+				"action": authzActionAllow,
 				"principal": map[string]interface{}{
 					"jwt": map[string]interface{}{
 						"provider": "oidc",
