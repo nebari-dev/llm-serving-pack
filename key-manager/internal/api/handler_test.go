@@ -31,11 +31,11 @@ func (m *mockModelLister) FilterModelsForUser(groups []string) []models.ModelInf
 }
 
 type mockKeyManager struct {
-	keys          []secrets.KeyInfo
-	createResult  *secrets.CreateKeyResult
-	createErr     error
-	revokeErr     error
-	listUserErr   error
+	keys         []secrets.KeyInfo
+	createResult *secrets.CreateKeyResult
+	createErr    error
+	revokeErr    error
+	listUserErr  error
 }
 
 func (m *mockKeyManager) CreateKey(ctx context.Context, modelName, username, description string) (*secrets.CreateKeyResult, error) {
@@ -323,15 +323,15 @@ func TestCreateKey(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		user           *UserInfo
-		body           interface{}
-		accessModels   []models.ModelInfo
-		createResult   *secrets.CreateKeyResult
-		createErr      error
-		wantStatus     int
-		wantClientID   string
-		wantAPIKey     string
+		name         string
+		user         *UserInfo
+		body         interface{}
+		accessModels []models.ModelInfo
+		createResult *secrets.CreateKeyResult
+		createErr    error
+		wantStatus   int
+		wantClientID string
+		wantAPIKey   string
 	}{
 		{
 			name: "creates key and returns 201 with apiKey",
@@ -442,17 +442,17 @@ func TestDeleteKey(t *testing.T) {
 		wantStatus int
 	}{
 		{
-			name:  "returns 204 when key belongs to user",
-			user:  testUser,
-			path:  "/api/keys/default/llama3/user-chuck-1",
-			keys:  testKeys,
+			name:       "returns 204 when key belongs to user",
+			user:       testUser,
+			path:       "/api/keys/default/llama3/user-chuck-1",
+			keys:       testKeys,
 			wantStatus: http.StatusNoContent,
 		},
 		{
-			name: "returns 403 when user doesn't own the key",
-			user: testUser,
-			path: "/api/keys/default/llama3/user-alice-1",
-			keys: testKeys,
+			name:       "returns 403 when user doesn't own the key",
+			user:       testUser,
+			path:       "/api/keys/default/llama3/user-alice-1",
+			keys:       testKeys,
 			wantStatus: http.StatusForbidden,
 		},
 		{
