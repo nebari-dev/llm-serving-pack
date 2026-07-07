@@ -10,18 +10,20 @@ const REF = process.env.HUGO_REF || 'origin/docs-site';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const docsDir = path.join(repoRoot, 'docs/src/content/docs');
 
-// Two files are intentionally excluded from this parity check:
+// Three files are intentionally excluded from this parity check:
 //   - cicd-and-releasing.md documents the Astro docs workflow (not byte-identical to
 //     the Hugo source by design, user-approved).
 //   - installation.md has its screenshot references rewritten from /public absolute
 //     paths to Astro src/assets imports (PR #120 review), so its body diverges from
 //     the frozen Hugo source by design.
+//   - local-development.md was updated by PR #115 to document the AI Gateway v0.5
+//     local dev flow (real ext_proc, passthrough inference, key-manager UI dev mode),
+//     so its body intentionally diverges from the frozen Hugo source.
 
 // migrated file (in src/content/docs) -> hugo source basename (in docs/site/content)
 const MAP = {
   'index.md': '_index.md',
   'quickstart.md': 'quickstart.md',
-  'local-development.md': 'local-development.md',
   'shared-storage.md': 'shared-storage.md',
   'troubleshooting.md': 'troubleshooting.md',
   'configuration.md': 'configuration.md',

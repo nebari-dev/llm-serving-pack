@@ -1,0 +1,60 @@
+# Three OpenRouter passthrough models for the local dev environment, applied by
+# `make run-dev` so the key-manager UI has a populated model list to work with.
+# Each is its own PassthroughModel so the UI lists three distinct models.
+#
+# Note: API keys are currently gateway-scoped, not model-scoped (see
+# nebari-dev/llm-serving-pack#116), so a key minted for one of these works for
+# all of them. That does not affect UI development.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: claude-sonnet-45
+  namespace: llm-operator-system
+spec:
+  provider:
+    hostname: openrouter.ai
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    catchAll: false
+    declared:
+      - anthropic/claude-sonnet-4.5
+  access:
+    groups:
+      - llm
+---
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: gemini-25-flash
+  namespace: llm-operator-system
+spec:
+  provider:
+    hostname: openrouter.ai
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    catchAll: false
+    declared:
+      - google/gemini-2.5-flash
+  access:
+    groups:
+      - llm
+---
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: llama-33-70b
+  namespace: llm-operator-system
+spec:
+  provider:
+    hostname: openrouter.ai
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    catchAll: false
+    declared:
+      - meta-llama/llama-3.3-70b-instruct
+  access:
+    groups:
+      - llm

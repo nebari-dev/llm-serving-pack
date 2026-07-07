@@ -25,6 +25,7 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Local Development', slug: 'local-development' },
+            { label: 'UI Development', slug: 'ui-development' },
             { label: 'Shared Storage', slug: 'shared-storage' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
           ],

@@ -1,0 +1,33 @@
+# OpenRouter PassthroughModel for the local dev cluster.
+#
+# Prereq: the provider credential Secret. Create it with:
+#   make create-openrouter-secret OPENROUTER_API_KEY=sk-or-v1-...
+#
+# Once reconciled (kubectl -n llm-operator-system get passthroughmodel), reach
+# it through the gateway. The external endpoint uses API-key auth, so inject a
+# client key into the api-keys Secret to skip the key-manager:
+#   kubectl -n llm-operator-system patch secret openrouter-api-keys --type merge \
+#     -p '{"stringData":{"localtester":"sk-localtest-abc123"}}'
+#   kubectl -n envoy-gateway-system port-forward svc/envoy-...-nebari-gateway 8443:443 &
+#   curl -k https://llm.local:8443/v1/chat/completions \
+#     --resolve llm.local:8443:127.0.0.1 \
+#     -H "Authorization: Bearer sk-localtest-abc123" -H "Content-Type: application/json" \
+#     -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: openrouter
+  namespace: llm-operator-system # per #59 lives in the operator namespace
+spec:
+  provider:
+    hostname: openrouter.ai
+    # OpenRouter serves the OpenAI API under /api/v1.
+    schemaVersion: api/v1
+    credentialSecretName: openrouter-api-key
+  models:
+    catchAll: true
+    declared:
+      - openai/gpt-4o-mini
+  access:
+    groups:
+      - llm
