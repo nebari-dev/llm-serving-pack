@@ -1,0 +1,56 @@
+name: Docs preview purge (manual)
+# Manually delete Cloudflare Pages preview deployments. Leave `branch` empty to
+# purge every preview deployment (e.g. to clear orphans left by past cleanup
+# failures); set it to remove only one branch's previews. The per-PR job in
+# docs-preview-cleanup.yml handles the normal on-close case.
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to purge previews for. Leave empty to purge ALL preview deployments."
+        required: false
+        default: ""
+permissions:
+  contents: read
+env:
+  CF_PROJECT: llm-serving-pack
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete preview deployments
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRANCH: ${{ github.event.inputs.branch }}
+        run: |
+          set -euo pipefail
+          base="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PROJECT}/deployments"
+          # The Pages deployments API rejects per_page (HTTP 400) but supports
+          # `page`, so walk pages until one comes back empty.
+          ids=""
+          page=1
+          while [ "$page" -le 50 ]; do
+            resp=$(curl -fsS -H "Authorization: Bearer ${CF_API_TOKEN}" "${base}?env=preview&page=${page}")
+            count=$(printf '%s' "$resp" | jq '(.result // []) | length')
+            [ "$count" -eq 0 ] && break
+            if [ -z "${BRANCH}" ]; then
+              match=$(printf '%s' "$resp" | jq -r '(.result // [])[] | .id')
+            else
+              match=$(printf '%s' "$resp" \
+                | jq -r --arg b "$BRANCH" '(.result // [])[] | select((.deployment_trigger?.metadata?.branch?) == $b) | .id')
+            fi
+            [ -n "$match" ] && ids="${ids}${match}"$'\n'
+            page=$((page + 1))
+          done
+          ids=$(printf '%s' "$ids" | sed '/^$/d' | sort -u)
+          if [ -z "$ids" ]; then
+            echo "No preview deployments to purge (branch='${BRANCH:-<all>}')."
+            exit 0
+          fi
+          echo "Purging $(printf '%s\n' "$ids" | wc -l) preview deployment(s) (branch='${BRANCH:-<all>}')."
+          while IFS= read -r id; do
+            echo "Deleting preview deployment $id"
+            curl -fsS -X DELETE -H "Authorization: Bearer ${CF_API_TOKEN}" "${base}/${id}?force=true" >/dev/null
+          done <<< "$ids"
+          echo "Done."
