@@ -45,6 +45,21 @@ export async function initKeycloak(): Promise<Keycloak> {
     return _keycloak;
   }
 
+  // Local-dev bypass mirroring the key-manager's LLM_DEV_MODE: skip Keycloak
+  // entirely and run as a fixed "dev" identity (the same one the backend
+  // injects). Enabled with VITE_DEV_NO_AUTH=true, which `make run-dev` sets so
+  // the UI runs against a Keycloak-free local cluster. Never honored in a
+  // production build.
+  if (import.meta.env.MODE !== "production" && import.meta.env.VITE_DEV_NO_AUTH === "true") {
+    _keycloak = fakeSession("dev", {
+      name: "dev",
+      preferred_username: "dev",
+      email: "dev@local",
+      sub: "dev",
+    });
+    return _keycloak;
+  }
+
   const { keycloak: cfg } = await loadAppConfig();
   const kc = new Keycloak({ url: cfg.url, realm: cfg.realm, clientId: cfg.clientId });
 

@@ -1,5 +1,11 @@
 CLUSTER_NAME ?= llm-serving-test
 
+# Pin every kubectl to the local kind cluster's context. Without this, the dev
+# targets act on whatever your current kube-context happens to be - which could
+# be a remote/production cluster - and would deploy the auth-bypassing dev-mode
+# key-manager there. kind names its context "kind-<cluster>".
+KUBECTL := kubectl --context kind-$(CLUSTER_NAME)
+
 # Dependency versions. These move together: Envoy AI Gateway v0.5.x requires
 # Envoy Gateway v1.6.x and Gateway API v1.4.0 (see
 # https://aigateway.envoyproxy.io/docs/compatibility/). Bump them as a set
@@ -31,30 +37,30 @@ setup: ## Create kind cluster and install dependencies
 	# died midway can be re-run without `make teardown` first.
 	@kind get clusters | grep -qx $(CLUSTER_NAME) || kind create cluster --name $(CLUSTER_NAME)
 	# cert-manager
-	kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
-	kubectl -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
+	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
+	$(KUBECTL) -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
 	# Gateway API CRDs. Server-side apply so the field ownership matches the
 	# eg chart's own SSA on Helm 4, letting it cleanly take co-ownership with
 	# --force-conflicts (see HELM_FORCE_CONFLICTS above) instead of erroring.
-	kubectl apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
+	$(KUBECTL) apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	# GIE CRDs (includes the graduated inference.networking.k8s.io group)
-	kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/$(GIE_VERSION)/manifests.yaml
+	$(KUBECTL) apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/$(GIE_VERSION)/manifests.yaml
 	# Envoy AI Gateway first: envoy-gateway's extensionManager below points at
 	# the ai-gateway-controller XDS service, so bring it up before reconfiguring
 	# envoy-gateway to avoid noisy connection-refused logs during translation.
 	helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system --create-namespace
 	helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system
-	kubectl -n envoy-ai-gateway-system wait --timeout=120s deployment/ai-gateway-controller --for=condition=Available
+	$(KUBECTL) -n envoy-ai-gateway-system wait --timeout=120s deployment/ai-gateway-controller --for=condition=Available
 	# Envoy Gateway, wired with the AI Gateway ext_proc extension (enableBackend,
 	# extensionManager, backendResources). Without this the per-model routing
 	# layer 404s and passthrough upstreams never get a TLS transport socket.
 	helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(HELM_FORCE_CONFLICTS) -f eg-extension-values.yaml
-	kubectl -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
+	$(KUBECTL) -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# CRDs (served LLMModels and external-provider PassthroughModels)
-	kubectl apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
-	kubectl apply -f ../charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml
+	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
+	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml
 	# Test Gateways
-	kubectl apply -f gateways.yaml
+	$(KUBECTL) apply -f gateways.yaml
 
 teardown: ## Delete kind cluster
 	kind delete cluster --name $(CLUSTER_NAME)
@@ -70,52 +76,52 @@ load-images: ## Load images into kind
 deploy: deploy-operator deploy-key-manager ## Deploy everything
 
 deploy-operator: ## Deploy operator
-	kubectl apply -f manifests/operator.yaml
-	kubectl apply -f manifests/cert-manager-config.yaml
-	kubectl apply -f manifests/webhook.yaml
-	kubectl -n llm-operator-system rollout status deployment/llm-operator --timeout=60s
+	$(KUBECTL) apply -f manifests/operator.yaml
+	$(KUBECTL) apply -f manifests/cert-manager-config.yaml
+	$(KUBECTL) apply -f manifests/webhook.yaml
+	$(KUBECTL) -n llm-operator-system rollout status deployment/llm-operator --timeout=60s
 
 deploy-key-manager: ## Deploy key manager (dev mode: auth bypassed, dev identity injected)
-	kubectl apply -f manifests/key-manager.yaml
-	kubectl -n llm-operator-system rollout status deployment/llm-key-manager --timeout=60s
+	$(KUBECTL) apply -f manifests/key-manager.yaml
+	$(KUBECTL) -n llm-operator-system rollout status deployment/llm-key-manager --timeout=60s
 
 deploy-keycloak: ## Deploy dev Keycloak (imports the nebari realm)
-	kubectl create namespace keycloak --dry-run=client -o yaml | kubectl apply -f -
-	kubectl create configmap keycloak-realm-import -n keycloak \
+	$(KUBECTL) create namespace keycloak --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) create configmap keycloak-realm-import -n keycloak \
 		--from-file=realm-nebari.json=keycloak/realm-nebari.json \
-		--dry-run=client -o yaml | kubectl apply -f -
-	kubectl apply -f manifests/keycloak.yaml
-	kubectl -n keycloak rollout status deployment/keycloak --timeout=180s
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) apply -f manifests/keycloak.yaml
+	$(KUBECTL) -n keycloak rollout status deployment/keycloak --timeout=180s
 
 apply-test-model: ## Apply served test model (mock vLLM)
-	kubectl apply -f manifests/test-model.yaml
+	$(KUBECTL) apply -f manifests/test-model.yaml
 
 create-openrouter-secret: ## Create the OpenRouter provider credential (OPENROUTER_API_KEY env var required)
 	@test -n "$(OPENROUTER_API_KEY)" || { echo "set OPENROUTER_API_KEY"; exit 1; }
-	kubectl -n llm-operator-system create secret generic openrouter-api-key \
+	$(KUBECTL) -n llm-operator-system create secret generic openrouter-api-key \
 		--from-literal=apiKey="$(OPENROUTER_API_KEY)" \
-		--dry-run=client -o yaml | kubectl apply -f -
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
 
 apply-passthrough-model: ## Apply the OpenRouter PassthroughModel (run create-openrouter-secret first)
-	kubectl apply -f manifests/passthrough-test-model.yaml
+	$(KUBECTL) apply -f manifests/passthrough-test-model.yaml
 
 ui: ## Port-forward the key-manager UI to http://localhost:8080 (dev mode, no login)
 	@echo "key-manager UI at http://localhost:8080 (dev mode injects user 'dev')"
-	kubectl -n llm-operator-system port-forward svc/llm-key-manager 8080:8080
+	$(KUBECTL) -n llm-operator-system port-forward svc/llm-key-manager 8080:8080
 
 logs-operator: ## Tail operator logs
-	kubectl -n llm-operator-system logs -f deployment/llm-operator
+	$(KUBECTL) -n llm-operator-system logs -f deployment/llm-operator
 
 logs-key-manager: ## Tail key manager logs
-	kubectl -n llm-operator-system logs -f deployment/llm-key-manager
+	$(KUBECTL) -n llm-operator-system logs -f deployment/llm-key-manager
 
 logs-keycloak: ## Tail Keycloak logs
-	kubectl -n keycloak logs -f deployment/keycloak
+	$(KUBECTL) -n keycloak logs -f deployment/keycloak
 
 pf-key-manager: ## Port-forward key-manager API to localhost:8080
-	kubectl -n llm-operator-system port-forward svc/llm-key-manager 8080:8080
+	$(KUBECTL) -n llm-operator-system port-forward svc/llm-key-manager 8080:8080
 
 pf-keycloak: ## Port-forward Keycloak to localhost:8180
-	kubectl -n keycloak port-forward svc/keycloak 8180:8080
+	$(KUBECTL) -n keycloak port-forward svc/keycloak 8180:8080
 
 clean: teardown ## Alias for teardown
