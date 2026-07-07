@@ -49,7 +49,8 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 // authResourceLabels returns the labels applied to the API-key Secret and
 // metadata ConfigMap. The `llm.nebari.dev/model` label (from StandardLabels)
 // is the documented selector for `kubectl get secrets -l llm.nebari.dev/model`
-// (see docs/getting-started.md). The additional `llm.nebari.dev/model-name`
+// (see https://nebari-dev.github.io/nebari-llm-serving-pack/local-development/).
+// The additional `llm.nebari.dev/model-name`
 // label is required by the key-manager, which filters API-key metadata
 // ConfigMaps on it (see key-manager/internal/secrets/manager.go). The
 // `model-namespace` label was redundant once these resources moved into the

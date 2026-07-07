@@ -19,7 +19,8 @@ import (
 // Shared-TLS constants. The operator maintains a single Certificate covering
 // both shared hostnames and a single Secret holding the rendered cert; one
 // name for each keeps cross-namespace references (from the Gateways and
-// ReferenceGrants) unambiguous. See docs/design.md for the full picture.
+// ReferenceGrants) unambiguous. See the Architecture docs for the full picture:
+// https://nebari-dev.github.io/nebari-llm-serving-pack/architecture/
 const (
 	SharedTLSCertificateName = "nebari-llm-shared-tls"
 	SharedTLSSecretName      = "nebari-llm-shared-tls"

@@ -1,5 +1,6 @@
-# Key-manager UI development
-
+---
+title: Key-manager UI development
+---
 A one-command local environment for working on the key-manager web UI, with a
 populated model list and hot reload. You do not need to understand the operator,
 the gateway, or Kubernetes to use it.
@@ -106,7 +107,7 @@ All under `/api`, all gated by auth (bypassed in dev mode):
 
 ## Related
 
-- [getting-started.md](getting-started.md) - the full local dev path (operator,
+- [Local Development](/local-development/) - the full local dev path (operator,
   passthrough models, inference).
-- [install-production.md](install-production.md) - real-cluster deployment with
+- [Installation](/installation/) - real-cluster deployment with
   Keycloak and the gateway.

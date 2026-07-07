@@ -1,5 +1,6 @@
-# Getting Started (Local Dev Cluster)
-
+---
+title: Local Development
+---
 This guide walks through setting up a local development environment using [kind](https://kind.sigs.k8s.io/) to test the nebari-llm-serving-pack without a full Nebari deployment.
 
 > **Scope of this dev path.** The local `kind` setup exercises the
@@ -10,8 +11,8 @@ This guide walks through setting up a local development environment using [kind]
 > External-provider `PassthroughModel`s route to the real provider, so
 > end-to-end inference works against, for example, OpenRouter (see
 > "Test an external provider" below). For a full GPU serving deployment
-> use a real cluster as documented in
-> [`install-production.md`](install-production.md).
+> use a real cluster as documented in the [Installation](/installation/)
+> guide.
 
 ## Prerequisites
 
@@ -21,13 +22,13 @@ Install the following tools before proceeding:
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [helm](https://helm.sh/docs/intro/install/) v3.12+
 - [Docker](https://docs.docker.com/get-docker/) (or compatible container runtime)
-- [Go](https://go.dev/doc/install) 1.22+ (for building the operator and key manager)
+- [Go](https://go.dev/doc/install) 1.25+ (the key manager requires 1.25; the operator requires 1.24 - each builds with the version pinned in its own `go.mod`)
 
 ## 1. Clone the repo
 
 ```bash
-git clone https://github.com/nebari-dev/nebari-llm-serving-pack
-cd nebari-llm-serving-pack
+git clone https://github.com/nebari-dev/llm-serving-pack
+cd llm-serving-pack
 ```
 
 ## 2. Create the dev cluster
@@ -40,6 +41,7 @@ make setup
 ```
 
 This creates a kind cluster named `llm-serving-test` and installs:
+
 - cert-manager (for webhook TLS)
 - Gateway API CRDs
 - Gateway API Inference Extension CRDs
@@ -99,7 +101,7 @@ Apply the test `LLMModel` resource, which uses the mock vLLM image:
 make apply-test-model
 ```
 
-This creates an `LLMModel` named `test-model` in the `llm-operator-system` namespace. The operator reconciles it and creates the supporting resources. (Per [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) all LLMModels must live in the operator's own namespace - the validating webhook rejects anywhere else.)
+This creates an `LLMModel` named `test-model` in the `llm-operator-system` namespace. The operator reconciles it and creates the supporting resources. Per [#59](https://github.com/nebari-dev/llm-serving-pack/issues/59) all LLMModels must live in the operator's own namespace - the validating webhook rejects anywhere else.
 
 ## 6. Watch reconciliation
 
@@ -128,11 +130,12 @@ kubectl -n llm-operator-system get securitypolicies
 ```
 
 The operator creates:
+
 - A `Deployment` running the mock vLLM pod
 - A `Service` for the deployment
 - An `InferencePool` for intelligent request scheduling
 - `AIGatewayRoute` resources for external (API key) and internal (JWT) access
-- `SecurityPolicy` resources for auth enforcement (the API-key Secret they reference is co-located in this same namespace; see [#59](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/59) for why)
+- `SecurityPolicy` resources for auth enforcement (the API-key Secret they reference is co-located in this same namespace; see [#59](https://github.com/nebari-dev/llm-serving-pack/issues/59) for why)
 
 ## 8. Test the key manager API
 
@@ -146,14 +149,14 @@ List models (requires a JWT in the `Authorization` header or an identity cookie)
 
 ```bash
 # With a fake JWT (the dev server accepts any token for testing)
-curl -s http://localhost:8080/api/v1/models \
+curl -s http://localhost:8080/api/models \
   -H "Authorization: Bearer fake-jwt-token" | jq .
 ```
 
 Create an API key for the test model:
 
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/keys \
+curl -s -X POST http://localhost:8080/api/keys \
   -H "Authorization: Bearer fake-jwt-token" \
   -H "Content-Type: application/json" \
   -d '{"modelName": "test-model"}' | jq .
@@ -220,9 +223,27 @@ deployment.
 
 > **Working on the UI itself?** Use `make run-dev` instead of the steps above:
 > one command brings up the cluster, three models, the port-forward, and a
-> hot-reloading dev server. See [ui-development.md](ui-development.md).
+> hot-reloading dev server. See [UI Development](/ui-development/).
 
-## 11. Cleanup
+## 11. Tail logs
+
+You can tail logs from either component while working:
+
+```bash
+make logs-operator
+make logs-key-manager
+```
+
+## 12. Run unit tests
+
+Run the operator and key manager tests directly without a cluster:
+
+```bash
+cd operator && make test
+cd key-manager && go test ./...
+```
+
+## 13. Cleanup
 
 When you are done, delete the kind cluster:
 
@@ -238,7 +259,7 @@ make clean
 
 ## Next steps
 
-- Read [docs/design.md](design.md) for the full architecture and CRD spec
+- Read the [Architecture](/architecture/) page for the full design and CRD spec
 - See `dev/manifests/test-model.yaml` for an annotated example `LLMModel`
 - Check the Helm chart at `charts/nebari-llm-serving/` for production deployment values
-- For a real deployment with GPUs and OIDC, see the [Quick start](../README.md#quick-start) in the main README
+- For a real deployment with GPUs and OIDC, see the [Quick start](/quickstart/)
