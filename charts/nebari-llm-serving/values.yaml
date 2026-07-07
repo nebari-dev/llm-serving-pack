@@ -152,3 +152,19 @@ defaults:
     storageClassName: ""
   monitoring:
     enabled: true
+  # routing configures the AIGatewayRoutes the operator generates for each
+  # LLMModel's external (llm.<baseDomain>) and internal
+  # (llm-internal.<baseDomain>) endpoints. (PassthroughModel routes use a
+  # fixed timeout and are not affected by these settings.)
+  routing:
+    # requestTimeout is the HTTP request timeout applied to those routes
+    # (spec.rules[].timeouts.request) - the maximum time Envoy waits for a
+    # model to return a complete response. Empty (the default) leaves the
+    # field unset, so the Envoy AI Gateway applies its built-in 60s default.
+    # Raise it when generations need longer than 60s (large prompts, long or
+    # reasoning outputs, cold model loads) by setting a Gateway API duration
+    # string such as "600s" or "10m". The route is the only effective place
+    # to set this: an explicit route timeout takes precedence over any
+    # BackendTrafficPolicy. A future LLMModel.spec field will be able to
+    # override this per model.
+    requestTimeout: ""
