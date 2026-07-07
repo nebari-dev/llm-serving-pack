@@ -41,6 +41,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_OIDC_GROUPS_CLAIM":          "custom-groups",
 				"LLM_OIDC_AUDIENCE":              "my-audience",
 				"LLM_DEFAULT_SERVING_IMAGE":      "my-registry/my-image:v1.0.0",
+				"LLM_DEFAULT_EPP_IMAGE":          "my-registry/my-epp:v1.0.0",
 				"LLM_API_KEYS_NAMESPACE":         "my-api-keys-ns",
 				"POD_NAMESPACE":                  "llm-serving",
 				"LLM_CLUSTER_ISSUER_NAME":        "my-issuer",
@@ -57,6 +58,7 @@ func TestLoadFromEnv(t *testing.T) {
 				OIDCGroupsClaim:       "custom-groups",
 				OIDCAudience:          "my-audience",
 				DefaultServingImage:   "my-registry/my-image:v1.0.0",
+				DefaultEPPImage:       "my-registry/my-epp:v1.0.0",
 				APIKeysNamespace:      "my-api-keys-ns",
 				OperatorNamespace:     "llm-serving",
 				ClusterIssuerName:     "my-issuer",
@@ -125,7 +127,8 @@ func TestLoadFromEnv(t *testing.T) {
 				OIDCIssuerURL:         "https://auth.example.com",
 				OIDCGroupsClaim:       "groups",
 				OIDCAudience:          "",
-				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
+				DefaultEPPImage:       "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0",
 				APIKeysNamespace:      "",
 				OperatorNamespace:     "llm-serving",
 				ClusterIssuerName:     "letsencrypt-production",
@@ -152,7 +155,8 @@ func TestLoadFromEnv(t *testing.T) {
 				OIDCIssuerURL:         "https://auth.example.com",
 				OIDCGroupsClaim:       "groups",
 				OIDCAudience:          "",
-				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
+				DefaultEPPImage:       "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0",
 				APIKeysNamespace:      "",
 				OperatorNamespace:     "llm-serving",
 				ClusterIssuerName:     "letsencrypt-production",
@@ -187,7 +191,8 @@ func TestLoadFromEnv(t *testing.T) {
 				InternalGatewayNS:     "envoy-gateway-system",
 				OIDCIssuerURL:         "https://auth.example.com",
 				OIDCGroupsClaim:       "groups",
-				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+				DefaultServingImage:   "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
+				DefaultEPPImage:       "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0",
 				OperatorNamespace:     "",
 				ClusterIssuerName:     "letsencrypt-production",
 				ManageSharedListeners: true,
@@ -208,6 +213,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"LLM_OIDC_GROUPS_CLAIM",
 				"LLM_OIDC_AUDIENCE",
 				"LLM_DEFAULT_SERVING_IMAGE",
+				"LLM_DEFAULT_EPP_IMAGE",
 				"LLM_API_KEYS_NAMESPACE",
 				"POD_NAMESPACE",
 				"LLM_CLUSTER_ISSUER_NAME",
@@ -268,6 +274,9 @@ func TestLoadFromEnv(t *testing.T) {
 			}
 			if got.DefaultServingImage != tt.wantConfig.DefaultServingImage {
 				t.Errorf("DefaultServingImage = %q, want %q", got.DefaultServingImage, tt.wantConfig.DefaultServingImage)
+			}
+			if got.DefaultEPPImage != tt.wantConfig.DefaultEPPImage {
+				t.Errorf("DefaultEPPImage = %q, want %q", got.DefaultEPPImage, tt.wantConfig.DefaultEPPImage)
 			}
 			if got.APIKeysNamespace != tt.wantConfig.APIKeysNamespace {
 				t.Errorf("APIKeysNamespace = %q, want %q", got.APIKeysNamespace, tt.wantConfig.APIKeysNamespace)

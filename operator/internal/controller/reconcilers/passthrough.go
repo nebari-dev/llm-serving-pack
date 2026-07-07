@@ -166,10 +166,10 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			// v1alpha3 rather than v1: Envoy Gateway v1.3 (the minimum the
-			// pack supports) predates the v1 BackendTLSPolicy API. Bump
-			// alongside the minimum Envoy Gateway version.
-			"apiVersion": "gateway.networking.k8s.io/v1alpha3",
+			// BackendTLSPolicy is GA as v1 in the Gateway API Standard channel
+			// (v1.4.0+), which the bundled Envoy AI Gateway requires. Gateway
+			// API v1.4.0 no longer serves the old v1alpha3 version.
+			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "BackendTLSPolicy",
 			"metadata": map[string]interface{}{
 				"name":      pm.Name + "-backend-tls",

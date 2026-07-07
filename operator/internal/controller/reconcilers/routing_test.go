@@ -117,7 +117,7 @@ func defaultRoutingConfig() *config.OperatorConfig {
 		InternalGatewayName: "internal-gw",
 		InternalGatewayNS:   "envoy-gateway-system",
 		OIDCIssuerURL:       "https://oidc.example.com",
-		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
 	}
 }
 

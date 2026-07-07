@@ -46,6 +46,8 @@ spec:
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
             - name: LLM_DEFAULT_SERVING_IMAGE
               value: {{ .Values.defaults.serving.image | quote }}
+            - name: LLM_DEFAULT_EPP_IMAGE
+              value: {{ .Values.defaults.epp.image | quote }}
             - name: LLM_DEFAULT_STORAGE_CLASS_NAME
               value: {{ .Values.defaults.storage.storageClassName | quote }}
             - name: LLM_CLUSTER_ISSUER_NAME

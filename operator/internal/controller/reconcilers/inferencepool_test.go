@@ -42,7 +42,8 @@ func defaultInferencePoolConfig() *config.OperatorConfig {
 		ExternalGatewayName: "external-gw",
 		InternalGatewayName: "internal-gw",
 		OIDCIssuerURL:       "https://oidc.example.com",
-		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.6.0",
+		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
+		DefaultEPPImage:     "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0",
 	}
 }
 
@@ -205,11 +206,32 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if len(containers) != 1 {
 					t.Fatalf("expected 1 container, got %d", len(containers))
 				}
-				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.6.1-rc.1" {
+				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0" {
 					t.Errorf("expected EPP image, got %q", containers[0].Image)
 				}
 				if containers[0].Name != testPoolEPPLabel {
 					t.Errorf("expected container name epp, got %q", containers[0].Name)
+				}
+			},
+		},
+		{
+			name:  "EPP Deployment: custom EPP image from config overrides the default",
+			model: defaultInferencePoolModel(),
+			cfg: func() *config.OperatorConfig {
+				cfg := defaultInferencePoolConfig()
+				cfg.DefaultEPPImage = "mirror.internal/llm-d/llm-d-inference-scheduler:v0.8.0-custom"
+				return cfg
+			}(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				containers := result.EPPDeployment.Spec.Template.Spec.Containers
+				if len(containers) != 1 {
+					t.Fatalf("expected 1 container, got %d", len(containers))
+				}
+				if containers[0].Image != "mirror.internal/llm-d/llm-d-inference-scheduler:v0.8.0-custom" {
+					t.Errorf("expected EPP image from config, got %q", containers[0].Image)
 				}
 			},
 		},

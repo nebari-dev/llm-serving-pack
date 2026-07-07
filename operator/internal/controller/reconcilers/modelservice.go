@@ -1,4 +1,14 @@
-// Resource specs based on llm-d-modelservice chart v0.4.7
+// Resource specs based on llm-d-modelservice chart v0.4.7. NOTE: the
+// llm-d-modelservice Helm chart was deprecated as an llm-d component in llm-d
+// v0.7.0 (which referenced it at v0.4.9) in favor of a kustomize-based
+// install. The chart is off the recommended install path but its repo is NOT
+// frozen - it still cuts releases:
+// https://github.com/llm-d-incubation/llm-d-modelservice (tags are named
+// llm-d-modelservice-vX.Y.Z). The "diff the upstream chart on each release"
+// maintenance contract in the architecture docs
+// (docs/src/content/docs/architecture.md) therefore still has a target; diff
+// these specs against the latest llm-d-modelservice-* tag when re-verifying.
+// The vLLM serving image is bumped to llm-d-cuda:v0.7.0 (CUDA 13.0.2 runtime).
 package reconcilers
 
 import (

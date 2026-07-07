@@ -50,7 +50,7 @@ var llmmodellog = logf.Log.WithName("llmmodel-resource")
 func SetupLLMModelWebhookWithManager(mgr ctrl.Manager, operatorNamespace string) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&llmv1alpha1.LLMModel{}).
 		WithValidator(&LLMModelCustomValidator{
-			Client:            mgr.GetClient(),
+			Reader:            mgr.GetAPIReader(),
 			OperatorNamespace: operatorNamespace,
 		}).
 		Complete()
@@ -67,7 +67,12 @@ func SetupLLMModelWebhookWithManager(mgr ctrl.Manager, operatorNamespace string)
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type LLMModelCustomValidator struct {
-	Client            client.Client
+	// Reader is an uncached, direct API reader. The validation reads below
+	// (namespace label and PassthroughModel name-collision) must observe
+	// authoritative state: a cache-backed client can miss an object created
+	// moments earlier and would then admit a colliding resource. See
+	// validateNoNameCollision.
+	Reader            client.Reader
 	OperatorNamespace string // pod namespace; LLMModels must live here. Empty disables the check.
 }
 
@@ -119,7 +124,7 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 // model's keys under the other. Names must be unique across both kinds.
 func (v *LLMModelCustomValidator) validateNoNameCollision(ctx context.Context, llmmodel *llmv1alpha1.LLMModel) error {
 	var existing llmv1alpha1.PassthroughModel
-	err := v.Client.Get(ctx, types.NamespacedName{Name: llmmodel.Name, Namespace: llmmodel.Namespace}, &existing)
+	err := v.Reader.Get(ctx, types.NamespacedName{Name: llmmodel.Name, Namespace: llmmodel.Namespace}, &existing)
 	if err == nil {
 		return fmt.Errorf(
 			"name %q is already used by a PassthroughModel in namespace %q; LLMModel and "+
@@ -230,7 +235,7 @@ func (v *LLMModelCustomValidator) ValidateDelete(_ context.Context, obj runtime.
 // validateNamespaceLabel checks that the given namespace has the nebari.dev/managed=true label.
 func (v *LLMModelCustomValidator) validateNamespaceLabel(ctx context.Context, namespaceName string) error {
 	var ns corev1.Namespace
-	if err := v.Client.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
+	if err := v.Reader.Get(ctx, types.NamespacedName{Name: namespaceName}, &ns); err != nil {
 		return fmt.Errorf("failed to get namespace %q: %w", namespaceName, err)
 	}
 

@@ -35,6 +35,9 @@ func main() {
 	auditIntervalStr := getEnvOrDefault("LLM_AUDIT_INTERVAL", "5m")
 	oidcUserinfoURL := os.Getenv("LLM_OIDC_USERINFO_URL") // optional
 	listenAddr := getEnvOrDefault("LLM_LISTEN_ADDR", ":8080")
+	devMode := strings.EqualFold(os.Getenv("LLM_DEV_MODE"), "true")
+	devUser := getEnvOrDefault("LLM_DEV_USER", "dev")
+	devGroups := splitAndTrim(getEnvOrDefault("LLM_DEV_GROUPS", "llm"))
 
 	auditInterval, err := time.ParseDuration(auditIntervalStr)
 	if err != nil {
@@ -114,10 +117,22 @@ func main() {
 	mux.Handle("GET /", http.FileServer(http.FS(staticFS)))
 
 	// Apply auth middleware only to /api/ routes.
-	authMW := api.AuthMiddleware(api.AuthConfig{
+	authConfig := api.AuthConfig{
 		GroupsClaim:  groupsClaim,
 		CookiePrefix: cookiePrefix,
-	})
+		DevMode:      devMode,
+	}
+	if devMode {
+		authConfig.DevIdentity = api.UserInfo{
+			Username: devUser,
+			Name:     devUser,
+			Email:    devUser + "@local",
+			Groups:   devGroups,
+		}
+		logger.Warn("LLM_DEV_MODE is enabled: auth is bypassed and a fixed identity is injected; never enable this in a real deployment",
+			"username", devUser, "groups", devGroups)
+	}
+	authMW := api.AuthMiddleware(authConfig)
 
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -158,6 +173,19 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// splitAndTrim splits a comma-separated list, trimming whitespace and dropping
+// empty entries. Used for LLM_DEV_GROUPS.
+func splitAndTrim(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // makeUserinfoLookup returns a UserGroupsLookup that calls the OIDC userinfo endpoint.
