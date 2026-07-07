@@ -2,8 +2,6 @@
 
 A [Nebari](https://github.com/nebari-dev/nebari-infrastructure-core) software pack for serving LLMs. Deploys a Kubernetes operator that manages LLM model serving via [llm-d](https://llm-d.ai), with per-model access control, API key management, and Envoy AI Gateway integration for token counting and rate limiting.
 
-**Documentation:** [https://nebari-dev.github.io/nebari-llm-serving-pack/](https://nebari-dev.github.io/nebari-llm-serving-pack/)
-
 ## What this does
 
 You apply an `LLMModel` custom resource and the operator handles the rest: model download, vLLM serving pods, inference scheduling, routing, and auth.
