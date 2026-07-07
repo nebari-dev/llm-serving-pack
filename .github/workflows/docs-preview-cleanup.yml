@@ -27,14 +27,27 @@ jobs:
         run: |
           set -euo pipefail
           base="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/pages/projects/${CF_PROJECT}/deployments"
-          ids=$(curl -fsS -H "Authorization: Bearer ${CF_API_TOKEN}" "${base}?env=preview&per_page=100" \
-            | jq -r --arg b "$BRANCH" '.result[] | select(.deployment_trigger.metadata.branch == $b) | .id')
+          # The Pages deployments API rejects per_page (HTTP 400) but supports
+          # `page`, so walk pages until one comes back empty. Filtering by branch
+          # is client-side because the API has no branch filter.
+          ids=""
+          page=1
+          while [ "$page" -le 50 ]; do
+            resp=$(curl -fsS -H "Authorization: Bearer ${CF_API_TOKEN}" "${base}?env=preview&page=${page}")
+            count=$(printf '%s' "$resp" | jq '(.result // []) | length')
+            [ "$count" -eq 0 ] && break
+            match=$(printf '%s' "$resp" \
+              | jq -r --arg b "$BRANCH" '(.result // [])[] | select((.deployment_trigger?.metadata?.branch?) == $b) | .id')
+            [ -n "$match" ] && ids="${ids}${match}"$'\n'
+            page=$((page + 1))
+          done
+          ids=$(printf '%s' "$ids" | sed '/^$/d' | sort -u)
           if [ -z "$ids" ]; then
             echo "No preview deployments found for branch '$BRANCH'."
             exit 0
           fi
-          for id in $ids; do
+          while IFS= read -r id; do
             echo "Deleting preview deployment $id (branch '$BRANCH')"
             curl -fsS -X DELETE -H "Authorization: Bearer ${CF_API_TOKEN}" "${base}/${id}?force=true" >/dev/null
-          done
+          done <<< "$ids"
           echo "Cleaned up preview deployments for branch '$BRANCH'."
