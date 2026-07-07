@@ -33,6 +33,14 @@ export function CreateKeyDialog() {
 
   const open = dialog.type === "create";
 
+  // Base UI's Select renders the raw value unless given a label mapping, so we
+  // derive {label, value} items once and reuse them for both the options and
+  // the trigger's value→label lookup.
+  const modelItems = (models ?? []).map((model) => ({
+    value: model.name,
+    label: model.namespace ? `${model.namespace}/${model.name}` : model.name,
+  }));
+
   function close() {
     setDialog({ type: "none" });
     setModelName("");
@@ -70,14 +78,22 @@ export function CreateKeyDialog() {
         <form onSubmit={onSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="model-select">Model</Label>
-            <Select value={modelName} onValueChange={setModelName}>
+            <Select
+              items={modelItems}
+              value={modelName}
+              onValueChange={(value) => setModelName((value as string | null) ?? "")}
+            >
               <SelectTrigger id="model-select" className="w-full">
-                <SelectValue placeholder="Select a model" />
+                <SelectValue>
+                  {(value) =>
+                    modelItems.find((item) => item.value === value)?.label ?? "Select a model"
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
-                {(models ?? []).map((model) => (
-                  <SelectItem key={`${model.namespace}/${model.name}`} value={model.name}>
-                    {model.namespace ? `${model.namespace}/${model.name}` : model.name}
+                {modelItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -95,13 +111,15 @@ export function CreateKeyDialog() {
             />
           </div>
 
-          {fieldError ? <p className="text-destructive text-sm">{fieldError}</p> : null}
+          {fieldError ? <p className="text-destructive-foreground text-sm">{fieldError}</p> : null}
 
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={close}>
               Cancel
             </Button>
-            <Button type="submit" disabled={createKey.isPending}>
+            {/* Nebari's Button defaults its rendered element to type="button", so a
+                bare type="submit" prop is overridden — pass it via the render element. */}
+            <Button render={<button type="submit" />} disabled={createKey.isPending}>
               {createKey.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>

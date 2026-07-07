@@ -35,7 +35,7 @@ export function KeysCard({ className }: { className?: string }) {
         {isLoading ? (
           <p className="py-6 text-muted-foreground text-sm">Loading keys…</p>
         ) : isError ? (
-          <p className="py-6 text-destructive text-sm">
+          <p className="py-6 text-destructive-foreground text-sm">
             Failed to load keys: {error instanceof Error ? error.message : "unknown error"}
           </p>
         ) : !keys || keys.length === 0 ? (

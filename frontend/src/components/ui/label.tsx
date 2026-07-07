@@ -1,16 +1,23 @@
-"use client";
-
-import { Label as LabelPrimitive } from "radix-ui";
-import type * as React from "react";
-
+import type { ComponentProps } from "react";
 import { cn } from "@/lib/utils";
 
-function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimitive.Root>) {
+type LabelProps = ComponentProps<"label">;
+
+/**
+ * Label is the standalone accessible label for a form control, styled from the
+ * Nebari Figma spec. Pair it with a control via `htmlFor` / `id` when not using
+ * `Field`. Inside a `Field`, prefer `FieldLabel` (built on Base UI's
+ * `Field.Label`), which wires the association automatically. The
+ * `peer-disabled:` styles dim the label when an adjacent `peer` control is
+ * disabled.
+ */
+function Label({ className, ...props }: LabelProps) {
   return (
-    <LabelPrimitive.Root
+    // biome-ignore lint/a11y/noLabelWithoutControl: association is the caller's responsibility via htmlFor or Field
+    <label
       data-slot="label"
       className={cn(
-        "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+        "select-none font-medium text-foreground text-sm peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
         className,
       )}
       {...props}
@@ -18,4 +25,5 @@ function Label({ className, ...props }: React.ComponentProps<typeof LabelPrimiti
   );
 }
 
+export type { LabelProps };
 export { Label };

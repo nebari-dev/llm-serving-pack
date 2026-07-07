@@ -1,37 +1,38 @@
+import { useRender } from "@base-ui-components/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
-import { Slot } from "radix-ui";
-import type * as React from "react";
-
+import { Children, isValidElement, type ReactNode } from "react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-md border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md font-medium underline-offset-4 outline-none motion-safe:transition-[color,background-color,border-color,opacity,transform] motion-safe:duration-[--duration-fast] motion-safe:ease-[--ease-standard] motion-safe:active:scale-[0.97] hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[disabled]:pointer-events-none data-[disabled]:text-muted-foreground data-[disabled]:no-underline data-[disabled]:shadow-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
+      // Disabled and loading collapse to a muted look (Figma): the component
+      // sets `data-disabled` whenever `disabled || loading`, so both states
+      // share these `data-[disabled]:*` overrides and loading also shows a Spinner.
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/80",
-        outline:
-          "border-border bg-background shadow-xs hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
-        secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
-        ghost:
-          "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
+        default:
+          "bg-primary text-primary-foreground shadow-xs hover:bg-primary-hover active:bg-primary-hover data-[disabled]:bg-muted",
         destructive:
-          "bg-destructive/10 text-destructive hover:bg-destructive/20 focus-visible:border-destructive/40 focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
-        link: "text-primary underline-offset-4 hover:underline",
+          "border border-transparent bg-destructive text-destructive-foreground hover:border-destructive-foreground active:border-destructive-foreground data-[disabled]:border-transparent data-[disabled]:bg-muted",
+        outline:
+          "border border-input bg-background shadow-xs hover:border-muted-foreground hover:bg-accent hover:text-accent-foreground active:border-muted-foreground active:bg-accent active:text-accent-foreground data-[disabled]:border-border data-[disabled]:bg-transparent",
+        secondary:
+          "border border-transparent bg-secondary text-secondary-foreground shadow-xs hover:border-input active:border-input data-[disabled]:border-transparent data-[disabled]:bg-muted",
+        ghost:
+          "hover:bg-accent hover:text-accent-foreground active:bg-accent active:text-accent-foreground",
+        link: "text-foreground",
       },
       size: {
-        default:
-          "h-9 gap-1.5 px-2.5 in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),8px)] px-2 text-xs in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-8 gap-1 rounded-[min(var(--radius-md),10px)] px-2.5 in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5",
-        lg: "h-10 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        icon: "size-9",
-        "icon-xs":
-          "size-6 rounded-[min(var(--radius-md),8px)] in-data-[slot=button-group]:rounded-md [&_svg:not([class*='size-'])]:size-3",
-        "icon-sm":
-          "size-8 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-md",
-        "icon-lg": "size-10",
+        xs: "h-6 gap-1 rounded-md px-2 text-xs [&_svg:not([class*='size-'])]:size-3.5",
+        sm: "h-7 gap-1.5 rounded-md px-2.5 text-xs [&_svg:not([class*='size-'])]:size-3.5",
+        default: "h-8 px-3 text-sm",
+        lg: "h-9 px-4 text-sm",
+        "icon-xs": "size-6 [&_svg:not([class*='size-'])]:size-3.5",
+        "icon-sm": "size-7 [&_svg:not([class*='size-'])]:size-3.5",
+        icon: "size-8 text-sm",
+        "icon-lg": "size-9 text-sm",
       },
     },
     defaultVariants: {
@@ -41,27 +42,86 @@ const buttonVariants = cva(
   },
 );
 
+type ButtonProps = useRender.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    /**
+     * Renders a {@link Spinner}, sets `aria-busy`, and disables the button
+     * while an async action is in flight. The Spinner replaces the leading
+     * icon (or the whole content, for icon-only sizes).
+     */
+    loading?: boolean;
+    /**
+     * Optional label shown beside the Spinner while `loading`, replacing the
+     * button's normal content (e.g. `loadingText="Saving…"`). Ignored for
+     * icon-only sizes.
+     */
+    loadingText?: ReactNode;
+  };
+
+/**
+ * Button implemented from the Nebari Figma spec. Variants and sizes are driven
+ * by `class-variance-authority`; polymorphism is provided by Base UI's `render`
+ * prop, so a `Button` can become a link or any other element while keeping its
+ * styling (`<Button render={<a href="…" />}>`).
+ */
 function Button({
   className,
-  variant = "default",
-  size = "default",
-  asChild = false,
+  variant,
+  size,
+  loading = false,
+  loadingText,
+  disabled,
+  children,
+  ref,
+  render = <button type="button" />,
   ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean;
-  }) {
-  const Comp = asChild ? Slot.Root : "button";
+}: ButtonProps) {
+  const isDisabled = disabled || loading;
+  const isIconSize = size?.startsWith("icon") ?? false;
 
-  return (
-    <Comp
-      data-slot="button"
-      data-variant={variant}
-      data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
-      {...props}
-    />
-  );
+  // While loading the Spinner takes the place of the leading icon. Icon-only
+  // buttons show just the Spinner; otherwise it sits before the remaining
+  // content, and `loadingText` (when given) replaces that content entirely.
+  let content: ReactNode = children;
+  if (loading) {
+    if (isIconSize) {
+      content = <Spinner />;
+    } else if (loadingText !== undefined) {
+      content = (
+        <>
+          <Spinner />
+          {loadingText}
+        </>
+      );
+    } else {
+      const items = Children.toArray(children);
+      const hasLeadingIcon = items.length > 0 && isValidElement(items[0]);
+      content = (
+        <>
+          <Spinner />
+          {hasLeadingIcon ? items.slice(1) : items}
+        </>
+      );
+    }
+  }
+
+  return useRender({
+    render,
+    ref,
+    props: {
+      className: cn(buttonVariants({ variant, size }), className),
+      "data-slot": "button",
+      "data-variant": variant ?? "default",
+      "data-size": size ?? "default",
+      "data-disabled": isDisabled || undefined,
+      disabled: isDisabled,
+      "aria-busy": loading || undefined,
+      "aria-disabled": isDisabled || undefined,
+      children: content,
+      ...props,
+    },
+  });
 }
 
+export type { ButtonProps };
 export { Button, buttonVariants };
