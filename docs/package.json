@@ -12,6 +12,7 @@
     "screenshots": "node scripts/screenshots.mjs"
   },
   "dependencies": {
+    "@astrojs/markdown-remark": "^7.2.1",
     "@astrojs/starlight": "^0.41.0",
     "@nebari/starlight": "^0.2.1",
     "astro": "^7.0.6",
