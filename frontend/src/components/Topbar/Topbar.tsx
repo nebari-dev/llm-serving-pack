@@ -24,7 +24,7 @@ export function Topbar() {
   const displayName = user?.name || user?.email || "Account";
 
   return (
-    <header className="flex h-[60px] w-full items-center justify-between border-border border-b bg-muted px-10">
+    <header className="flex h-[60px] w-full items-center justify-between border-border border-b bg-header-background px-10">
       <a href="/" className="flex items-center" aria-label="Go to homepage">
         <img src="/nebari-logo.svg" alt="Nebari" className="h-8 w-auto dark:hidden" />
         <img src="/nebari-logo_dark.svg" alt="Nebari" className="hidden h-8 w-auto dark:block" />

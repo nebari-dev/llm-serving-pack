@@ -78,6 +78,9 @@
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
 
   /* App-specific tokens (not part of the Nebari theme) */
+  --body-background: #ffffff;
+  --header-background: #f8f8f8;
+
   --pill-category-fg: #475467;
   --text-secondary: #4e596a;
 
@@ -149,6 +152,9 @@
   --sidebar-ring: oklch(69.98% 0.1926 311.48);
 
   /* App-specific tokens (not part of the Nebari theme) */
+  --body-background: #262628;
+  --header-background: #353538;
+
   --pill-category-fg: #ffffff;
   --text-secondary: #d0d5dd;
 
@@ -212,6 +218,9 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-scrim: var(--scrim);
+
+  --color-body-background: var(--body-background);
+  --color-header-background: var(--header-background);
 
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -283,7 +292,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-body-background text-foreground;
   }
 
   html,
