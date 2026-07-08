@@ -42,6 +42,10 @@ func main() {
 	keycloakURL := os.Getenv("LLM_KEYCLOAK_URL")
 	keycloakRealm := getEnvOrDefault("LLM_KEYCLOAK_REALM", "nebari")
 	keycloakIssuerURL := os.Getenv("LLM_KEYCLOAK_ISSUER_URL")
+	// Optional: pin the accepted token's `azp` to the SPA client ID. The nebari
+	// realm is shared, so leaving this unset accepts any client's token in the
+	// realm; set it to reject tokens minted for other clients.
+	keycloakSPAClientID := os.Getenv("LLM_KEYCLOAK_SPA_CLIENT_ID")
 
 	auditInterval, err := time.ParseDuration(auditIntervalStr)
 	if err != nil {
@@ -134,8 +138,12 @@ func main() {
 		}
 		validator := api.NewJWTValidator(keycloakURL, keycloakRealm, logger)
 		validator.SetIssuerURL(keycloakIssuerURL)
+		validator.SetExpectedClientID(keycloakSPAClientID)
 		authConfig.Validator = validator
-		logger.Info("bearer-token auth enabled", "keycloakURL", keycloakURL, "realm", keycloakRealm)
+		if keycloakSPAClientID == "" {
+			logger.Warn("LLM_KEYCLOAK_SPA_CLIENT_ID not set: accepting tokens from any client in the realm (azp is not pinned)")
+		}
+		logger.Info("bearer-token auth enabled", "keycloakURL", keycloakURL, "realm", keycloakRealm, "azpPinned", keycloakSPAClientID != "")
 	}
 	authMW := api.AuthMiddleware(authConfig)
 

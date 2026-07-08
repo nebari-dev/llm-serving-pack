@@ -1,4 +1,7 @@
 {{- if and .Values.keyManager.enabled .Values.keyManager.nebariApp.enabled }}
+{{- if not .Values.frontend.enabled }}
+{{- fail "keyManager.nebariApp.enabled=true requires frontend.enabled=true: the NebariApp (and its landing-page healthcheck on /) targets the -frontend Service, which is only rendered when frontend.enabled=true. For an API-only install, set keyManager.nebariApp.enabled=false." }}
+{{- end }}
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
 metadata:

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // retryMaxAttempts and retryInitialBackoff control the *active* JWKS fetch
@@ -44,6 +45,21 @@ var ErrNotReady = errors.New("jwt validator: initial JWKS fetch not yet complete
 // spurious "token expired" errors. 30s is generous but still provides real
 // expiry protection (Keycloak's default access-token lifetime is 5 minutes).
 const clockLeeway = 30 * time.Second
+
+// unknownKIDCooldown is the minimum interval between JWKS refreshes triggered by
+// a token bearing an unrecognized `kid`. It exists purely to cap outbound load
+// on Keycloak: because the gateway runs enforceAtGateway:false and nginx
+// forwards Authorization as-is, an unauthenticated caller can send forged tokens
+// with arbitrary `kid`s — this code runs *before* signature verification — and
+// each cache miss would otherwise fan out into a 10s HTTP GET to Keycloak's
+// /certs. singleflight collapses concurrent misses into one in-flight fetch, and
+// this cooldown bounds the sustained refresh rate so request volume can't drive
+// a fetch storm. Legitimate key rotations are rare and tolerate a 30s delay.
+const unknownKIDCooldown = 30 * time.Second
+
+// errKIDRefreshCooldown is returned when an unknown-`kid` refresh is suppressed
+// because another refresh happened within unknownKIDCooldown.
+var errKIDRefreshCooldown = errors.New("unknown-kid JWKS refresh suppressed by cooldown")
 
 // jwk is a single JSON Web Key from Keycloak's JWKS endpoint.
 type jwk struct {
@@ -76,11 +92,24 @@ type JWTValidator struct {
 	// overridden with SetIssuerURL when the external Keycloak URL (embedded in
 	// tokens as `iss`) differs from the internal cluster URL used for JWKS
 	// fetching.
-	issuerURL  string
-	realm      string
-	publicKeys map[string]*rsa.PublicKey
-	keysMu     sync.RWMutex
-	lastFetch  time.Time
+	issuerURL string
+	realm     string
+	// expectedClientID, when non-empty, pins the token's `azp` (authorized party)
+	// claim to a specific Keycloak client. The `nebari` realm is shared across all
+	// Nebari apps, so `iss` alone would accept a token minted for any client in
+	// the realm; pinning `azp` restricts acceptance to tokens obtained by the
+	// key-manager's own SPA client. Empty disables the check (see SetExpectedClientID).
+	expectedClientID string
+	publicKeys       map[string]*rsa.PublicKey
+	keysMu           sync.RWMutex
+	lastFetch        time.Time
+	// refreshGroup collapses concurrent JWKS refreshes (hourly re-fetch and
+	// unknown-kid re-fetch) into a single in-flight outbound request.
+	refreshGroup singleflight.Group
+	// lastKIDRefresh is the unix-nano timestamp of the most recent unknown-kid
+	// refresh attempt, used to enforce unknownKIDCooldown. Atomic because it is
+	// read and written from every request-handling goroutine.
+	lastKIDRefresh atomic.Int64
 	// ready flips to true once the first JWKS fetch succeeds. It is atomic
 	// because the writer runs on the background init goroutine while readers
 	// run on every request-handling goroutine.
@@ -125,6 +154,13 @@ func (v *JWTValidator) SetIssuerURL(url string) {
 		return
 	}
 	v.issuerURL = strings.TrimSuffix(url, "/")
+}
+
+// SetExpectedClientID pins the accepted token's `azp` claim to clientID. Use it
+// to reject tokens minted for other clients in a shared Keycloak realm. An empty
+// string is a no-op, leaving the `azp` check disabled (issuer-only validation).
+func (v *JWTValidator) SetExpectedClientID(clientID string) {
+	v.expectedClientID = clientID
 }
 
 // initLoop runs the initial JWKS fetch with exponential backoff, then falls
@@ -203,8 +239,11 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 		return nil, ErrNotReady
 	}
 
-	if time.Since(v.lastFetch) > time.Hour {
-		if err := v.fetchPublicKeys(); err != nil {
+	v.keysMu.RLock()
+	lastFetch := v.lastFetch
+	v.keysMu.RUnlock()
+	if time.Since(lastFetch) > time.Hour {
+		if err := v.refreshKeys(); err != nil {
 			v.logger.Error("failed to refresh public keys", "error", err)
 		}
 	}
@@ -226,8 +265,9 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 			return publicKey, nil
 		}
 
-		// Key not cached — Keycloak may have rotated keys. Try a one-shot refresh.
-		if refreshErr := v.fetchPublicKeys(); refreshErr != nil {
+		// Key not cached — Keycloak may have rotated keys. Try a rate-limited,
+		// de-duplicated refresh (see unknownKIDCooldown for why this is guarded).
+		if refreshErr := v.refreshForUnknownKID(); refreshErr != nil {
 			return nil, fmt.Errorf("unknown key ID %s and key refresh failed: %w", kid, refreshErr)
 		}
 		v.keysMu.RLock()
@@ -245,15 +285,56 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Expiry is already enforced by ParseWithClaims (with clockLeeway); only the
-	// issuer needs a manual check. `aud`/`azp` are intentionally not checked, to
-	// match the reference webapi validation.
+	// Expiry is already enforced by ParseWithClaims (with clockLeeway); the issuer
+	// and (optionally) the authorized party are checked manually here.
 	expectedIssuer := fmt.Sprintf("%s/realms/%s", v.issuerURL, v.realm)
 	if iss, _ := claims["iss"].(string); iss != expectedIssuer {
 		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", expectedIssuer, iss)
 	}
 
+	// The `nebari` realm is shared across all Nebari apps, so `iss` alone accepts
+	// a token minted for any client in the realm. When expectedClientID is set,
+	// pin `azp` to reject tokens obtained by other clients. Public PKCE clients
+	// are not placed in `aud` by Keycloak, so `azp` — not `aud` — is the claim
+	// that identifies the client that obtained the token.
+	if v.expectedClientID != "" {
+		if azp, _ := claims["azp"].(string); azp != v.expectedClientID {
+			return nil, fmt.Errorf("invalid azp: expected %s, got %s", v.expectedClientID, azp)
+		}
+	}
+
 	return claims, nil
+}
+
+// refreshKeys performs a JWKS refresh, collapsing concurrent callers into a
+// single in-flight outbound request via singleflight so a burst of requests
+// arriving at the same time produces exactly one call to Keycloak.
+func (v *JWTValidator) refreshKeys() error {
+	_, err, _ := v.refreshGroup.Do("certs", func() (interface{}, error) {
+		return nil, v.fetchPublicKeys()
+	})
+	return err
+}
+
+// refreshForUnknownKID refreshes the JWKS in response to a token carrying an
+// unrecognized `kid`, rate-limited to at most one attempt per unknownKIDCooldown.
+// This runs before signature verification on attacker-controllable input, so the
+// cooldown (plus singleflight in refreshKeys) is what prevents forged tokens with
+// random `kid`s from amplifying request volume into a fetch storm against
+// Keycloak. Returns errKIDRefreshCooldown when suppressed.
+func (v *JWTValidator) refreshForUnknownKID() error {
+	now := time.Now().UnixNano()
+	last := v.lastKIDRefresh.Load()
+	if last != 0 && now-last < int64(unknownKIDCooldown) {
+		return errKIDRefreshCooldown
+	}
+	// CAS ensures only one goroutine per cooldown window proceeds to the fetch;
+	// losers are treated as suppressed (singleflight would dedup them anyway, but
+	// this also bounds the rate when fetches fail and return quickly).
+	if !v.lastKIDRefresh.CompareAndSwap(last, now) {
+		return errKIDRefreshCooldown
+	}
+	return v.refreshKeys()
 }
 
 func (v *JWTValidator) fetchPublicKeys() error {

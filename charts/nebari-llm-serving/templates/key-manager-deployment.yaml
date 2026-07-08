@@ -50,6 +50,14 @@ spec:
               value: {{ .Values.keyManager.keycloak.realm | default .Values.frontend.keycloak.realm | quote }}
             - name: LLM_KEYCLOAK_ISSUER_URL
               value: {{ .Values.keyManager.keycloak.issuerURL | default .Values.frontend.keycloak.url | quote }}
+            {{- if .Values.keyManager.keycloak.pinClientAudience }}
+            # Opt-in hardening: pin the token's `azp` to the SPA client ID so a
+            # token minted for another client in the (shared) nebari realm is
+            # rejected. Derived from the same client ID the SPA logs in with, so
+            # the two always agree.
+            - name: LLM_KEYCLOAK_SPA_CLIENT_ID
+              value: {{ .Values.frontend.keycloak.clientId | default (printf "%s-%s-key-manager-spa" (include "nebari-llm-serving.operatorNamespace" .) (include "nebari-llm-serving.fullname" .)) | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.keyManager.auditInterval }}
             - name: LLM_AUDIT_INTERVAL

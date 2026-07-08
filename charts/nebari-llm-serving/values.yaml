@@ -93,6 +93,14 @@ keyManager:
     # issuerURL - the URL embedded in tokens as `iss`; validated exactly.
     # Defaults to frontend.keycloak.url (the URL the browser talks to).
     issuerURL: ""
+    # pinClientAudience - when true, the key-manager additionally checks the
+    # token's `azp` (authorized party) claim against the SPA client ID, rejecting
+    # tokens minted for other clients in the realm. The nebari realm is shared
+    # across all Nebari apps, so leaving this false accepts any valid token in the
+    # realm (issuer-only validation). The client ID is derived from
+    # frontend.keycloak.clientId (or the operator convention), so it always
+    # matches the token the SPA actually presents.
+    pinClientAudience: false
   # nebariApp - the NebariApp CR that exposes the key-manager UI via the
   # nebari-operator (HTTPRoute, TLS cert, Keycloak client, landing-page tile).
   # Set enabled=false when installing standalone without a Nebari cluster.
