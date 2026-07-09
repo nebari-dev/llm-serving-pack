@@ -55,6 +55,18 @@ func sanitizedPrefix(raw string) string {
 	return fmt.Sprintf("%s-%08x", string(out), h.Sum32())
 }
 
+// pairSuffix mirrors the production (username, model) pair hash appended to
+// every clientID so black-box tests can assemble the exact clientID the
+// manager will produce. Kept as an independent implementation so a drift
+// between this and production fails the tests below.
+func pairSuffix(rawUser, rawModel string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(rawUser))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(rawModel))
+	return fmt.Sprintf("%08x", h.Sum32())
+}
+
 const testNamespace = "llm-api-keys"
 
 func buildScheme(t *testing.T) *runtime.Scheme {
@@ -173,19 +185,22 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 			name:         "first key for user is -1",
 			username:     "chuck",
 			existingKeys: []string{},
-			wantClientID: "user-chuck-my-model-1",
+			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
 		},
 		{
 			name:         "second key for user is -2",
 			username:     "chuck",
-			existingKeys: []string{"user-chuck-my-model-1"},
-			wantClientID: "user-chuck-my-model-2",
+			existingKeys: []string{"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1"},
+			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-2",
 		},
 		{
-			name:         "third key for user is -3",
-			username:     "chuck",
-			existingKeys: []string{"user-chuck-my-model-1", "user-chuck-my-model-2"},
-			wantClientID: "user-chuck-my-model-3",
+			name:     "third key for user is -3",
+			username: "chuck",
+			existingKeys: []string{
+				"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
+				"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-2",
+			},
+			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-3",
 		},
 	}
 
@@ -257,11 +272,100 @@ func TestCreateKey_ClientIDUniqueAcrossModels(t *testing.T) {
 	if a.ClientID == b.ClientID {
 		t.Errorf("client IDs collide across models: model-a=%q model-b=%q (must be unique)", a.ClientID, b.ClientID)
 	}
-	if a.ClientID != "user-chuck-model-a-1" {
-		t.Errorf("model-a clientID = %q, want user-chuck-model-a-1", a.ClientID)
+	wantA := "user-chuck-model-a-" + pairSuffix("chuck", "model-a") + "-1"
+	if a.ClientID != wantA {
+		t.Errorf("model-a clientID = %q, want %q", a.ClientID, wantA)
 	}
-	if b.ClientID != "user-chuck-model-b-1" {
-		t.Errorf("model-b clientID = %q, want user-chuck-model-b-1", b.ClientID)
+	wantB := "user-chuck-model-b-" + pairSuffix("chuck", "model-b") + "-1"
+	if b.ClientID != wantB {
+		t.Errorf("model-b clientID = %q, want %q", b.ClientID, wantB)
+	}
+}
+
+// TestCreateKey_ClientIDUnambiguousBoundary: usernames and model names both
+// legitimately contain hyphens, so composing "user-<name>-<model>-<n>" with a
+// hyphen separator is ambiguous: ("mary", "jane-chat") and ("mary-jane",
+// "chat") would compose to the same clientID. Duplicate client IDs across two
+// models' Secrets collide in the pooled credentialRefs set (the #122 failure
+// mode: cross-model authorization plus one key failing to authenticate), so
+// distinct (user, model) pairs must always mint distinct client IDs.
+func TestCreateKey_ClientIDUnambiguousBoundary(t *testing.T) {
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			makeSecret("jane-chat", testNamespace),
+			makeConfigMap("jane-chat", testNamespace),
+			makeSecret("chat", testNamespace),
+			makeConfigMap("chat", testNamespace),
+		).
+		Build()
+
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	a, err := mgr.CreateKey(context.Background(), "jane-chat", "mary", "test")
+	if err != nil {
+		t.Fatalf("CreateKey mary/jane-chat: %v", err)
+	}
+	b, err := mgr.CreateKey(context.Background(), "chat", "mary-jane", "test")
+	if err != nil {
+		t.Fatalf("CreateKey mary-jane/chat: %v", err)
+	}
+	if a.ClientID == b.ClientID {
+		t.Errorf("distinct (user, model) pairs minted the same clientID %q; pooled credentialRefs require globally unique client IDs", a.ClientID)
+	}
+}
+
+// TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys: the sequence number must
+// not be derived from a bare count of existing keys. With keys {1,2,3},
+// revoking #2 leaves a count of 2, so a count-based mint would reuse sequence
+// 3 and silently overwrite the still-live key #3 (Secret value and ConfigMap
+// metadata), killing a credential the user believes is active.
+func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
+	scheme := buildScheme(t)
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(
+			makeSecret("model-a", testNamespace),
+			makeConfigMap("model-a", testNamespace),
+		).
+		Build()
+
+	ctx := context.Background()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	minted := make([]*secrets.CreateKeyResult, 0, 3)
+	for range 3 {
+		r, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+		if err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		minted = append(minted, r)
+	}
+
+	if err := mgr.RevokeKey(ctx, "model-a", minted[1].ClientID); err != nil {
+		t.Fatalf("RevokeKey %s: %v", minted[1].ClientID, err)
+	}
+	live := []*secrets.CreateKeyResult{minted[0], minted[2]}
+
+	fresh, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+	if err != nil {
+		t.Fatalf("CreateKey after revoke: %v", err)
+	}
+
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Namespace: testNamespace, Name: "model-a-api-keys"}
+	if err := fakeClient.Get(ctx, key, secret); err != nil {
+		t.Fatalf("Get Secret: %v", err)
+	}
+	for _, l := range live {
+		if fresh.ClientID == l.ClientID {
+			t.Errorf("mint after revoke reused live clientID %q", l.ClientID)
+		}
+		if got := string(secret.Data[l.ClientID]); got != l.APIKey {
+			t.Errorf("live key %q value changed after mint: got %q, want %q", l.ClientID, got, l.APIKey)
+		}
+	}
+	if _, ok := secret.Data[fresh.ClientID]; !ok {
+		t.Errorf("freshly minted clientID %q missing from Secret", fresh.ClientID)
 	}
 }
 
@@ -512,26 +616,26 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 		{
 			name:           "email username gets @ replaced with -at- and a hash suffix",
 			username:       "alice@example.com",
-			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-my-model-1",
+			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-1",
 			wantCreatorRaw: "alice@example.com",
 		},
 		{
 			name:           "plain alphanumeric username is unchanged",
 			username:       "chuck",
-			wantClientID:   "user-chuck-my-model-1",
+			wantClientID:   "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
 			wantCreatorRaw: "chuck",
 		},
 		{
 			name:             "sequence increments using sanitized prefix",
 			username:         "alice@example.com",
-			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-my-model-2",
+			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-2",
 			wantCreatorRaw:   "alice@example.com",
-			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-my-model-1"},
+			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-1"},
 		},
 		{
 			name:           "raw alice-at-example.com does NOT collide with alice@example.com",
 			username:       "alice-at-example.com",
-			wantClientID:   "user-alice-at-example.com-my-model-1", // already valid -> no hash suffix
+			wantClientID:   "user-alice-at-example.com-my-model-" + pairSuffix("alice-at-example.com", "my-model") + "-1", // already-valid username -> no sanitizer hash suffix
 			wantCreatorRaw: "alice-at-example.com",
 		},
 	}

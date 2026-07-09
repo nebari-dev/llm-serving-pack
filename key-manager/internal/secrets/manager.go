@@ -27,7 +27,7 @@ type KeyInfo struct {
 
 // CreateKeyResult is returned when a new key is created.
 type CreateKeyResult struct {
-	ClientID string // e.g., "user-chuck-1"
+	ClientID string // e.g., "user-chuck-phi4-mini-adae6d48-1" (user, model, pair hash, sequence)
 	APIKey   string // e.g., "sk-abc123..." - only returned once at creation time
 }
 
@@ -187,28 +187,49 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		return nil, err
 	}
 
-	// Count existing keys for this (user, model) to determine the sequence
-	// number. The clientID is scoped by BOTH username and model: the operator
-	// pools every model's api-keys Secret into each model's SecurityPolicy
+	// The clientID is scoped by BOTH username and model: the operator pools
+	// every model's api-keys Secret into each model's SecurityPolicy
 	// credentialRefs (model-scoped auth), and forwards the matched data key as
 	// the x-llm-client-id used for per-model authorization. A clientID that
 	// repeats across models - e.g. "user-<name>-1" for the first key of every
 	// model - collides in that pooled set, so one model's key both
 	// authenticates and authorizes for another, and the user's other keys fail
 	// to authenticate at all (only one value survives per duplicated key).
-	// Including the model keeps each clientID globally unique.
-	// KeyInfo.Creator below preserves the raw username for ownership checks.
+	//
+	// A hyphen-joined "user-<name>-<model>" is still ambiguous because both
+	// parts legitimately contain hyphens: ("mary", "jane-chat") and
+	// ("mary-jane", "chat") compose identically. An FNV-1a hash of the raw
+	// (username, model) pair is appended so distinct pairs always mint
+	// distinct client IDs. KeyInfo.Creator below preserves the raw username
+	// for ownership checks.
 	safeUsername := sanitizeUsernameForKey(username)
 	safeModel := sanitizeUsernameForKey(modelName)
-	userPrefix := "user-" + safeUsername + "-" + safeModel + "-"
+	pair := fnv.New32a()
+	_, _ = pair.Write([]byte(username))
+	_, _ = pair.Write([]byte{0})
+	_, _ = pair.Write([]byte(modelName))
+	userPrefix := fmt.Sprintf("user-%s-%s-%08x-", safeUsername, safeModel, pair.Sum32())
 	count := 0
 	for k := range secret.Data {
 		if strings.HasPrefix(k, userPrefix) {
 			count++
 		}
 	}
+	// Probe upward from count+1 until the clientID is unused. Revocation
+	// leaves gaps in the sequence, so a bare count can land on a still-live
+	// key (keys {1,2,3}, revoke #2, count=2 -> "-3") and would silently
+	// overwrite that credential in both the Secret and the ConfigMap.
 	sequence := count + 1
-	clientID := fmt.Sprintf("user-%s-%s-%d", safeUsername, safeModel, sequence)
+	clientID := fmt.Sprintf("%s%d", userPrefix, sequence)
+	for {
+		_, inSecret := secret.Data[clientID]
+		_, inCM := cm.Data[clientID]
+		if !inSecret && !inCM {
+			break
+		}
+		sequence++
+		clientID = fmt.Sprintf("%s%d", userPrefix, sequence)
+	}
 
 	apiKey, err := generateAPIKey()
 	if err != nil {
