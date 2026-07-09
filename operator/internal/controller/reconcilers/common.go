@@ -55,9 +55,14 @@ func SetOwnerReference(model *llmv1alpha1.LLMModel, obj metav1.Object, scheme *r
 	return controllerutil.SetControllerReference(model, obj, scheme)
 }
 
+// APIKeySecretSuffix is the naming suffix shared by every api-keys Secret.
+// APIKeySecretName appends it, and the controllers' Secret watches filter on
+// it to recognize api-keys Secrets among operator-managed Secrets.
+const APIKeySecretSuffix = "-api-keys"
+
 // APIKeySecretName returns the name of the Secret holding API keys for the given model.
 func APIKeySecretName(modelName string) string {
-	return modelName + "-api-keys"
+	return modelName + APIKeySecretSuffix
 }
 
 // APIKeyMetadataConfigMapName returns the name of the ConfigMap holding API key metadata for the given model.
