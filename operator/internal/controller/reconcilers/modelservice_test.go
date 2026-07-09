@@ -254,6 +254,31 @@ func TestBuildModelServiceResources(t *testing.T) { //nolint:gocyclo // table-dr
 			},
 		},
 		{
+			name: "spec.serving.command overrides the default vllm command",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultModel()
+				m.Spec.Serving.Command = []string{"vllm", "serve"}
+				return m
+			}(),
+			storage: defaultStorage(),
+			cfg:     defaultConfig(),
+			check: func(t *testing.T, result *ModelServiceResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				cmd := result.Deployment.Spec.Template.Spec.Containers[0].Command
+				want := []string{"vllm", "serve"}
+				if len(cmd) != len(want) {
+					t.Fatalf("expected vllm command %v, got %v", want, cmd)
+				}
+				for i := range want {
+					if cmd[i] != want[i] {
+						t.Errorf("vllm command[%d] = %q, want %q", i, cmd[i], want[i])
+					}
+				}
+			},
+		},
+		{
 			name: "tensorParallelism explicit value used",
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultModel()

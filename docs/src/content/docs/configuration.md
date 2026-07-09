@@ -149,6 +149,7 @@ Configures the vLLM serving layer. All fields optional.
 |-------|------|---------|-------------|
 | `spec.serving.replicas` | integer | `1` | Number of serving replicas. |
 | `spec.serving.image` | string | chart default | Container image for the vLLM server. Overrides `defaults.serving.image`. |
+| `spec.serving.command` | []string | `python3 -m vllm.entrypoints.openai.api_server` | Container command for the vLLM container. The default is required by the default serving image, whose entrypoint is the NVIDIA CUDA wrapper with no default CMD. Set this when a custom `serving.image` needs a different launcher; `serving.vllmArgs` are appended as arguments. |
 | `spec.serving.updateStrategy` | string | `Recreate` | Deployment rollout strategy: `Recreate` (default) or `RollingUpdate`. `Recreate` is the default because model pods hold exclusive GPUs and a ReadWriteOnce PVC; on clusters without spare GPU capacity a rolling update deadlocks until the old pod is removed. Set to `RollingUpdate` only when the cluster has enough free GPUs to run old and new pods simultaneously. |
 | `spec.serving.tensorParallelism` | integer | `gpu.count` | Tensor parallelism degree. Defaults to the GPU count when not set. |
 | `spec.serving.dataParallelism` | integer | `1` | Data parallelism degree. |

@@ -117,6 +117,14 @@ type ServingSpec struct {
 	// image overrides the default vLLM container image
 	// +optional
 	Image string `json:"image,omitempty"`
+	// command overrides the container command for the vLLM container.
+	// Defaults to the standard vLLM OpenAI-server entrypoint
+	// (python3 -m vllm.entrypoints.openai.api_server), which the default
+	// serving image requires because its entrypoint is the NVIDIA CUDA
+	// wrapper with no default CMD. Set this when a custom serving image
+	// needs a different launcher; vllmArgs are appended as arguments.
+	// +optional
+	Command []string `json:"command,omitempty"`
 	// replicas is the number of serving replicas
 	// +optional
 	// +kubebuilder:default=1

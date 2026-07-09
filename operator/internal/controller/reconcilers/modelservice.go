@@ -194,16 +194,23 @@ func buildVLLMContainer(
 
 	port8000 := intstr.FromString("http")
 
+	// The default serving image (llm-d-cuda) sets its entrypoint to the NVIDIA
+	// CUDA wrapper and ships no default CMD, so the vLLM command must be
+	// explicit. Without it the wrapper exec's the vLLM flags as if they were
+	// the command ("exec: --: invalid option") and the container crash-loops.
+	// This is the standard vLLM OpenAI-server entrypoint; the image's venv
+	// python3 is first on PATH. (Pack-specific divergence from the upstream
+	// llm-d-modelservice chart, which leaves the command to the image.)
+	// spec.serving.command overrides it for images with a different launcher.
+	command := []string{"python3", "-m", "vllm.entrypoints.openai.api_server"}
+	if len(model.Spec.Serving.Command) > 0 {
+		command = model.Spec.Serving.Command
+	}
+
 	container := corev1.Container{
-		Name:  "vllm",
-		Image: image,
-		// The serving image (llm-d-cuda) sets its entrypoint to the NVIDIA CUDA
-		// wrapper and ships no default CMD, so the vLLM command must be explicit.
-		// Without it the wrapper exec's the vLLM flags as if they were the
-		// command ("exec: --: invalid option") and the container crash-loops.
-		// This is the standard vLLM OpenAI-server entrypoint; the image's venv
-		// python3 is first on PATH.
-		Command: []string{"python3", "-m", "vllm.entrypoints.openai.api_server"},
+		Name:    "vllm",
+		Image:   image,
+		Command: command,
 		Args:    args,
 		Ports: []corev1.ContainerPort{
 			{Name: "http", ContainerPort: 8000, Protocol: corev1.ProtocolTCP},

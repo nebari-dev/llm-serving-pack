@@ -10,7 +10,7 @@ const REF = process.env.HUGO_REF || 'origin/docs-site';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const docsDir = path.join(repoRoot, 'docs/src/content/docs');
 
-// Four files are intentionally excluded from this parity check:
+// Five files are intentionally excluded from this parity check:
 //   - cicd-and-releasing.md documents the Astro docs workflow (not byte-identical to
 //     the Hugo source by design, user-approved).
 //   - installation.md has its screenshot references rewritten from /public absolute
@@ -22,6 +22,9 @@ const docsDir = path.join(repoRoot, 'docs/src/content/docs');
 //   - architecture.md was updated by PR #117 (#116) to document the now-enabled
 //     per-model API-key authorization on the external endpoint, so its body
 //     intentionally diverges from the frozen Hugo source.
+//   - configuration.md was updated by PR #117 to document the new
+//     spec.serving.command override, so its body intentionally diverges from
+//     the frozen Hugo source.
 
 // migrated file (in src/content/docs) -> hugo source basename (in docs/site/content)
 const MAP = {
@@ -29,7 +32,6 @@ const MAP = {
   'quickstart.md': 'quickstart.md',
   'shared-storage.md': 'shared-storage.md',
   'troubleshooting.md': 'troubleshooting.md',
-  'configuration.md': 'configuration.md',
 };
 
 // Strip a leading TOML (+++) or YAML (---) frontmatter block; return the body.
