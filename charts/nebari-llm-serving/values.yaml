@@ -100,6 +100,11 @@ keyManager:
     # realm (issuer-only validation). The client ID is derived from
     # frontend.keycloak.clientId (or the operator convention), so it always
     # matches the token the SPA actually presents.
+    #
+    # Only meaningful with frontend.enabled=true: the pinned client is the SPA
+    # client the NebariApp provisions, so enabling this on an API-only install
+    # (frontend.enabled=false) pins an `azp` that no token in the realm carries
+    # and every request 401s.
     pinClientAudience: false
   # nebariApp - the NebariApp CR that exposes the key-manager UI via the
   # nebari-operator (HTTPRoute, TLS cert, Keycloak client, landing-page tile).

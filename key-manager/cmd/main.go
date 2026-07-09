@@ -123,6 +123,7 @@ func main() {
 		GroupsClaim: groupsClaim,
 		DevMode:     devMode,
 	}
+	var validator *api.JWTValidator
 	if devMode {
 		authConfig.DevIdentity = api.UserInfo{
 			Username: devUser,
@@ -136,7 +137,7 @@ func main() {
 		if keycloakURL == "" {
 			log.Fatal("LLM_KEYCLOAK_URL is required unless LLM_DEV_MODE=true")
 		}
-		validator := api.NewJWTValidator(keycloakURL, keycloakRealm, logger)
+		validator = api.NewJWTValidator(keycloakURL, keycloakRealm, logger)
 		validator.SetIssuerURL(keycloakIssuerURL)
 		validator.SetExpectedClientID(keycloakSPAClientID)
 		authConfig.Validator = validator
@@ -170,6 +171,10 @@ func main() {
 		defer shutdownCancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("http server shutdown error", "error", err)
+		}
+		// Stop the validator's background JWKS refresh goroutine.
+		if validator != nil {
+			validator.Stop()
 		}
 	}()
 

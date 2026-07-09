@@ -62,6 +62,15 @@ data:
             root /usr/share/nginx/html;
             index index.html;
 
+            # Security headers. add_header does NOT inherit into a location that
+            # sets its own add_header, so these cover the SPA document (location
+            # /); the config.json block below repeats the ones that matter for it.
+            # The framing headers matter because the UI exposes one-click "revoke
+            # key" — deny embedding to block clickjacking.
+            add_header X-Frame-Options "DENY" always;
+            add_header Content-Security-Policy "frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options "nosniff" always;
+
             gzip on;
             gzip_types text/plain text/css application/json application/javascript
                        text/xml application/xml application/xml+rss text/javascript
@@ -89,6 +98,14 @@ data:
                 access_log off;
                 return 200 "ok\n";
                 add_header Content-Type text/plain;
+            }
+
+            # Runtime config: never cache, so Keycloak settings changes take
+            # effect on the next page load instead of being pinned by a stale copy.
+            location = /config.json {
+                add_header Cache-Control "no-store" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                try_files $uri =404;
             }
 
             # SPA fallback.

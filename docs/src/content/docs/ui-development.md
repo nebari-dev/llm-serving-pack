@@ -92,14 +92,14 @@ npm run check   # biome lint + format
 The UI ships as its own image
 (`ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend`, nginx serving the built
 bundle) - it is no longer embedded in the Go key-manager binary. Committing your
-edits to `frontend/` is all that is needed for them to ship in the next image
-build. To see your changes in the actual in-cluster pod (rather than the dev
-server), rebuild and reload:
+edits to `frontend/` is all that is needed for them to ship: CI builds and
+publishes the frontend image on merge, and a chart upgrade rolls it out.
 
-```bash
-make build-images && make load-images
-kubectl -n llm-operator-system rollout restart deployment/llm-frontend
-```
+During local development you iterate against the Vite dev server (`make ui` in
+`dev/`), which hot-reloads on save and proxies `/api` to the port-forwarded
+key-manager - there is no in-cluster frontend pod in the dev stack to rebuild or
+restart. (`make build-images` builds only the operator, key-manager, and
+mock-vllm images.)
 
 ## API reference (what the UI calls)
 

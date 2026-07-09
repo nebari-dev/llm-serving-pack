@@ -72,7 +72,6 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
-		lastFetch:   time.Now(),
 	}
 	v.ready.Store(true)
 
@@ -106,6 +105,58 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 	_, _ = v.ValidateToken(forged)
 	if got := fetchCount.Load(); got != 2 {
 		t.Fatalf("expected a refresh after cooldown elapsed, got %d fetches", got)
+	}
+}
+
+// TestRotatedKIDResolvesForConcurrentBurst is the rotation counterpart to
+// TestUnknownKIDRefreshIsRateLimited. When Keycloak has rotated to a new signing
+// key, a concurrent burst of legitimate requests bearing the new kid must all
+// validate off a single shared JWKS fetch — none may be spuriously 401'd by the
+// cooldown gate. This is the case the SPA hits on the first page load after a
+// rotation, firing /api/me, /api/models and /api/keys concurrently with the same
+// fresh token. The rate bound (exactly one outbound fetch) must still hold.
+func TestRotatedKIDResolvesForConcurrentBurst(t *testing.T) {
+	oldPriv := genKey(t)
+	rotPriv := genKey(t)
+	const rotatedKID = "rotated-kid"
+
+	var fetchCount atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetchCount.Add(1)
+		writeJWKS(t, w, rotatedKID, &rotPriv.PublicKey)
+	}))
+	defer srv.Close()
+
+	// Validator starts holding only the pre-rotation key, under testKID.
+	v := &JWTValidator{
+		logger:      slog.Default(),
+		keycloakURL: srv.URL,
+		issuerURL:   testIssuer,
+		realm:       testRealm,
+		publicKeys:  map[string]*rsa.PublicKey{testKID: &oldPriv.PublicKey},
+	}
+	v.ready.Store(true)
+
+	// A genuine token minted by the rotated key; its kid is not yet cached.
+	token := signTokenWithKID(t, rotPriv, rotatedKID, jwt.MapClaims{"preferred_username": "alice"})
+
+	const burst = 50
+	var wg sync.WaitGroup
+	var okCount atomic.Int64
+	for range burst {
+		wg.Go(func() {
+			if _, err := v.ValidateToken(token); err == nil {
+				okCount.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+
+	if got := okCount.Load(); got != burst {
+		t.Fatalf("expected all %d concurrent requests with the rotated kid to validate, got %d", burst, got)
+	}
+	if got := fetchCount.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 JWKS fetch for the rotation burst, got %d", got)
 	}
 }
 
@@ -167,7 +218,6 @@ func TestKnownKIDNeverRefetches(t *testing.T) {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
-		lastFetch:   time.Now(),
 	}
 	v.ready.Store(true)
 

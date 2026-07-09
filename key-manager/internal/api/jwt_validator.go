@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -31,6 +32,13 @@ var (
 	retryDelay = time.Sleep
 	// slowPollInterval is the cadence for the post-retry "keep trying" loop.
 	slowPollInterval = 30 * time.Second
+	// keyRefreshInterval is the steady-state cadence at which the background
+	// goroutine proactively re-fetches the JWKS once the validator is ready, so a
+	// key rotation is picked up without waiting for a request to miss the cache.
+	// Kept deliberately off the request path (see refreshLoop): a synchronous
+	// hourly refresh would stall every concurrent request for up to the fetch
+	// timeout whenever Keycloak is unreachable at the moment the cache goes stale.
+	keyRefreshInterval = time.Hour
 )
 
 // ErrNotReady is returned by ValidateToken when the validator's initial JWKS
@@ -60,6 +68,10 @@ const unknownKIDCooldown = 30 * time.Second
 // errKIDRefreshCooldown is returned when an unknown-`kid` refresh is suppressed
 // because another refresh happened within unknownKIDCooldown.
 var errKIDRefreshCooldown = errors.New("unknown-kid JWKS refresh suppressed by cooldown")
+
+// maxJWKSBytes caps the JWKS response body read from Keycloak. A realm key set is
+// a few KB; 1 MiB bounds memory against an oversized or unbounded response.
+const maxJWKSBytes = 1 << 20
 
 // jwk is a single JSON Web Key from Keycloak's JWKS endpoint.
 type jwk struct {
@@ -102,8 +114,7 @@ type JWTValidator struct {
 	expectedClientID string
 	publicKeys       map[string]*rsa.PublicKey
 	keysMu           sync.RWMutex
-	lastFetch        time.Time
-	// refreshGroup collapses concurrent JWKS refreshes (hourly re-fetch and
+	// refreshGroup collapses concurrent JWKS refreshes (periodic re-fetch and
 	// unknown-kid re-fetch) into a single in-flight outbound request.
 	refreshGroup singleflight.Group
 	// lastKIDRefresh is the unix-nano timestamp of the most recent unknown-kid
@@ -163,21 +174,30 @@ func (v *JWTValidator) SetExpectedClientID(clientID string) {
 	v.expectedClientID = clientID
 }
 
-// initLoop runs the initial JWKS fetch with exponential backoff, then falls
-// back to a slow poll if all active attempts fail. It exits as soon as any
-// fetch succeeds or when Stop() is called.
+// initLoop drives the validator's background goroutine: it first brings the
+// validator online (initialFetch), then keeps the JWKS fresh on a steady cadence
+// (refreshLoop). It exits, closing doneCh, only when Stop() is called.
 func (v *JWTValidator) initLoop() {
 	defer close(v.doneCh)
+	if v.initialFetch() {
+		v.refreshLoop()
+	}
+}
 
+// initialFetch runs the initial JWKS fetch with exponential backoff, then falls
+// back to a slow poll if all active attempts fail. It returns true as soon as a
+// fetch succeeds (marking the validator ready), or false if Stop() is called
+// before that happens.
+func (v *JWTValidator) initialFetch() bool {
 	backoff := retryInitialBackoff
 	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
 		if v.stopped() {
-			return
+			return false
 		}
 		if err := v.fetchPublicKeys(); err == nil {
 			v.ready.Store(true)
 			v.logger.Info("JWT validator ready", "attempt", attempt)
-			return
+			return true
 		} else {
 			v.logger.Warn("failed to fetch Keycloak public keys, retrying",
 				"attempt", attempt, "maxRetries", retryMaxAttempts, "backoff", backoff, "error", err,
@@ -196,15 +216,36 @@ func (v *JWTValidator) initLoop() {
 	for {
 		select {
 		case <-v.stopCh:
-			return
+			return false
 		case <-time.After(slowPollInterval):
 		}
 		if err := v.fetchPublicKeys(); err == nil {
 			v.ready.Store(true)
 			v.logger.Info("JWT validator ready (slow poll)")
-			return
+			return true
 		} else {
 			v.logger.Warn("slow poll JWKS fetch failed", "error", err)
+		}
+	}
+}
+
+// refreshLoop proactively re-fetches the JWKS every keyRefreshInterval until
+// Stop() is called, keeping key rotation off the request path. A failed refresh
+// is logged and retried on the next tick; the previously-cached keys remain in
+// use in the meantime, so a transient Keycloak outage never fails validation
+// (fail-open on stale keys). The unknown-kid path in ValidateToken remains the
+// fast trigger for a rotation that lands between ticks.
+func (v *JWTValidator) refreshLoop() {
+	ticker := time.NewTicker(keyRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-v.stopCh:
+			return
+		case <-ticker.C:
+			if err := v.refreshKeys(); err != nil {
+				v.logger.Error("background JWKS refresh failed; keeping cached keys", "error", err)
+			}
 		}
 	}
 }
@@ -239,14 +280,8 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 		return nil, ErrNotReady
 	}
 
-	v.keysMu.RLock()
-	lastFetch := v.lastFetch
-	v.keysMu.RUnlock()
-	if time.Since(lastFetch) > time.Hour {
-		if err := v.refreshKeys(); err != nil {
-			v.logger.Error("failed to refresh public keys", "error", err)
-		}
-	}
+	// The steady-state JWKS refresh runs on the background goroutine (refreshLoop),
+	// not here, so a slow or unreachable Keycloak never stalls request handling.
 
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
@@ -265,11 +300,15 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 			return publicKey, nil
 		}
 
-		// Key not cached — Keycloak may have rotated keys. Try a rate-limited,
-		// de-duplicated refresh (see unknownKIDCooldown for why this is guarded).
-		if refreshErr := v.refreshForUnknownKID(); refreshErr != nil {
-			return nil, fmt.Errorf("unknown key ID %s and key refresh failed: %w", kid, refreshErr)
-		}
+		// Key not cached — Keycloak may have rotated keys. Trigger a rate-limited,
+		// de-duplicated refresh, then re-check the cache regardless of the refresh
+		// outcome. A concurrent burst with the same freshly-rotated kid all funnels
+		// through the one in-flight fetch (singleflight) and finds the key here; a
+		// caller whose refresh was suppressed by the cooldown may still find the key
+		// populated by a fetch that just completed. Only a genuinely absent kid
+		// (forged, or a bad token) falls through to the error below. See
+		// unknownKIDCooldown / refreshForUnknownKID for why the refresh is guarded.
+		_ = v.refreshForUnknownKID()
 		v.keysMu.RLock()
 		publicKey, exists = v.publicKeys[kid]
 		v.keysMu.RUnlock()
@@ -317,24 +356,33 @@ func (v *JWTValidator) refreshKeys() error {
 }
 
 // refreshForUnknownKID refreshes the JWKS in response to a token carrying an
-// unrecognized `kid`, rate-limited to at most one attempt per unknownKIDCooldown.
-// This runs before signature verification on attacker-controllable input, so the
-// cooldown (plus singleflight in refreshKeys) is what prevents forged tokens with
-// random `kid`s from amplifying request volume into a fetch storm against
-// Keycloak. Returns errKIDRefreshCooldown when suppressed.
+// unrecognized `kid`, rate-limited to at most one outbound fetch per
+// unknownKIDCooldown. This runs before signature verification on
+// attacker-controllable input, so the cooldown plus singleflight is what prevents
+// forged tokens with random `kid`s from amplifying request volume into a fetch
+// storm against Keycloak. Returns errKIDRefreshCooldown when suppressed.
+//
+// The cooldown gate lives *inside* the singleflight callback on purpose. A burst
+// of concurrent callers with the same legitimately-rotated kid collapses into one
+// in-flight fetch: the winner runs the callback while the rest block, then every
+// caller shares the result and re-checks the cache (see keyFunc). Were the gate
+// outside singleflight, all-but-one caller would get a suppression error and 401
+// even though the key they need is being fetched right then. The rate bound is
+// unchanged: once a fetch has occurred, callbacks within the window return early
+// without an outbound call, so request volume still cannot drive fetch volume.
 func (v *JWTValidator) refreshForUnknownKID() error {
-	now := time.Now().UnixNano()
-	last := v.lastKIDRefresh.Load()
-	if last != 0 && now-last < int64(unknownKIDCooldown) {
-		return errKIDRefreshCooldown
-	}
-	// CAS ensures only one goroutine per cooldown window proceeds to the fetch;
-	// losers are treated as suppressed (singleflight would dedup them anyway, but
-	// this also bounds the rate when fetches fail and return quickly).
-	if !v.lastKIDRefresh.CompareAndSwap(last, now) {
-		return errKIDRefreshCooldown
-	}
-	return v.refreshKeys()
+	_, err, _ := v.refreshGroup.Do("certs", func() (interface{}, error) {
+		now := time.Now().UnixNano()
+		last := v.lastKIDRefresh.Load()
+		if last != 0 && now-last < int64(unknownKIDCooldown) {
+			return nil, errKIDRefreshCooldown
+		}
+		// Only one callback runs per in-flight singleflight window, so a plain
+		// store (no CAS) is enough to stamp the window before fetching.
+		v.lastKIDRefresh.Store(now)
+		return nil, v.fetchPublicKeys()
+	})
+	return err
 }
 
 func (v *JWTValidator) fetchPublicKeys() error {
@@ -362,8 +410,11 @@ func (v *JWTValidator) fetchPublicKeys() error {
 		return fmt.Errorf("failed to fetch keys: status %d", resp.StatusCode)
 	}
 
+	// Cap the response body: a realm JWKS is a few KB, so 1 MiB is a generous
+	// ceiling that bounds memory if the endpoint (or something impersonating it)
+	// returns an unexpectedly large or unbounded body.
 	var set jwks
-	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJWKSBytes)).Decode(&set); err != nil {
 		return fmt.Errorf("failed to decode JWKS: %w", err)
 	}
 
@@ -386,7 +437,6 @@ func (v *JWTValidator) fetchPublicKeys() error {
 
 	v.keysMu.Lock()
 	v.publicKeys = keys
-	v.lastFetch = time.Now()
 	v.keysMu.Unlock()
 
 	v.logger.Info("Keycloak public keys refreshed", "count", len(keys))

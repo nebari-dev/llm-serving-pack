@@ -33,18 +33,23 @@ spec:
   # provisions the public SPA client but emits no gateway SecurityPolicy.
   auth:
     enabled: true
+    # Hardcoded to keycloak: the key-manager only validates Keycloak-minted
+    # tokens today. generic-oidc support is tracked in nebari-dev/#61.
     provider: keycloak
     enforceAtGateway: false
     scopes:
       {{- toYaml .Values.keyManager.nebariApp.auth.scopes | nindent 6 }}
     # The groups mapper ensures access tokens carry group claims so the
-    # key-manager can filter models by group membership.
+    # key-manager can filter models by group membership. claim.name is derived
+    # from the same value the key-manager reads (auth.oidc.groupsClaim, wired to
+    # LLM_OIDC_GROUPS_CLAIM) so overriding the claim name can't drift the mapper
+    # and the reader out of sync.
     keycloakConfig:
       protocolMappers:
         - name: group-membership
           protocolMapper: oidc-group-membership-mapper
           config:
-            claim.name: groups
+            claim.name: {{ .Values.auth.oidc.groupsClaim | quote }}
             full.path: "false"
             id.token.claim: "true"
             access.token.claim: "true"

@@ -112,7 +112,7 @@ check() { # name expected actual
   if [[ "$2" == "$3" ]]; then
     echo "  PASS: $1 (HTTP $3)"
   else
-    echo "  FAIL: $1 — expected $2, got $3"
+    echo "  FAIL: $1 - expected $2, got $3"
     FAILED=1
   fi
 }

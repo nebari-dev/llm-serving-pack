@@ -29,7 +29,6 @@ func newTestValidator(t *testing.T, pub *rsa.PublicKey) *JWTValidator {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: pub},
-		lastFetch:   time.Now(),
 	}
 	v.ready.Store(true)
 	return v
