@@ -202,6 +202,11 @@ curl -k https://llm.local:8443/v1/chat/completions \
   -d '{"model":"openai/gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}'
 ```
 
+A curl issued immediately after the Secret patch can return 403: the key
+authenticates as soon as Envoy Gateway syncs the Secret, but authorization
+waits for the operator to re-render the model's SecurityPolicy allow-list
+(typically a few seconds). Retry on a 403 before digging deeper.
+
 The internal endpoint (`llm-internal.local`) always requires a real Keycloak
 JWT, even when access is public, so it is not reachable on a bare kind cluster.
 

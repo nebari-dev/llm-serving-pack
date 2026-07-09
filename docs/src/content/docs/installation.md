@@ -1645,11 +1645,26 @@ config. Re-check section 6.
 
 ### `401` on external endpoint with a valid API key
 
+Authentication is pooled across every model's api-keys Secret, so a 401
+means the key is not present in any model's Secret (revoked, mistyped, or
+never minted).
+
 - Verify the API key Secret exists: `kubectl get secret -n nebari-llm-serving-system <model>-api-keys`
-- Verify the key is for the right model (keys are per-model)
 - Verify the `model` field in your request body matches the
   HuggingFace model ID (e.g. `Qwen/Qwen3.5-35B-A3B-GPTQ-Int4`),
   not the LLMModel CR name
+
+### `403` on external endpoint with a valid API key
+
+Keys authenticate anywhere on the shared listener but are authorized only
+for the model they were minted for, so a 403 means the key is valid but
+not on this model's allow-list.
+
+- Verify the key was minted for the model you are calling (a key for
+  model A returns 403 against model B by design)
+- A freshly minted key can 403 until the operator re-renders the model's
+  SecurityPolicy allow-list - typically seconds, within about a minute;
+  retry before digging deeper
 
 ### Key-manager UI shows "No models available" for a user who should have access
 

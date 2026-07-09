@@ -69,7 +69,7 @@ All resources live in the `LLMModel`'s own namespace, which (per the validating 
 | InferencePool + EPP | Intelligent inference scheduling |
 | AIGatewayRoute (external) | External endpoint with token counting, rate limiting |
 | AIGatewayRoute (internal) | Internal endpoint with token counting, rate limiting |
-| SecurityPolicy (external) | apiKeyAuth referencing the per-model Secret (same namespace) plus a deny-by-default authorization allow-list of that model's client IDs |
+| SecurityPolicy (external) | apiKeyAuth pooling every model's api-keys Secret (all same-namespace) plus a deny-by-default authorization allow-list of this model's own client IDs |
 | SecurityPolicy (internal) | JWT validation with group claim matching against `access.groups` |
 | Secret (API keys) | Per-model API key store (created by operator, data managed by key manager) |
 | ConfigMap (key metadata) | Per-model metadata for API keys (creator, timestamp, description) |
@@ -153,7 +153,7 @@ Most operator work is per-`LLMModel` and flows through `LLMModelReconciler`. A s
 
 These are reconciled by `ClusterTLSSingleton`, a `manager.Runnable` (not a controller-runtime Reconciler) that runs under leader election with a 5-minute resync after an initial reconcile on leader acquisition. It sets no `OwnerReferences` on its targets: the Certificate is cluster-scoped in spirit even though it lives in a namespace, and the Gateways are owned out-of-band by the platform - the operator only mutates their `.spec.listeners` slice in place, matched by listener name. On operator uninstall, the Certificate and listeners stay behind so in-flight traffic continues to terminate TLS while a new pack version rolls.
 
-Use this pattern for any future cluster-wide concern; do not co-locate cluster-wide state inside `LLMModelReconciler`. The split keeps per-model reconciles fast and cluster-singleton reconciles rare and idempotent.
+Use this pattern for any future cluster-wide concern; do not co-locate cluster-wide state inside `LLMModelReconciler`. The split keeps per-model reconciles fast and cluster-singleton reconciles rare and idempotent. One deliberate exception: the pooled `apiKeyAuth.credentialRefs` on each external SecurityPolicy are fleet-wide input to a per-model resource - see the external endpoint section for why that pooling cannot be hoisted to a gateway-level policy.
 
 ### Shared TLS and Gateway listeners
 
@@ -201,6 +201,22 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
   the key-manager mints or revokes a key, so a newly minted key activates within
   about a minute. The forwarded `x-llm-client-id` header also reaches the
   backend, where it serves request attribution and GIE flow control.
+- Authentication is pooled by design, and it lives on each per-route policy
+  rather than on a single gateway-level one. Envoy Gateway's `api_key_auth`
+  filter runs before the AI Gateway ext_proc resolves the model, so
+  authentication is evaluated before the request reaches the model's own
+  route; each external SecurityPolicy therefore pools every model's api-keys
+  Secret into its `credentialRefs`, and any valid key authenticates on the
+  shared listener. Hoisting that shared credential pool to one gateway-level
+  SecurityPolicy does not work: each route needs its own SecurityPolicy for
+  the per-model authorization allow-list anyway, and a route-level policy
+  takes precedence over a gateway-level one rather than merging with it (per
+  Envoy Gateway policy-attachment semantics), which would leave routes
+  without the pooled credentials. The consequence is that every per-model
+  reconcile reads the full api-keys Secret set and any Secret change
+  re-reconciles all models - a deliberate exception to the
+  cluster-singleton rule, since the rendered SecurityPolicy is genuinely
+  per-model and only its inputs are fleet-wide.
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
 ### Internal endpoint
@@ -294,7 +310,7 @@ Semantics worth knowing:
 - **Catch-all conflicts are not validated.** Two catch-all PassthroughModels on the same gateway race for unclaimed model ids the same way two identical HTTPRoutes would; the webhook validates per-CR only, consistent with the LLMModel webhook dropping cross-CR collision checks. Document one catch-all per cluster as the supported shape.
 - **Names are unique across both kinds.** Both an LLMModel and a PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so sharing a name would make the two controllers fight over one Secret. Both webhooks reject a CR whose name is already taken by the other kind in the same namespace. The key-manager cache also keeps kind-prefixed entries as defense in depth.
 - **Status.** Phase is `Ready`/`Error` with conditions `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs surface as `ApplyFailed` conditions with a one-minute requeue rather than failing reconciliation outright. This surface-and-requeue handling is the intended operator-wide convention for a degraded gateway-apply. The older LLMModel reconciler instead logs-and-continues for the same case; converging it onto this convention is tracked as a follow-up.
-- **Generated gateway resources are reconciled on-change-only.** Because the AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`, `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as unstructured objects, `SetupWithManager` registers only `For(&PassthroughModel{})` and does not `Owns(...)` them. If a generated resource is deleted out-of-band, it is not recreated until the next edit to the PassthroughModel CR.
+- **Generated gateway resources are reconciled on-change-only.** Because the AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`, `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as unstructured objects, `SetupWithManager` registers `For(&PassthroughModel{})` plus a watch on operator-managed api-keys Secrets, and does not `Owns(...)` them. If a generated resource is deleted out-of-band, it is not recreated until the next PassthroughModel edit or the next api-keys Secret change in the namespace (any key mint or revoke re-reconciles every model).
 
 ---
 
