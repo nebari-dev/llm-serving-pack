@@ -54,12 +54,17 @@ spec:
             id.token.claim: "true"
             access.token.claim: "true"
             userinfo.token.claim: "true"
-    # Public Keycloak client for the React SPA (PKCE, no secret). Client ID
-    # defaults to <namespace>-<nebariapp-name>-spa; the operator writes it to the
-    # <nebariapp-name>-oidc-spa-client ConfigMap.
+    # Public Keycloak client for the React SPA (PKCE, no secret). The client the
+    # operator provisions here must match the client the SPA presents
+    # (frontend.keycloak.clientId, rendered into config.json) and the one the
+    # key-manager pins `azp` to. To keep those from drifting, the client ID
+    # defaults to frontend.keycloak.clientId; spaClientId is only an explicit
+    # override on top of that. When both are empty no clientId is emitted and the
+    # operator generates the <namespace>-<nebariapp-name>-spa convention — which is
+    # also what config.json and the azp default fall back to, so they still agree.
     spaClient:
       enabled: true
-      {{- with .Values.keyManager.nebariApp.auth.spaClientId }}
+      {{- with (.Values.keyManager.nebariApp.auth.spaClientId | default .Values.frontend.keycloak.clientId) }}
       clientId: {{ . | quote }}
       {{- end }}
   {{- with .Values.keyManager.nebariApp.landingPage }}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -29,6 +30,7 @@ func newTestValidator(t *testing.T, pub *rsa.PublicKey) *JWTValidator {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: pub},
+		baseCtx:     context.Background(),
 	}
 	v.ready.Store(true)
 	return v
@@ -255,6 +257,52 @@ func TestAuthMiddlewareMisconfigured(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// fakeValidator is a TokenValidator stand-in: it records the context and token it
+// was handed and returns canned claims, so middleware behaviour can be tested
+// without a real JWKS or Keycloak.
+type fakeValidator struct {
+	claims map[string]interface{}
+	err    error
+	gotCtx context.Context
+	gotTok string
+}
+
+func (f *fakeValidator) ValidateToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	f.gotCtx = ctx
+	f.gotTok = token
+	return f.claims, f.err
+}
+
+// TestAuthMiddlewareWithFakeValidator proves AuthConfig.Validator is satisfied by
+// any TokenValidator: the middleware passes the request context and bearer token
+// through and maps the returned claims onto the request identity, with no
+// *JWTValidator or Keycloak involved.
+func TestAuthMiddlewareWithFakeValidator(t *testing.T) {
+	fake := &fakeValidator{claims: map[string]interface{}{
+		"preferred_username": "fakeuser",
+		"groups":             []interface{}{"llm"},
+	}}
+	handler := AuthMiddleware(AuthConfig{Validator: fake})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer abc.def.ghi")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Username"); got != "fakeuser" {
+		t.Errorf("username: got %q, want %q", got, "fakeuser")
+	}
+	if fake.gotTok != "abc.def.ghi" {
+		t.Errorf("validator received token %q, want the bearer value", fake.gotTok)
+	}
+	if fake.gotCtx == nil {
+		t.Error("validator received a nil context; middleware should pass the request context through")
 	}
 }
 

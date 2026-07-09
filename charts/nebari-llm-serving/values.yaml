@@ -138,9 +138,13 @@ keyManager:
         - profile
         - email
         - groups
-      # spaClientId - override the SPA client ID. Leave empty to use the operator
-      # convention <namespace>-<nebariapp-name>-spa. Must match frontend config.json
-      # (frontend.keycloak.clientId), which defaults to the same convention.
+      # spaClientId - explicit override for the provisioned SPA client ID. Leave
+      # empty (the default) to derive it from frontend.keycloak.clientId so the
+      # provisioned client, the client the SPA presents, and the key-manager's azp
+      # pin can't be set apart; if that is also empty, the operator convention
+      # <namespace>-<nebariapp-name>-spa is used, which config.json and the azp
+      # default also fall back to. Only set this to decouple the provisioned client
+      # from frontend.keycloak.clientId (unusual).
       spaClientId: ""
     # landingPage controls how the UI appears on the Nebari landing page.
     landingPage:

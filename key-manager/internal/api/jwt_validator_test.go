@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -72,6 +73,7 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
+		baseCtx:     context.Background(),
 	}
 	v.ready.Store(true)
 
@@ -84,7 +86,7 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 	for range burst {
 		wg.Go(func() {
 			// All of these must fail (kid never resolves); we only care about fetches.
-			_, _ = v.ValidateToken(forged)
+			_, _ = v.ValidateToken(context.Background(), forged)
 		})
 	}
 	wg.Wait()
@@ -94,7 +96,7 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 	}
 
 	// A further attempt inside the cooldown window must not fetch again.
-	_, _ = v.ValidateToken(forged)
+	_, _ = v.ValidateToken(context.Background(), forged)
 	if got := fetchCount.Load(); got != 1 {
 		t.Fatalf("expected cooldown to suppress refresh, got %d fetches", got)
 	}
@@ -102,7 +104,7 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 	// Once the cooldown has elapsed (simulated by clearing the timestamp), a new
 	// unknown-kid attempt is allowed to refresh again.
 	v.lastKIDRefresh.Store(0)
-	_, _ = v.ValidateToken(forged)
+	_, _ = v.ValidateToken(context.Background(), forged)
 	if got := fetchCount.Load(); got != 2 {
 		t.Fatalf("expected a refresh after cooldown elapsed, got %d fetches", got)
 	}
@@ -134,6 +136,7 @@ func TestRotatedKIDResolvesForConcurrentBurst(t *testing.T) {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: &oldPriv.PublicKey},
+		baseCtx:     context.Background(),
 	}
 	v.ready.Store(true)
 
@@ -145,7 +148,7 @@ func TestRotatedKIDResolvesForConcurrentBurst(t *testing.T) {
 	var okCount atomic.Int64
 	for range burst {
 		wg.Go(func() {
-			if _, err := v.ValidateToken(token); err == nil {
+			if _, err := v.ValidateToken(context.Background(), token); err == nil {
 				okCount.Add(1)
 			}
 		})
@@ -188,7 +191,7 @@ func TestAzpValidation(t *testing.T) {
 			if tc.azp != nil {
 				claims["azp"] = tc.azp
 			}
-			_, err := v.ValidateToken(signToken(t, priv, claims))
+			_, err := v.ValidateToken(context.Background(), signToken(t, priv, claims))
 
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected error, got nil")
@@ -218,13 +221,95 @@ func TestKnownKIDNeverRefetches(t *testing.T) {
 		issuerURL:   testIssuer,
 		realm:       testRealm,
 		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
+		baseCtx:     context.Background(),
 	}
 	v.ready.Store(true)
 
-	if _, err := v.ValidateToken(signToken(t, priv, jwt.MapClaims{"preferred_username": "alice"})); err != nil {
+	if _, err := v.ValidateToken(context.Background(), signToken(t, priv, jwt.MapClaims{"preferred_username": "alice"})); err != nil {
 		t.Fatalf("validating a token with a cached kid: %v", err)
 	}
 	if got := fetchCount.Load(); got != 0 {
 		t.Fatalf("expected no JWKS fetch for a cached kid, got %d", got)
+	}
+}
+
+// TestInitialFetchRetriesThenSucceeds covers the active retry loop: the first two
+// attempts fail and the third succeeds within the retry budget, so the validator
+// comes ready without falling through to the slow poll. retryDelay is a counter
+// so the test does not sleep.
+func TestInitialFetchRetriesThenSucceeds(t *testing.T) {
+	priv := genKey(t)
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) < 3 {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJWKS(t, w, testKID, &priv.PublicKey)
+	}))
+	defer srv.Close()
+
+	var delays int
+	v := &JWTValidator{
+		logger:              slog.Default(),
+		keycloakURL:         srv.URL,
+		issuerURL:           testIssuer,
+		realm:               testRealm,
+		publicKeys:          map[string]*rsa.PublicKey{},
+		retryMaxAttempts:    5,
+		retryInitialBackoff: time.Millisecond,
+		slowPollInterval:    time.Millisecond,
+		retryDelay:          func(time.Duration) { delays++ },
+		baseCtx:             context.Background(),
+	}
+
+	if ok := v.initialFetch(); !ok {
+		t.Fatal("expected initialFetch to succeed once the server recovers")
+	}
+	if !v.Ready() {
+		t.Error("validator should be ready after a successful fetch")
+	}
+	if got := attempts.Load(); got != 3 {
+		t.Errorf("expected 3 fetch attempts (2 failures + 1 success), got %d", got)
+	}
+	if delays != 2 {
+		t.Errorf("expected 2 backoff delays between the 3 attempts, got %d", delays)
+	}
+}
+
+// TestInitialFetchFallsBackToSlowPoll covers the state transition after the
+// active retry budget is exhausted: all active attempts fail, and a later slow
+// poll succeeds and marks the validator ready.
+func TestInitialFetchFallsBackToSlowPoll(t *testing.T) {
+	priv := genKey(t)
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) <= 2 { // both active attempts fail
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeJWKS(t, w, testKID, &priv.PublicKey)
+	}))
+	defer srv.Close()
+
+	v := &JWTValidator{
+		logger:              slog.Default(),
+		keycloakURL:         srv.URL,
+		issuerURL:           testIssuer,
+		realm:               testRealm,
+		publicKeys:          map[string]*rsa.PublicKey{},
+		retryMaxAttempts:    2,
+		retryInitialBackoff: time.Millisecond,
+		slowPollInterval:    time.Millisecond,
+		retryDelay:          func(time.Duration) {},
+		baseCtx:             context.Background(),
+		stopCh:              make(chan struct{}),
+	}
+
+	if ok := v.initialFetch(); !ok {
+		t.Fatal("expected initialFetch to eventually succeed via the slow poll")
+	}
+	if !v.Ready() {
+		t.Error("validator should be ready after a slow-poll success")
 	}
 }

@@ -20,25 +20,25 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// retryMaxAttempts and retryInitialBackoff control the *active* JWKS fetch
-// retry loop run on the background init goroutine. After this budget is
-// exhausted the goroutine switches to slowPollInterval to keep trying
-// indefinitely without the exponential blow-up. They are package-level
-// variables so tests can override them without incurring real sleep time.
-var (
-	retryMaxAttempts    = 5
-	retryInitialBackoff = 2 * time.Second
-	// retryDelay is called between attempts; replaced in tests to avoid sleeping.
-	retryDelay = time.Sleep
-	// slowPollInterval is the cadence for the post-retry "keep trying" loop.
-	slowPollInterval = 30 * time.Second
-	// keyRefreshInterval is the steady-state cadence at which the background
+// Defaults for the JWKS fetch retry/poll cadence, applied by NewJWTValidator.
+// The live values are per-instance fields on JWTValidator (not package globals),
+// so tests can tune them without racing under t.Parallel().
+const (
+	// defaultRetryMaxAttempts and defaultRetryInitialBackoff control the *active*
+	// JWKS fetch retry loop on the background init goroutine. After this budget is
+	// exhausted the goroutine switches to the slow poll to keep trying indefinitely
+	// without the exponential blow-up.
+	defaultRetryMaxAttempts    = 5
+	defaultRetryInitialBackoff = 2 * time.Second
+	// defaultSlowPollInterval is the cadence for the post-retry "keep trying" loop.
+	defaultSlowPollInterval = 30 * time.Second
+	// defaultKeyRefreshInterval is the steady-state cadence at which the background
 	// goroutine proactively re-fetches the JWKS once the validator is ready, so a
 	// key rotation is picked up without waiting for a request to miss the cache.
 	// Kept deliberately off the request path (see refreshLoop): a synchronous
 	// hourly refresh would stall every concurrent request for up to the fetch
 	// timeout whenever Keycloak is unreachable at the moment the cache goes stale.
-	keyRefreshInterval = time.Hour
+	defaultKeyRefreshInterval = time.Hour
 )
 
 // ErrNotReady is returned by ValidateToken when the validator's initial JWKS
@@ -87,6 +87,14 @@ type jwks struct {
 	Keys []jwk `json:"keys"`
 }
 
+// TokenValidator verifies a bearer token and returns its claims. *JWTValidator
+// is the production implementation (Keycloak JWKS); the middleware depends on
+// this interface rather than the concrete type so tests can substitute a fake.
+// The context bounds any JWKS fetch the validation may trigger.
+type TokenValidator interface {
+	ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error)
+}
+
 // JWTValidator validates bearer tokens minted by Keycloak against the realm's
 // JWKS. Under Model B (SPA-managed Keycloak) there is no gateway JWT
 // enforcement, so the key-manager verifies the token itself: RSA signature,
@@ -124,7 +132,22 @@ type JWTValidator struct {
 	// ready flips to true once the first JWKS fetch succeeds. It is atomic
 	// because the writer runs on the background init goroutine while readers
 	// run on every request-handling goroutine.
-	ready    atomic.Bool
+	ready atomic.Bool
+	// Retry/poll cadence, defaulted in NewJWTValidator from the default* consts.
+	// Instance fields rather than package globals so parallel tests can tune them
+	// without racing. retryDelay is the sleep between active retries (swapped for a
+	// no-op in tests).
+	retryMaxAttempts    int
+	retryInitialBackoff time.Duration
+	slowPollInterval    time.Duration
+	keyRefreshInterval  time.Duration
+	retryDelay          func(time.Duration)
+	// baseCtx bounds outbound JWKS fetches to the validator's lifetime; cancel is
+	// invoked by Stop() so a shutdown aborts any in-flight fetch. Fetches use this
+	// context, never a request's, so a single cancelled request cannot abort a
+	// fetch that other in-flight requests are sharing via singleflight.
+	baseCtx  context.Context
+	cancel   context.CancelFunc
 	stopCh   chan struct{}
 	doneCh   chan struct{}
 	stopOnce sync.Once
@@ -140,14 +163,22 @@ func NewJWTValidator(keycloakURL, realm string, logger *slog.Logger) *JWTValidat
 		logger = slog.Default()
 	}
 	cleanURL := strings.TrimSuffix(keycloakURL, "/")
+	baseCtx, cancel := context.WithCancel(context.Background())
 	v := &JWTValidator{
-		logger:      logger,
-		keycloakURL: cleanURL,
-		issuerURL:   cleanURL, // default; override with SetIssuerURL if needed
-		realm:       realm,
-		publicKeys:  make(map[string]*rsa.PublicKey),
-		stopCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
+		logger:              logger,
+		keycloakURL:         cleanURL,
+		issuerURL:           cleanURL, // default; override with SetIssuerURL if needed
+		realm:               realm,
+		publicKeys:          make(map[string]*rsa.PublicKey),
+		retryMaxAttempts:    defaultRetryMaxAttempts,
+		retryInitialBackoff: defaultRetryInitialBackoff,
+		slowPollInterval:    defaultSlowPollInterval,
+		keyRefreshInterval:  defaultKeyRefreshInterval,
+		retryDelay:          time.Sleep,
+		baseCtx:             baseCtx,
+		cancel:              cancel,
+		stopCh:              make(chan struct{}),
+		doneCh:              make(chan struct{}),
 	}
 
 	go v.initLoop()
@@ -189,22 +220,22 @@ func (v *JWTValidator) initLoop() {
 // fetch succeeds (marking the validator ready), or false if Stop() is called
 // before that happens.
 func (v *JWTValidator) initialFetch() bool {
-	backoff := retryInitialBackoff
-	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
+	backoff := v.retryInitialBackoff
+	for attempt := 1; attempt <= v.retryMaxAttempts; attempt++ {
 		if v.stopped() {
 			return false
 		}
-		if err := v.fetchPublicKeys(); err == nil {
+		if err := v.fetchPublicKeys(v.baseCtx); err == nil {
 			v.ready.Store(true)
 			v.logger.Info("JWT validator ready", "attempt", attempt)
 			return true
 		} else {
 			v.logger.Warn("failed to fetch Keycloak public keys, retrying",
-				"attempt", attempt, "maxRetries", retryMaxAttempts, "backoff", backoff, "error", err,
+				"attempt", attempt, "maxRetries", v.retryMaxAttempts, "backoff", backoff, "error", err,
 				"hint", "verify LLM_KEYCLOAK_URL is correct — Keycloak 17+ does not use /auth as a context root")
 		}
-		if attempt < retryMaxAttempts {
-			retryDelay(backoff)
+		if attempt < v.retryMaxAttempts {
+			v.retryDelay(backoff)
 			backoff *= 2
 		}
 	}
@@ -212,14 +243,14 @@ func (v *JWTValidator) initialFetch() bool {
 	// Active budget exhausted: switch to a steady slow poll so the validator
 	// still comes online if Keycloak eventually recovers, without a tight retry
 	// storm in the logs.
-	v.logger.Warn("active retry budget exhausted; switching to slow poll", "interval", slowPollInterval)
+	v.logger.Warn("active retry budget exhausted; switching to slow poll", "interval", v.slowPollInterval)
 	for {
 		select {
 		case <-v.stopCh:
 			return false
-		case <-time.After(slowPollInterval):
+		case <-time.After(v.slowPollInterval):
 		}
-		if err := v.fetchPublicKeys(); err == nil {
+		if err := v.fetchPublicKeys(v.baseCtx); err == nil {
 			v.ready.Store(true)
 			v.logger.Info("JWT validator ready (slow poll)")
 			return true
@@ -236,14 +267,14 @@ func (v *JWTValidator) initialFetch() bool {
 // (fail-open on stale keys). The unknown-kid path in ValidateToken remains the
 // fast trigger for a rotation that lands between ticks.
 func (v *JWTValidator) refreshLoop() {
-	ticker := time.NewTicker(keyRefreshInterval)
+	ticker := time.NewTicker(v.keyRefreshInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-v.stopCh:
 			return
 		case <-ticker.C:
-			if err := v.refreshKeys(); err != nil {
+			if err := v.refreshKeys(v.baseCtx); err != nil {
 				v.logger.Error("background JWKS refresh failed; keeping cached keys", "error", err)
 			}
 		}
@@ -267,15 +298,21 @@ func (v *JWTValidator) Ready() bool {
 // Stop signals the background init goroutine to exit and waits for it. Safe to
 // call multiple times, including concurrently.
 func (v *JWTValidator) Stop() {
-	v.stopOnce.Do(func() { close(v.stopCh) })
+	v.stopOnce.Do(func() {
+		close(v.stopCh)
+		v.cancel()
+	})
 	<-v.doneCh
 }
 
 // ValidateToken verifies a bearer token's RSA signature, expiry (with
 // clockLeeway) and issuer, returning the verified claims. It returns
 // ErrNotReady if the initial JWKS fetch has not yet completed; the caller
-// should surface that as 503 Service Unavailable.
-func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}, error) {
+// should surface that as 503 Service Unavailable. ctx cancels the caller's wait
+// on any JWKS fetch triggered by an unknown `kid` (the fetch itself runs on the
+// validator's lifetime context so one cancelled request can't abort a fetch
+// shared with others).
+func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error) {
 	if !v.ready.Load() {
 		return nil, ErrNotReady
 	}
@@ -308,7 +345,7 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 		// populated by a fetch that just completed. Only a genuinely absent kid
 		// (forged, or a bad token) falls through to the error below. See
 		// unknownKIDCooldown / refreshForUnknownKID for why the refresh is guarded.
-		_ = v.refreshForUnknownKID()
+		_ = v.refreshForUnknownKID(ctx)
 		v.keysMu.RLock()
 		publicKey, exists = v.publicKeys[kid]
 		v.keysMu.RUnlock()
@@ -347,12 +384,20 @@ func (v *JWTValidator) ValidateToken(tokenString string) (map[string]interface{}
 
 // refreshKeys performs a JWKS refresh, collapsing concurrent callers into a
 // single in-flight outbound request via singleflight so a burst of requests
-// arriving at the same time produces exactly one call to Keycloak.
-func (v *JWTValidator) refreshKeys() error {
-	_, err, _ := v.refreshGroup.Do("certs", func() (interface{}, error) {
-		return nil, v.fetchPublicKeys()
+// arriving at the same time produces exactly one call to Keycloak. The fetch
+// runs on the validator's lifetime context; ctx only bounds how long this caller
+// waits for the shared result, so a cancelled request abandons its wait without
+// aborting a fetch other in-flight requests are sharing.
+func (v *JWTValidator) refreshKeys(ctx context.Context) error {
+	ch := v.refreshGroup.DoChan("certs", func() (interface{}, error) {
+		return nil, v.fetchPublicKeys(v.baseCtx)
 	})
-	return err
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case res := <-ch:
+		return res.Err
+	}
 }
 
 // refreshForUnknownKID refreshes the JWKS in response to a token carrying an
@@ -370,8 +415,8 @@ func (v *JWTValidator) refreshKeys() error {
 // even though the key they need is being fetched right then. The rate bound is
 // unchanged: once a fetch has occurred, callbacks within the window return early
 // without an outbound call, so request volume still cannot drive fetch volume.
-func (v *JWTValidator) refreshForUnknownKID() error {
-	_, err, _ := v.refreshGroup.Do("certs", func() (interface{}, error) {
+func (v *JWTValidator) refreshForUnknownKID(ctx context.Context) error {
+	ch := v.refreshGroup.DoChan("certs", func() (interface{}, error) {
 		now := time.Now().UnixNano()
 		last := v.lastKIDRefresh.Load()
 		if last != 0 && now-last < int64(unknownKIDCooldown) {
@@ -380,15 +425,20 @@ func (v *JWTValidator) refreshForUnknownKID() error {
 		// Only one callback runs per in-flight singleflight window, so a plain
 		// store (no CAS) is enough to stamp the window before fetching.
 		v.lastKIDRefresh.Store(now)
-		return nil, v.fetchPublicKeys()
+		return nil, v.fetchPublicKeys(v.baseCtx)
 	})
-	return err
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case res := <-ch:
+		return res.Err
+	}
 }
 
-func (v *JWTValidator) fetchPublicKeys() error {
+func (v *JWTValidator) fetchPublicKeys(ctx context.Context) error {
 	certsURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", v.keycloakURL, v.realm)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certsURL, nil)

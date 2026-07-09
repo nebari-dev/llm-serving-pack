@@ -32,8 +32,9 @@ type AuthConfig struct {
 	// GroupsClaim is the JWT claim containing groups (default: "groups").
 	GroupsClaim string
 	// Validator verifies bearer tokens against Keycloak's JWKS (signature,
-	// expiry, issuer). Required unless DevMode is true.
-	Validator *JWTValidator
+	// expiry, issuer). Required unless DevMode is true. Typed as an interface so
+	// tests can substitute a fake; production uses *JWTValidator.
+	Validator TokenValidator
 	// DevMode disables token handling and injects DevIdentity into every
 	// request. It exists so the UI can run on a local cluster that has no
 	// Keycloak in front of it. It is off by default and must never be enabled
@@ -75,7 +76,7 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			claims, err := cfg.Validator.ValidateToken(token)
+			claims, err := cfg.Validator.ValidateToken(r.Context(), token)
 			if err != nil {
 				// JWKS not fetched yet: transient, tell the client to retry.
 				if errors.Is(err, ErrNotReady) {
