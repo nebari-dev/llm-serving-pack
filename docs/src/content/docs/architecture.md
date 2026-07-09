@@ -169,7 +169,7 @@ Escape hatch: set `platform.gateway.manageSharedListeners: false`. The operator 
 
 Every model on the cluster shares a single hostname pair: `llm.<baseDomain>` for the external endpoint and `llm-internal.<baseDomain>` for the internal endpoint. One TLS certificate covering both names serves every model.
 
-Per-model routing happens via the `x-ai-eg-model` request header. The Envoy AI Gateway controller automatically extracts the `model` field from the JSON request body and surfaces it as that header. Each `LLMModel` produces an `AIGatewayRoute` whose single rule matches both the shared `Host` header and `x-ai-eg-model: <spec.model.name>` exactly. Clients set `model` in the request body, the same way they would against api.openai.com - no per-model URL is required.
+Per-model routing happens via the `x-ai-eg-model` request header. The Envoy AI Gateway controller automatically extracts the `model` field from the JSON request body and surfaces it as that header. Each `LLMModel` produces an `AIGatewayRoute` whose single rule matches `x-ai-eg-model: <spec.model.name>` exactly; `sectionName` on the parentRef scopes the route to its listener, whose own hostname pins the FQDN. (The rule previously also matched the shared `Host` header, but the AI Gateway v0.5 controller does not register a model whose match rule carries any header beyond `x-ai-eg-model`, so the Host matcher was removed; see [#116](https://github.com/nebari-dev/llm-serving-pack/issues/116).) Clients set `model` in the request body, the same way they would against api.openai.com - no per-model URL is required.
 
 The `endpoints.external.subdomain` field on `LLMModel` is currently unused at the routing layer. It is retained on the CRD for a future DNS-01 / wildcard cert path. See [Configuration](/configuration/) for field details.
 
@@ -262,7 +262,7 @@ spec:
     schemaVersion: api/v1            # upstream path prefix (default v1)
     credentialSecretName: openrouter-api-key   # same-namespace Secret, key "apiKey"
   models:
-    catchAll: true                   # any model id not claimed elsewhere
+    catchAll: true                   # currently inert on AI Gateway v0.5; see below
     declared:                        # explicit routes, advertised by /v1/models
       - openai/gpt-5.2
       - anthropic/claude-opus-4.6
@@ -288,7 +288,8 @@ Generated resources (all in the CR's namespace, no serving stack):
 Semantics worth knowing:
 
 - **Two auth layers.** Users authenticate to the cluster gateway (their own API key externally, Keycloak JWT internally); the gateway injects the platform's provider credential upstream. Users never see the provider key.
-- **Served models win.** Per-LLMModel routes match Host AND `x-ai-eg-model` (two headers) while the catch-all matches Host only, so Gateway API precedence keeps any locally served model id local.
+- **Served models win (validated live on EG v1.6.7 / AI Gateway v0.5).** The mechanism changed with the Host-matcher removal ([#116](https://github.com/nebari-dev/llm-serving-pack/issues/116)): dispatch is decided by the AI Gateway ext_proc's model registry, not by Gateway API header-count precedence. A request whose `model` is a served or declared id is routed to that model's own rule via `x-ai-eg-model`, regardless of route age - verified with a `catchAll: true` PassthroughModel whose routes were older than the served model's.
+- **`catchAll: true` is currently inert on AI Gateway v0.5.** The ext_proc returns 404 ("model not configured in the Gateway") for any model id not registered by some route rule, before HTTPRoute matching runs, so the catch-all rule (a Host-only match) never receives traffic - undeclared ids cannot reach the provider through it. Declared models are unaffected. The field is retained for a future AI Gateway version where unregistered ids fall through to route matching.
 - **`modelsOwnedBy` is set on the external route only.** The gateway's `/v1/models` endpoint aggregates declared models across every route on the Gateway; declaring on both endpoints lists each model twice.
 - **Catch-all conflicts are not validated.** Two catch-all PassthroughModels on the same gateway race for unclaimed model ids the same way two identical HTTPRoutes would; the webhook validates per-CR only, consistent with the LLMModel webhook dropping cross-CR collision checks. Document one catch-all per cluster as the supported shape.
 - **Names are unique across both kinds.** Both an LLMModel and a PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so sharing a name would make the two controllers fight over one Secret. Both webhooks reject a CR whose name is already taken by the other kind in the same namespace. The key-manager cache also keeps kind-prefixed entries as defense in depth.
@@ -308,9 +309,9 @@ A small web application behind `NebariApp` that lets authenticated users generat
 3. Key manager watches all `LLMModel` CRs, filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`)
 4. User sees only models they can access
 5. User creates a key for a model; key manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the operator namespace, and writes metadata to the corresponding ConfigMap
-6. Envoy Gateway's `apiKeyAuth` picks up the new Secret entry immediately
+6. Envoy Gateway's pooled `apiKeyAuth` picks up the new Secret entry as soon as it syncs (authentication); separately, the operator - watching api-keys Secrets - re-renders the model's SecurityPolicy authorization allow-list to include the new client ID (authorization). A fresh key works once both land - typically seconds, within about a minute
 
-Revocation: remove the entry from the Secret and its corresponding metadata from the ConfigMap. Effect is immediate.
+Revocation: remove the entry from the Secret and its corresponding metadata from the ConfigMap. Authentication fails as soon as Envoy Gateway syncs the Secret (immediate in practice); the operator also drops the client ID from the authorization allow-list.
 
 ### Known limitation - group-change revocation not yet implemented
 
@@ -322,7 +323,7 @@ Automatic revocation on group change is **planned but not implemented in v0.1**.
 
 No database. State is split across two Kubernetes resources per model, both in the operator namespace:
 
-- **Secret** (`<model-name>-api-keys`): contains only the data Envoy Gateway needs. Each entry: key = client ID (e.g., `user-chuck-1`), value = the raw API key. This Secret is the source of truth for authentication. Individual Secrets are limited to 1 MiB, which supports roughly a few thousand keys per model (known scaling limit for v0.1).
+- **Secret** (`<model-name>-api-keys`): contains only the data Envoy Gateway needs. Each entry: key = client ID (e.g., `user-chuck-phi4-mini-adae6d48-1`: user, model, an FNV-1a hash binding the (user, model) pair, sequence number), value = the raw API key. Client IDs must be globally unique across every model's Secret - the operator pools all api-keys Secrets into each external SecurityPolicy's `credentialRefs`, and a duplicated client ID in that pooled set both breaks authentication and leaks authorization across models; the pair hash keeps hyphenated usernames and model names from composing to the same ID. This Secret is the source of truth for authentication. Individual Secrets are limited to 1 MiB, which supports roughly a few thousand keys per model (known scaling limit for v0.1).
 
 - **ConfigMap** (`<model-name>-api-key-metadata`): contains a JSON blob per client ID with management metadata (creator username, creation timestamp, description). Separated from the Secret so the key manager can read and display metadata without exposing actual key values. Also limited to 1 MiB.
 
@@ -334,8 +335,8 @@ Envoy Gateway's `apiKeyAuth` expects Secret data entries where each key is the c
 
 ```yaml
 data:
-  user-chuck-1: c2stYWJjMTIzZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4  # base64 of "sk-abc123def..."
-  user-alice-1: c2stZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNk
+  user-chuck-phi4-mini-adae6d48-1: c2stYWJjMTIzZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4  # base64 of "sk-abc123def..."
+  user-alice-phi4-mini-11079538-1: c2stZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNk
 ```
 
 ### Key manager RBAC

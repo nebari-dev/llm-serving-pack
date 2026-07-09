@@ -260,9 +260,15 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 }
 
 // buildPassthroughRoute renders the AIGatewayRoute for one endpoint of a
-// PassthroughModel. Rule order matters only for readability: Gateway API
-// precedence (more header matches wins) is what keeps served LLMModels,
-// whose routes match x-ai-eg-model, ahead of the catch-all rule.
+// PassthroughModel. Rule order within this route matters only for
+// readability. NOTE: since served-model rules lost their Host matcher
+// (AI Gateway v0.5 model registration; #116), header-count precedence no
+// longer orders a served rule (x-ai-eg-model) against the opt-in catch-all
+// rule (Host). Live-validated on EG v1.6.7 / AI Gateway v0.5: dispatch is
+// decided by the ext_proc's model registry, so served/declared ids always
+// reach their own rule regardless of route age, and unregistered ids 404 at
+// the ext_proc before route matching - which leaves the catch-all rule
+// currently inert (see the comment in the CatchAll block below).
 //
 // sectionName scoping is load-bearing for the same reason as in
 // buildAIGatewayRoute: the AI Gateway controller appends a catch-all
@@ -314,8 +320,11 @@ func buildPassthroughRoute(
 		// The catch-all rule (opt-in; catchAll defaults false) keeps the Host
 		// matcher. It carries no x-ai-eg-model header, so it is not a
 		// model-registration rule and is not affected by the AI Gateway v0.5
-		// issue fixed for the declared-model rules (#116). Left as-is because
-		// the catch-all path has no end-to-end test on EG v1.6.7 yet.
+		// issue fixed for the declared-model rules (#116). Live-tested on
+		// EG v1.6.7 / AI Gateway v0.5: the ext_proc 404s any model id not
+		// registered by some rule before route matching runs, so this rule
+		// currently receives no traffic. Kept for a future AI Gateway version
+		// where unregistered ids fall through to route matching.
 		rules = append(rules, map[string]interface{}{
 			"matches": []interface{}{
 				map[string]interface{}{
