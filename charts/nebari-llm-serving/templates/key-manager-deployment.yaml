@@ -79,7 +79,7 @@ spec:
               value: {{ .Values.keyManager.devMode.groups | join "," | quote }}
             {{- end }}
           # Probes hit the unauthenticated /healthz, which reports only that the
-          # process is serving HTTP — it does not gate on the JWKS validator being
+          # process is serving HTTP - it does not gate on the JWKS validator being
           # ready, so a slow/unreachable Keycloak at startup does not CrashLoop the
           # pod (per-request not-ready is surfaced to clients as 503 instead).
           livenessProbe:

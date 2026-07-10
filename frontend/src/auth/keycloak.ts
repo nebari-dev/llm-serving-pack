@@ -89,14 +89,20 @@ export class SessionExpiredError extends Error {
   }
 }
 
-/** Returns a valid access token, refreshing it first if it is close to expiry. */
-export async function getToken(): Promise<string> {
+/**
+ * Returns a valid access token, refreshing it first if it is close to expiry.
+ * Pass `forceRefresh` to refresh unconditionally (used by the 401 retry, where
+ * the current token was just rejected and re-sending it would only 401 again).
+ */
+export async function getToken(forceRefresh = false): Promise<string> {
   if (!_keycloak?.authenticated) {
     throw new SessionExpiredError();
   }
 
   try {
-    await _keycloak.updateToken(30);
+    // updateToken(-1) forces a refresh; updateToken(30) is a no-op unless the
+    // token has under 30s of validity left.
+    await _keycloak.updateToken(forceRefresh ? -1 : 30);
   } catch {
     _keycloak.login();
     throw new SessionExpiredError();

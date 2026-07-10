@@ -288,7 +288,7 @@ The key manager web UI is a [React](https://react.dev) + TypeScript app (Vite, T
 cd dev && make run-dev
 ```
 
-This idempotently brings up the kind cluster, deploys the operator and a **dev-mode** key manager (auth bypassed, a fixed `dev` identity injected — see `LLM_DEV_MODE`), applies a few OpenRouter passthrough models so the list is populated, port-forwards the key-manager API to `localhost:8080`, and starts the Vite dev server at **http://localhost:5173** with hot reload. Edit files under `frontend/src/` and the browser updates live — there is no build step and no login. Press `Ctrl-C` to stop (the cluster is left running for the next run).
+This idempotently brings up the kind cluster, deploys the operator and a **dev-mode** key manager (auth bypassed, a fixed `dev` identity injected - see `LLM_DEV_MODE`), applies a few OpenRouter passthrough models so the list is populated, port-forwards the key-manager API to `localhost:8080`, and starts the Vite dev server at **http://localhost:5173** with hot reload. Edit files under `frontend/src/` and the browser updates live - there is no build step and no login. Press `Ctrl-C` to stop (the cluster is left running for the next run).
 
 Requires [Node.js](https://nodejs.org) + npm and an [OpenRouter API key](https://openrouter.ai/keys). To exercise the real Keycloak login flow instead of the bypass, deploy Keycloak (`make deploy-keycloak && make pf-keycloak`) and run the UI without the dev flag (`cd frontend && npm run dev`).
 

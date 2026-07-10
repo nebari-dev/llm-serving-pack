@@ -131,7 +131,7 @@ keyManager:
     auth:
       # Model B (SPA-managed Keycloak). The operator provisions a public PKCE
       # SPA client and (because enforceAtGateway is false in the template) emits
-      # no gateway SecurityPolicy — keycloak-js logs in from the browser and the
+      # no gateway SecurityPolicy - keycloak-js logs in from the browser and the
       # key-manager validates the bearer token against Keycloak's JWKS.
       scopes:
         - openid
@@ -181,7 +181,7 @@ frontend:
     # versions move together. Override to pull a specific build.
     tag: ""
     pullPolicy: Always
-  # port nginx listens on. Must be > 1024 — the container runs as non-root
+  # port nginx listens on. Must be > 1024 - the container runs as non-root
   # (UID 101) with all capabilities dropped and cannot bind privileged ports.
   port: 8080
   service:

@@ -60,7 +60,7 @@ spec:
     # key-manager pins `azp` to. To keep those from drifting, the client ID
     # defaults to frontend.keycloak.clientId; spaClientId is only an explicit
     # override on top of that. When both are empty no clientId is emitted and the
-    # operator generates the <namespace>-<nebariapp-name>-spa convention — which is
+    # operator generates the <namespace>-<nebariapp-name>-spa convention - which is
     # also what config.json and the azp default fall back to, so they still agree.
     spaClient:
       enabled: true

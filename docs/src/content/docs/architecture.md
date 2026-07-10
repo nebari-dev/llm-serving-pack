@@ -368,7 +368,7 @@ spec:
       - pathPrefix: /
   auth:
     enabled: true
-    provider: keycloak               # or generic-oidc
+    provider: keycloak
     enforceAtGateway: false          # SPA drives login; no gateway cookie/oauth2-proxy
     scopes: [openid, profile, email, groups]
     keycloakConfig:

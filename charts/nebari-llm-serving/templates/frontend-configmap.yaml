@@ -66,7 +66,7 @@ data:
             # sets its own add_header, so these cover the SPA document (location
             # /); the config.json block below repeats the ones that matter for it.
             # The framing headers matter because the UI exposes one-click "revoke
-            # key" — deny embedding to block clickjacking.
+            # key" - deny embedding to block clickjacking.
             add_header X-Frame-Options "DENY" always;
             add_header Content-Security-Policy "frame-ancestors 'none'" always;
             add_header X-Content-Type-Options "nosniff" always;
@@ -77,7 +77,7 @@ data:
                        image/svg+xml;
             gzip_min_length 1024;
 
-            # Proxy /api/* to the key-manager ClusterIP — never exposed publicly.
+            # Proxy /api/* to the key-manager ClusterIP - never exposed publicly.
             location /api/ {
                 proxy_pass         http://{{ include "nebari-llm-serving.fullname" . }}-key-manager.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc.cluster.local:8080/api/;
                 proxy_set_header   Authorization   $http_authorization;

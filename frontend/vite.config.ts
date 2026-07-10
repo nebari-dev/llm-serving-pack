@@ -27,7 +27,6 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         "/api": { target: apiTarget, changeOrigin: true },
-        "/logout": { target: apiTarget, changeOrigin: true },
       },
     },
 

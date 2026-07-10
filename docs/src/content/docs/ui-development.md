@@ -25,7 +25,7 @@ You develop against `http://localhost:5173`.
 ## Prerequisites
 
 - Docker, [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation), kubectl, helm, and Go 1.25+.
-- [Node.js](https://nodejs.org) 20+ and npm (for the Vite dev server).
+- [Node.js](https://nodejs.org) 22+ and npm (for the Vite dev server).
 - An [OpenRouter API key](https://openrouter.ai/keys).
 
 ## Setup

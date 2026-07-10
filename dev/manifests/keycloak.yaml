@@ -9,7 +9,7 @@
 # Reach it from the host with:
 #   kubectl -n keycloak port-forward svc/keycloak 8180:8080
 # which matches frontend/public/config.json (url: http://localhost:8180,
-# realm: nebari, clientId: nebari-frontend-spa). Login as testuser / testuser.
+# realm: nebari, clientId: nebari-frontend-spa). Login as dev / password.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

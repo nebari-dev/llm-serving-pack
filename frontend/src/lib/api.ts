@@ -14,8 +14,8 @@ export class ApiError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   // Auth is SPA-managed Keycloak: attach the current access token as a bearer
   // on every call. getToken() refreshes it first if it is near expiry.
-  const exec = async () => {
-    const token = await getToken();
+  const exec = async (forceRefresh = false) => {
+    const token = await getToken(forceRefresh);
     const opts: RequestInit = {
       method,
       headers: {
@@ -33,7 +33,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   // 401, force a refresh and retry once.
   let resp = await exec();
   if (resp.status === 401) {
-    resp = await exec();
+    resp = await exec(true);
   }
 
   if (!resp.ok) {
