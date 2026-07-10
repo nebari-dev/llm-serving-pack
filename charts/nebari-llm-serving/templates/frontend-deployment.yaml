@@ -1,0 +1,102 @@
+{{- if and .Values.frontend.enabled .Values.keyManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-frontend
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "nebari-llm-serving.fullname" . }}-frontend
+  template:
+    metadata:
+      annotations:
+        # Roll the pod when the rendered nginx.conf / config.json changes: a
+        # ConfigMap update alone does not restart its consumers, so without this a
+        # config-only `helm upgrade` would leave the old config live in the pod.
+        checksum/config: {{ include (print $.Template.BasePath "/frontend-configmap.yaml") . | sha256sum }}
+      labels:
+        app: {{ include "nebari-llm-serving.fullname" . }}-frontend
+        {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101 # nginx default non-root uid
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # nginx serves the React SPA and proxies /api/* to the key-manager
+        # ClusterIP. This is the service the NebariApp targets; auth is handled
+        # client-side by keycloak-js (PKCE/S256) and validated by the key-manager.
+        - name: frontend
+          image: {{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.port }}
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          # nginx serves /healthz (a static 200) for both probes.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 200m
+              memory: 128Mi
+            requests:
+              cpu: 25m
+              memory: 32Mi
+          volumeMounts:
+            # nginx needs writable /tmp, /var/cache/nginx, and /var/run.
+            - name: nginx-tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            # Helm-rendered nginx.conf (adds the /api/ proxy to the key-manager).
+            - name: frontend-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            # Helm-rendered config.json, overriding the placeholder baked into
+            # the image at build time.
+            - name: frontend-config
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+              readOnly: true
+      volumes:
+        - name: nginx-tmp
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: frontend-config
+          configMap:
+            name: {{ include "nebari-llm-serving.fullname" . }}-frontend-config
+      terminationGracePeriodSeconds: 10
+{{- end }}

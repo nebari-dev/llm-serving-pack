@@ -38,7 +38,6 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `auth.oidc.existingSecret` | `""` | Name of the Secret containing the `issuer-url` key. Defaults to `<release-fullname>-oidc-client` when empty. |
 | `auth.oidc.groupsClaim` | `groups` | JWT claim name used to extract group memberships. |
 | `auth.oidc.audience` | `""` | Expected audience value in JWT tokens. |
-| `auth.oidc.cookiePrefix` | `IdToken` | Cookie name prefix used by the OAuth2 proxy sidecar. |
 
 ### Envoy AI Gateway
 
@@ -61,7 +60,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `keyManager.nebariApp.gateway` | `public` | Which Nebari shared gateway to attach the HTTPRoute to. Valid values: `public` or `internal`. |
 | `keyManager.nebariApp.routing.routes[0].pathPrefix` | `/` | Path prefix for the key-manager UI route. |
 | `keyManager.nebariApp.routing.routes[0].pathType` | `PathPrefix` | Path match type. |
-| `keyManager.nebariApp.auth.provisionClient` | `true` | Create a dedicated Keycloak OIDC client for the UI. |
+| `keyManager.nebariApp.auth.spaClientId` | `""` | Optional override for the public PKCE Keycloak client id the operator provisions for the SPA. Empty derives a default. The chart always renders the Model B auth template (`enforceAtGateway: false` + `spaClient.enabled: true`); there is no gateway cookie login to configure. |
 | `keyManager.nebariApp.auth.scopes` | `[openid, profile, email, groups]` | OIDC scopes requested during login. |
 | `keyManager.nebariApp.landingPage.enabled` | `true` | Show the key-manager on the Nebari landing page. |
 | `keyManager.nebariApp.landingPage.displayName` | `"LLM API Keys"` | Display name on the landing page tile. |
@@ -70,9 +69,29 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `keyManager.nebariApp.landingPage.icon` | `"keycloak"` | Tile icon. One of the built-in keys (`jupyter`, `grafana`, `prometheus`, `keycloak`, `argocd`, `kubernetes`) or a URL to a custom image. |
 | `keyManager.nebariApp.landingPage.priority` | `100` | Sort order on the landing page (lower = higher priority). |
 | `keyManager.nebariApp.landingPage.healthCheck.enabled` | `true` | Enable active health probing for the landing page tile. |
-| `keyManager.nebariApp.landingPage.healthCheck.path` | `/` | Probe path. The key-manager serves its SPA at `/` (HTTP 200, unauthenticated). |
+| `keyManager.nebariApp.landingPage.healthCheck.path` | `/` | Probe path. The frontend nginx serves the SPA at `/` (HTTP 200, unauthenticated). |
 | `keyManager.nebariApp.landingPage.healthCheck.intervalSeconds` | `30` | Probe interval in seconds. |
 | `keyManager.nebariApp.landingPage.healthCheck.timeoutSeconds` | `5` | Probe timeout in seconds. |
+| `keyManager.keycloak.url` | `frontend.keycloak.url` | Base URL the key-manager fetches the Keycloak JWKS from (env `LLM_KEYCLOAK_URL`). Defaults to `frontend.keycloak.url`. |
+| `keyManager.keycloak.realm` | `frontend.keycloak.realm` | Keycloak realm used for JWKS lookup and token validation (env `LLM_KEYCLOAK_REALM`). Defaults to `frontend.keycloak.realm`. |
+| `keyManager.keycloak.issuerURL` | `frontend.keycloak.url` | Expected `iss` value on incoming JWTs (env `LLM_KEYCLOAK_ISSUER_URL`). Defaults to the SPA's external Keycloak URL. |
+
+### Frontend
+
+The React SPA served by nginx. It serves the SPA and a runtime `/config.json`, and reverse-proxies `/api/*` to the key-manager Service. This is the Service the `NebariApp` targets.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `frontend.enabled` | `true` | Deploy the frontend (nginx) Deployment, Service, and config ConfigMap. |
+| `frontend.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | Frontend container image repository. |
+| `frontend.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty. |
+| `frontend.image.pullPolicy` | `Always` | Image pull policy. |
+| `frontend.port` | `8080` | Container port nginx listens on. |
+| `frontend.service.port` | `8080` | Service port for the frontend. |
+| `frontend.title` | (chart default) | Title rendered into `/config.json` and shown in the SPA. |
+| `frontend.keycloak.url` | `""` | **Required when `frontend.enabled=true`.** External Keycloak base URL the SPA uses for PKCE login (rendered into `/config.json`). |
+| `frontend.keycloak.realm` | (chart default) | Keycloak realm the SPA authenticates against. |
+| `frontend.keycloak.clientId` | (chart default) | Public PKCE client id the SPA uses. |
 
 ### Operator
 
@@ -204,13 +223,15 @@ The fields below map directly to the chart values in the [Key Manager](#key-mana
 |-----------------|-------------|-------------|
 | `spec.hostname` | `keyManager.nebariApp.hostname` | Fully qualified hostname. Required. |
 | `spec.gateway` | `keyManager.nebariApp.gateway` | `public` or `internal`. |
-| `spec.service.name` | (chart-derived) | Service name for the key-manager backend. |
+| `spec.service.name` | (chart-derived) | Service name for the **frontend** (nginx) backend the NebariApp routes to. |
 | `spec.service.port` | `8080` | Fixed service port. |
 | `spec.routing` | `keyManager.nebariApp.routing` | Passed through verbatim. Without this block the operator sets `RoutingReady=False` and skips HTTPRoute and Certificate provisioning. |
 | `spec.auth.enabled` | `true` (fixed) | Authentication always enabled for the key-manager. |
 | `spec.auth.provider` | `keycloak` (fixed) | Auth provider. |
-| `spec.auth.provisionClient` | `keyManager.nebariApp.auth.provisionClient` | When `true`, creates a dedicated Keycloak client and writes credentials to `<nebariapp-name>-oidc-client` Secret. |
-| `spec.auth.scopes` | `keyManager.nebariApp.auth.scopes` | OIDC scopes requested. |
+| `spec.auth.enforceAtGateway` | `false` (fixed) | Model B: the gateway does not enforce auth. The SPA drives Keycloak PKCE login and the key-manager validates the bearer against JWKS. No oauth2-proxy sidecar or cookie login. |
+| `spec.auth.spaClient.enabled` | `true` (fixed) | The operator provisions a **public** PKCE Keycloak client (no secret) for the SPA. |
+| `spec.auth.keycloakConfig.protocolMappers` | (fixed) | A group-membership mapper that emits the `groups` claim. |
+| `spec.auth.scopes` | `keyManager.nebariApp.auth.scopes` | OIDC scopes requested (`openid, profile, email, groups`). |
 | `spec.landingPage.enabled` | `keyManager.nebariApp.landingPage.enabled` | Show tile on Nebari landing page. |
 | `spec.landingPage.displayName` | `keyManager.nebariApp.landingPage.displayName` | Tile display name. Required when `enabled: true`. |
 | `spec.landingPage.description` | `keyManager.nebariApp.landingPage.description` | Tile description. |

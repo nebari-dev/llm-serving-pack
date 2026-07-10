@@ -8,7 +8,7 @@ You apply an `LLMModel` custom resource and the operator handles the rest: model
 
 Each model gets per-model access control via OIDC groups (works with any OIDC provider, tested against Keycloak). Two auth endpoints are created per model: external access via API keys, and internal (in-cluster) access via JWT. Both paths go through Envoy AI Gateway for token counting and rate limiting.
 
-An optional key manager web UI lets users generate and revoke API keys for models they have access to.
+An optional key manager lets users generate and revoke API keys for models they have access to: a React single-page app (served by its own nginx image) backed by an API-only Go service, with SPA-managed Keycloak login.
 
 Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar images. Model downloads use a purpose-built [distroless container image](model-downloader/) with pixi-managed dependencies for reproducibility.
 
@@ -205,7 +205,9 @@ response = client.chat.completions.create(
 | `defaults.epp.image` | Endpoint Picker (llm-d-inference-scheduler) image | `ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0` |
 | `defaults.storage.storageClassName` | Default StorageClass for model PVCs (empty = cluster default) | `""` |
 | `defaults.monitoring.enabled` | Enable PodMonitor for Prometheus scraping | `true` |
-| `keyManager.enabled` | Deploy the key manager web UI | `true` |
+| `keyManager.enabled` | Deploy the key manager API service | `true` |
+| `frontend.enabled` | Deploy the React UI (nginx) frontend | `true` |
+| `frontend.keycloak.url` | External Keycloak URL for SPA login (required when `frontend.enabled=true`) | `""` |
 
 ## Architecture
 
@@ -223,7 +225,9 @@ Admin applies LLMModel CR
         |
   Key Manager (optional)
         |
-        +---> Web UI behind NebariApp (Keycloak/OIDC login)
+        +---> React SPA (nginx image) behind NebariApp; SPA-managed Keycloak PKCE login
+        +---> nginx serves the SPA + /config.json and proxies /api to the key-manager
+        +---> key-manager is API-only; validates the Keycloak bearer against JWKS in-process
         +---> Generates API keys, writes to K8s Secrets
         +---> Envoy Gateway validates keys natively
 ```
@@ -233,7 +237,8 @@ Admin applies LLMModel CR
 | Image | Description |
 |-------|-------------|
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | LLM operator - reconciles LLMModel CRDs |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager web UI and API |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager REST API |
+| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | LLM serving pack React UI (nginx) |
 | `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | Model download init container (distroless, pixi-managed) |
 
 ### Infrastructure requirements
@@ -263,8 +268,8 @@ make deploy
 # Apply a test model
 make apply-test-model
 
-# Watch reconciliation
-kubectl -n llm-serving get llmmodels -w
+# Watch reconciliation (models live in the operator's namespace)
+kubectl -n llm-operator-system get llmmodels -w
 
 # Tail logs
 make logs-operator
@@ -274,11 +279,25 @@ make logs-key-manager
 make teardown
 ```
 
+### Key manager UI
+
+The key manager web UI is a [React](https://react.dev) + TypeScript app (Vite, Tailwind, shadcn/ui) in [`frontend/`](frontend/). In production it ships as its own nginx image (`ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend`) that serves the SPA and proxies `/api` to the API-only key-manager; it is not embedded in the Go binary. For a one-command dev loop that needs **no Keycloak**:
+
+```bash
+# One-time: copy dev/.env.example to dev/.env and set OPENROUTER_API_KEY
+cd dev && make run-dev
+```
+
+This idempotently brings up the kind cluster, deploys the operator and a **dev-mode** key manager (auth bypassed, a fixed `dev` identity injected - see `LLM_DEV_MODE`), applies a few OpenRouter passthrough models so the list is populated, port-forwards the key-manager API to `localhost:8080`, and starts the Vite dev server at **http://localhost:5173** with hot reload. Edit files under `frontend/src/` and the browser updates live - there is no build step and no login. Press `Ctrl-C` to stop (the cluster is left running for the next run).
+
+Requires [Node.js](https://nodejs.org) + npm and an [OpenRouter API key](https://openrouter.ai/keys). To exercise the real Keycloak login flow instead of the bypass, deploy Keycloak (`make deploy-keycloak && make pf-keycloak`) and run the UI without the dev flag (`cd frontend && npm run dev`).
+
 Run tests directly:
 
 ```bash
 cd operator && make test
 cd key-manager && go test ./...
+cd frontend && npm test
 ```
 
 ### Documentation site

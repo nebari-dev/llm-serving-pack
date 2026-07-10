@@ -45,11 +45,25 @@ func NewHandler(w ModelLister, s KeyManager, logger *slog.Logger) *Handler {
 
 // RegisterRoutes registers all API routes on the given mux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	// /healthz is intentionally outside /api/ so the auth middleware (which only
+	// wraps /api/ in main.go) does not gate it — kubelet probes carry no bearer.
+	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /api/me", h.getMe)
 	mux.HandleFunc("GET /api/models", h.getModels)
 	mux.HandleFunc("GET /api/keys", h.getKeys)
 	mux.HandleFunc("POST /api/keys", h.createKey)
 	mux.HandleFunc("DELETE /api/keys/{namespace}/{model}/{clientID}", h.deleteKey)
+}
+
+// healthz is an unauthenticated liveness/readiness probe. It reports only that
+// the process is up and serving HTTP; it deliberately does not gate on the JWKS
+// validator being ready. Per-request readiness is surfaced by the auth
+// middleware as 503, and gating the probe on it would CrashLoop the pod whenever
+// Keycloak is briefly unreachable at startup — the opposite of what we want.
+func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("ok\n"))
 }
 
 // writeJSON encodes v as JSON into w with the given status code.

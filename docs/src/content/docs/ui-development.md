@@ -7,19 +7,25 @@ the gateway, or Kubernetes to use it.
 
 ## What you get
 
-`make run-dev` brings up a local [kind](https://kind.sigs.k8s.io/) cluster with
-the operator, the key-manager (in dev mode, so no Keycloak login), and three
-OpenRouter passthrough models, then:
+The UI is a React 19 + TypeScript app (Vite, Tailwind, shadcn/ui) that lives in
+`frontend/` at the repo root. It is a standalone single-page app: in production
+it is built to a static bundle and served by its own nginx container image, and
+it talks to the key-manager only over `/api/*`.
 
-- port-forwards the key-manager to `http://localhost:8080` (its embedded UI + API), and
-- starts a hot-reload dev server at `http://localhost:5173` that serves the UI
-  from your working copy and reloads the browser when you edit it.
+`make run-dev` (or `cd dev && ./run-dev.sh`) brings up a local
+[kind](https://kind.sigs.k8s.io/) cluster with the operator, the key-manager (in
+dev mode, so no Keycloak login), and three OpenRouter passthrough models, then:
+
+- port-forwards the key-manager API to `http://localhost:8080`, and
+- starts the Vite dev server at `http://localhost:5173` with hot module reload,
+  proxying `/api/*` to the port-forwarded key-manager.
 
 You develop against `http://localhost:5173`.
 
 ## Prerequisites
 
 - Docker, [kind](https://kind.sigs.k8s.io/docs/user/quick-start/#installation), kubectl, helm, and Go 1.25+.
+- [Node.js](https://nodejs.org) 22+ and npm (for the Vite dev server).
 - An [OpenRouter API key](https://openrouter.ai/keys).
 
 ## Setup
@@ -28,58 +34,72 @@ You develop against `http://localhost:5173`.
 cd dev
 cp .env.example .env
 # edit .env and set OPENROUTER_API_KEY=sk-or-v1-...
-make run-dev
+./run-dev.sh          # or: make run-dev  (from dev/)  ·  make ui  (from repo root)
 ```
 
 First run creates the cluster and builds images, so it takes a few minutes.
 Later runs reuse the cluster and start in seconds. When it is ready you will see:
 
 ```
-key-manager (embedded UI + API): http://localhost:8080
-hot-reload UI dev server:        http://localhost:5173   <-- develop here
+key-manager API:   http://localhost:8080
+Vite dev server:   http://localhost:5173   <-- develop here
 ```
 
-Open `http://localhost:5173`. You are signed in automatically as user `dev`
-(group `llm`), and the model list shows `claude-sonnet-45`, `gemini-25-flash`,
-and `llama-33-70b`. Mint and revoke keys against them as a real user would.
+Open `http://localhost:5173`. The dev server runs with `VITE_DEV_NO_AUTH=true`,
+so the Keycloak PKCE login is bypassed and you are signed in automatically as
+user `dev` (group `llm`). The model list shows `claude-sonnet-45`,
+`gemini-25-flash`, and `llama-33-70b`. Mint and revoke keys against them as a
+real user would.
 
 Press Ctrl-C to stop; the port-forward is cleaned up for you. The cluster keeps
 running for the next `make run-dev`.
 
 ## Editing the UI
 
-The UI is plain static files (no build step):
-
-```
-key-manager/internal/ui/static/
-  index.html
-  app.js
-  style.css
-```
-
-Edit any of them and the browser at `:5173` reloads automatically. The dev
-server proxies `/api/*` to the port-forwarded key-manager, so the UI talks to a
-real backend (real models, real key minting) while you iterate on markup, styles,
-and JavaScript.
+The React source lives under `frontend/src/`. Edit any file there and the Vite
+dev server at `:5173` hot-reloads the browser. The dev server proxies `/api/*`
+to the port-forwarded key-manager, so the UI talks to a real backend (real
+models, real key minting) while you iterate on components, styles, and state.
 
 ### Auth in dev mode
 
-The key-manager normally sits behind Keycloak and the gateway's OIDC layer. On
-this cluster it runs with `LLM_DEV_MODE=true`, which bypasses auth and injects a
-fixed identity (`dev`, group `llm`). So `/api/me` returns that identity and every
-`/api/*` call works without a token. Never enable dev mode in a real deployment.
+In production the SPA owns login: `keycloak-js` performs a `login-required` PKCE
+redirect to Keycloak, obtains an access token, and the app sends
+`Authorization: Bearer <token>` on every `/api` call. The dev loop shortcuts
+this on both ends:
+
+- The Vite dev server sets `VITE_DEV_NO_AUTH=true`, which skips the keycloak-js
+  redirect so you never hit a login screen.
+- The in-cluster key-manager runs with `LLM_DEV_MODE=true`, which bypasses auth
+  and injects a fixed identity (`dev`, group `llm`). So `/api/me` returns that
+  identity and every `/api/*` call works without a token.
+
+Never enable dev mode in a real deployment.
+
+## Frontend quality gate
+
+Before opening a PR, run the same checks CI runs, from `frontend/`:
+
+```bash
+cd frontend
+npm run build   # tsc -b && vite build
+npm test        # vitest
+npm run check   # biome lint + format
+```
 
 ## Shipping a change
 
-The static files are compiled into the key-manager binary with `go:embed`, so
-committing your edits is all that is needed for them to ship in the next image
-build. To see your changes in the actual in-cluster pod (rather than the dev
-server), rebuild and reload:
+The UI ships as its own image
+(`ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend`, nginx serving the built
+bundle) - it is no longer embedded in the Go key-manager binary. Committing your
+edits to `frontend/` is all that is needed for them to ship: CI builds and
+publishes the frontend image on merge, and a chart upgrade rolls it out.
 
-```bash
-make build-images && make load-images
-kubectl -n llm-operator-system rollout restart deployment/llm-key-manager
-```
+During local development you iterate against the Vite dev server (`make ui` in
+`dev/`), which hot-reloads on save and proxies `/api` to the port-forwarded
+key-manager - there is no in-cluster frontend pod in the dev stack to rebuild or
+restart. (`make build-images` builds only the operator, key-manager, and
+mock-vllm images.)
 
 ## API reference (what the UI calls)
 
@@ -95,10 +115,10 @@ All under `/api`, all gated by auth (bypassed in dev mode):
 
 ## Troubleshooting
 
-- **`SSL_ERROR_RX_RECORD_TOO_LONG` / "Secure Connection Failed"** - the UI is
-  plain HTTP. Use `http://localhost:5173` (or `:8080`), not `https://`. If your
-  browser force-upgrades localhost to HTTPS, use a private window or disable
-  HTTPS-Only mode for the site.
+- **`SSL_ERROR_RX_RECORD_TOO_LONG` / "Secure Connection Failed"** - the dev
+  server is plain HTTP. Use `http://localhost:5173` (or `:8080`), not `https://`.
+  If your browser force-upgrades localhost to HTTPS, use a private window or
+  disable HTTPS-Only mode for the site.
 - **Model list is empty** - the key-manager resyncs models every 30s; give it a
   moment after `make run-dev`, or check `kubectl -n llm-operator-system get passthroughmodel`.
 - **`make run-dev` says `OPENROUTER_API_KEY is not set`** - create `dev/.env`

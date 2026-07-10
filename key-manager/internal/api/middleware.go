@@ -2,8 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -32,36 +31,33 @@ func UserFromContext(ctx context.Context) (*UserInfo, bool) {
 type AuthConfig struct {
 	// GroupsClaim is the JWT claim containing groups (default: "groups").
 	GroupsClaim string
-	// CookiePrefix is the prefix for the IdToken cookie (default: "IdToken").
-	// The middleware accepts any cookie whose name starts with this prefix.
-	CookiePrefix string
-	// DevMode disables token extraction and injects DevIdentity into every
+	// Validator verifies bearer tokens against Keycloak's JWKS (signature,
+	// expiry, issuer). Required unless DevMode is true. Typed as an interface so
+	// tests can substitute a fake; production uses *JWTValidator.
+	Validator TokenValidator
+	// DevMode disables token handling and injects DevIdentity into every
 	// request. It exists so the UI can run on a local cluster that has no
-	// Keycloak or gateway OIDC layer in front of it. It is off by default and
-	// must never be enabled in a real deployment.
+	// Keycloak in front of it. It is off by default and must never be enabled
+	// in a real deployment.
 	DevMode bool
 	// DevIdentity is the user injected into the request context when DevMode
 	// is on. Ignored when DevMode is false.
 	DevIdentity UserInfo
 }
 
-// AuthMiddleware returns HTTP middleware that extracts user identity from JWT.
-// It does NOT validate signatures - Envoy Gateway handles that upstream.
-// Token sources (in priority order):
-//  1. Authorization: Bearer <token> header
-//  2. Cookie with name matching CookiePrefix
+// AuthMiddleware returns HTTP middleware that authenticates requests using a
+// Keycloak bearer token (Model B: SPA-managed Keycloak). It extracts the token
+// from the Authorization header, verifies it against the realm's JWKS via
+// cfg.Validator, and injects the resulting identity into the request context.
 func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 	if cfg.GroupsClaim == "" {
 		cfg.GroupsClaim = "groups"
 	}
-	if cfg.CookiePrefix == "" {
-		cfg.CookiePrefix = "IdToken"
-	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Dev mode: skip token handling entirely and inject a fixed
-			// identity so the UI works without an OIDC provider in front.
+			// Dev mode: skip token handling entirely and inject a fixed identity
+			// so the UI works without an OIDC provider in front.
 			if cfg.DevMode {
 				devUser := cfg.DevIdentity
 				ctx := context.WithValue(r.Context(), userContextKey, &devUser)
@@ -69,78 +65,68 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			token, err := extractToken(r, cfg.CookiePrefix)
+			if cfg.Validator == nil {
+				http.Error(w, "auth not configured", http.StatusInternalServerError)
+				return
+			}
+
+			token, err := extractBearerToken(r)
 			if err != nil {
 				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 				return
 			}
 
-			user, err := parseJWT(token, cfg.GroupsClaim)
+			claims, err := cfg.Validator.ValidateToken(r.Context(), token)
 			if err != nil {
+				// JWKS not fetched yet: transient, tell the client to retry.
+				if errors.Is(err, ErrNotReady) {
+					w.Header().Set("Retry-After", "5")
+					http.Error(w, "auth not ready: "+err.Error(), http.StatusServiceUnavailable)
+					return
+				}
 				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 				return
 			}
 
+			user := userInfoFromClaims(claims, cfg.GroupsClaim)
 			ctx := context.WithValue(r.Context(), userContextKey, user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// extractToken retrieves the raw JWT string from the request.
-// Checks Authorization: Bearer header first, then cookies matching the prefix.
-func extractToken(r *http.Request, cookiePrefix string) (string, error) {
-	// Check Authorization header first.
+// extractBearerToken returns the raw JWT from the Authorization: Bearer header.
+func extractBearerToken(r *http.Request) (string, error) {
 	authHeader := r.Header.Get("Authorization")
-	if authHeader != "" {
-		if !strings.HasPrefix(authHeader, "Bearer ") {
-			return "", fmt.Errorf("authorization header must use Bearer scheme")
-		}
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token == "" {
-			return "", fmt.Errorf("bearer token is empty")
-		}
-		return token, nil
+	if authHeader == "" {
+		return "", fmt.Errorf("no Authorization header")
 	}
-
-	// Fall back to cookie matching the prefix.
-	for _, cookie := range r.Cookies() {
-		if strings.HasPrefix(cookie.Name, cookiePrefix) {
-			return cookie.Value, nil
-		}
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return "", fmt.Errorf("authorization header must use Bearer scheme")
 	}
-
-	return "", fmt.Errorf("no token found in Authorization header or cookie")
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == "" {
+		return "", fmt.Errorf("bearer token is empty")
+	}
+	return token, nil
 }
 
-// parseJWT decodes a JWT payload (without signature verification) and extracts user identity.
-func parseJWT(token, groupsClaim string) (*UserInfo, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("invalid JWT: expected 3 parts, got %d", len(parts))
-	}
-
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("invalid JWT payload encoding: %w", err)
-	}
-
-	var claims map[string]interface{}
-	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return nil, fmt.Errorf("invalid JWT payload JSON: %w", err)
-	}
-
+// userInfoFromClaims builds a UserInfo from a set of verified JWT claims.
+func userInfoFromClaims(claims map[string]interface{}, groupsClaim string) *UserInfo {
 	username, _ := claims["preferred_username"].(string)
+	if username == "" {
+		// Fall back to the subject when preferred_username is absent.
+		username, _ = claims["sub"].(string)
+	}
 	name, _ := claims["name"].(string)
 	email, _ := claims["email"].(string)
-	groups := extractGroups(claims, groupsClaim)
 
 	return &UserInfo{
 		Username: username,
 		Name:     name,
 		Email:    email,
-		Groups:   groups,
-	}, nil
+		Groups:   extractGroups(claims, groupsClaim),
+	}
 }
 
 // extractGroups reads the groups claim from JWT claims.
@@ -161,6 +147,8 @@ func extractGroups(claims map[string]interface{}, claimName string) []string {
 			}
 		}
 		return groups
+	case []string:
+		return v
 	case string:
 		return []string{v}
 	default:
