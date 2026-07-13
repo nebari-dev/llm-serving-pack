@@ -15,6 +15,10 @@ NS=llm-operator-system
 KM_PORT="${KM_PORT:-8080}"
 UI_PORT="${UI_PORT:-5173}"
 
+# Pin kubectl to the kind cluster's context so this script can never act on
+# whatever the current context happens to be (e.g. a remote/production cluster).
+KUBECTL="kubectl --context kind-${CLUSTER_NAME}"
+
 # --- load .env -------------------------------------------------------------
 if [[ -f .env ]]; then
   set -a; . ./.env; set +a
@@ -28,10 +32,28 @@ fi
 if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
   echo "==> kind cluster '$CLUSTER_NAME' not found; running full setup (a few minutes)..."
   make setup
+else
+  # The cluster is registered, but its node container(s) may be stopped (e.g.
+  # after a Docker Desktop restart or OOM). `kind get clusters` still lists it,
+  # so it slips past the check above and later kubectl / `kind load` calls fail
+  # against a dead container. Start any stopped nodes and wait for the API.
+  stopped="$(docker ps -aq \
+    --filter "label=io.x-k8s.kind.cluster=${CLUSTER_NAME}" \
+    --filter "status=exited" --filter "status=created" 2>/dev/null || true)"
+  if [[ -n "$stopped" ]]; then
+    echo "==> kind cluster '$CLUSTER_NAME' has stopped node(s); starting them..."
+    # shellcheck disable=SC2086
+    docker start $stopped >/dev/null
+    echo "==> waiting for the Kubernetes API to become ready..."
+    for _ in $(seq 1 30); do
+      if $KUBECTL get --raw='/readyz' >/dev/null 2>&1; then break; fi
+      sleep 2
+    done
+  fi
 fi
 
 # --- 2. operator + key-manager --------------------------------------------
-if ! kubectl -n "$NS" get deploy/llm-key-manager >/dev/null 2>&1; then
+if ! $KUBECTL -n "$NS" get deploy/llm-key-manager >/dev/null 2>&1; then
   echo "==> building images and deploying operator + key-manager..."
   make build-images
   make load-images
@@ -42,25 +64,25 @@ fi
 
 # --- 3. provider credential + models --------------------------------------
 echo "==> applying OpenRouter credential and dev models..."
-kubectl -n "$NS" create secret generic openrouter-api-key \
+$KUBECTL -n "$NS" create secret generic openrouter-api-key \
   --from-literal=apiKey="$OPENROUTER_API_KEY" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  --dry-run=client -o yaml | $KUBECTL apply -f - >/dev/null
 # The operator's validating webhook gates PassthroughModel creates and isn't
 # guaranteed to be serving the instant `make deploy`'s rollout returns (it waits
 # on the cert mount). Retry so a momentary "connection refused" doesn't trip
 # `set -e` and abort the whole run.
 for attempt in $(seq 1 30); do
-  kubectl apply -f manifests/dev-models.yaml >/dev/null 2>&1 && break
+  $KUBECTL apply -f manifests/dev-models.yaml >/dev/null 2>&1 && break
   if [[ $attempt -eq 30 ]]; then
     echo "ERROR: operator webhook never became ready" >&2
-    kubectl apply -f manifests/dev-models.yaml >&2 || true
+    $KUBECTL apply -f manifests/dev-models.yaml >&2 || true
     exit 1
   fi
   echo "==> operator webhook not ready yet, retrying ($attempt)..."
   sleep 2
 done
 for m in claude-sonnet-45 gemini-25-flash llama-33-70b; do
-  kubectl -n "$NS" wait passthroughmodel/$m --for=jsonpath='{.status.phase}'=Ready --timeout=90s
+  $KUBECTL -n "$NS" wait passthroughmodel/$m --for=jsonpath='{.status.phase}'=Ready --timeout=90s
 done
 
 # --- 4. port-forward + UI dev server --------------------------------------
@@ -76,7 +98,7 @@ trap cleanup EXIT INT TERM
 # crashed prior run and make the readiness check below pass instantly.
 PF_LOG="$(mktemp)"
 echo "==> port-forwarding key-manager to localhost:${KM_PORT}..."
-kubectl -n "$NS" port-forward svc/llm-key-manager "${KM_PORT}:8080" >"$PF_LOG" 2>&1 &
+$KUBECTL -n "$NS" port-forward svc/llm-key-manager "${KM_PORT}:8080" >"$PF_LOG" 2>&1 &
 PF_PID=$!
 for _ in $(seq 1 20); do
   if grep -q "Forwarding from" "$PF_LOG" 2>/dev/null; then break; fi
@@ -84,14 +106,21 @@ for _ in $(seq 1 20); do
 done
 
 echo
-echo "  key-manager (embedded UI + API): http://localhost:${KM_PORT}"
-echo "  hot-reload UI dev server:        http://localhost:${UI_PORT}   <-- develop here"
-echo "  edit key-manager/internal/ui/static/* and the browser reloads automatically."
+echo "  key-manager API (dev mode, no auth): http://localhost:${KM_PORT}"
+echo "  React UI dev server (hot reload):    http://localhost:${UI_PORT}   <-- develop here"
+echo "  edit frontend/src/* and Vite hot-reloads the browser."
 echo "  Ctrl-C to stop."
 echo
 
-# Foreground: exits on Ctrl-C, which triggers cleanup of the port-forward.
-( cd uidev && go run . \
-    -static ../../key-manager/internal/ui/static \
-    -api "http://localhost:${KM_PORT}" \
-    -addr ":${UI_PORT}" )
+# First run needs the frontend deps installed.
+if [[ ! -d ../frontend/node_modules ]]; then
+  echo "==> installing frontend dependencies (first run)..."
+  npm --prefix ../frontend install
+fi
+
+# Foreground: the Vite dev server. Exits on Ctrl-C, which triggers cleanup of
+# the port-forward. VITE_DEV_NO_AUTH bypasses the Keycloak login redirect to
+# match the key-manager's LLM_DEV_MODE, so no Keycloak is required. Vite proxies
+# /api to the port-forwarded key-manager (WEBAPI_URL; see frontend/vite.config.ts).
+VITE_DEV_NO_AUTH=true WEBAPI_URL="http://localhost:${KM_PORT}" \
+  npm --prefix ../frontend run dev -- --port "${UI_PORT}" --strictPort

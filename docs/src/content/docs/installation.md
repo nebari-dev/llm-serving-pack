@@ -1001,11 +1001,14 @@ kubectl get certificate -n nebari-llm-serving-system nebari-llm-shared-tls
 
 Expected `READY=True`.
 
-The key-manager UI is reachable at `https://llm-keys.<baseDomain>/`,
-gated by Keycloak OAuth2 (members of the `llm` group only). Hitting
-that URL in a browser at this point should redirect through the
-Keycloak login screen and bounce back to a (mostly empty) key-manager
-page. There are no LLMModels yet; section 9 changes that.
+The key-manager UI is reachable at `https://llm-keys.<baseDomain>/`.
+It is a React single-page app (served by nginx) that drives its own
+Keycloak login: `keycloak-js` performs a PKCE redirect to Keycloak,
+and the SPA then calls the key-manager API with a bearer token. Hitting
+that URL in a browser at this point should send you through the
+Keycloak login screen and back to a (mostly empty) key-manager page
+for users in the `llm` group. There are no LLMModels yet; section 9
+changes that.
 
 ## 9. Apply your first LLMModel
 
@@ -1361,45 +1364,41 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 Expected: a single entry with `"name": "llm"`.
 
-The Keycloak clients reconciled by the operator from NebariApps:
+The Keycloak client reconciled by the operator from the key-manager NebariApp:
 
 ```bash
 curl -sS -H "Authorization: Bearer $TOKEN" \
   "https://keycloak.<baseDomain>/admin/realms/nebari/clients?clientId=nebari-llm-serving-key-manager" \
-  | python3 -m json.tool | head -20
+  | python3 -m json.tool | head -30
 ```
 
-Expected: a client with the same `clientId` and `redirectUris`
-covering `https://llm-keys.<baseDomain>/oauth2/callback`.
+Expected: a **public** client (`"publicClient": true`, no client
+secret) with `"standardFlowEnabled": true` and `redirectUris` covering
+the SPA origin `https://llm-keys.<baseDomain>/*`. This is the PKCE
+client the SPA logs in with; there is no `/oauth2/callback` redirect
+because the pack no longer uses an oauth2-proxy cookie flow.
 
-### 10.9 SecurityPolicy OIDC endpoints (browser-facing vs back-channel)
+### 10.9 Key-manager JWT validation (Model B)
 
-> **Beta documentation gate - dual-endpoint auth:** The pack uses two
-> different Keycloak URL forms for the SecurityPolicy OIDC config.
-> Browser-facing endpoints (`authorizationEndpoint`, `endSessionEndpoint`)
-> must use the public `https://keycloak.<baseDomain>/...` URL so that
-> browser redirects resolve. Back-channel endpoints (`tokenEndpoint`,
-> `issuer`) use the in-cluster `http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/...`
-> URL for performance and to avoid hairpinning through the public Gateway.
-> This split is implemented in nebari-operator >= v0.1.0-alpha.19. If
-> your cluster has an older operator, section 12.2 documents the
-> workaround.
+The key-manager UI uses **Model B - SPA-managed Keycloak**: the SPA
+obtains a bearer token via PKCE and sends it on `/api` calls, and the
+key-manager validates that JWT itself against the realm's JWKS. There
+is **no gateway `SecurityPolicy`** on the key-manager host, so there is
+no gateway OIDC/cookie config to inspect. Instead, confirm the
+key-manager is pointed at the right Keycloak realm and issuer:
 
 ```bash
-kubectl get securitypolicy -n nebari-llm-serving-system nebari-llm-serving-key-manager-security \
-  -o jsonpath='{.spec.oidc.provider}' | python3 -m json.tool
+kubectl get deploy -n nebari-llm-serving-system nebari-llm-serving-key-manager \
+  -o jsonpath='{range .spec.template.spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+  | grep -E '^LLM_KEYCLOAK_'
 ```
 
-Expected (the WL-3 fix from `nebari-operator v0.1.0-alpha.19+`):
-
-- `authorizationEndpoint`: `https://keycloak.<baseDomain>/...auth`  (PUBLIC)
-- `endSessionEndpoint`:    `https://keycloak.<baseDomain>/...logout` (PUBLIC)
-- `tokenEndpoint`:         `http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/...token` (in-cluster)
-- `issuer`:                in-cluster (until upstream nebari-operator
-  #112 ships)
-
-If the public endpoints still point at `keycloak-keycloakx-http.keycloak.svc.cluster.local`,
-your NIC operator is older than `v0.1.0-alpha.19`; bump it.
+Expected: `LLM_KEYCLOAK_URL` (the base URL JWKS is fetched from),
+`LLM_KEYCLOAK_REALM=nebari`, and `LLM_KEYCLOAK_ISSUER_URL` set to the
+public Keycloak realm URL (`https://keycloak.<baseDomain>/realms/nebari`)
+- this is the exact `iss` value the key-manager requires on incoming
+tokens. The key-manager checks the RSA signature, `exp` (with 30s
+leeway), and an exact `iss` match; audience is not checked.
 
 ### 10.10 Browser smoke test
 
@@ -1408,11 +1407,15 @@ cookies), open:
 
 - `https://<baseDomain>/` -> NIC landing page should render with a
   tile for `nebari-llm-serving-key-manager`.
-- `https://llm-keys.<baseDomain>/` -> Keycloak login screen, then
-  the key-manager UI for users in the `llm` group.
+- `https://llm-keys.<baseDomain>/` -> the SPA loads and immediately
+  redirects to the Keycloak login screen (PKCE), then returns to the
+  key-manager UI for users in the `llm` group.
 
-If the browser dead-ends on `keycloak-keycloakx-http.keycloak.svc.cluster.local`,
-re-run check 10.9.
+The SPA reads its Keycloak URL from the runtime `/config.json` served
+by nginx, so login always uses the public `https://keycloak.<baseDomain>`
+URL. If the model list is empty or `/api` calls return 401, re-run
+check 10.9 to confirm the key-manager's `LLM_KEYCLOAK_ISSUER_URL`
+matches the token issuer.
 
 If every check passes, the install is good. Section 11 walks
 through the actual end-user journeys (mint a key, hit the external
@@ -1578,9 +1581,21 @@ NIC should ship with `cert-manager.maxConcurrentChallenges: 1` to
 prevent HTTP-01 solver races on overlapping SANs
 (nebari-dev/nebari-infrastructure-core#259).
 
-### 12.2 SecurityPolicy uses in-cluster Keycloak URLs for browser-facing endpoints
+### 12.2 SecurityPolicy uses in-cluster Keycloak URLs for browser-facing endpoints (obsolete for the key-manager)
 
-**Symptom:** The key-manager UI redirects the browser to
+> **No longer applies to the key-manager.** This was an issue with the
+> old gateway oauth2-proxy cookie flow, where an Envoy `SecurityPolicy`
+> injected browser-facing OIDC endpoints. The key-manager now uses
+> **Model B - SPA-managed Keycloak** (`enforceAtGateway: false`, a
+> public PKCE client, and in-app JWKS validation), so there is no
+> gateway `SecurityPolicy` on the key-manager host and no in-cluster
+> vs. public endpoint split to get wrong. The SPA reads its Keycloak
+> URL from `/config.json` and always uses the public
+> `https://keycloak.<baseDomain>` URL. Retained here only for clusters
+> still running other apps on the older cookie flow.
+
+**Symptom (legacy cookie flow):** A UI behind the gateway oauth2-proxy
+redirects the browser to
 `http://keycloak-keycloakx-http.keycloak.svc.cluster.local:8080/...`
 instead of the public `https://keycloak.<baseDomain>/...` URL. The
 OAuth2 flow dead-ends because browsers cannot resolve in-cluster
@@ -1593,10 +1608,6 @@ This version uses `KEYCLOAK_EXTERNAL_URL` for
 `authorizationEndpoint` and `endSessionEndpoint` (the two endpoints
 the browser hits) while keeping `tokenEndpoint` and `issuer` as
 in-cluster URLs (back-channel only).
-
-If your NIC ships an older nebari-operator, override the image in
-your NIC kustomization or ArgoCD values until the fix is released
-upstream.
 
 ### 12.3 AI Gateway webhook certificate becomes untrusted after pod rescheduling
 

@@ -132,6 +132,21 @@ var testKeys = []secrets.KeyInfo{
 	},
 }
 
+// --- GET /healthz tests ---
+
+func TestHealthz(t *testing.T) {
+	h := newHandlerWithMocks(&mockModelLister{}, &mockKeyManager{})
+	// No user in context: the probe must not require authentication.
+	rr := callHandler(t, h, http.MethodGet, "/healthz", nil, nil)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rr.Code, http.StatusOK)
+	}
+	if body := rr.Body.String(); body != "ok\n" {
+		t.Errorf("body: got %q, want %q", body, "ok\n")
+	}
+}
+
 // --- GET /api/me tests ---
 
 func TestGetMe(t *testing.T) {

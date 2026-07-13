@@ -1,0 +1,18 @@
+{{- if and .Values.frontend.enabled .Values.keyManager.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-frontend
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: {{ include "nebari-llm-serving.fullname" . }}-frontend
+{{- end }}

@@ -14,7 +14,7 @@ To get a model running quickly, see [Quickstart](/quickstart/).
 
 The pack deploys a Go operator that watches a custom `LLMModel` CRD. Admins apply one `LLMModel` per model they want to serve. The operator handles everything downstream: model storage, vLLM serving pods, inference scheduling, routing, and access control.
 
-An optional key manager service gives users a web UI to generate API keys for external access. Envoy AI Gateway provides token counting, rate limiting, and protocol normalization on both external and internal endpoints.
+An optional key manager gives users a web UI to generate API keys for external access: a React single-page app served by nginx, backed by an API-only Go service. Envoy AI Gateway provides token counting, rate limiting, and protocol normalization on both external and internal endpoints.
 
 ---
 
@@ -48,7 +48,7 @@ Installing the chart (pack install) deploys:
 
 1. **LLMModel CRD** - the `llm.nebari.dev/v1alpha1` custom resource definition
 2. **LLM operator** - a Go controller (kubebuilder/controller-runtime) that watches `LLMModel` CRs in its own namespace
-3. **Key manager** (conditional, `keyManager.enabled`) - a web UI and REST API behind a `NebariApp` with Keycloak/OIDC auth
+3. **Key manager** (conditional, `keyManager.enabled`) - a React SPA served by an nginx **frontend** image plus an API-only Go service, fronted by a `NebariApp` with SPA-managed Keycloak/OIDC auth
 4. **Envoy AI Gateway** (conditional, `envoyAIGateway.install`) - the controller and CRDs; when `false`, assumes pre-installed
 
 The chart creates the operator namespace and labels it `nebari.dev/managed=true` (gated on `createNamespace: true`, default on).
@@ -316,16 +316,20 @@ Semantics worth knowing:
 
 ## Key manager
 
-A small web application behind `NebariApp` that lets authenticated users generate and manage API keys for models they can access.
+Behind `NebariApp` sits a two-part application that lets authenticated users generate and manage API keys for models they can access: a React single-page app served by an nginx **frontend** image, and an API-only Go service. The frontend serves the SPA and a runtime `/config.json` (Keycloak settings), and reverse-proxies `/api/*` to the key-manager's internal ClusterIP over in-cluster DNS. The key-manager Service is internal-only; it is never exposed through the gateway, and the Go service serves `/api/*` only (no static files, no `GET /`).
 
 ### How it works
 
-1. User hits the key manager UI at `llm-keys.<baseDomain>`
-2. Keycloak/OIDC login via `NebariApp` auth
-3. Key manager watches all `LLMModel` CRs, filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`)
-4. User sees only models they can access
-5. User creates a key for a model; key manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the operator namespace, and writes metadata to the corresponding ConfigMap
-6. Envoy Gateway's pooled `apiKeyAuth` picks up the new Secret entry as soon as it syncs (authentication); separately, the operator - watching api-keys Secrets - re-renders the model's SecurityPolicy authorization allow-list to include the new client ID (authorization). A fresh key works once both land - typically seconds, within about a minute
+The auth model is **Model B - SPA-managed Keycloak** (no gateway cookie login, no oauth2-proxy sidecar):
+
+1. The browser loads the SPA at `llm-keys.<baseDomain>`.
+2. `keycloak-js` performs a `login-required` PKCE (S256) redirect to Keycloak using a **public** client (provisioned by the operator via `spaClient.enabled: true`; no client secret), obtains an access token, and attaches `Authorization: Bearer <token>` on every `/api` call.
+3. nginx forwards the bearer to the key-manager, which **validates the JWT itself** against the Keycloak realm's JWKS: RSA signature, `exp` with 30s leeway, and an exact `iss` match (audience is not checked). Auth is not enforced at the gateway (`enforceAtGateway: false`).
+4. The key-manager reads identity and groups from the token claims, watches all `LLMModel` CRs, and filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`). Users see only models they can access.
+5. The user creates a key for a model; the key-manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the operator namespace, and writes metadata to the corresponding ConfigMap.
+6. Envoy Gateway's pooled `apiKeyAuth` picks up the new Secret entry as soon as it syncs (authentication); separately, the operator - watching api-keys Secrets - re-renders the model's SecurityPolicy authorization allow-list to include the new client ID (authorization). A fresh key works once both land - typically seconds, within about a minute.
+
+JWKS validation is configured on the key-manager by three env vars: `LLM_KEYCLOAK_URL` (base URL the JWKS is fetched from), `LLM_KEYCLOAK_REALM`, and `LLM_KEYCLOAK_ISSUER_URL` (the expected `iss` value; defaults to the SPA's external Keycloak URL). These derive from the `keyManager.keycloak.*` Helm values, which in turn default to `frontend.keycloak.*`.
 
 Revocation: remove the entry from the Secret and its corresponding metadata from the ConfigMap. Authentication fails as soon as Envoy Gateway syncs the Secret (immediate in practice); the operator also drops the client ID from the authorization allow-list.
 
@@ -374,6 +378,8 @@ The key manager has a scaffolded periodic background audit (configurable interva
 
 ### NebariApp integration
 
+The `NebariApp` targets the **frontend** (nginx) Service, not the key-manager. Its auth block is Model B: gateway enforcement is off, and the operator provisions a public PKCE client that the SPA drives itself.
+
 ```yaml
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
@@ -382,17 +388,26 @@ metadata:
 spec:
   hostname: llm-keys.<baseDomain>   # set via keyManager.nebariApp.hostname (no default)
   service:
-    name: nebari-llm-serving-key-manager
+    name: nebari-llm-serving-frontend
     port: 8080
   routing:
     routes:
       - pathPrefix: /
   auth:
     enabled: true
-    provider: keycloak               # or generic-oidc
-    provisionClient: true
+    provider: keycloak
+    enforceAtGateway: false          # SPA drives login; no gateway cookie/oauth2-proxy
+    scopes: [openid, profile, email, groups]
+    keycloakConfig:
+      protocolMappers:
+        - type: group-membership     # emits the `groups` claim
+          claim: groups
+    spaClient:
+      enabled: true                  # operator provisions a PUBLIC PKCE client (no secret)
   gateway: public
 ```
+
+There is no gateway `SecurityPolicy`, no oauth2-proxy sidecar, no cookie login, and no `/oauth2/callback` for the key-manager. The SPA obtains the token; the key-manager validates it in-process against Keycloak's JWKS.
 
 ---
 

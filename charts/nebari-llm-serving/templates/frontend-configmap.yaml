@@ -1,0 +1,117 @@
+{{- if and .Values.frontend.enabled .Values.keyManager.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nebari-llm-serving.fullname" . }}-frontend-config
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+data:
+  # Served by nginx at /config.json. The SPA fetches this at startup so Keycloak
+  # settings change without rebuilding the image. clientId defaults to the
+  # nebari-operator SPA-client convention (<namespace>-<nebariapp-name>-spa); the
+  # NebariApp for the UI is named "<fullname>-key-manager", so the SPA client is
+  # "<operator-namespace>-<fullname>-key-manager-spa".
+  config.json: |
+    {
+      "keycloak": {
+        "url":      {{ required "frontend.keycloak.url is required when frontend.enabled=true" .Values.frontend.keycloak.url | quote }},
+        "realm":    {{ .Values.frontend.keycloak.realm | quote }},
+        "clientId": {{ default (printf "%s-%s-key-manager-spa" (include "nebari-llm-serving.operatorNamespace" .) (include "nebari-llm-serving.fullname" .)) .Values.frontend.keycloak.clientId | quote }}
+      }{{ with .Values.frontend.title }},
+      "title": {{ . | quote }}{{ end }}
+    }
+
+  # nginx configuration for the frontend pod.
+  #
+  # Traffic flow (production):
+  #   Browser → Gateway → frontend Service (nginx:{{ .Values.frontend.port }})
+  #     ├─ /api/*  → proxy_pass to the key-manager ClusterIP (cluster DNS, never
+  #     │            public); nginx forwards the Authorization: Bearer header as-is
+  #     │            and the key-manager validates it against Keycloak JWKS.
+  #     └─ /*      → serve the SPA; keycloak-js handles OIDC PKCE in the browser.
+  nginx.conf: |
+    worker_processes auto;
+    pid /tmp/nginx.pid;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+
+        client_body_temp_path /tmp/client_temp;
+        proxy_temp_path       /tmp/proxy_temp_path;
+        fastcgi_temp_path     /tmp/fastcgi_temp;
+        uwsgi_temp_path       /tmp/uwsgi_temp;
+        scgi_temp_path        /tmp/scgi_temp;
+
+        sendfile        on;
+        keepalive_timeout 65;
+
+        access_log /dev/stdout;
+        error_log  /dev/stderr warn;
+
+        server {
+            listen {{ .Values.frontend.port }};
+            server_name _;
+
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # Security headers. add_header does NOT inherit into a location that
+            # sets its own add_header, so these cover the SPA document (location
+            # /); the config.json block below repeats the ones that matter for it.
+            # The framing headers matter because the UI exposes one-click "revoke
+            # key" - deny embedding to block clickjacking.
+            add_header X-Frame-Options "DENY" always;
+            add_header Content-Security-Policy "frame-ancestors 'none'" always;
+            add_header X-Content-Type-Options "nosniff" always;
+
+            gzip on;
+            gzip_types text/plain text/css application/json application/javascript
+                       text/xml application/xml application/xml+rss text/javascript
+                       image/svg+xml;
+            gzip_min_length 1024;
+
+            # Proxy /api/* to the key-manager ClusterIP - never exposed publicly.
+            location /api/ {
+                proxy_pass         http://{{ include "nebari-llm-serving.fullname" . }}-key-manager.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc.cluster.local:8080/api/;
+                proxy_set_header   Authorization   $http_authorization;
+                proxy_set_header   X-Real-IP       $remote_addr;
+                proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header   Host            $host;
+                proxy_http_version 1.1;
+            }
+
+            # Cache content-hashed static assets aggressively.
+            location ~* \.(js|css|png|svg|ico|woff2?|ttf|eot)$ {
+                expires 1y;
+                add_header Cache-Control "public, immutable";
+                try_files $uri =404;
+            }
+
+            location /healthz {
+                access_log off;
+                return 200 "ok\n";
+                add_header Content-Type text/plain;
+            }
+
+            # Runtime config: never cache, so Keycloak settings changes take
+            # effect on the next page load instead of being pinned by a stale copy.
+            location = /config.json {
+                add_header Cache-Control "no-store" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                try_files $uri =404;
+            }
+
+            # SPA fallback.
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+        }
+    }
+{{- end }}

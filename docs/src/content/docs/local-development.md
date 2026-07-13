@@ -145,22 +145,25 @@ The key manager exposes an HTTP API for generating and revoking API keys. In the
 kubectl -n llm-operator-system port-forward svc/llm-key-manager 8080:8080 &
 ```
 
-List models (requires a JWT in the `Authorization` header or an identity cookie):
+On the dev cluster the key-manager runs with `LLM_DEV_MODE=true`, which
+bypasses auth and injects a fixed identity (user `dev`, group `llm`). No token
+is required - list models directly:
 
 ```bash
-# With a fake JWT (the dev server accepts any token for testing)
-curl -s http://localhost:8080/api/models \
-  -H "Authorization: Bearer fake-jwt-token" | jq .
+curl -s http://localhost:8080/api/models | jq .
 ```
 
 Create an API key for the test model:
 
 ```bash
 curl -s -X POST http://localhost:8080/api/keys \
-  -H "Authorization: Bearer fake-jwt-token" \
   -H "Content-Type: application/json" \
   -d '{"modelName": "test-model"}' | jq .
 ```
+
+Outside dev mode the key-manager validates a real Keycloak bearer token on
+every `/api` call (RSA signature + `exp` + `iss`), which the SPA obtains via
+PKCE.
 
 The response includes the generated key. Keys are stored as Kubernetes Secrets in the operator namespace (defaults to `llm-operator-system` for the dev cluster, `nebari-llm-serving-system` for the chart):
 
@@ -212,23 +215,31 @@ JWT, even when access is public, so it is not reachable on a bare kind cluster.
 
 ## 10. Open the key-manager UI (dev mode)
 
-The deployed key-manager runs in dev mode on kind: it bypasses auth and injects a
-fixed identity (user `dev`, groups `["llm"]`), because there is no Keycloak or
-gateway OIDC layer in front of it. Forward its port and open the UI:
+The UI is a React + TypeScript SPA in `frontend/`, served in production by its
+own nginx image. For local work, run it with the Vite dev server against the
+dev-mode key-manager - one command wires up the cluster, models, port-forward,
+and hot reload:
 
 ```bash
-make ui   # serves http://localhost:8080
+./run-dev.sh   # from dev/  ·  also: make run-dev  ·  make ui (repo root)
 ```
+
+This port-forwards the key-manager API to `http://localhost:8080` and starts the
+Vite dev server at `http://localhost:5173` (develop there). Two things make login
+disappear locally:
+
+- The dev server sets `VITE_DEV_NO_AUTH=true`, so the SPA skips the keycloak-js
+  PKCE redirect.
+- The deployed key-manager runs with `LLM_DEV_MODE=true`, which bypasses auth
+  and injects a fixed identity (user `dev`, group `llm`).
 
 The UI loads without a login and can mint and revoke keys for any model the
 `dev` identity's groups grant access to. Dev mode is controlled by
-`LLM_DEV_MODE` on the key-manager Deployment (and `keyManager.devMode.enabled`
-in the Helm chart); it is off by default and must never be enabled in a real
-deployment.
+`LLM_DEV_MODE` on the key-manager Deployment; it is off by default and must
+never be enabled in a real deployment.
 
-> **Working on the UI itself?** Use `make run-dev` instead of the steps above:
-> one command brings up the cluster, three models, the port-forward, and a
-> hot-reloading dev server. See [UI Development](/ui-development/).
+> **Working on the UI itself?** See [UI Development](/ui-development/) for the
+> full hot-reload loop and the frontend quality gate.
 
 ## 11. Tail logs
 

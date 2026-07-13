@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"log"
 	"log/slog"
 	"net/http"
@@ -24,20 +23,29 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/audit"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/ui"
 )
 
 func main() {
 	// 1. Parse config from env vars.
 	apiKeysNamespace := getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys")
 	groupsClaim := getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups")
-	cookiePrefix := getEnvOrDefault("LLM_AUTH_COOKIE_PREFIX", "IdToken")
 	auditIntervalStr := getEnvOrDefault("LLM_AUDIT_INTERVAL", "5m")
 	oidcUserinfoURL := os.Getenv("LLM_OIDC_USERINFO_URL") // optional
 	listenAddr := getEnvOrDefault("LLM_LISTEN_ADDR", ":8080")
 	devMode := strings.EqualFold(os.Getenv("LLM_DEV_MODE"), "true")
 	devUser := getEnvOrDefault("LLM_DEV_USER", "dev")
 	devGroups := splitAndTrim(getEnvOrDefault("LLM_DEV_GROUPS", "llm"))
+	// Model B (SPA-managed Keycloak): the key-manager verifies bearer tokens
+	// against the realm's JWKS. keycloakURL is the internal cluster URL used to
+	// fetch JWKS; keycloakIssuerURL (optional) is the external URL embedded in
+	// tokens as `iss` and defaults to keycloakURL when unset.
+	keycloakURL := os.Getenv("LLM_KEYCLOAK_URL")
+	keycloakRealm := getEnvOrDefault("LLM_KEYCLOAK_REALM", "nebari")
+	keycloakIssuerURL := os.Getenv("LLM_KEYCLOAK_ISSUER_URL")
+	// Optional: pin the accepted token's `azp` to the SPA client ID. The nebari
+	// realm is shared, so leaving this unset accepts any client's token in the
+	// realm; set it to reject tokens minted for other clients.
+	keycloakSPAClientID := os.Getenv("LLM_KEYCLOAK_SPA_CLIENT_ID")
 
 	auditInterval, err := time.ParseDuration(auditIntervalStr)
 	if err != nil {
@@ -105,23 +113,17 @@ func main() {
 		logger.Info("audit loop disabled: LLM_OIDC_USERINFO_URL not set")
 	}
 
-	// 8. Set up HTTP mux and routes.
+	// 8. Set up HTTP mux and routes. The key-manager is API-only; the React UI
+	// is served by a separate nginx image that reverse-proxies /api here.
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux)
 
-	// Serve static UI files at root.
-	staticFS, err := fs.Sub(ui.StaticFiles, "static")
-	if err != nil {
-		log.Fatalf("creating sub-FS for static files: %v", err)
-	}
-	mux.Handle("GET /", http.FileServer(http.FS(staticFS)))
-
 	// Apply auth middleware only to /api/ routes.
 	authConfig := api.AuthConfig{
-		GroupsClaim:  groupsClaim,
-		CookiePrefix: cookiePrefix,
-		DevMode:      devMode,
+		GroupsClaim: groupsClaim,
+		DevMode:     devMode,
 	}
+	var validator *api.JWTValidator
 	if devMode {
 		authConfig.DevIdentity = api.UserInfo{
 			Username: devUser,
@@ -131,6 +133,18 @@ func main() {
 		}
 		logger.Warn("LLM_DEV_MODE is enabled: auth is bypassed and a fixed identity is injected; never enable this in a real deployment",
 			"username", devUser, "groups", devGroups)
+	} else {
+		if keycloakURL == "" {
+			log.Fatal("LLM_KEYCLOAK_URL is required unless LLM_DEV_MODE=true")
+		}
+		validator = api.NewJWTValidator(keycloakURL, keycloakRealm, logger)
+		validator.SetIssuerURL(keycloakIssuerURL)
+		validator.SetExpectedClientID(keycloakSPAClientID)
+		authConfig.Validator = validator
+		if keycloakSPAClientID == "" {
+			logger.Warn("LLM_KEYCLOAK_SPA_CLIENT_ID not set: accepting tokens from any client in the realm (azp is not pinned)")
+		}
+		logger.Info("bearer-token auth enabled", "keycloakURL", keycloakURL, "realm", keycloakRealm, "azpPinned", keycloakSPAClientID != "")
 	}
 	authMW := api.AuthMiddleware(authConfig)
 
@@ -157,6 +171,10 @@ func main() {
 		defer shutdownCancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("http server shutdown error", "error", err)
+		}
+		// Stop the validator's background JWKS refresh goroutine.
+		if validator != nil {
+			validator.Stop()
 		}
 	}()
 

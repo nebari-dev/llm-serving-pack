@@ -1,31 +1,70 @@
 package api
 
 import (
-	"encoding/base64"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// makeTestJWT creates a test JWT with the given claims by base64url-encoding a JSON payload.
-// No actual signing - Envoy Gateway handles verification in production.
-func makeTestJWT(claims map[string]interface{}) string {
-	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload, _ := json.Marshal(claims)
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payload)
-	sig := base64.RawURLEncoding.EncodeToString([]byte("fake-signature"))
-	return header + "." + payloadB64 + "." + sig
-}
+const (
+	testRealm  = "nebari"
+	testIssuer = "https://keycloak.example.com"
+	testKID    = "test-key-1"
+)
 
-func defaultConfig() AuthConfig {
-	return AuthConfig{
-		GroupsClaim:  "groups",
-		CookiePrefix: "IdToken",
+// newTestValidator returns a JWTValidator preloaded with pub under testKID and
+// marked ready, so tests validate signed tokens without any network fetch.
+func newTestValidator(t *testing.T, pub *rsa.PublicKey) *JWTValidator {
+	t.Helper()
+	v := &JWTValidator{
+		logger:      slog.Default(),
+		keycloakURL: testIssuer,
+		issuerURL:   testIssuer,
+		realm:       testRealm,
+		publicKeys:  map[string]*rsa.PublicKey{testKID: pub},
+		baseCtx:     context.Background(),
 	}
+	v.ready.Store(true)
+	return v
 }
 
-// handlerThatChecksUser is a test handler that writes the extracted username/groups to the response.
+// signToken signs claims as an RS256 JWT with testKID. iss/exp are filled with
+// valid defaults unless already present.
+func signToken(t *testing.T, priv *rsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	if _, ok := claims["iss"]; !ok {
+		claims["iss"] = testIssuer + "/realms/" + testRealm
+	}
+	if _, ok := claims["exp"]; !ok {
+		claims["exp"] = time.Now().Add(5 * time.Minute).Unix()
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = testKID
+	s, err := tok.SignedString(priv)
+	if err != nil {
+		t.Fatalf("signing token: %v", err)
+	}
+	return s
+}
+
+func genKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	return key
+}
+
+// handlerThatChecksUser writes the extracted username/groups to the response.
 func handlerThatChecksUser(t *testing.T) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +82,10 @@ func handlerThatChecksUser(t *testing.T) http.Handler {
 }
 
 func TestAuthMiddleware(t *testing.T) {
+	priv := genKey(t)
+	otherPriv := genKey(t)
+	validator := newTestValidator(t, &priv.PublicKey)
+
 	tests := []struct {
 		name         string
 		cfg          AuthConfig
@@ -52,10 +95,10 @@ func TestAuthMiddleware(t *testing.T) {
 		wantGroups   []string
 	}{
 		{
-			name: "bearer JWT in Authorization header extracts username and groups",
-			cfg:  defaultConfig(),
+			name: "valid bearer token extracts username and groups",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
+				token := signToken(t, priv, jwt.MapClaims{
 					"preferred_username": "alice",
 					"groups":             []string{"admins", "users"},
 				})
@@ -66,121 +109,65 @@ func TestAuthMiddleware(t *testing.T) {
 			wantGroups:   []string{"admins", "users"},
 		},
 		{
-			name: "JWT in IdToken cookie extracts username and groups",
-			cfg:  defaultConfig(),
-			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "bob",
-					"groups":             []string{"users"},
-				})
-				r.AddCookie(&http.Cookie{Name: "IdToken-somedeployment", Value: token})
-			},
-			wantStatus:   http.StatusOK,
-			wantUsername: "bob",
-			wantGroups:   []string{"users"},
+			name:         "no token returns 401",
+			cfg:          AuthConfig{GroupsClaim: "groups", Validator: validator},
+			setupRequest: func(r *http.Request) {},
+			wantStatus:   http.StatusUnauthorized,
 		},
 		{
-			name: "no token returns 401",
-			cfg:  defaultConfig(),
+			name: "Authorization header without Bearer prefix returns 401",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				// no cookie, no Authorization header
+				r.Header.Set("Authorization", "some-token")
 			},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name: "invalid JWT without 3 parts returns 401",
-			cfg:  defaultConfig(),
+			name: "garbage token returns 401",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
 				r.Header.Set("Authorization", "Bearer notajwt")
 			},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name: "malformed base64 in payload returns 401",
-			cfg:  defaultConfig(),
+			name: "token signed by an unknown key returns 401",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				// header.invalid-base64!.sig
-				r.Header.Set("Authorization", "Bearer aGVhZGVy.!!!notbase64!!!.c2ln")
+				token := signToken(t, otherPriv, jwt.MapClaims{"preferred_username": "mallory"})
+				r.Header.Set("Authorization", "Bearer "+token)
 			},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name: "groups claim as string array works",
-			cfg:  defaultConfig(),
+			name: "token with wrong issuer returns 401",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "carol",
-					"groups":             []string{"eng", "ml"},
+				token := signToken(t, priv, jwt.MapClaims{
+					"preferred_username": "alice",
+					"iss":                "https://evil.example.com/realms/nebari",
 				})
 				r.Header.Set("Authorization", "Bearer "+token)
-			},
-			wantStatus:   http.StatusOK,
-			wantUsername: "carol",
-			wantGroups:   []string{"eng", "ml"},
-		},
-		{
-			name: "groups claim as single string is converted to []string",
-			cfg:  defaultConfig(),
-			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "dave",
-					"groups":             "solo-group",
-				})
-				r.Header.Set("Authorization", "Bearer "+token)
-			},
-			wantStatus:   http.StatusOK,
-			wantUsername: "dave",
-			wantGroups:   []string{"solo-group"},
-		},
-		{
-			name: "missing groups claim results in empty groups",
-			cfg:  defaultConfig(),
-			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "eve",
-				})
-				r.Header.Set("Authorization", "Bearer "+token)
-			},
-			wantStatus:   http.StatusOK,
-			wantUsername: "eve",
-			wantGroups:   []string{},
-		},
-		{
-			name: "Authorization header without Bearer prefix returns 401",
-			cfg:  defaultConfig(),
-			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "frank",
-				})
-				r.Header.Set("Authorization", token)
 			},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
-			name: "custom cookie prefix is respected",
-			cfg: AuthConfig{
-				GroupsClaim:  "groups",
-				CookiePrefix: "OauthToken",
-			},
+			name: "expired token returns 401",
+			cfg:  AuthConfig{GroupsClaim: "groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "grace",
-					"groups":             []string{"devs"},
+				token := signToken(t, priv, jwt.MapClaims{
+					"preferred_username": "alice",
+					"exp":                time.Now().Add(-time.Hour).Unix(),
 				})
-				r.AddCookie(&http.Cookie{Name: "OauthToken-prod", Value: token})
+				r.Header.Set("Authorization", "Bearer "+token)
 			},
-			wantStatus:   http.StatusOK,
-			wantUsername: "grace",
-			wantGroups:   []string{"devs"},
+			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name: "custom groups claim name is respected",
-			cfg: AuthConfig{
-				GroupsClaim:  "cognito:groups",
-				CookiePrefix: "IdToken",
-			},
+			cfg:  AuthConfig{GroupsClaim: "cognito:groups", Validator: validator},
 			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
+				token := signToken(t, priv, jwt.MapClaims{
 					"preferred_username": "henry",
 					"cognito:groups":     []string{"cognito-admins"},
 				})
@@ -199,14 +186,13 @@ func TestAuthMiddleware(t *testing.T) {
 			if tc.wantStatus == http.StatusOK {
 				handler = middleware(handlerThatChecksUser(t))
 			} else {
-				// For error cases, inner handler should not be called.
 				handler = middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					t.Error("inner handler should not be called when auth fails")
 					w.WriteHeader(http.StatusOK)
 				}))
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
 			tc.setupRequest(req)
 			rec := httptest.NewRecorder()
 
@@ -217,28 +203,106 @@ func TestAuthMiddleware(t *testing.T) {
 			}
 
 			if tc.wantStatus == http.StatusOK {
-				gotUsername := rec.Header().Get("X-Username")
-				if gotUsername != tc.wantUsername {
-					t.Errorf("username: got %q, want %q", gotUsername, tc.wantUsername)
+				if got := rec.Header().Get("X-Username"); got != tc.wantUsername {
+					t.Errorf("username: got %q, want %q", got, tc.wantUsername)
 				}
-
 				var gotGroups []string
-				groupsJSON := rec.Header().Get("X-Groups")
-				if err := json.Unmarshal([]byte(groupsJSON), &gotGroups); err != nil {
-					t.Fatalf("failed to parse groups header %q: %v", groupsJSON, err)
+				if err := json.Unmarshal([]byte(rec.Header().Get("X-Groups")), &gotGroups); err != nil {
+					t.Fatalf("failed to parse groups header %q: %v", rec.Header().Get("X-Groups"), err)
 				}
 				if len(gotGroups) != len(tc.wantGroups) {
-					t.Errorf("groups length: got %d, want %d (got %v, want %v)",
-						len(gotGroups), len(tc.wantGroups), gotGroups, tc.wantGroups)
-				} else {
-					for i := range gotGroups {
-						if gotGroups[i] != tc.wantGroups[i] {
-							t.Errorf("groups[%d]: got %q, want %q", i, gotGroups[i], tc.wantGroups[i])
-						}
+					t.Fatalf("groups: got %v, want %v", gotGroups, tc.wantGroups)
+				}
+				for i := range gotGroups {
+					if gotGroups[i] != tc.wantGroups[i] {
+						t.Errorf("groups[%d]: got %q, want %q", i, gotGroups[i], tc.wantGroups[i])
 					}
 				}
 			}
 		})
+	}
+}
+
+// TestAuthMiddlewareNotReady checks that requests during JWKS warmup get a 503
+// with Retry-After, not a 401, so clients can distinguish "auth not online yet".
+func TestAuthMiddlewareNotReady(t *testing.T) {
+	priv := genKey(t)
+	v := newTestValidator(t, &priv.PublicKey)
+	v.ready.Store(false)
+
+	handler := AuthMiddleware(AuthConfig{Validator: v})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+signToken(t, priv, jwt.MapClaims{"preferred_username": "alice"}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected Retry-After header on 503")
+	}
+}
+
+// TestAuthMiddlewareMisconfigured checks that a non-dev config without a
+// validator fails closed with 500 rather than admitting the request.
+func TestAuthMiddlewareMisconfigured(t *testing.T) {
+	handler := AuthMiddleware(AuthConfig{})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer whatever")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+// fakeValidator is a TokenValidator stand-in: it records the context and token it
+// was handed and returns canned claims, so middleware behaviour can be tested
+// without a real JWKS or Keycloak.
+type fakeValidator struct {
+	claims map[string]interface{}
+	err    error
+	gotCtx context.Context
+	gotTok string
+}
+
+func (f *fakeValidator) ValidateToken(ctx context.Context, token string) (map[string]interface{}, error) {
+	f.gotCtx = ctx
+	f.gotTok = token
+	return f.claims, f.err
+}
+
+// TestAuthMiddlewareWithFakeValidator proves AuthConfig.Validator is satisfied by
+// any TokenValidator: the middleware passes the request context and bearer token
+// through and maps the returned claims onto the request identity, with no
+// *JWTValidator or Keycloak involved.
+func TestAuthMiddlewareWithFakeValidator(t *testing.T) {
+	fake := &fakeValidator{claims: map[string]interface{}{
+		"preferred_username": "fakeuser",
+		"groups":             []interface{}{"llm"},
+	}}
+	handler := AuthMiddleware(AuthConfig{Validator: fake})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer abc.def.ghi")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Username"); got != "fakeuser" {
+		t.Errorf("username: got %q, want %q", got, "fakeuser")
+	}
+	if fake.gotTok != "abc.def.ghi" {
+		t.Errorf("validator received token %q, want the bearer value", fake.gotTok)
+	}
+	if fake.gotCtx == nil {
+		t.Error("validator received a nil context; middleware should pass the request context through")
 	}
 }
 
@@ -265,11 +329,7 @@ func TestAuthMiddlewareDevMode(t *testing.T) {
 		{
 			name: "a supplied bearer token is ignored in favor of the dev identity",
 			setupRequest: func(r *http.Request) {
-				token := makeTestJWT(map[string]interface{}{
-					"preferred_username": "alice",
-					"groups":             []string{"admins"},
-				})
-				r.Header.Set("Authorization", "Bearer "+token)
+				r.Header.Set("Authorization", "Bearer some-token")
 			},
 			wantUsername: "dev",
 			wantGroups:   []string{"llm"},
@@ -279,10 +339,9 @@ func TestAuthMiddlewareDevMode(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := AuthConfig{
-				GroupsClaim:  "groups",
-				CookiePrefix: "IdToken",
-				DevMode:      true,
-				DevIdentity:  devIdentity,
+				GroupsClaim: "groups",
+				DevMode:     true,
+				DevIdentity: devIdentity,
 			}
 			handler := AuthMiddleware(cfg)(handlerThatChecksUser(t))
 
@@ -314,43 +373,65 @@ func TestAuthMiddlewareDevMode(t *testing.T) {
 	}
 }
 
-func TestParseJWTExtractsNameAndEmail(t *testing.T) {
-	token := makeTestJWT(map[string]interface{}{
-		"preferred_username": "chuck",
-		"name":               "Chuck Norris",
-		"email":              "chuck@example.com",
-		"groups":             []string{"llm"},
+func TestUserInfoFromClaims(t *testing.T) {
+	t.Run("extracts name, email, username, groups", func(t *testing.T) {
+		u := userInfoFromClaims(map[string]interface{}{
+			"preferred_username": "chuck",
+			"name":               "Chuck Norris",
+			"email":              "chuck@example.com",
+			"groups":             []interface{}{"llm"},
+		}, "groups")
+		if u.Username != "chuck" {
+			t.Errorf("username: got %q, want %q", u.Username, "chuck")
+		}
+		if u.Name != "Chuck Norris" {
+			t.Errorf("name: got %q, want %q", u.Name, "Chuck Norris")
+		}
+		if u.Email != "chuck@example.com" {
+			t.Errorf("email: got %q, want %q", u.Email, "chuck@example.com")
+		}
+		if len(u.Groups) != 1 || u.Groups[0] != "llm" {
+			t.Errorf("groups: got %v, want [llm]", u.Groups)
+		}
 	})
 
-	user, err := parseJWT(token, "groups")
-	if err != nil {
-		t.Fatalf("parseJWT returned error: %v", err)
-	}
-	if user.Username != "chuck" {
-		t.Errorf("username: got %q, want %q", user.Username, "chuck")
-	}
-	if user.Name != "Chuck Norris" {
-		t.Errorf("name: got %q, want %q", user.Name, "Chuck Norris")
-	}
-	if user.Email != "chuck@example.com" {
-		t.Errorf("email: got %q, want %q", user.Email, "chuck@example.com")
-	}
+	t.Run("falls back to sub when preferred_username absent", func(t *testing.T) {
+		u := userInfoFromClaims(map[string]interface{}{"sub": "abc-123"}, "groups")
+		if u.Username != "abc-123" {
+			t.Errorf("username: got %q, want %q", u.Username, "abc-123")
+		}
+		if u.Name != "" || u.Email != "" {
+			t.Errorf("expected empty name/email, got %q/%q", u.Name, u.Email)
+		}
+		if len(u.Groups) != 0 {
+			t.Errorf("expected empty groups, got %v", u.Groups)
+		}
+	})
 }
 
-func TestParseJWTMissingNameAndEmailAreEmpty(t *testing.T) {
-	token := makeTestJWT(map[string]interface{}{
-		"preferred_username": "eve",
-	})
-
-	user, err := parseJWT(token, "groups")
-	if err != nil {
-		t.Fatalf("parseJWT returned error: %v", err)
+func TestExtractGroups(t *testing.T) {
+	tests := []struct {
+		name   string
+		claims map[string]interface{}
+		claim  string
+		want   []string
+	}{
+		{"interface array", map[string]interface{}{"groups": []interface{}{"a", "b"}}, "groups", []string{"a", "b"}},
+		{"single string", map[string]interface{}{"groups": "solo"}, "groups", []string{"solo"}},
+		{"missing", map[string]interface{}{}, "groups", []string{}},
 	}
-	if user.Name != "" {
-		t.Errorf("name: got %q, want empty", user.Name)
-	}
-	if user.Email != "" {
-		t.Errorf("email: got %q, want empty", user.Email)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractGroups(tc.claims, tc.claim)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("[%d]: got %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
 	}
 }
 
