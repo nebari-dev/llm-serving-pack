@@ -1,6 +1,9 @@
 ---
 title: Architecture
 ---
+import { Code } from '@astrojs/starlight/components';
+import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
 
 For configuration knobs (Helm values, CRD fields), see [Configuration](/configuration/).
@@ -239,29 +242,9 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
 
-```yaml
-apiVersion: llm.nebari.dev/v1alpha1
-kind: PassthroughModel
-metadata:
-  name: openrouter
-  namespace: nebari-llm-serving-system
-spec:
-  provider:
-    hostname: openrouter.ai          # bare hostname, TLS assumed
-    port: 443                        # default
-    schemaVersion: api/v1            # upstream path prefix (default v1)
-    credentialSecretName: openrouter-api-key   # same-namespace Secret, key "apiKey"
-  models:
-    catchAll: true                   # any model id not claimed elsewhere
-    declared:                        # explicit routes, advertised by /v1/models
-      - openai/gpt-5.2
-      - anthropic/claude-opus-4.6
-  access:
-    groups: [llm]                    # same semantics as LLMModel access
-  endpoints:
-    external: {enabled: true}
-    internal: {enabled: true}
-```
+<Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
+
+For a step-by-step walkthrough see [Route to an external provider](/quickstart/#route-to-an-external-provider); for the full field reference see the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference).
 
 Generated resources (all in the CR's namespace, no serving stack):
 
