@@ -27,7 +27,7 @@ spec:
     # Pin a tagged release. Chart AppVersion drives the operator and
     # key-manager image tags, so pinning the chart pins the images too.
     - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: v0.1.0-alpha.7
+      targetRevision: v0.1.1
       path: charts/nebari-llm-serving
       helm:
         releaseName: nebari-llm-serving
@@ -54,14 +54,16 @@ spec:
               # Certificate. Must already exist on the cluster. HTTP-01
               # is the assumed challenge type; wildcards are not
               # supported and not required.
-              clusterIssuer: letsencrypt-production
+              clusterIssuer: letsencrypt-issuer
 
           defaults:
             storage:
-              # Set the StorageClass for model PVCs. Use a StorageClass backed
-              # by cloud-native storage (EFS on AWS, Filestore on GCP, etc.)
-              # so PVC size is not limited by node disk.
-              storageClassName: efs-sc
+              # Set the StorageClass for model PVCs. Defaults to the
+              # cluster's longhorn StorageClass. Optionally override with
+              # a StorageClass backed by cloud-native storage (EFS on AWS,
+              # Filestore on GCP, etc.) if PVC size should not be limited
+              # by node disk.
+              storageClassName: longhorn
 
           auth:
             oidc:

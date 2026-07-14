@@ -38,7 +38,7 @@ spec:
 
   source:
     chart: ai-gateway-crds-helm
-    repoURL: oci://docker.io/envoyproxy
+    repoURL: docker.io/envoyproxy
     targetRevision: v0.5.0
 
   destination:
@@ -73,7 +73,7 @@ spec:
 
   source:
     chart: ai-gateway-helm
-    repoURL: oci://docker.io/envoyproxy
+    repoURL: docker.io/envoyproxy
     targetRevision: v0.5.0
 
   destination:

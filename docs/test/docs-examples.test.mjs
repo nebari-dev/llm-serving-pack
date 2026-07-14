@@ -105,3 +105,29 @@ describe('troubleshooting', () => {
     expect(page).toMatch(/catch-all|catchAll/i);
   });
 });
+
+describe('manifest reconciliation (NIC source of truth)', () => {
+  it('argocd-application.yaml uses v0.1.1 + NIC clusterIssuer + longhorn', () => {
+    const m = readExample('argocd-application.yaml');
+    expect(m).toMatch(/targetRevision:\s*v0\.1\.1\b/);
+    expect(m).toMatch(/clusterIssuer:\s*letsencrypt-issuer\b/);
+    expect(m).toMatch(/storageClassName:\s*longhorn\b/);
+    expect(m).not.toMatch(/v0\.1\.0-alpha\.7\b/);
+    expect(m).not.toMatch(/letsencrypt-production\b/);
+  });
+  it('nvidia-gpu-operator.yaml uses the documented v25.10.1', () => {
+    const m = readExample('nvidia-gpu-operator.yaml');
+    expect(m).toMatch(/targetRevision:\s*v25\.10\.1\b/);
+    expect(m).not.toMatch(/v26\.3\.0\b/);
+  });
+  it('envoy-ai-gateway.yaml drops the oci:// prefix (NIC form)', () => {
+    const m = readExample('envoy-ai-gateway.yaml');
+    expect(m).not.toMatch(/oci:\/\//);
+    expect(m).toMatch(/repoURL:\s*docker\.io\/envoyproxy\b/);
+  });
+  it('installation.md recommends the v0.1.1 pack version', () => {
+    const page = readPage('installation.md');
+    expect(page).toMatch(/v0\.1\.1\b/);
+    expect(page).not.toMatch(/targetRevision:\s*v0\.1\.0-alpha\.9\b/);
+  });
+});

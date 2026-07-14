@@ -876,7 +876,7 @@ spec:
   project: foundational
   source:
     repoURL: https://github.com/nebari-dev/llm-serving-pack.git
-    targetRevision: v0.1.0-alpha.9
+    targetRevision: v0.1.1
     path: charts/nebari-llm-serving
     helm:
       releaseName: nebari-llm-serving
@@ -924,6 +924,10 @@ spec:
       limit: 5
       backoff: { duration: 5s, factor: 2, maxDuration: 3m }
 ```
+
+A generic multi-source template (chart + a cluster-config repo for
+LLMModel CRs) is at
+[`examples/argocd-application.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/argocd-application.yaml).
 
 The `platform.gateway.external` and `platform.gateway.internal` blocks
 both point at `nebari-gateway` because this runbook uses a single
