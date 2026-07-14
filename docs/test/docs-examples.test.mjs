@@ -82,3 +82,16 @@ describe('configuration', () => {
     expect(page).not.toMatch(/namespace:\s*llm-serving\b/);
   });
 });
+
+describe('shared-storage', () => {
+  it('embeds complete OCI and gated-HF manifests', () => {
+    const page = readPage('shared-storage.mdx');
+    expect(page).toMatch(/examples\/models\/oci-model\.yaml\?raw/);
+    expect(page).toMatch(/examples\/models\/devstral-small\.yaml\?raw/);
+  });
+
+  it('devstral example header comment uses the operator namespace', () => {
+    const m = readExample('models/devstral-small.yaml');
+    expect(m).not.toMatch(/create secret generic hf-token -n llm-serving\b/);
+  });
+});
