@@ -42,3 +42,21 @@ describe('new example manifests', () => {
     }
   });
 });
+
+describe('quickstart', () => {
+  it('has a Route to an external provider section that embeds the example', () => {
+    const page = readPage('quickstart.mdx');
+    expect(page).toMatch(/##\s+Route to an external provider/);
+    expect(page).toMatch(
+      /import\s+\w+\s+from\s+'\.\.\/\.\.\/\.\.\/\.\.\/examples\/passthrough-openrouter\.yaml\?raw'/,
+    );
+    expect(page).toMatch(/kubectl create secret generic openrouter-api-key/);
+    expect(page).toMatch(/llm\.[^\s]*\/v1\/chat\/completions/);
+  });
+
+  it('shows how to create the hf-token secret inline where authSecretName appears', () => {
+    const page = readPage('quickstart.mdx');
+    expect(page).toMatch(/kubectl create secret generic hf-token/);
+    expect(page).toMatch(/HF_TOKEN/);
+  });
+});
