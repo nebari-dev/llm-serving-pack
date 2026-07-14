@@ -3,7 +3,7 @@
 # Prerequisites:
 #   - The pack installed with the AI Gateway (see docs/src/content/docs/installation.md)
 #   - A Secret holding the platform's OpenRouter API key:
-#       kubectl -n nebari-llm-serving-system create secret generic openrouter-api-key \
+#       kubectl create secret generic openrouter-api-key -n nebari-llm-serving-system \
 #         --from-literal=apiKey='sk-or-v1-...'
 #
 # After it reconciles, any OpenRouter model id works against
