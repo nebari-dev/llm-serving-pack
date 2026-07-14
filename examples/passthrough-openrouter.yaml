@@ -1,7 +1,7 @@
 # PassthroughModel routing the shared LLM endpoints to OpenRouter.
 #
 # Prerequisites:
-#   - The pack installed with the AI Gateway (see docs/src/content/docs/installation.md)
+#   - The pack installed with the AI Gateway (see the Installation guide)
 #   - A Secret holding the platform's OpenRouter API key:
 #       kubectl create secret generic openrouter-api-key -n nebari-llm-serving-system \
 #         --from-literal=apiKey='sk-or-v1-...'
