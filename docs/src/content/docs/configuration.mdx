@@ -1,6 +1,11 @@
 ---
 title: Configuration
 ---
+import { Code } from '@astrojs/starlight/components';
+import minimalModel from '../../../../examples/models/minimal.yaml?raw';
+import advancedModel from '../../../../examples/models/advanced-scheduling.yaml?raw';
+import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+
 This page is the authoritative reference for every knob the pack exposes.
 It covers the Helm chart values you set at install time, the `LLMModel` custom resource you create per model, and the `NebariApp` fields the chart uses to wire the key-manager UI into the Nebari platform.
 
@@ -197,6 +202,10 @@ Escape hatches for power users. All fields optional.
 | `spec.advanced.vllm.extraEnv` | []EnvVar | Additional environment variables on the vLLM container (supports `value`, `valueFrom`, `secretKeyRef`, etc.). |
 | `spec.advanced.inferencePool.schedulerConfig` | object | EPP scheduler plugin configuration (free-form, `x-kubernetes-preserve-unknown-fields`). |
 
+A complete manifest exercising these fields:
+
+<Code code={advancedModel} lang="yaml" title="examples/models/advanced-scheduling.yaml" />
+
 ### Status fields
 
 The operator writes these fields to `status`; they are read-only.
@@ -210,6 +219,45 @@ The operator writes these fields to `status`; they are read-only.
 | `status.endpoints.internal` | string | Actual internal endpoint URL once provisioned. |
 | `status.modelSize` | string | Actual model size after download. |
 | `status.conditions` | []Condition | Standard Kubernetes conditions (type, status, reason, message). |
+
+---
+
+## PassthroughModel CRD reference
+
+`PassthroughModel` (`passthroughmodels.llm.nebari.dev`, group `llm.nebari.dev/v1alpha1`) routes the shared endpoints to an external OpenAI-compatible provider instead of a locally served model. It provisions gateway routing and the same two auth layers as `LLMModel`, but no storage, serving, or scheduling. Required fields: `spec.provider`, `spec.access`.
+
+### spec.provider
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.provider.hostname` | string | Yes | Provider hostname, e.g. `openrouter.ai` (bare host, TLS assumed). |
+| `spec.provider.port` | integer | No (default `443`) | Provider port. |
+| `spec.provider.schemaVersion` | string | No (default `v1`) | Upstream API path prefix, e.g. `api/v1` for OpenRouter, `v1` for api.openai.com. |
+| `spec.provider.credentialSecretName` | string | Yes | Secret in the PassthroughModel's namespace whose `apiKey` key holds the provider API key. Injected upstream; end users never see it. |
+
+### spec.models
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.models.catchAll` | boolean | No | Route any model id not claimed by a more specific route. Served LLMModels always win (they match Host and `x-ai-eg-model`). |
+| `spec.models.declared` | []string | No | Explicit model ids; also advertised by the gateway's `/v1/models` (external route only) so UIs can build a picker. |
+
+### spec.access
+
+Same semantics as `LLMModel`: set `public: true` or list `groups` (see [spec.access](#specaccess) above).
+
+### spec.endpoints
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `spec.endpoints.external.enabled` | boolean | `true` | Create the external (API-key) endpoint. |
+| `spec.endpoints.internal.enabled` | boolean | `true` | Create the internal (JWT) endpoint. |
+
+> **Naming constraint:** an LLMModel and a PassthroughModel cannot share a name in the same namespace (both derive the `<name>-api-keys` Secret). Only one catch-all PassthroughModel per gateway is supported.
+
+### Minimal PassthroughModel example
+
+<Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
 
 ---
 
@@ -251,27 +299,4 @@ For the full NebariApp CRD schema, see the [nebari-operator](https://github.com/
 
 The example below is the smallest valid manifest. See [Quickstart](/quickstart/) for an annotated walkthrough and [Shared Storage](/shared-storage/) for PVC options.
 
-```yaml
-apiVersion: llm.nebari.dev/v1alpha1
-kind: LLMModel
-metadata:
-  name: my-model
-  namespace: llm-serving
-spec:
-  access:
-    public: true
-  model:
-    name: mistralai/Devstral-Small-2505
-    source: huggingface
-    authSecretName: hf-token
-    preload: true
-    storage:
-      type: pvc
-      size: 200Gi
-  resources:
-    gpu:
-      count: 1
-      type: nvidia
-  serving:
-    replicas: 1
-```
+<Code code={minimalModel} lang="yaml" title="examples/models/minimal.yaml" />

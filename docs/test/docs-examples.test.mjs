@@ -60,3 +60,25 @@ describe('quickstart', () => {
     expect(page).toMatch(/HF_TOKEN/);
   });
 });
+
+describe('configuration', () => {
+  it('documents every PassthroughModel field', () => {
+    const page = readPage('configuration.mdx');
+    expect(page).toMatch(/##\s+PassthroughModel CRD reference/);
+    for (const f of [
+      'provider.hostname', 'provider.port', 'provider.schemaVersion',
+      'provider.credentialSecretName', 'models.catchAll', 'models.declared',
+      'access', 'endpoints',
+    ]) {
+      expect(page).toContain(f);
+    }
+  });
+
+  it('embeds minimal and advanced examples instead of inlining them', () => {
+    const page = readPage('configuration.mdx');
+    expect(page).toMatch(/examples\/models\/minimal\.yaml\?raw/);
+    expect(page).toMatch(/examples\/models\/advanced-scheduling\.yaml\?raw/);
+    // the broken hand-written minimal manifest is gone
+    expect(page).not.toMatch(/namespace:\s*llm-serving\b/);
+  });
+});
