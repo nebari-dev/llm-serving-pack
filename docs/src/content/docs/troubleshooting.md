@@ -274,3 +274,28 @@ If either flag is missing, update the ConfigMap (or the ArgoCD Application value
 ```bash
 kubectl rollout restart deploy -n envoy-gateway-system envoy-gateway
 ```
+
+---
+
+## External provider (PassthroughModel) not working
+
+**Upstream 401 / auth errors from the provider.** The gateway injects the key from `spec.provider.credentialSecretName`. Confirm the Secret exists in the operator namespace and has an `apiKey` key:
+
+```bash
+kubectl -n nebari-llm-serving-system get secret <credentialSecretName> \
+  -o jsonpath='{.data.apiKey}' | base64 -d | head -c 8; echo
+```
+
+If empty or the wrong key name, recreate it: the key MUST be named `apiKey`.
+
+**PassthroughModel stuck with `ApplyFailed`.** This condition means the Envoy AI Gateway CRDs are not installed; the operator requeues every minute rather than failing outright. Check the CR and the CRDs:
+
+```bash
+kubectl -n nebari-llm-serving-system get passthroughmodel <name> \
+  -o jsonpath='{.status.conditions}' | python3 -m json.tool
+kubectl get crd | grep aigateway
+```
+
+Install the AI Gateway (see [Installation](/installation/)) and the next reconcile clears the condition.
+
+**A model id you expected to hit the provider is served locally instead.** Per-LLMModel routes match Host and `x-ai-eg-model`, so they always win over a catch-all PassthroughModel. If a declared provider model id collides with a served model name, the served model wins. Rename or remove the conflicting LLMModel, or declare the provider model under a distinct id.

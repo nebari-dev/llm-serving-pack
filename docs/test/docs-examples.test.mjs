@@ -95,3 +95,13 @@ describe('shared-storage', () => {
     expect(m).not.toMatch(/create secret generic hf-token -n llm-serving\b/);
   });
 });
+
+describe('troubleshooting', () => {
+  it('has an external-provider (PassthroughModel) failure section', () => {
+    const page = readPage('troubleshooting.md');
+    expect(page).toMatch(/PassthroughModel|external provider/i);
+    expect(page).toMatch(/ApplyFailed/);
+    expect(page).toMatch(/credentialSecretName/);
+    expect(page).toMatch(/catch-all|catchAll/i);
+  });
+});
