@@ -26,3 +26,19 @@ describe('architecture: PassthroughModel embed', () => {
     expect(page).not.toMatch(/```yaml[\s\S]*kind:\s*PassthroughModel/);
   });
 });
+
+describe('new example manifests', () => {
+  it('minimal.yaml uses the operator namespace the webhook requires', () => {
+    const m = readExample('models/minimal.yaml');
+    expect(m).toMatch(/namespace:\s*nebari-llm-serving-system/);
+    expect(m).toMatch(/kind:\s*LLMModel/);
+    expect(m).not.toMatch(/namespace:\s*llm-serving\b/);
+  });
+
+  it('advanced-scheduling.yaml demonstrates all spec.advanced escape hatches', () => {
+    const m = readExample('models/advanced-scheduling.yaml');
+    for (const field of ['nodeSelector', 'tolerations', 'affinity', 'extraArgs', 'extraEnv']) {
+      expect(m).toContain(field);
+    }
+  });
+});

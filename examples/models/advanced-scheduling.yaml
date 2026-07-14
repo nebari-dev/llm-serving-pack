@@ -1,0 +1,48 @@
+# Demonstrates spec.advanced escape hatches: pin to a node pool, tolerate a
+# GPU taint, set affinity, and pass extra vLLM args / env. All fields optional.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: advanced-scheduling
+  namespace: nebari-llm-serving-system
+spec:
+  access:
+    public: false
+    groups:
+      - llm
+  model:
+    name: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"
+    source: huggingface
+    storage:
+      type: pvc
+      size: "30Gi"
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+  serving:
+    replicas: 1
+  advanced:
+    vllm:
+      nodeSelector:
+        nvidia.com/gpu.product: NVIDIA-L4
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node.kubernetes.io/instance-type
+                    operator: In
+                    values: ["g6.xlarge", "g5.xlarge"]
+      extraArgs:
+        - "--max-model-len"
+        - "8192"
+      extraEnv:
+        - name: VLLM_LOGGING_LEVEL
+          value: DEBUG
+        - name: HF_HUB_ENABLE_HF_TRANSFER
+          value: "1"
