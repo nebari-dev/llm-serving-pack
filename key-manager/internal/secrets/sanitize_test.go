@@ -2,12 +2,12 @@ package secrets
 
 import "testing"
 
-// Each row pins a literal expected output. The hash suffixes are FNV-1a
-// over the raw username; pinning them as literals (rather than computing
-// them via fnv in the test) means any change to either the substitution
-// rules OR the hash algorithm fails the test loudly. That is the drift
-// detector. The companion black-box test in manager_test.go has its own
-// independent reproduction of the rule used to assemble end-to-end
+// Each row pins a literal expected output. The hash suffixes are a
+// 128-bit-truncated SHA-256 over the raw username; pinning them as literals
+// (rather than computing them via sha256 in the test) means any change to
+// either the substitution rules OR the hash algorithm fails the test loudly.
+// That is the drift detector. The companion black-box test in manager_test.go
+// has its own independent reproduction of the rule used to assemble end-to-end
 // expected clientIDs.
 func TestSanitizeUsernameForKey(t *testing.T) {
 	tests := []struct {
@@ -33,27 +33,27 @@ func TestSanitizeUsernameForKey(t *testing.T) {
 		{
 			name:  "single @ becomes -at- with hash suffix",
 			input: "alice@example.com",
-			want:  "alice-at-example.com-94a4b546",
+			want:  "alice-at-example.com-ff8d9819fc0e12bf0d24892e45987e24",
 		},
 		{
 			name:  "multiple @ each become -at- with hash suffix",
 			input: "weird@@example.com",
-			want:  "weird-at--at-example.com-a114d2ab",
+			want:  "weird-at--at-example.com-d5641a0e3fa38a581fbd6ffd29f970cc",
 		},
 		{
 			name:  "plus is replaced with dash",
 			input: "alice+tag@example.com",
-			want:  "alice-tag-at-example.com-916aa631",
+			want:  "alice-tag-at-example.com-567e25214281f7004cf65c7a16fd5868",
 		},
 		{
 			name:  "space is replaced with dash",
 			input: "alice smith",
-			want:  "alice-smith-0c2e7d10",
+			want:  "alice-smith-038bd15a1ecf0f7b85db10beda1695ed",
 		},
 		{
 			name:  "unicode bytes are each replaced with dash",
 			input: "alicé",
-			want:  "alic---7bb18798", // é is two bytes in UTF-8, both invalid
+			want:  "alic---6dba1f9539a0e88583e9034e656a3822", // é is two bytes in UTF-8, both invalid
 		},
 		{
 			name:  "uppercase is preserved",

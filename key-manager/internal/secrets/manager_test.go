@@ -2,8 +2,9 @@ package secrets_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"testing"
 	"time"
@@ -50,9 +51,7 @@ func sanitizedPrefix(raw string) string {
 			out = append(out, '-')
 		}
 	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(raw))
-	return fmt.Sprintf("%s-%08x", string(out), h.Sum32())
+	return fmt.Sprintf("%s-%s", string(out), testShortHash(raw))
 }
 
 // pairSuffix mirrors the production (username, model) pair hash appended to
@@ -60,11 +59,22 @@ func sanitizedPrefix(raw string) string {
 // manager will produce. Kept as an independent implementation so a drift
 // between this and production fails the tests below.
 func pairSuffix(rawUser, rawModel string) string {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(rawUser))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(rawModel))
-	return fmt.Sprintf("%08x", h.Sum32())
+	return testShortHash(rawUser, rawModel)
+}
+
+// testShortHash mirrors the production shortHash helper (128-bit-truncated
+// SHA-256 over NUL-joined parts). Kept as an independent implementation so a
+// drift between this and production fails the tests below.
+func testShortHash(parts ...string) string {
+	h := sha256.New()
+	for i, p := range parts {
+		if i > 0 {
+			_, _ = h.Write([]byte{0})
+		}
+		_, _ = h.Write([]byte(p))
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:16])
 }
 
 const testNamespace = "llm-api-keys"
