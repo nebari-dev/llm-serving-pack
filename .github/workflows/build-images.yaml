@@ -9,6 +9,12 @@ on:
       - "frontend/**"
       - "model-downloader/**"
       - ".github/workflows/build-images.yaml"
+      # The release workflow pins images to sha-<release-commit>, so the
+      # release commit (a Chart.yaml bump) must produce images with that
+      # sha. Building here on the bump ensures they exist. This runs in
+      # parallel with the release workflow (no hard gate in v1), so images
+      # are published around the same time the chart becomes consumable.
+      - "charts/nebari-llm-serving/Chart.yaml"
   pull_request:
     paths:
       - "operator/**"

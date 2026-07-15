@@ -38,7 +38,9 @@ The Helm lint job runs `helm lint charts/nebari-llm-serving/` against the chart 
 
 ### Build Images (`build-images.yaml`)
 
-**Triggers:** push to `main` touching `operator/`, `key-manager/`, `frontend/`, `model-downloader/`, or the workflow file itself; pull requests touching those same component paths (builds the image but does not push it); manual `workflow_dispatch`.
+**Triggers:** push to `main` touching `operator/`, `key-manager/`, `frontend/`, `model-downloader/`, the workflow file itself, or `charts/nebari-llm-serving/Chart.yaml`; pull requests touching those same component paths (builds the image but does not push it; chart-only PRs do not trigger a build); manual `workflow_dispatch`.
+
+The `Chart.yaml` path is in the push trigger for a specific reason: a release is cut by bumping `version` in that file (see [Releasing](#releasing)), and the release workflow pins the release commit's images to `sha-<that commit>`. Triggering a build on the same push that cuts the release ensures those shas exist.
 
 Each of the four images (operator, model-downloader, key-manager, frontend - React SPA served by nginx) has its own job in `build-images.yaml`, and each job is a one-line call into the shared `pack-build-image.yaml` workflow, passing the image name, build context, and Dockerfile path. The shared workflow does the actual work: it builds with Docker Buildx and, on a push, pushes the image to two registries:
 
@@ -121,9 +123,13 @@ Cutting a release is one action: open a pull request that bumps `version` in `ch
 
 **What happens when that PR merges:**
 
-1. `build-images.yaml` builds images for the merge commit and pushes them to `ghcr.io` and `quay.io`, tagged `sha-<short>` (see [Build Images](#build-images-build-imagesyaml) above).
+The merge commit (the `Chart.yaml` bump) touches a path that both `build-images.yaml` and `release.yaml` watch, so it triggers both workflows in parallel:
+
+1. `build-images.yaml` builds images for the merge commit and pushes them to `ghcr.io` and `quay.io`, tagged `sha-<short>` (see [Build Images](#build-images-build-imagesyaml) above). This is what guarantees the sha the release pins in the next step actually has matching images.
 2. `release.yaml` runs. It reads the new `version` from `Chart.yaml`, pins that exact sha into the four image tags in the chart's `values.yaml` (operator, key manager, frontend, model downloader), packages the chart with `helm package`, and creates a GitHub Release tagged `nebari-llm-serving-<version>` with auto-generated notes and the packaged chart attached. It then opens a pull request that syncs the pinned chart source to `nebari-dev/helm-repository`; once that PR merges, the chart is published to `oci://quay.io/nebari/charts/nebari-llm-serving`.
 3. A pre-release version (anything with a `-` in it, e.g. `0.2.0-alpha.1`) is marked as a pre-release on the GitHub Release automatically.
+
+There is no hard gate between the two workflows in v1: `release.yaml` does not wait for `build-images.yaml` to finish before pinning shas. In practice both jobs kick off from the same push and finish close together. If the image build for that commit fails or lags, the release still pins the sha, and that failure is visible immediately: the `build-images.yaml` run shows red, and any deploy of that version fails to pull the missing image. The fix is to re-cut the release (bump `version` again) once the underlying build issue is resolved, rather than to retroactively patch a published chart.
 
 **Why `values.yaml` on `main` shows `tag: "latest"`:** the tag floats on purpose. Pinning happens in step 2 above, when a version is packaged, not in the repository tree. The published chart, not the source, is the pinned record of what a given version actually runs. To see exactly which image shas a released version deploys:
 
@@ -138,5 +144,3 @@ To install a released version, see the [Installation](/installation/) guide. To 
 ## Known Gaps
 
 - There is no chart-testing (`ct lint`) step that validates the chart against multiple Kubernetes versions. Contributions adding `helm/chart-testing-action` are welcome.
-- The release workflow does not wait for `build-images.yaml` to finish before pinning image shas into the chart. Both are triggered by the same push to `main` and normally finish independently, but there is no hard gate between them: if the image build for that commit is slow or fails, the released chart is still pinned to that sha, and the image only becomes pullable once the build catches up.
-- `build-images.yaml` only triggers on changes under `operator/`, `key-manager/`, `frontend/`, or `model-downloader/`; it does not watch `charts/**`. A release PR that touches only `Chart.yaml` will not trigger a fresh image build for that commit, so the pinned sha could have no matching image. Cut releases from a PR that also changes at least one component, or manually run `build-images.yaml` via `workflow_dispatch` against the release commit first.
