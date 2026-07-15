@@ -1,11 +1,11 @@
 ---
 title: CI/CD and Releasing
 ---
-This page documents every GitHub Actions workflow in the repository, the container images they produce, and the manual release process used to cut new versions. It is aimed at contributors and maintainers.
+This page documents every GitHub Actions workflow in the repository, the container images they produce, and the release process used to cut new versions. It is aimed at contributors and maintainers.
 
 ## Workflows
 
-The repository has six workflows located in `.github/workflows/`.
+This section covers the workflows in `.github/workflows/` relevant to CI and releasing. The image build and chart release workflows are thin callers of reusable workflows shared across Nebari packs, defined in [`nebari-dev/.github`](https://github.com/nebari-dev/.github): `pack-build-image.yaml` and `pack-release.yaml`. This repository's own `build-images.yaml` and `release.yaml` files just supply the pack-specific inputs (image names, build contexts, the chart path, which `values.yaml` keys to pin); the actual build, pin, package, and publish steps live in the shared workflows, so every pack that adopts them gets the same behavior and bug fixes.
 
 ### Test (`test.yaml`)
 
@@ -38,32 +38,38 @@ The Helm lint job runs `helm lint charts/nebari-llm-serving/` against the chart 
 
 ### Build Images (`build-images.yaml`)
 
-**Triggers:** push to `main`, push of any `v*` tag, manual `workflow_dispatch`.
+**Triggers:** push to `main` touching `operator/`, `key-manager/`, `frontend/`, `model-downloader/`, or the workflow file itself; pull requests touching those same component paths (builds the image but does not push it); manual `workflow_dispatch`.
 
-Builds and pushes four images to GitHub Container Registry (`ghcr.io`) under the prefix `ghcr.io/nebari-dev/nebari-llm-serving-pack`:
+Each of the four images (operator, model-downloader, key-manager, frontend - React SPA served by nginx) has its own job in `build-images.yaml`, and each job is a one-line call into the shared `pack-build-image.yaml` workflow, passing the image name, build context, and Dockerfile path. The shared workflow does the actual work: it builds with Docker Buildx and, on a push, pushes the image to two registries:
 
 | Image | Build context | Dockerfile |
 |-------|--------------|------------|
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | `operator/` | `operator/Dockerfile` |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | `model-downloader/` | `model-downloader/Dockerfile` |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | `.` (repo root) | `key-manager/Dockerfile` |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | `frontend/` | `frontend/Dockerfile` |
+| `operator` | `operator/` | `operator/Dockerfile` |
+| `model-downloader` | `model-downloader/` | `model-downloader/Dockerfile` |
+| `key-manager` | `.` (repo root) | `key-manager/Dockerfile` |
+| `frontend` | `frontend/` | `frontend/Dockerfile` |
 
-The `build-frontend` job (React SPA → nginx) is added alongside the existing image jobs.
+- GitHub Container Registry, as `ghcr.io/nebari-dev/llm-serving-pack/<image>`
+- Quay, as `quay.io/nebari/llm-serving-pack-<image>`
 
-Each job uses `docker/metadata-action` to derive tags automatically:
+`docker/metadata-action` derives the tags automatically:
 
 | Condition | Tag applied |
 |-----------|------------|
-| Any push | `sha-<short SHA>` |
-| Push to `main` branch | branch name (`main`) and `:latest` |
-| Push of a `v*` tag | semantic version from the tag, `v` prefix preserved (e.g. `v0.1.0-alpha.9`) |
+| Any push (or manual dispatch) | `sha-<short SHA>` |
+| Push to the default branch (`main`) | also `latest` |
 
-The `latest` tag only applies when building from the default branch. Version tags applied on a `v*` push take the form `v{{version}}` as extracted by `docker/metadata-action`'s semver pattern.
+Pull request builds always run with pushing disabled, so a PR proves the image builds without publishing anything under that PR's commit.
 
-Authentication to GHCR uses the workflow's automatic `GITHUB_TOKEN` with `packages: write` permission.
+Authentication uses the workflow's automatic `GITHUB_TOKEN` for GHCR (`packages: write`) and a `QUAY_TOKEN` secret plus a `QUAY_USERNAME` repository variable for Quay.
 
-The chart's `values.yaml` does not set a default tag for the operator, key-manager, and frontend images; it leaves `tag: ""` and falls back to `.Chart.AppVersion` at render time. This means `helm install` without a tag override pulls whatever image version matches the chart's `appVersion`.
+Nothing here produces a version-numbered tag. On `main`, the chart's `values.yaml` hardcodes `tag: "latest"` for the operator, key-manager, frontend, and model-downloader images - that is deliberate, and covered in [Chart Versioning](#chart-versioning) and [Releasing](#releasing) below.
+
+### Release Chart (`release.yaml`)
+
+**Triggers:** push to `main` that touches `charts/nebari-llm-serving/Chart.yaml`.
+
+This is the workflow that actually cuts a release. It is a thin caller of the shared `pack-release.yaml` workflow: `release.yaml` just tells it which chart to package (`charts/nebari-llm-serving`), what to call it (`nebari-llm-serving`), and which `values.yaml` keys hold image tags that need to be pinned (`operator.image.tag`, `keyManager.image.tag`, `frontend.image.tag`, `modelDownloader.image.tag`). The full mechanics of what the shared workflow does are described in [Releasing](#releasing) below.
 
 ### Docs (`docs.yml`)
 
@@ -91,10 +97,10 @@ The four images built by `build-images.yaml` and their roles in the pack:
 
 | Image | Purpose |
 |-------|---------|
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | Kubernetes controller that reconciles `LLMModel` CRs |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | Init container that downloads model weights into a PVC before the serving pod starts |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager REST API for managing per-user API keys |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | LLM serving pack React UI (nginx) - serves the SPA and proxies `/api` to the key-manager |
+| `ghcr.io/nebari-dev/llm-serving-pack/operator` | Kubernetes controller that reconciles `LLMModel` CRs |
+| `ghcr.io/nebari-dev/llm-serving-pack/model-downloader` | Init container that downloads model weights into a PVC before the serving pod starts |
+| `ghcr.io/nebari-dev/llm-serving-pack/key-manager` | Key manager REST API for managing per-user API keys |
+| `ghcr.io/nebari-dev/llm-serving-pack/frontend` | LLM serving pack React UI (nginx) - serves the SPA and proxies `/api` to the key-manager |
 
 A fifth image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving image. Its version is set in `values.yaml` under `defaults.serving.image` and is not built by this repository. See the [llm-d project](https://github.com/llm-d/llm-d) for its release history.
 
@@ -102,25 +108,35 @@ A fifth image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving ima
 
 The Helm chart lives at `charts/nebari-llm-serving/` and has two version fields in `Chart.yaml`:
 
-- **`version`** - the chart packaging version (SemVer). Helm uses this for `helm repo` indexing and upgrade resolution.
-- **`appVersion`** - the application version string, which the chart uses as the default image tag for the operator, key-manager, and frontend when no explicit tag override is given.
+- **`version`** - the chart packaging version (SemVer). Bumping this field and merging the change to `main` is what cuts a release; see [Releasing](#releasing) below.
+- **`appVersion`** - the application version string. The chart only uses it to set the `app.kubernetes.io/version` label on the resources it renders. It has no effect on which image gets deployed.
 
-Both fields are kept in sync; every release bumps them together to the same value (e.g. `0.1.0-alpha.9`). The current version is `0.1.0-alpha.9`.
+Both fields are conventionally bumped together (e.g. to `0.1.0-alpha.9`), but only `version` drives the release automation. The current version is `0.1.0-alpha.9`.
 
-## Release Process
+Image tags are not derived from `appVersion`, and they are not hand-edited in the repository either. On `main`, every image tag in `values.yaml` (operator, key manager, frontend, model downloader) is pinned to `latest` on purpose: the real, immutable tag only gets written when a release is packaged, and that step never touches the repo tree. See [Releasing](#releasing) for where that pinning happens.
 
-Releases follow a manual workflow. As of `v0.1.0-alpha.9` there is no automated Helm repository publish step; the release consists of:
+## Releasing
 
-1. **Bump chart version** - edit `charts/nebari-llm-serving/Chart.yaml` and update both `version` and `appVersion` to the new value. Commit with a message like `chore(release): cut v0.1.0-alpha.X`.
-2. **Push a `v*` tag** - push an annotated or lightweight tag matching the new version (e.g. `git tag v0.1.0-alpha.9 && git push origin v0.1.0-alpha.9`). This tag triggers `build-images.yaml`, which pushes images with the version tag to GHCR.
-3. **Create a GitHub release** - the release is created manually (or as a draft) on the GitHub releases page. Release notes summarise the PRs included since the previous release.
+Cutting a release is one action: open a pull request that bumps `version` in `charts/nebari-llm-serving/Chart.yaml`, and merge it. Everything else is automatic - no git tag to push by hand, no editing image tags, no release step that happens outside a PR merged to `main`.
 
-There is currently **no automated Helm chart repository or OCI chart publish step**. Users install the chart directly from a local checkout or from the repository source. A future task will add automated chart publishing to a Helm OCI registry or GitHub Pages-hosted index.
+**What happens when that PR merges:**
 
-To install from the current release, see the [Installation](/installation/) guide. To work with a local development build, see the [Local Development](/local-development/) page.
+1. `build-images.yaml` builds images for the merge commit and pushes them to `ghcr.io` and `quay.io`, tagged `sha-<short>` (see [Build Images](#build-images-build-imagesyaml) above).
+2. `release.yaml` runs. It reads the new `version` from `Chart.yaml`, pins that exact sha into the four image tags in the chart's `values.yaml` (operator, key manager, frontend, model downloader), packages the chart with `helm package`, and creates a GitHub Release tagged `nebari-llm-serving-<version>` with auto-generated notes and the packaged chart attached. It then opens a pull request that syncs the pinned chart source to `nebari-dev/helm-repository`; once that PR merges, the chart is published to `oci://quay.io/nebari/charts/nebari-llm-serving`.
+3. A pre-release version (anything with a `-` in it, e.g. `0.2.0-alpha.1`) is marked as a pre-release on the GitHub Release automatically.
+
+**Why `values.yaml` on `main` shows `tag: "latest"`:** the tag floats on purpose. Pinning happens in step 2 above, when a version is packaged, not in the repository tree. The published chart, not the source, is the pinned record of what a given version actually runs. To see exactly which image shas a released version deploys:
+
+```
+helm show values oci://quay.io/nebari/charts/nebari-llm-serving --version <version>
+```
+
+**Reproducibility:** installing a given `--version` always deploys the same shas, because those shas are baked into the packaged chart rather than read live from `main`. Re-running the release pipeline for a version that has already been released is a no-op: it checks whether a GitHub Release for that chart and version already exists, and skips everything if so.
+
+To install a released version, see the [Installation](/installation/) guide. To work with a local development build, which reads `values.yaml` as committed (so `latest`-tagged images), see the [Local Development](/local-development/) page.
 
 ## Known Gaps
 
 - There is no chart-testing (`ct lint`) step that validates the chart against multiple Kubernetes versions. Contributions adding `helm/chart-testing-action` are welcome.
-- There is no automated Helm chart publish. The release process is entirely manual after the images are pushed.
-- The `v0.1.0-alpha.9` GitHub release is currently a draft and has not been formally published.
+- The release workflow does not wait for `build-images.yaml` to finish before pinning image shas into the chart. Both are triggered by the same push to `main` and normally finish independently, but there is no hard gate between them: if the image build for that commit is slow or fails, the released chart is still pinned to that sha, and the image only becomes pullable once the build catches up.
+- `build-images.yaml` only triggers on changes under `operator/`, `key-manager/`, `frontend/`, or `model-downloader/`; it does not watch `charts/**`. A release PR that touches only `Chart.yaml` will not trigger a fresh image build for that commit, so the pinned sha could have no matching image. Cut releases from a PR that also changes at least one component, or manually run `build-images.yaml` via `workflow_dispatch` against the release commit first.
