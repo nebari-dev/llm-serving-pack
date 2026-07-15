@@ -25,8 +25,7 @@ on:
 
 jobs:
   operator:
-    # TODO: re-pin to the v1 tag before this PR merges (bring-up ref only).
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@feat/pack-release-workflows
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: operator
       context: operator/
@@ -35,8 +34,7 @@ jobs:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
 
   model-downloader:
-    # TODO: re-pin to the v1 tag before this PR merges (bring-up ref only).
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@feat/pack-release-workflows
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: model-downloader
       context: model-downloader/
@@ -45,8 +43,7 @@ jobs:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
 
   key-manager:
-    # TODO: re-pin to the v1 tag before this PR merges (bring-up ref only).
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@feat/pack-release-workflows
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: key-manager
       context: "."
@@ -56,8 +53,7 @@ jobs:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
 
   frontend:
-    # TODO: re-pin to the v1 tag before this PR merges (bring-up ref only).
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@feat/pack-release-workflows
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: frontend
       context: frontend/
