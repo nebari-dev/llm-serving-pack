@@ -34,7 +34,7 @@ spec:
         # ClusterIP. This is the service the NebariApp targets; auth is handled
         # client-side by keycloak-js (PKCE/S256) and validated by the key-manager.
         - name: frontend
-          image: {{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}
+          image: {{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag }}
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - name: http

@@ -19,7 +19,7 @@ spec:
       serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-operator
       containers:
         - name: manager
-          image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag | default .Chart.AppVersion }}
+          image: {{ .Values.operator.image.repository }}:{{ .Values.operator.image.tag }}
           imagePullPolicy: {{ .Values.operator.image.pullPolicy | default "IfNotPresent" }}
           env:
             - name: LLM_BASE_DOMAIN
@@ -48,6 +48,8 @@ spec:
               value: {{ .Values.defaults.serving.image | quote }}
             - name: LLM_DEFAULT_EPP_IMAGE
               value: {{ .Values.defaults.epp.image | quote }}
+            - name: LLM_MODEL_DOWNLOADER_IMAGE
+              value: "{{ .Values.modelDownloader.image.repository }}:{{ .Values.modelDownloader.image.tag }}"
             - name: LLM_DEFAULT_STORAGE_CLASS_NAME
               value: {{ .Values.defaults.storage.storageClassName | quote }}
             - name: LLM_CLUSTER_ISSUER_NAME
