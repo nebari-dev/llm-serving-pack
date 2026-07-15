@@ -1,0 +1,21 @@
+name: Release Chart
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "charts/nebari-llm-serving/Chart.yaml"
+
+jobs:
+  release:
+    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
+    with:
+      chart-path: charts/nebari-llm-serving
+      chart-name: nebari-llm-serving
+      tag-paths: |
+        operator.image.tag
+        keyManager.image.tag
+        frontend.image.tag
+        modelDownloader.image.tag
+    secrets:
+      NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}

@@ -90,7 +90,7 @@ npm run check   # biome lint + format
 ## Shipping a change
 
 The UI ships as its own image
-(`ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend`, nginx serving the built
+(`ghcr.io/nebari-dev/llm-serving-pack/frontend`, nginx serving the built
 bundle) - it is no longer embedded in the Go key-manager binary. Committing your
 edits to `frontend/` is all that is needed for them to ship: CI builds and
 publishes the frontend image on merge, and a chart upgrade rolls it out.

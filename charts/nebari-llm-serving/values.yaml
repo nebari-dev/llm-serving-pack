@@ -72,11 +72,9 @@ keyManager:
     groups:
       - llm
   image:
-    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager
-    # tag defaults to .Chart.AppVersion when empty so the chart version and
-    # the image version always move together. Override only when testing a
-    # specific image build (e.g. tag: 0.1.0-alpha.2 or tag: sha-abc1234).
-    tag: ""
+    repository: ghcr.io/nebari-dev/llm-serving-pack/key-manager
+    # Floating on main; pinned to a build sha at release time (see cicd-and-releasing).
+    tag: "latest"
     pullPolicy: Always
   auditInterval: 5m
   oidcUserinfoURL: ""
@@ -176,10 +174,9 @@ frontend:
   # Set enabled=false to skip the frontend (e.g. an API-only test install).
   enabled: true
   image:
-    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend
-    # tag defaults to .Chart.AppVersion when empty so the chart and image
-    # versions move together. Override to pull a specific build.
-    tag: ""
+    repository: ghcr.io/nebari-dev/llm-serving-pack/frontend
+    # Floating on main; pinned to a build sha at release time (see cicd-and-releasing).
+    tag: "latest"
     pullPolicy: Always
   # port nginx listens on. Must be > 1024 - the container runs as non-root
   # (UID 101) with all capabilities dropped and cannot bind privileged ports.
@@ -202,13 +199,20 @@ frontend:
 
 operator:
   image:
-    repository: ghcr.io/nebari-dev/nebari-llm-serving-pack/operator
-    # tag defaults to .Chart.AppVersion when empty so the chart version and
-    # the image version always move together. Override only when testing a
-    # specific image build (e.g. tag: 0.1.0-alpha.2 or tag: sha-abc1234).
-    tag: ""
+    repository: ghcr.io/nebari-dev/llm-serving-pack/operator
+    # Floating on main; pinned to a build sha at release time (see cicd-and-releasing).
+    tag: "latest"
     pullPolicy: Always
 
+# modelDownloader - the init/job image the operator uses to fetch model
+# weights before a serving Deployment starts. Rendered into the operator's
+# LLM_MODEL_DOWNLOADER_IMAGE env var (operator-deployment.yaml) rather than
+# hardcoded, so it can be re-pinned without rebuilding the operator image.
+modelDownloader:
+  image:
+    repository: ghcr.io/nebari-dev/llm-serving-pack/model-downloader
+    # Floating on main; pinned to a build sha at release time (see cicd-and-releasing).
+    tag: "latest"
 
 defaults:
   serving:

@@ -2,6 +2,7 @@ package reconcilers
 
 import (
 	"fmt"
+	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -13,8 +14,19 @@ import (
 const (
 	modelStorageVolumeName = "model-storage"
 	modelCachePath         = "/model-cache"
-	hfInitContainerImage   = "ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest"
+
+	defaultModelDownloaderImage = "ghcr.io/nebari-dev/llm-serving-pack/model-downloader:latest"
 )
+
+// modelDownloaderImage returns the image to use for the model-downloader init
+// container. It can be overridden via the LLM_MODEL_DOWNLOADER_IMAGE env var;
+// otherwise it falls back to defaultModelDownloaderImage.
+func modelDownloaderImage() string {
+	if v := os.Getenv("LLM_MODEL_DOWNLOADER_IMAGE"); v != "" {
+		return v
+	}
+	return defaultModelDownloaderImage
+}
 
 // StorageResult holds the storage-related Kubernetes resources for an LLMModel.
 type StorageResult struct {
@@ -144,7 +156,7 @@ func buildHFInitContainer(model *llmv1alpha1.LLMModel) corev1.Container {
 
 	container := corev1.Container{
 		Name:  "model-downloader",
-		Image: hfInitContainerImage,
+		Image: modelDownloaderImage(),
 		Args:  args,
 		VolumeMounts: []corev1.VolumeMount{
 			{

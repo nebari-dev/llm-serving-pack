@@ -31,6 +31,22 @@ func makeHFModel(storage llmv1alpha1.StorageSpec) *llmv1alpha1.LLMModel {
 	}
 }
 
+func TestModelDownloaderImage(t *testing.T) {
+	const def = "ghcr.io/nebari-dev/llm-serving-pack/model-downloader:latest"
+	tests := []struct{ name, env, want string }{
+		{"default when unset", "", def},
+		{"override from env", "quay.io/nebari/llm-serving-pack-model-downloader:sha-abc1234", "quay.io/nebari/llm-serving-pack-model-downloader:sha-abc1234"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LLM_MODEL_DOWNLOADER_IMAGE", tt.env)
+			if got := modelDownloaderImage(); got != tt.want {
+				t.Fatalf("got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildStorageSpec(t *testing.T) { //nolint:gocyclo // table-driven test
 	t.Parallel()
 
