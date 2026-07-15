@@ -32,6 +32,7 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   model-downloader:
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
@@ -41,6 +42,7 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   key-manager:
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
@@ -51,6 +53,7 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   frontend:
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
@@ -60,3 +63,4 @@ jobs:
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
