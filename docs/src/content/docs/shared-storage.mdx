@@ -22,7 +22,7 @@ All model loading paths - HuggingFace and OCI - mount the model at `/model-cache
 When `model.source` is `huggingface` (or any value other than `oci`, including an empty string when the field is left unset - the operator treats any non-`oci` source as HuggingFace), the operator:
 
 1. Creates a PVC named `<llmmodel-name>-model-storage` in the same namespace
-2. Adds an init container running `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest`
+2. Adds an init container running `ghcr.io/nebari-dev/llm-serving-pack/model-downloader:latest`
 3. The init container runs `hf download <model-name> --local-dir /model-cache`
 4. Mounts the PVC at `/model-cache` in both the init container and the vLLM container
 

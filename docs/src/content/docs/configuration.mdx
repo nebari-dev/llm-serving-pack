@@ -55,7 +55,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `keyManager.enabled` | `true` | Deploy the key-manager service. |
-| `keyManager.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Container image repository. |
+| `keyManager.image.repository` | `ghcr.io/nebari-dev/llm-serving-pack/key-manager` | Container image repository. |
 | `keyManager.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty, keeping chart and image versions in sync. Override only when testing a specific build. |
 | `keyManager.image.pullPolicy` | `Always` | Image pull policy. |
 | `keyManager.auditInterval` | `5m` | How often the scaffolded audit loop runs (only when `oidcUserinfoURL` is set). Group-change revocation is not yet implemented (see below), so this loop performs no revocation today. |
@@ -88,7 +88,7 @@ The React SPA served by nginx. It serves the SPA and a runtime `/config.json`, a
 | Key | Default | Description |
 |-----|---------|-------------|
 | `frontend.enabled` | `true` | Deploy the frontend (nginx) Deployment, Service, and config ConfigMap. |
-| `frontend.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | Frontend container image repository. |
+| `frontend.image.repository` | `ghcr.io/nebari-dev/llm-serving-pack/frontend` | Frontend container image repository. |
 | `frontend.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty. |
 | `frontend.image.pullPolicy` | `Always` | Image pull policy. |
 | `frontend.port` | `8080` | Container port nginx listens on. |
@@ -102,7 +102,7 @@ The React SPA served by nginx. It serves the SPA and a runtime `/config.json`, a
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `operator.image.repository` | `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | Operator container image repository. |
+| `operator.image.repository` | `ghcr.io/nebari-dev/llm-serving-pack/operator` | Operator container image repository. |
 | `operator.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty. Override only when testing a specific build. |
 | `operator.image.pullPolicy` | `Always` | Image pull policy. |
 
