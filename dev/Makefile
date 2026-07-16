@@ -24,7 +24,7 @@ AI_GATEWAY_VERSION ?= v0.5.0
 HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v?([0-9]+).*/\1/')
 HELM_FORCE_CONFLICTS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--force-conflicts,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -112,6 +112,9 @@ ui: ## Run the React UI dev server against the local cluster (alias for run-dev)
 
 test-auth: ## Verify the key-manager's real bearer-token JWKS validation (deploys Keycloak, flips off dev mode, mints a token, asserts 200/401). KEEP_AUTH=1 leaves real-auth mode on.
 	./test-auth.sh
+
+test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-spoofing through the gateway (deploys two mock models, asserts the 200/403/401 matrix). KEEP=1 leaves the models.
+	./test-model-scope.sh
 
 logs-operator: ## Tail operator logs
 	$(KUBECTL) -n llm-operator-system logs -f deployment/llm-operator

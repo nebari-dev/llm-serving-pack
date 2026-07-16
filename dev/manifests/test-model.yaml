@@ -23,6 +23,10 @@ spec:
       memory: "256Mi"
   serving:
     image: mock-vllm:dev
+    # The operator defaults the container command to the real vLLM entrypoint
+    # (required by the llm-d-cuda serving image); the mock image runs a plain
+    # Python HTTP server instead, so override it here.
+    command: ["python", "/server.py"]
     replicas: 1
     monitoring:
       enabled: false

@@ -3,10 +3,11 @@ package secrets
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ type KeyInfo struct {
 
 // CreateKeyResult is returned when a new key is created.
 type CreateKeyResult struct {
-	ClientID string // e.g., "user-chuck-1"
+	ClientID string // e.g., "user-chuck-phi4-mini-<32-hex-sha256>-1" (user, model, pair hash, sequence)
 	APIKey   string // e.g., "sk-abc123..." - only returned once at creation time
 }
 
@@ -54,7 +55,7 @@ func secretName(modelName string) string {
 //
 // Already-valid input is returned unchanged so the common ASCII case keeps
 // human-readable clientIDs. When sanitization is needed, "@" becomes "-at-"
-// and any other disallowed byte becomes "-"; an 8-hex-char FNV-1a hash of
+// and any other disallowed byte becomes "-"; a truncated SHA-256 hash of
 // the raw username is then appended so two distinct raw usernames that
 // would otherwise collide (e.g. "alice@example.com" vs literal
 // "alice-at-example.com") get unique keys.
@@ -72,7 +73,7 @@ func sanitizeUsernameForKey(username string) string {
 		return username
 	}
 	var b strings.Builder
-	b.Grow(len(username) + 9) // worst case "@"-only inputs grow ~4x; "+ -XXXXXXXX" suffix is 9
+	b.Grow(len(username) + 33) // worst case "@"-only inputs grow ~4x; the "-<32-hex>" hash suffix is 33
 	for i := 0; i < len(username); i++ {
 		c := username[i]
 		switch {
@@ -84,9 +85,7 @@ func sanitizeUsernameForKey(username string) string {
 			b.WriteByte('-')
 		}
 	}
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(username))
-	fmt.Fprintf(&b, "-%08x", h.Sum32())
+	fmt.Fprintf(&b, "-%s", shortHash(username))
 	return b.String()
 }
 
@@ -118,6 +117,33 @@ func isValidDataKeyName(s string) bool {
 		}
 	}
 	return true
+}
+
+// shortHash returns a hex-encoded, 128-bit-truncated SHA-256 over the given
+// parts joined with a NUL byte (so ("a","bc") and ("ab","c") hash to different
+// values). It disambiguates client IDs whose human-readable
+// "user-<user>-<model>-" prefix would otherwise compose identically - e.g.
+// ("mary","jane-chat") vs ("mary-jane","chat") - and keeps two raw usernames
+// that sanitize to the same data-key form distinct.
+//
+// A duplicate client ID across two models' api-keys Secrets recreates the
+// cross-model authorization bypass, because Envoy Gateway uses the first of any
+// client ID duplicated across the pooled credentialRefs (#116, #122). The
+// previous 32-bit FNV-1a hash made such collisions cheap to construct; truncated
+// SHA-256 makes them computationally infeasible. The client ID is a public
+// authorization principal, not a secret, so a deterministic hash - reproducible
+// for tests and debugging - is the right tool: uniqueness, not unpredictability,
+// is the property that matters.
+func shortHash(parts ...string) string {
+	h := sha256.New()
+	for i, p := range parts {
+		if i > 0 {
+			_, _ = h.Write([]byte{0})
+		}
+		_, _ = h.Write([]byte(p))
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:16])
 }
 
 // configMapName returns the name of the ConfigMap for a model.
@@ -187,20 +213,46 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 		return nil, err
 	}
 
-	// Count existing keys for this user to determine the sequence number.
-	// The sanitized username is used both for the data-key prefix and for the
-	// composed clientID so the count and the new clientID stay in sync.
-	// KeyInfo.Creator below preserves the raw username for ownership checks.
+	// The clientID is scoped by BOTH username and model: the operator pools
+	// every model's api-keys Secret into each model's SecurityPolicy
+	// credentialRefs (model-scoped auth), and forwards the matched data key as
+	// the x-llm-client-id used for per-model authorization. A clientID that
+	// repeats across models - e.g. "user-<name>-1" for the first key of every
+	// model - collides in that pooled set, so one model's key both
+	// authenticates and authorizes for another, and the user's other keys fail
+	// to authenticate at all (only one value survives per duplicated key).
+	//
+	// A hyphen-joined "user-<name>-<model>" is still ambiguous because both
+	// parts legitimately contain hyphens: ("mary", "jane-chat") and
+	// ("mary-jane", "chat") compose identically. A truncated SHA-256 of the
+	// length-delimited (username, model) pair is appended so distinct pairs mint
+	// distinct client IDs (collisions are computationally infeasible; the former
+	// 32-bit FNV-1a made them cheap to construct). KeyInfo.Creator below
+	// preserves the raw username for ownership checks.
 	safeUsername := sanitizeUsernameForKey(username)
-	userPrefix := "user-" + safeUsername + "-"
+	safeModel := sanitizeUsernameForKey(modelName)
+	userPrefix := fmt.Sprintf("user-%s-%s-%s-", safeUsername, safeModel, shortHash(username, modelName))
 	count := 0
 	for k := range secret.Data {
 		if strings.HasPrefix(k, userPrefix) {
 			count++
 		}
 	}
+	// Probe upward from count+1 until the clientID is unused. Revocation
+	// leaves gaps in the sequence, so a bare count can land on a still-live
+	// key (keys {1,2,3}, revoke #2, count=2 -> "-3") and would silently
+	// overwrite that credential in both the Secret and the ConfigMap.
 	sequence := count + 1
-	clientID := fmt.Sprintf("user-%s-%d", safeUsername, sequence)
+	clientID := fmt.Sprintf("%s%d", userPrefix, sequence)
+	for {
+		_, inSecret := secret.Data[clientID]
+		_, inCM := cm.Data[clientID]
+		if !inSecret && !inCM {
+			break
+		}
+		sequence++
+		clientID = fmt.Sprintf("%s%d", userPrefix, sequence)
+	}
 
 	apiKey, err := generateAPIKey()
 	if err != nil {

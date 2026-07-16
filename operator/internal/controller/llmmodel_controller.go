@@ -32,9 +32,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -124,7 +127,15 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// 6. Reconcile auth resources (Secret + ConfigMap, both in the model's namespace)
 	var authResources *reconcilers.AuthResources
 	if r.Config != nil {
-		authResources, err = reconcilers.BuildAuthResources(model, r.Config)
+		clientIDs, err := apiKeyClientIDs(ctx, r.Client, model.Name, model.Namespace)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
+		}
+		credentialSecretNames, err := apiKeySecretNamesWith(ctx, r.Client, model.Namespace, reconcilers.APIKeySecretName(model.Name))
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("listing api key secrets: %w", err)
+		}
+		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs, credentialSecretNames)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
@@ -744,6 +755,13 @@ func (r *LLMModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return enqueueAllModelsForAPIKeySecret(ctx, r.Client, obj, &llmv1alpha1.LLMModelList{})
+			}),
+			builder.WithPredicates(managedByOperatorPredicate()),
+		).
 		Named("llmmodel").
 		Complete(r)
 }

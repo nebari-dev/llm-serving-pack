@@ -29,9 +29,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -89,7 +92,15 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config)
+	clientIDs, err := apiKeyClientIDs(ctx, r.Client, pm.Name, pm.Namespace)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
+	}
+	credentialSecretNames, err := apiKeySecretNamesWith(ctx, r.Client, pm.Namespace, reconcilers.APIKeySecretName(pm.Name))
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("listing api key secrets: %w", err)
+	}
+	resources, err := reconcilers.BuildPassthroughResources(pm, r.Config, clientIDs, credentialSecretNames)
 	if err != nil {
 		// Surface the build failure as a condition so `kubectl describe`
 		// explains the Error phase rather than only the reconcile log.
@@ -339,6 +350,13 @@ func boolOrDefaultStatus(b *bool) bool {
 func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llmv1alpha1.PassthroughModel{}).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return enqueueAllModelsForAPIKeySecret(ctx, r.Client, obj, &llmv1alpha1.PassthroughModelList{})
+			}),
+			builder.WithPredicates(managedByOperatorPredicate()),
+		).
 		Named("passthroughmodel").
 		Complete(r)
 }

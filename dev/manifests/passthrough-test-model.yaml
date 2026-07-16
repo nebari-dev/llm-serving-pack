@@ -5,7 +5,9 @@
 #
 # Once reconciled (kubectl -n llm-operator-system get passthroughmodel), reach
 # it through the gateway. The external endpoint uses API-key auth, so inject a
-# client key into the api-keys Secret to skip the key-manager:
+# client key into the api-keys Secret to skip the key-manager. A curl right
+# after the patch can 403 until the operator re-renders the SecurityPolicy
+# allow-list from the Secret (a few seconds) - retry on 403:
 #   kubectl -n llm-operator-system patch secret openrouter-api-keys --type merge \
 #     -p '{"stringData":{"localtester":"sk-localtest-abc123"}}'
 #   kubectl -n envoy-gateway-system port-forward svc/envoy-...-nebari-gateway 8443:443 &
