@@ -193,7 +193,7 @@ curl -X POST https://keys.llm.<baseDomain>/api/keys \
   -d '{"modelName": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"}'
 ```
 
-To revoke a key, delete it in the key manager UI, or call `DELETE /api/keys/{namespace}/{model}/{clientID}` with the same bearer token. A revoked key immediately returns 401 on the external route.
+To revoke a key, delete it in the key manager UI, or call `DELETE /api/keys/{namespace}/{model}/{clientID}` with the same bearer token (the `namespace`, `model`, and `clientID` come from the mint response, or from `GET /api/keys`). A revoked key immediately returns 401 on the external route.
 
 ### Internal access (JWT from JupyterLab or in-cluster service)
 

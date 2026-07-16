@@ -148,17 +148,17 @@ The [Installation](/installation/) guide's ArgoCD Application is the recommended
 ```bash
 # From the OCI registry (no repo add needed):
 helm install nebari-llm-serving \
-  oci://quay.io/nebari/charts/nebari-llm-serving --version 0.1.2 \
+  oci://quay.io/nebari/charts/nebari-llm-serving --version <version> \
   -n nebari-llm-serving-system --create-namespace -f my-values.yaml
 
 # Or via the Helm repo index:
 helm repo add nebari https://raw.githubusercontent.com/nebari-dev/helm-repository/gh-pages/
 helm repo update
-helm install nebari-llm-serving nebari/nebari-llm-serving --version 0.1.2 \
+helm install nebari-llm-serving nebari/nebari-llm-serving --version <version> \
   -n nebari-llm-serving-system --create-namespace -f my-values.yaml
 ```
 
-Both forms install the same packaged chart with the same pinned image shas (see [Releasing](#releasing) above); `my-values.yaml` should set at least `platform.baseDomain` and the other required values covered in [Configuration](/configuration/).
+Replace `<version>` with a released version (the newest is on the repository's Releases page). Both forms install the same packaged chart with the same pinned image shas (see [Releasing](#releasing) above); `my-values.yaml` should set at least `platform.baseDomain` and the other required values covered in [Configuration](/configuration/).
 
 ## Known Gaps
 

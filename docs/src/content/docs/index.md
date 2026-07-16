@@ -40,7 +40,7 @@ Apply it, and the operator downloads the weights, starts vLLM, registers the mod
 inference scheduler, creates the internal and external routes, and gates them on the groups you
 listed. See the [Quickstart](/quickstart/) for the end-to-end flow.
 
-Ready-to-apply manifests are in [`examples/models/`](https://github.com/nebari-dev/llm-serving-pack/tree/main/examples/models) (minimal, gated-HuggingFace, OCI, and advanced-scheduling).
+Ready-to-apply manifests are in [`examples/models/`](https://github.com/nebari-dev/llm-serving-pack/tree/main/examples/models) (minimal, gated-HuggingFace, OCI, quantized, and advanced-scheduling).
 
 ## What you get
 
