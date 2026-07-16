@@ -7,7 +7,7 @@ domain: nebari.dev
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: github.com/nebari-dev/nebari-llm-serving-pack/operator
+repo: github.com/nebari-dev/llm-serving-pack/operator
 resources:
 - api:
     crdVersion: v1
@@ -16,7 +16,7 @@ resources:
   domain: nebari.dev
   group: llm
   kind: LLMModel
-  path: github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1
+  path: github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1
   version: v1alpha1
   webhooks:
     validation: true

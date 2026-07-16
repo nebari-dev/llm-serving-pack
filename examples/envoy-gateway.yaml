@@ -1,6 +1,6 @@
 # Envoy Gateway ArgoCD Application with AI-Gateway-compatible values.
 #
-# The nebari-llm-serving-pack relies on Envoy AI Gateway's ext_proc
+# The llm-serving-pack relies on Envoy AI Gateway's ext_proc
 # filter to extract the `model` field from OpenAI-style request bodies
 # and dispatch per-model. For that filter to be programmed into
 # Envoy's HCM, Envoy Gateway MUST be installed with:
