@@ -837,7 +837,8 @@ non-empty `id`.
 
 ## 8. Install the nebari-llm-serving pack
 
-The pack itself ships as a single Helm chart that reconciles three things
+The pack itself ships as a single Helm chart, published to the
+`quay.io/nebari/charts` OCI registry, that reconciles three things
 into the cluster:
 
 - The **pack operator** (`nebari-llm-serving-operator`) which watches
@@ -875,9 +876,9 @@ metadata:
 spec:
   project: foundational
   source:
-    repoURL: https://github.com/nebari-dev/llm-serving-pack.git
-    targetRevision: v0.1.1
-    path: charts/nebari-llm-serving
+    repoURL: quay.io/nebari/charts
+    chart: nebari-llm-serving
+    targetRevision: "0.1.2"
     helm:
       releaseName: nebari-llm-serving
       values: |

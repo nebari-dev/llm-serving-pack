@@ -107,11 +107,14 @@ describe('troubleshooting', () => {
 });
 
 describe('manifest reconciliation (NIC source of truth)', () => {
-  it('argocd-application.yaml uses v0.1.1 + NIC clusterIssuer + longhorn', () => {
+  it('argocd-application.yaml uses the published OCI chart (0.1.2) + NIC clusterIssuer + longhorn', () => {
     const m = readExample('argocd-application.yaml');
-    expect(m).toMatch(/targetRevision:\s*v0\.1\.1\b/);
+    expect(m).toMatch(/repoURL:\s*quay\.io\/nebari\/charts\b/);
+    expect(m).toMatch(/chart:\s*nebari-llm-serving\b/);
+    expect(m).toMatch(/targetRevision:\s*"0\.1\.2"/);
     expect(m).toMatch(/clusterIssuer:\s*letsencrypt-issuer\b/);
     expect(m).toMatch(/storageClassName:\s*longhorn\b/);
+    expect(m).not.toMatch(/path:\s*charts\/nebari-llm-serving\b/);
     expect(m).not.toMatch(/v0\.1\.0-alpha\.7\b/);
     expect(m).not.toMatch(/letsencrypt-production\b/);
   });
@@ -125,9 +128,12 @@ describe('manifest reconciliation (NIC source of truth)', () => {
     expect(m).not.toMatch(/oci:\/\//);
     expect(m).toMatch(/repoURL:\s*docker\.io\/envoyproxy\b/);
   });
-  it('installation.md recommends the v0.1.1 pack version', () => {
+  it('installation.md installs the pack from the published OCI chart (0.1.2)', () => {
     const page = readPage('installation.md');
-    expect(page).toMatch(/v0\.1\.1\b/);
+    expect(page).toMatch(/repoURL:\s*quay\.io\/nebari\/charts\b/);
+    expect(page).toMatch(/chart:\s*nebari-llm-serving\b/);
+    expect(page).toMatch(/targetRevision:\s*"0\.1\.2"/);
+    expect(page).not.toMatch(/path:\s*charts\/nebari-llm-serving\b/);
     expect(page).not.toMatch(/targetRevision:\s*v0\.1\.0-alpha\.9\b/);
   });
 });
