@@ -5,8 +5,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
 )
 
 // AuthResources holds all auth-related resources for an LLMModel. All
@@ -14,7 +14,7 @@ import (
 // uses a separate api-keys namespace because Envoy Gateway's
 // SecurityPolicy.spec.apiKeyAuth.credentialRefs rejects cross-namespace
 // Secret references (it does not honor ReferenceGrant for that field; see
-// nebari-dev/nebari-llm-serving-pack#59). The model webhook enforces that
+// nebari-dev/llm-serving-pack#59). The model webhook enforces that
 // LLMModel CRs live in the operator's namespace so that the key-manager
 // (also in the operator namespace) can find these Secrets.
 type AuthResources struct {
@@ -49,7 +49,7 @@ func BuildAuthResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig)
 // authResourceLabels returns the labels applied to the API-key Secret and
 // metadata ConfigMap. The `llm.nebari.dev/model` label (from StandardLabels)
 // is the documented selector for `kubectl get secrets -l llm.nebari.dev/model`
-// (see https://nebari-dev.github.io/nebari-llm-serving-pack/local-development/).
+// (see https://nebari-dev.github.io/llm-serving-pack/local-development/).
 // The additional `llm.nebari.dev/model-name`
 // label is required by the key-manager, which filters API-key metadata
 // ConfigMaps on it (see key-manager/internal/secrets/manager.go). The

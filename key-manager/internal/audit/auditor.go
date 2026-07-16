@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/models"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // UserGroupsLookup returns the current OIDC groups for a username.

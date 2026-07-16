@@ -20,7 +20,7 @@ import (
 // both shared hostnames and a single Secret holding the rendered cert; one
 // name for each keeps cross-namespace references (from the Gateways and
 // ReferenceGrants) unambiguous. See the Architecture docs for the full picture:
-// https://nebari-dev.github.io/nebari-llm-serving-pack/architecture/
+// https://nebari-dev.github.io/llm-serving-pack/architecture/
 const (
 	SharedTLSCertificateName = "nebari-llm-shared-tls"
 	SharedTLSSecretName      = "nebari-llm-shared-tls"

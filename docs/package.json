@@ -1,5 +1,5 @@
 {
-  "name": "nebari-llm-serving-pack-docs-astro",
+  "name": "llm-serving-pack-docs-astro",
   "type": "module",
   "version": "0.0.1",
   "scripts": {
