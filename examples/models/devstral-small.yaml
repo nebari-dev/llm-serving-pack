@@ -1,7 +1,7 @@
 # Mistral Devstral Small - a coding-focused model.
 # Requires a HuggingFace token for gated model access.
 # Create the secret first:
-#   kubectl create secret generic hf-token -n llm-serving \
+#   kubectl create secret generic hf-token -n nebari-llm-serving-system \
 #     --from-literal=HF_TOKEN=hf_your_token_here
 apiVersion: llm.nebari.dev/v1alpha1
 kind: LLMModel

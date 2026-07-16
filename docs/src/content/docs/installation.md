@@ -350,6 +350,17 @@ spec:
         maxDuration: 3m
 ```
 
+> **Which values block to use.** The distinction is what your GPU node's AMI
+> already ships. The manifest above disables only the driver
+> (`driver.enabled: false`), so the operator still installs the container
+> toolkit and device plugin: use it when the AMI ships the NVIDIA driver but
+> not the toolkit, which is the case for NIC's AL2023 NVIDIA AMI. If your AMI
+> ships BOTH the driver and the toolkit, use the values in
+> [`examples/nvidia-gpu-operator.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/nvidia-gpu-operator.yaml)
+> instead, which also sets `toolkit.enabled: false` so the operator adds only
+> the device plugin. If your nodes ship neither, set `driver.enabled: true` so
+> the operator installs the driver as well.
+
 `git push` the file. ArgoCD's `nebari-root` app-of-apps picks it up on
 its next refresh (typically within a minute; you can force it with
 `kubectl annotate application -n argocd nebari-root argocd.argoproj.io/refresh=hard --overwrite`).
@@ -837,7 +848,8 @@ non-empty `id`.
 
 ## 8. Install the nebari-llm-serving pack
 
-The pack itself ships as a single Helm chart that reconciles three things
+The pack itself ships as a single Helm chart, published to the
+`quay.io/nebari/charts` OCI registry, that reconciles three things
 into the cluster:
 
 - The **pack operator** (`nebari-llm-serving-operator`) which watches
@@ -875,9 +887,9 @@ metadata:
 spec:
   project: foundational
   source:
-    repoURL: https://github.com/nebari-dev/llm-serving-pack.git
-    targetRevision: v0.1.0-alpha.9
-    path: charts/nebari-llm-serving
+    repoURL: quay.io/nebari/charts
+    chart: nebari-llm-serving
+    targetRevision: "0.1.2"
     helm:
       releaseName: nebari-llm-serving
       values: |
@@ -924,6 +936,10 @@ spec:
       limit: 5
       backoff: { duration: 5s, factor: 2, maxDuration: 3m }
 ```
+
+A generic multi-source template (chart + a cluster-config repo for
+LLMModel CRs) is at
+[`examples/argocd-application.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/argocd-application.yaml).
 
 The `platform.gateway.external` and `platform.gateway.internal` blocks
 both point at `nebari-gateway` because this runbook uses a single

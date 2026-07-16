@@ -1,6 +1,9 @@
 ---
 title: Quickstart
 ---
+import { Code } from '@astrojs/starlight/components';
+import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+
 Get a model serving in five minutes. This page covers the fast path: deploy the pack, apply one `LLMModel`, and call the API.
 
 For a full production-grade setup (air-gapped clusters, HuggingFace token secrets, monitoring, and all values), see [Installation](/installation/) and [Configuration](/configuration/).
@@ -144,7 +147,12 @@ spec:
       enabled: true
 ```
 
-For gated HuggingFace models, create a Secret with your HuggingFace token and reference it:
+For gated HuggingFace models, create a Secret holding your token, then reference it from the model spec:
+
+```bash
+kubectl create secret generic hf-token -n nebari-llm-serving-system \
+  --from-literal=HF_TOKEN=hf_your_token_here
+```
 
 ```yaml
 spec:
@@ -175,6 +183,18 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
   -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
+You can also mint a key from the command line instead of the UI. The key-manager exposes a REST API under the same hostname (`keyManager.nebariApp.hostname`, e.g. `keys.llm.<baseDomain>`):
+
+```bash
+# Mint a key via the API instead of the UI (bearer token = a Keycloak JWT):
+curl -X POST https://keys.llm.<baseDomain>/api/keys \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"modelName": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"}'
+```
+
+To revoke a key, delete it in the key manager UI, or call `DELETE /api/keys/{namespace}/{model}/{clientID}` with the same bearer token (the `namespace`, `model`, and `clientID` come from the mint response, or from `GET /api/keys`). A revoked key immediately returns 401 on the external route.
+
 ### Internal access (JWT from JupyterLab or in-cluster service)
 
 ```python
@@ -190,3 +210,29 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+## Route to an external provider
+
+Instead of serving a model locally, a `PassthroughModel` points the shared endpoints at an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM). Users get the same two auth layers and mint keys in the same UI; the platform's provider key is injected upstream and never exposed.
+
+First create a Secret holding the platform's provider key (the `apiKey` field), in the operator namespace:
+
+```bash
+kubectl create secret generic openrouter-api-key -n nebari-llm-serving-system \
+  --from-literal=apiKey='sk-or-v1-...'
+```
+
+Then apply the PassthroughModel:
+
+<Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
+
+Once it reconciles, any provider model id works against the shared external endpoint with a minted key (or against `llm-internal.<baseDomain>` with a Keycloak JWT):
+
+```bash
+curl https://llm.your-cluster.example.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "openai/gpt-5.2", "messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+See the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference) for every field.

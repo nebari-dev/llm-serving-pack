@@ -1,7 +1,7 @@
 # Example ArgoCD Application for deploying the LLM serving pack.
 #
 # This uses a multi-source setup:
-#   Source 1: The Helm chart from this repo with cluster-specific values
+#   Source 1: The published OCI Helm chart with cluster-specific values
 #   Source 2: LLMModel CRs from your cluster config repo
 #
 # Replace all placeholder values (your-cluster, your-org, etc.) with your
@@ -24,11 +24,11 @@ spec:
   sources:
     # Source 1: LLM serving pack Helm chart
     #
-    # Pin a tagged release. Chart AppVersion drives the operator and
-    # key-manager image tags, so pinning the chart pins the images too.
-    - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: v0.1.0-alpha.7
-      path: charts/nebari-llm-serving
+    # Pin a published chart version. Chart AppVersion drives the operator
+    # and key-manager image tags, so pinning the chart pins the images too.
+    - repoURL: quay.io/nebari/charts
+      chart: nebari-llm-serving
+      targetRevision: "0.1.2"
       helm:
         releaseName: nebari-llm-serving
         values: |
@@ -54,14 +54,16 @@ spec:
               # Certificate. Must already exist on the cluster. HTTP-01
               # is the assumed challenge type; wildcards are not
               # supported and not required.
-              clusterIssuer: letsencrypt-production
+              clusterIssuer: letsencrypt-issuer
 
           defaults:
             storage:
-              # Set the StorageClass for model PVCs. Use a StorageClass backed
-              # by cloud-native storage (EFS on AWS, Filestore on GCP, etc.)
-              # so PVC size is not limited by node disk.
-              storageClassName: efs-sc
+              # Set the StorageClass for model PVCs. Defaults to the
+              # cluster's longhorn StorageClass. Optionally override with
+              # a StorageClass backed by cloud-native storage (EFS on AWS,
+              # Filestore on GCP, etc.) if PVC size should not be limited
+              # by node disk.
+              storageClassName: longhorn
 
           auth:
             oidc:

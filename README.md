@@ -45,9 +45,9 @@ spec:
 
   sources:
     # Source 1: LLM serving pack Helm chart
-    - repoURL: https://github.com/nebari-dev/nebari-llm-serving-pack.git
-      targetRevision: v0.1.0-alpha.7
-      path: charts/nebari-llm-serving
+    - repoURL: quay.io/nebari/charts
+      chart: nebari-llm-serving
+      targetRevision: "0.1.2"
       helm:
         releaseName: nebari-llm-serving
         values: |
@@ -236,10 +236,10 @@ Admin applies LLMModel CR
 
 | Image | Description |
 |-------|-------------|
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/operator` | LLM operator - reconciles LLMModel CRDs |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/key-manager` | Key manager REST API |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend` | LLM serving pack React UI (nginx) |
-| `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader` | Model download init container (distroless, pixi-managed) |
+| `ghcr.io/nebari-dev/llm-serving-pack/operator` | LLM operator - reconciles LLMModel CRDs |
+| `ghcr.io/nebari-dev/llm-serving-pack/key-manager` | Key manager REST API |
+| `ghcr.io/nebari-dev/llm-serving-pack/frontend` | LLM serving pack React UI (nginx) |
+| `ghcr.io/nebari-dev/llm-serving-pack/model-downloader` | Model download init container (distroless, pixi-managed) |
 
 ### Infrastructure requirements
 
@@ -281,7 +281,7 @@ make teardown
 
 ### Key manager UI
 
-The key manager web UI is a [React](https://react.dev) + TypeScript app (Vite, Tailwind, shadcn/ui) in [`frontend/`](frontend/). In production it ships as its own nginx image (`ghcr.io/nebari-dev/nebari-llm-serving-pack/frontend`) that serves the SPA and proxies `/api` to the API-only key-manager; it is not embedded in the Go binary. For a one-command dev loop that needs **no Keycloak**:
+The key manager web UI is a [React](https://react.dev) + TypeScript app (Vite, Tailwind, shadcn/ui) in [`frontend/`](frontend/). In production it ships as its own nginx image (`ghcr.io/nebari-dev/llm-serving-pack/frontend`) that serves the SPA and proxies `/api` to the API-only key-manager; it is not embedded in the Go binary. For a one-command dev loop that needs **no Keycloak**:
 
 ```bash
 # One-time: copy dev/.env.example to dev/.env and set OPENROUTER_API_KEY

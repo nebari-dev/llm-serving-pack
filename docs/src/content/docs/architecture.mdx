@@ -1,6 +1,9 @@
 ---
 title: Architecture
 ---
+import { Code } from '@astrojs/starlight/components';
+import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
 
 For configuration knobs (Helm values, CRD fields), see [Configuration](/configuration/).
@@ -265,29 +268,9 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
 
-```yaml
-apiVersion: llm.nebari.dev/v1alpha1
-kind: PassthroughModel
-metadata:
-  name: openrouter
-  namespace: nebari-llm-serving-system
-spec:
-  provider:
-    hostname: openrouter.ai          # bare hostname, TLS assumed
-    port: 443                        # default
-    schemaVersion: api/v1            # upstream path prefix (default v1)
-    credentialSecretName: openrouter-api-key   # same-namespace Secret, key "apiKey"
-  models:
-    catchAll: true                   # currently inert on AI Gateway v0.5; see below
-    declared:                        # explicit routes, advertised by /v1/models
-      - openai/gpt-5.2
-      - anthropic/claude-opus-4.6
-  access:
-    groups: [llm]                    # same semantics as LLMModel access
-  endpoints:
-    external: {enabled: true}
-    internal: {enabled: true}
-```
+<Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
+
+For a step-by-step walkthrough see [Route to an external provider](/quickstart/#route-to-an-external-provider); for the full field reference see the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference).
 
 Generated resources (all in the CR's namespace, no serving stack):
 
@@ -343,7 +326,7 @@ Automatic revocation on group change is **planned but not implemented in v0.1**.
 
 No database. State is split across two Kubernetes resources per model, both in the operator namespace:
 
-- **Secret** (`<model-name>-api-keys`): contains only the data Envoy Gateway needs. Each entry: key = client ID (e.g., `user-chuck-phi4-mini-adae6d48-1`: user, model, an FNV-1a hash binding the (user, model) pair, sequence number), value = the raw API key. Client IDs must be globally unique across every model's Secret - the operator pools all api-keys Secrets into each external SecurityPolicy's `credentialRefs`, and a duplicated client ID in that pooled set both breaks authentication and leaks authorization across models; the pair hash keeps hyphenated usernames and model names from composing to the same ID. This Secret is the source of truth for authentication. Individual Secrets are limited to 1 MiB, which supports roughly a few thousand keys per model (known scaling limit for v0.1).
+- **Secret** (`<model-name>-api-keys`): contains only the data Envoy Gateway needs. Each entry: key = client ID (e.g., `user-chuck-phi4-mini-476079e8fc69d8c621e4aaf2b3a619d1-1`: user, model, a 128-bit-truncated SHA-256 hash binding the (user, model) pair, sequence number), value = the raw API key. Client IDs must be globally unique across every model's Secret - the operator pools all api-keys Secrets into each external SecurityPolicy's `credentialRefs`, and a duplicated client ID in that pooled set both breaks authentication and leaks authorization across models; the pair hash keeps hyphenated usernames and model names from composing to the same ID. This Secret is the source of truth for authentication. Individual Secrets are limited to 1 MiB, which supports roughly a few thousand keys per model (known scaling limit for v0.1).
 
 - **ConfigMap** (`<model-name>-api-key-metadata`): contains a JSON blob per client ID with management metadata (creator username, creation timestamp, description). Separated from the Secret so the key manager can read and display metadata without exposing actual key values. Also limited to 1 MiB.
 
@@ -355,8 +338,8 @@ Envoy Gateway's `apiKeyAuth` expects Secret data entries where each key is the c
 
 ```yaml
 data:
-  user-chuck-phi4-mini-adae6d48-1: c2stYWJjMTIzZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4  # base64 of "sk-abc123def..."
-  user-alice-phi4-mini-11079538-1: c2stZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNk
+  user-chuck-phi4-mini-476079e8fc69d8c621e4aaf2b3a619d1-1: c2stYWJjMTIzZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4  # base64 of "sk-abc123def..."
+  user-alice-phi4-mini-9ff3446b2a77eb12a73cb5d5919a1e63-1: c2stZGVmNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNk
 ```
 
 ### Key manager RBAC

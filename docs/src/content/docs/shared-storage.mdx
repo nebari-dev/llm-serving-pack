@@ -1,6 +1,10 @@
 ---
 title: Shared Storage
 ---
+import { Code } from '@astrojs/starlight/components';
+import ociModel from '../../../../examples/models/oci-model.yaml?raw';
+import devstralModel from '../../../../examples/models/devstral-small.yaml?raw';
+
 Model files are large. Downloading a 30-80 GB model on every pod start is slow, wastes bandwidth, and delays requests. The LLM Serving Pack solves this with persistent model storage managed by the operator: models are downloaded once, cached on a PVC, and shared across replicas.
 
 ## How model storage works
@@ -18,7 +22,7 @@ All model loading paths - HuggingFace and OCI - mount the model at `/model-cache
 When `model.source` is `huggingface` (or any value other than `oci`, including an empty string when the field is left unset - the operator treats any non-`oci` source as HuggingFace), the operator:
 
 1. Creates a PVC named `<llmmodel-name>-model-storage` in the same namespace
-2. Adds an init container running `ghcr.io/nebari-dev/nebari-llm-serving-pack/model-downloader:latest`
+2. Adds an init container running `ghcr.io/nebari-dev/llm-serving-pack/model-downloader:latest`
 3. The init container runs `hf download <model-name> --local-dir /model-cache`
 4. Mounts the PVC at `/model-cache` in both the init container and the vLLM container
 
@@ -57,6 +61,10 @@ kubectl create secret generic hf-token -n <operator-namespace> \
 
 The operator injects `HF_TOKEN` as an environment variable into the init container.
 
+A complete gated-model manifest (create the `hf-token` Secret first, as shown above):
+
+<Code code={devstralModel} lang="yaml" title="examples/models/devstral-small.yaml" />
+
 ### PVC access mode
 
 The PVC is created with `accessMode: ReadWriteOnce`. Most cloud block storage classes only support `ReadWriteOnce`, which means all replicas must be scheduled on the same node when sharing the PVC. If you need replicas on different nodes, use a storage class backed by a network filesystem (NFS, EFS, Filestore) that supports `ReadWriteMany`.
@@ -90,6 +98,10 @@ image: "registry.example.com/models/my-model@sha256:abc123..."
 Tags are mutable; a digest pins the exact image layer set.
 
 Note: Kubernetes image volumes (alpha in 1.31, beta in 1.35) would eliminate the copy step, but many clusters do not have the `ImageVolume` feature gate enabled. The init-container copy path is the only supported OCI mechanism in v0.1.
+
+A complete OCI manifest:
+
+<Code code={ociModel} lang="yaml" title="examples/models/oci-model.yaml" />
 
 ## Storage type: PVC vs emptyDir for HuggingFace models
 

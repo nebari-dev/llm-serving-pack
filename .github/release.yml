@@ -1,0 +1,14 @@
+changelog:
+  categories:
+    - title: Features
+      labels: ["type: enhancement 💅🏼", "type: exploration 🔮"]
+    - title: Bug Fixes
+      labels: ["type: bug 🐛"]
+    - title: Documentation
+      labels: ["area: documentation 📖"]
+    - title: Dependencies
+      labels: ["area: dependencies 📦"]
+    - title: Maintenance
+      labels: ["type: maintenance 🛠", "area: ci 👷🏽‍♀️"]
+    - title: Other Changes
+      labels: ["*"]

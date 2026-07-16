@@ -1,156 +1,66 @@
-name: Build Images
+name: Build Docker Images
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    paths:
+      - "operator/**"
+      - "key-manager/**"
+      - "frontend/**"
+      - "model-downloader/**"
+      - ".github/workflows/build-images.yaml"
+      # The release workflow pins images to sha-<release-commit>, so the
+      # release commit (a Chart.yaml bump) must produce images with that
+      # sha. Building here on the bump ensures they exist. This runs in
+      # parallel with the release workflow (no hard gate in v1), so images
+      # are published around the same time the chart becomes consumable.
+      - "charts/nebari-llm-serving/Chart.yaml"
+  pull_request:
+    paths:
+      - "operator/**"
+      - "key-manager/**"
+      - "frontend/**"
+      - "model-downloader/**"
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/nebari-dev/nebari-llm-serving-pack
-
 jobs:
-  build-operator:
-    name: Build and push operator image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+  operator:
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    with:
+      image: operator
+      context: operator/
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+  model-downloader:
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    with:
+      image: model-downloader
+      context: model-downloader/
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.IMAGE_PREFIX }}/operator
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=semver,pattern=v{{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
+  key-manager:
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    with:
+      image: key-manager
+      context: "."
+      dockerfile: key-manager/Dockerfile
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
-      - name: Build and push operator image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: operator/
-          file: operator/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  build-model-downloader:
-    name: Build and push model-downloader image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.IMAGE_PREFIX }}/model-downloader
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=semver,pattern=v{{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push model-downloader image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: model-downloader/
-          file: model-downloader/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  build-key-manager:
-    name: Build and push key-manager image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.IMAGE_PREFIX }}/key-manager
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=semver,pattern=v{{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push key-manager image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          file: key-manager/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  build-frontend:
-    name: Build and push frontend image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.IMAGE_PREFIX }}/frontend
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=semver,pattern=v{{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: frontend/
-          file: frontend/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+  frontend:
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    with:
+      image: frontend
+      context: frontend/
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
