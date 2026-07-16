@@ -242,7 +242,7 @@ The operator writes these fields to `status`; they are read-only.
 | `spec.models.catchAll` | boolean | No | Route any model id not claimed by a more specific route. Served LLMModels always win (they match Host and `x-ai-eg-model`). |
 | `spec.models.declared` | []string | No | Explicit model ids; also advertised by the gateway's `/v1/models` (external route only) so UIs can build a picker. |
 
-### spec.access
+### spec.access (external provider)
 
 Same semantics as `LLMModel`: set `public: true` or list `groups` (see [spec.access](#specaccess) above).
 

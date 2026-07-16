@@ -183,6 +183,18 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
   -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
+You can also mint a key from the command line instead of the UI. The key-manager exposes a REST API under the same hostname (`keyManager.nebariApp.hostname`, e.g. `keys.llm.<baseDomain>`):
+
+```bash
+# Mint a key via the API instead of the UI (bearer token = a Keycloak JWT):
+curl -X POST https://keys.llm.<baseDomain>/api/keys \
+  -H "Authorization: Bearer <your-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"modelName": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4"}'
+```
+
+To revoke a key, delete it in the key manager UI, or call `DELETE /api/keys/{namespace}/{model}/{clientID}` with the same bearer token (the `namespace`, `model`, and `clientID` come from the mint response, or from `GET /api/keys`). A revoked key immediately returns 401 on the external route.
+
 ### Internal access (JWT from JupyterLab or in-cluster service)
 
 ```python

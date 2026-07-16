@@ -350,6 +350,17 @@ spec:
         maxDuration: 3m
 ```
 
+> **Which values block to use.** The distinction is what your GPU node's AMI
+> already ships. The manifest above disables only the driver
+> (`driver.enabled: false`), so the operator still installs the container
+> toolkit and device plugin: use it when the AMI ships the NVIDIA driver but
+> not the toolkit, which is the case for NIC's AL2023 NVIDIA AMI. If your AMI
+> ships BOTH the driver and the toolkit, use the values in
+> [`examples/nvidia-gpu-operator.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/nvidia-gpu-operator.yaml)
+> instead, which also sets `toolkit.enabled: false` so the operator adds only
+> the device plugin. If your nodes ship neither, set `driver.enabled: true` so
+> the operator installs the driver as well.
+
 `git push` the file. ArgoCD's `nebari-root` app-of-apps picks it up on
 its next refresh (typically within a minute; you can force it with
 `kubectl annotate application -n argocd nebari-root argocd.argoproj.io/refresh=hard --overwrite`).

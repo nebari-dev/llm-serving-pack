@@ -2,9 +2,11 @@
 # Required for GPU nodes to advertise nvidia.com/gpu as an allocatable
 # resource. Without this, GPU-requiring pods stay Pending.
 #
-# If your nodes use a pre-installed NVIDIA driver AMI (like AWS
-# AL2023_x86_64_NVIDIA), disable driver and toolkit installation since
-# the AMI already includes both.
+# Use this values block when your GPU nodes boot from an AMI that ships BOTH
+# the NVIDIA driver and the container toolkit: it disables both so the
+# operator only adds the device plugin. If your AMI ships the driver but not
+# the toolkit (e.g. NIC's AL2023 NVIDIA AMI), keep toolkit enabled instead
+# (see the Installation guide's nvidia-gpu-operator step).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -24,9 +26,8 @@ spec:
     helm:
       releaseName: nvidia-gpu-operator
       values: |
-        # Disable driver and toolkit if using a pre-installed NVIDIA AMI.
-        # Remove these overrides if your nodes need the operator to install
-        # NVIDIA drivers.
+        # Disable driver and toolkit when the AMI ships both. Remove these
+        # overrides if your nodes need the operator to install the driver.
         driver:
           enabled: false
         toolkit:
