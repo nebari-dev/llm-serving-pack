@@ -1,5 +1,6 @@
 // docs/astro.config.mjs
 import { defineConfig } from 'astro/config';
+import { fileURLToPath } from 'node:url';
 import starlight from '@astrojs/starlight';
 import { nebari } from '@nebari/starlight';
 import rehypeMermaid from 'rehype-mermaid';
@@ -46,5 +47,17 @@ export default defineConfig({
     syntaxHighlight: { type: 'shiki', excludeLangs: ['mermaid'] },
     remarkPlugins: [[remarkBaseLinks, { base: process.env.BASE || '/' }]],
     rehypePlugins: [[rehypeMermaid, { strategy: 'inline-svg' }]],
+  },
+  vite: {
+    server: {
+      fs: {
+        // Defense-in-depth: allow the repo root (parent of docs/) so Vite's
+        // dev static-file middleware can serve examples/*.yaml if a future
+        // pattern ever needs it. The current embed resolves examples/*.yaml
+        // via the Astro SSR module graph (`?raw` import), which is NOT gated
+        // by fs.allow, so this is precautionary, not load-bearing today.
+        allow: [fileURLToPath(new URL('..', import.meta.url))],
+      },
+    },
   },
 });

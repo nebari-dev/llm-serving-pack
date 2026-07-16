@@ -1,0 +1,26 @@
+# The smallest valid LLMModel. Serves a public model from HuggingFace on a
+# single GPU. See docs: Quickstart for an annotated walkthrough.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: my-model
+  # LLMModels must live in the operator namespace; the validating webhook
+  # rejects any other namespace (see #59). Dev clusters use llm-operator-system.
+  namespace: nebari-llm-serving-system
+spec:
+  access:
+    public: true
+  model:
+    name: mistralai/Devstral-Small-2505
+    source: huggingface
+    authSecretName: hf-token
+    preload: true
+    storage:
+      type: pvc
+      size: 200Gi
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+  serving:
+    replicas: 1
