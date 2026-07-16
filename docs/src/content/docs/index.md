@@ -40,6 +40,8 @@ Apply it, and the operator downloads the weights, starts vLLM, registers the mod
 inference scheduler, creates the internal and external routes, and gates them on the groups you
 listed. See the [Quickstart](/quickstart/) for the end-to-end flow.
 
+Ready-to-apply manifests are in [`examples/models/`](https://github.com/nebari-dev/llm-serving-pack/tree/main/examples/models) (minimal, gated-HuggingFace, OCI, and advanced-scheduling).
+
 ## What you get
 
 - **Declarative model serving** - one `LLMModel` CR per model; the operator reconciles the rest.

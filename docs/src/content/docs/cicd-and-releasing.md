@@ -141,6 +141,25 @@ helm show values oci://quay.io/nebari/charts/nebari-llm-serving --version <versi
 
 To install a released version, see the [Installation](/installation/) guide. To work with a local development build, which reads `values.yaml` as committed (so `latest`-tagged images), see the [Local Development](/local-development/) page.
 
+## Installing a released chart directly
+
+The [Installation](/installation/) guide's ArgoCD Application is the recommended path on Nebari - it keeps the release version under GitOps and gets you `selfHeal`/drift correction for free. For a local or manual install (testing a release, a non-ArgoCD cluster, or just poking around), install the published chart directly with `helm install`:
+
+```bash
+# From the OCI registry (no repo add needed):
+helm install nebari-llm-serving \
+  oci://quay.io/nebari/charts/nebari-llm-serving --version 0.1.2 \
+  -n nebari-llm-serving-system --create-namespace -f my-values.yaml
+
+# Or via the Helm repo index:
+helm repo add nebari https://raw.githubusercontent.com/nebari-dev/helm-repository/gh-pages/
+helm repo update
+helm install nebari-llm-serving nebari/nebari-llm-serving --version 0.1.2 \
+  -n nebari-llm-serving-system --create-namespace -f my-values.yaml
+```
+
+Both forms install the same packaged chart with the same pinned image shas (see [Releasing](#releasing) above); `my-values.yaml` should set at least `platform.baseDomain` and the other required values covered in [Configuration](/configuration/).
+
 ## Known Gaps
 
 - There is no chart-testing (`ct lint`) step that validates the chart against multiple Kubernetes versions. Contributions adding `helm/chart-testing-action` are welcome.
