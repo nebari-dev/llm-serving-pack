@@ -1,6 +1,7 @@
 import { ChevronDown, Monitor, Moon, Sun } from "lucide-react";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import type { ReactNode } from "react";
+import { getAppConfig } from "@/app/config";
 import { signOut } from "@/auth/keycloak";
 import { useUser } from "@/auth/user";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,11 +24,20 @@ export function Topbar() {
 
   const displayName = user?.name || user?.email || "Account";
 
+  // Branded logos from /config.json (frontend.branding.logoUrl / logoUrlDark),
+  // falling back to the built-in Nebari logos. Dark mode prefers the dark logo,
+  // then the light override, then the built-in dark logo — mirroring the
+  // nebari-landing header. loadAppConfig() has already resolved before mount.
+  const branding = getAppConfig();
+  const logoAlt = branding?.title || "Nebari";
+  const logoLight = branding?.logoUrl ?? "/nebari-logo.svg";
+  const logoDark = branding?.logoUrlDark ?? branding?.logoUrl ?? "/nebari-logo_dark.svg";
+
   return (
     <header className="flex h-[60px] w-full items-center justify-between border-border border-b bg-header-background px-10">
       <a href="/" className="flex items-center" aria-label="Go to homepage">
-        <img src="/nebari-logo.svg" alt="Nebari" className="h-8 w-auto dark:hidden" />
-        <img src="/nebari-logo_dark.svg" alt="Nebari" className="hidden h-8 w-auto dark:block" />
+        <img src={logoLight} alt={logoAlt} className="h-8 w-auto dark:hidden" />
+        <img src={logoDark} alt={logoAlt} className="hidden h-8 w-auto dark:block" />
       </a>
 
       <DropdownMenu modal={false}>

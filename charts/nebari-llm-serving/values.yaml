@@ -185,6 +185,36 @@ frontend:
     port: 8080
   # title - optional browser-tab title override rendered into config.json.
   title: ""
+  # branding - rendered into /config.json at deploy time and applied by the SPA
+  # before it mounts. Leave everything empty to use the built-in Nebari defaults
+  # (no visual change from an unbranded install). Outside Kubernetes the same
+  # fields resolve from a local config.json or BRANDING_* env vars - see the
+  # Configuration docs and frontend/docker-entrypoint.sh.
+  branding:
+    # URL to a custom logo shown in the header. Leave empty for the built-in
+    # Nebari logo. May be an absolute http(s) URL or a root-relative path.
+    logoUrl: ""
+    # URL to a custom dark-mode logo. Leave empty to fall back to logoUrl, then
+    # the built-in Nebari dark logo.
+    logoUrlDark: ""
+    # URL to a custom favicon. Leave empty for the built-in favicon.
+    faviconUrl: ""
+    # CSS variable overrides injected at runtime - no image rebuild required.
+    # Values are validated in the browser and rejected if they contain CSS
+    # injection characters (';', '{', '}', quotes, url(), javascript:, etc.).
+    # Supported tokens: primary, primaryForeground, background, foreground,
+    # secondary, secondaryForeground, muted, mutedForeground, accent,
+    # accentForeground, border, ring, radius.
+    # Example:
+    #   theme:
+    #     light:
+    #       primary: "oklch(55% 0.19 250)"
+    #       primaryForeground: "#ffffff"
+    #     dark:
+    #       primary: "oklch(62% 0.21 250)"
+    theme:
+      light: {}
+      dark: {}
   # keycloak - connection settings rendered into /config.json at deploy time and
   # fetched by the SPA at startup, so the image needs no build-time config.
   keycloak:

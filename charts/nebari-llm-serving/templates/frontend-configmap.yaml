@@ -9,18 +9,24 @@ metadata:
     app.kubernetes.io/component: frontend
 data:
   # Served by nginx at /config.json. The SPA fetches this at startup so Keycloak
-  # settings change without rebuilding the image. clientId defaults to the
-  # nebari-operator SPA-client convention (<namespace>-<nebariapp-name>-spa); the
-  # NebariApp for the UI is named "<fullname>-key-manager", so the SPA client is
-  # "<operator-namespace>-<fullname>-key-manager-spa".
+  # settings and branding change without rebuilding the image. clientId defaults
+  # to the nebari-operator SPA-client convention (<namespace>-<nebariapp-name>-spa);
+  # the NebariApp for the UI is named "<fullname>-key-manager", so the SPA client
+  # is "<operator-namespace>-<fullname>-key-manager-spa". Branding fields are
+  # rendered as-is (empty strings / empty maps by default) and the SPA falls back
+  # to the built-in Nebari defaults per field, so an unbranded install is unchanged.
   config.json: |
     {
       "keycloak": {
         "url":      {{ required "frontend.keycloak.url is required when frontend.enabled=true" .Values.frontend.keycloak.url | quote }},
         "realm":    {{ .Values.frontend.keycloak.realm | quote }},
         "clientId": {{ default (printf "%s-%s-key-manager-spa" (include "nebari-llm-serving.operatorNamespace" .) (include "nebari-llm-serving.fullname" .)) .Values.frontend.keycloak.clientId | quote }}
-      }{{ with .Values.frontend.title }},
-      "title": {{ . | quote }}{{ end }}
+      },
+      "title":       {{ .Values.frontend.title | quote }},
+      "logoUrl":     {{ .Values.frontend.branding.logoUrl | quote }},
+      "logoUrlDark": {{ .Values.frontend.branding.logoUrlDark | quote }},
+      "faviconUrl":  {{ .Values.frontend.branding.faviconUrl | quote }},
+      "theme":       {{ .Values.frontend.branding.theme | toJson }}
     }
 
   # nginx configuration for the frontend pod.

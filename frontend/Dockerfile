@@ -16,6 +16,9 @@ RUN npm run build
 # ─── Stage 2: serve ──────────────────────────────────────────────────────────
 FROM nginx:alpine AS final
 
+# jq powers the entrypoint's optional runtime branding overlay (non-k8s only).
+RUN apk add --no-cache jq
+
 # Remove the default nginx welcome page and config.
 RUN rm -rf /usr/share/nginx/html/* /etc/nginx/conf.d/default.conf
 
@@ -27,6 +30,13 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Listens on 8080 with all temp paths under /tmp so the container can run
 # non-root with a read-only root filesystem.
 COPY nginx.default.conf /etc/nginx/nginx.conf
+
+# Entrypoint applies optional BRANDING_* / KEYCLOAK_* env-var overrides to
+# config.json at startup (non-Kubernetes rebranding). It is a no-op unless one
+# of those vars is set, so the read-only ConfigMap mount used in-cluster is
+# untouched.
+COPY docker-entrypoint.sh /docker-entrypoint.d/40-branding.sh
+RUN chmod +x /docker-entrypoint.d/40-branding.sh
 
 EXPOSE 8080
 
