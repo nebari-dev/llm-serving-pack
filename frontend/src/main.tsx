@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import { getAppConfig } from "@/app/config";
+import { applyAppConfig, loadAppConfig } from "@/app/config";
 import { initKeycloak } from "@/auth/keycloak";
 import { queryClient } from "@/lib/queryClient";
 import { ThemeProvider } from "@/providers/ThemeProvider";
@@ -46,10 +46,17 @@ try {
   throw err;
 }
 
-// Optional page-title override from /config.json (frontend.title in the chart).
-const configuredTitle = getAppConfig()?.title;
-if (configuredTitle) {
-  document.title = configuredTitle;
+// Apply branding from /config.json (frontend.branding.* in the chart) before
+// the first paint: page title, favicon, and theme token overrides. Loaded here
+// (not only via initKeycloak) so branding still applies under the dev/E2E auth
+// bypass, which returns before loading config. Tolerant of a missing config so
+// a branding-less setup still boots; loadAppConfig() caches, so this is a no-op
+// fetch when initKeycloak already ran it. No-op when no branding is configured,
+// so existing deployments look unchanged.
+try {
+  applyAppConfig(await loadAppConfig());
+} catch {
+  // Branding is best-effort; fall back to the built-in defaults.
 }
 
 createRoot(rootElement).render(
