@@ -140,7 +140,7 @@ describe("loadAppConfig URL sanitisation", () => {
     expect(cfg.faviconUrl).toBe("http://example.com/favicon.ico");
   });
 
-  it("drops javascript:/data: and malformed URLs", async () => {
+  it("drops javascript:, data:text/html, non-base64 data:image, and malformed URLs", async () => {
     const cfg = await loadWith({
       keycloak: { url: "u", realm: "r", clientId: "c" },
       logoUrl: "javascript:alert(1)",
@@ -150,5 +150,23 @@ describe("loadAppConfig URL sanitisation", () => {
     expect(cfg.logoUrl).toBeUndefined();
     expect(cfg.logoUrlDark).toBeUndefined();
     expect(cfg.faviconUrl).toBeUndefined();
+
+    const cfg2 = await loadWith({
+      keycloak: { url: "u", realm: "r", clientId: "c" },
+      logoUrl: "data:text/html;base64,PGgxPmhpPC9oMT4=",
+      logoUrlDark: "data:application/octet-stream;base64,AAAA",
+    });
+    expect(cfg2.logoUrl).toBeUndefined();
+    expect(cfg2.logoUrlDark).toBeUndefined();
+  });
+
+  it("keeps base64-encoded data: image URIs from the allow-list", async () => {
+    const cfg = await loadWith({
+      keycloak: { url: "u", realm: "r", clientId: "c" },
+      logoUrl: "data:image/png;base64,iVBORw0KGgo=",
+      faviconUrl: "data:image/svg+xml;base64,PHN2Zy8+",
+    });
+    expect(cfg.logoUrl).toBe("data:image/png;base64,iVBORw0KGgo=");
+    expect(cfg.faviconUrl).toBe("data:image/svg+xml;base64,PHN2Zy8+");
   });
 });
