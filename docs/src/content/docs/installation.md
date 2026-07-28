@@ -675,55 +675,107 @@ These values come straight from the upstream
 `envoyproxy/ai-gateway` reference at
 [`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml).
 
-### 6.1 Edit NIC's envoy-gateway Application
+### 6.1 Apply the values
 
-Locate the file in your cluster-config repo where NIC's
-envoy-gateway ArgoCD Application lives. NIC ships it with a minimal
-`spec.source.helm.values` block: just `controllerName`, deployment
-resources, and Service type. Merge in the new keys without removing
-any existing ones:
+There are two ways to do this. Which one applies depends on your
+cluster-config repo's layout.
 
-```yaml
-spec:
-  source:
-    helm:
-      values: |
-        config:
-          envoyGateway:
-            gateway:
-              controllerName: gateway.envoyproxy.io/gatewayclass-controller
-            extensionApis:
-              enableEnvoyPatchPolicy: true
-              enableBackend: true                  # required for AI Gateway
-            extensionManager:
-              hooks:
-                xdsTranslator:
-                  translation:
-                    listener: { includeAll: true }
-                    route:    { includeAll: true }
-                    cluster:  { includeAll: true }
-                    secret:   { includeAll: true }
-                  post:
-                    - Translation
-                    - Cluster
-                    - Route
-              service:
-                fqdn:
-                  hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
-                  port: 1063
-              backendResources:
-                - group: inference.networking.k8s.io
-                  kind: InferencePool
-                  version: v1
-        # ... preserve any existing deployment / service / podDisruptionBudget
-        # values that NIC was already setting; only the config.envoyGateway
-        # subtree changes.
+Check for a `values/` directory (under your `git_repository.path`, if
+you set one):
+
+```bash
+ls <git_repository.path>/values/envoy-gateway/
 ```
 
-`git push`. ArgoCD will sync the chart with the new values; the
-`envoy-gateway-config` ConfigMap is updated, but the running
-controller process does not pick up changes until the deployment
-restarts.
+- **`base.yaml` is there** → use the overlay path below. This is the
+  supported route and it survives `nic deploy --regen-apps`.
+- **No `values/` directory** → your cluster predates NIC's values
+  overlay support; use the legacy path further down.
+
+#### Preferred: commit a values overlay
+
+NIC owns `values/envoy-gateway/base.yaml` and rewrites it on every
+`nic deploy --regen-apps`. It never writes to or deletes from
+`values/envoy-gateway/overlays/`, so a file you put there is
+permanent.
+
+Copy [`examples/envoy-gateway-overlay.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-gateway-overlay.yaml)
+into your cluster-config repo:
+
+```bash
+mkdir -p <git_repository.path>/values/envoy-gateway/overlays
+cp examples/envoy-gateway-overlay.yaml \
+   <git_repository.path>/values/envoy-gateway/overlays/20-ai-gateway.yaml
+git add <git_repository.path>/values/envoy-gateway/overlays/20-ai-gateway.yaml
+git commit -m "Add AI Gateway extension wiring to envoy-gateway"
+git push
+```
+
+The overlay contains **only** the keys that differ from NIC's base
+values:
+
+```yaml
+config:
+  envoyGateway:
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true                  # required for AI Gateway
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener: { includeAll: true }
+            route:    { includeAll: true }
+            cluster:  { includeAll: true }
+            secret:   { includeAll: true }
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+```
+
+Note what is **not** in it. Helm deep-merges maps, so
+`config.envoyGateway.gateway.controllerName` from `base.yaml` survives
+even though the overlay also writes under `config.envoyGateway`. The
+deployment resources, replica count and Service type stay as NIC set
+them. You do not restate them, and you do not risk dropping one by
+transcribing it wrongly.
+
+The `20-` prefix matters: overlays apply in lexical filename order and
+the last file wins on a key collision. Keeping this pack's overlay at
+`20-` leaves `30-` and later free for operator overrides.
+
+ArgoCD picks up the commit on its next sync. No `nic` run is needed.
+
+#### Legacy: edit the Application directly
+
+> **This is reverted by the next `nic deploy --regen-apps`.** On
+> clusters with a `values/` directory, do not use this path. NIC
+> regenerates `apps/*.yaml` from its own templates, so any values you
+> hand-edit there are silently discarded the next time anyone runs a
+> deploy with `--regen-apps`, and the AI Gateway wiring disappears with
+> them. The failure is quiet: routes start returning 404 or 500 again
+> with nothing in the ArgoCD UI to explain it.
+
+On an older cluster, locate the file in your cluster-config repo where
+NIC's envoy-gateway ArgoCD Application lives. NIC ships it with a
+minimal `spec.source.helm.values` block: just `controllerName`,
+deployment resources, and Service type. Merge in the new keys without
+removing any existing ones. A complete worked Application is in
+[`examples/envoy-gateway.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-gateway.yaml).
+
+Either way, `git push` when you are done. ArgoCD will sync the chart
+with the new values; the `envoy-gateway-config` ConfigMap is updated,
+but the running controller process does not pick up changes until the
+deployment restarts.
 
 ### 6.2 Restart the envoy-gateway controller
 

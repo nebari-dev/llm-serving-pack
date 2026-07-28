@@ -1,0 +1,80 @@
+# Envoy Gateway values overlay for AI Gateway integration.
+#
+# Commit this to your NIC cluster-config (GitOps) repository as:
+#
+#   <git_repository.path>/values/envoy-gateway/overlays/20-ai-gateway.yaml
+#
+# This is the preferred way to apply these values on any cluster whose
+# config repo has a `values/` directory. NIC owns
+# values/envoy-gateway/base.yaml and rewrites it on every
+# `nic deploy --regen-apps`; it never touches `overlays/`, so this file
+# survives regeneration. Editing the ArgoCD Application directly does
+# not survive it (see examples/envoy-gateway.yaml for that legacy path).
+#
+# Only the keys that differ from NIC's base values belong here. Helm
+# deep-merges maps, so `config.envoyGateway.gateway.controllerName` from
+# base.yaml survives even though this file also writes under
+# `config.envoyGateway`. Deployment resources, replica count and Service
+# type stay as NIC set them and are deliberately not repeated.
+#
+# The nebari llm-serving-pack relies on Envoy AI Gateway's ext_proc
+# filter to extract the `model` field from OpenAI-style request bodies
+# and dispatch per-model. For that filter to be programmed into Envoy's
+# HCM, Envoy Gateway MUST have:
+#
+#   1. extensionApis.enableBackend=true
+#      so the Backend API is available (AI Gateway uses it).
+#
+#   2. extensionManager.service.fqdn pointing at the AI Gateway
+#      controller's gRPC endpoint (port 1063), with xdsTranslator hooks
+#      so Envoy Gateway calls AI Gateway at xDS translation time.
+#
+#   3. extensionManager.backendResources listing
+#      inference.networking.k8s.io/InferencePool so Envoy Gateway will
+#      accept InferencePool as a valid HTTPRoute backendRef
+#      (otherwise it falls back to direct_response 500).
+#
+# Without (1) and (3), the HTTPRoute translates to a 500.
+# Without (2), ext_proc never lands in the filter chain and per-model
+# requests 404 with "No matching route found".
+#
+# Config shape is taken verbatim from envoyproxy/ai-gateway v0.5.0:
+#   https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml
+#
+# The `20-` prefix leaves room for operator overlays at higher numbers:
+# overlay files apply in lexical filename order and the last one wins on
+# any key collision, so an operator can override anything here with a
+# `30-`-or-later file without editing this one.
+#
+# After committing, restart the envoy-gateway controller: the ConfigMap
+# updates on sync but the running process does not reload it. See
+# section 6.2 of the installation guide.
+config:
+  envoyGateway:
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener:
+              includeAll: true
+            route:
+              includeAll: true
+            cluster:
+              includeAll: true
+            secret:
+              includeAll: true
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
