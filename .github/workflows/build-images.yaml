@@ -23,8 +23,18 @@ on:
       - "model-downloader/**"
   workflow_dispatch:
 
+# Each job grants id-token + attestations so the reusable pack-build-image
+# workflow can keyless-sign + attest (provenance + SBOM) the images it builds.
+# These scopes are inert until the signing-enabled pack-build-image ships under
+# @v1 (see nebari-dev/.github#46); PR builds still use push:false and are
+# fork-safe (signing is skipped when nothing is pushed).
 jobs:
   operator:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: operator
@@ -35,6 +45,11 @@ jobs:
       QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   model-downloader:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: model-downloader
@@ -45,6 +60,11 @@ jobs:
       QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   key-manager:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: key-manager
@@ -56,6 +76,11 @@ jobs:
       QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
 
   frontend:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
     with:
       image: frontend

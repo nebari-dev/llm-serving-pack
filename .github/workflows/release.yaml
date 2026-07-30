@@ -6,8 +6,16 @@ on:
     paths:
       - "charts/nebari-llm-serving/Chart.yaml"
 
+# The job grants id-token + attestations so the reusable pack-release workflow
+# can keyless-sign the packaged chart and attach the signature bundle + SBOM to
+# the GitHub Release. These scopes are inert until the signing-enabled
+# pack-release ships under @v1 (see nebari-dev/.github#46).
 jobs:
   release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
     with:
       chart-path: charts/nebari-llm-serving
