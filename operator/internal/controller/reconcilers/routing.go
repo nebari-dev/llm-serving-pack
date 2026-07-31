@@ -54,6 +54,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			ExternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
+			cfg.RouteRequestTimeout,
 		)
 	}
 
@@ -67,6 +68,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			InternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
+			cfg.RouteRequestTimeout,
 		)
 	}
 
@@ -80,7 +82,53 @@ func buildAIGatewayRoute(
 	listenerSectionName string,
 	poolName string,
 	modelName string,
+	requestTimeout string,
 ) *unstructured.Unstructured {
+	rule := map[string]interface{}{
+		// Match on the `x-ai-eg-model` header for per-model dispatch on the
+		// shared listener. The Envoy AI Gateway extproc derives this value from
+		// the request body's `model` field before HTTPRoute matching runs.
+		//
+		// We match ONLY x-ai-eg-model, not Host: sectionName on parentRefs
+		// already scopes this route to the llm-https listener (whose own
+		// hostname is the FQDN), so a Host matcher was redundant. Critically,
+		// the Envoy AI Gateway v0.5 controller does not register a model whose
+		// match rule carries any header beyond x-ai-eg-model - the extra Host
+		// matcher made every request 404 "model not configured in the Gateway"
+		// (nebari-dev/llm-serving-pack#116).
+		"matches": []interface{}{
+			map[string]interface{}{
+				"headers": []interface{}{
+					map[string]interface{}{
+						"type":  "Exact",
+						"name":  "x-ai-eg-model",
+						"value": modelName,
+					},
+				},
+			},
+		},
+		"backendRefs": []interface{}{
+			map[string]interface{}{
+				"group": "inference.networking.k8s.io",
+				"kind":  "InferencePool",
+				"name":  poolName,
+			},
+		},
+	}
+
+	// requestTimeout, when set, becomes spec.rules[].timeouts.request on the
+	// AIGatewayRoute. The Envoy AI Gateway copies it onto the HTTPRoute it
+	// renders; left unset, the gateway injects its own 60s default, which is
+	// too short for many LLM generations (long completions, reasoning models,
+	// large prompts, cold model loads). The route timeout is the only
+	// effective lever here: an explicit HTTPRoute timeout takes precedence
+	// over a BackendTrafficPolicy, so a policy attachment cannot raise it.
+	if requestTimeout != "" {
+		rule["timeouts"] = map[string]interface{}{
+			"request": requestTimeout,
+		}
+	}
+
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
@@ -109,39 +157,7 @@ func buildAIGatewayRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
-				"rules": []interface{}{
-					map[string]interface{}{
-						// Match on the `x-ai-eg-model` header for per-model dispatch on the
-						// shared listener. The Envoy AI Gateway extproc derives this value from
-						// the request body's `model` field before HTTPRoute matching runs.
-						//
-						// We match ONLY x-ai-eg-model, not Host: sectionName on parentRefs
-						// already scopes this route to the llm-https listener (whose own
-						// hostname is the FQDN), so a Host matcher was redundant. Critically,
-						// the Envoy AI Gateway v0.5 controller does not register a model whose
-						// match rule carries any header beyond x-ai-eg-model - the extra Host
-						// matcher made every request 404 "model not configured in the Gateway"
-						// (nebari-dev/llm-serving-pack#116).
-						"matches": []interface{}{
-							map[string]interface{}{
-								"headers": []interface{}{
-									map[string]interface{}{
-										"type":  "Exact",
-										"name":  "x-ai-eg-model",
-										"value": modelName,
-									},
-								},
-							},
-						},
-						"backendRefs": []interface{}{
-							map[string]interface{}{
-								"group": "inference.networking.k8s.io",
-								"kind":  "InferencePool",
-								"name":  poolName,
-							},
-						},
-					},
-				},
+				"rules": []interface{}{rule},
 			},
 		},
 	}
