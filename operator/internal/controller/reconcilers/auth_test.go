@@ -14,6 +14,9 @@ const (
 	testAuthModelName = "my-model"
 	testAuthNamespace = "test-ns"
 	testAuthSAName    = "nebari-llm-operator"
+	// testJWKSBackendService is the in-cluster Keycloak Service the JWKS
+	// backendRef test cases point at.
+	testJWKSBackendService = "keycloak-http"
 )
 
 func defaultAuthModel() *llmv1alpha1.LLMModel {
@@ -474,7 +477,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			cfg: func() *config.OperatorConfig {
 				cfg := defaultAuthConfig()
 				cfg.OIDCJWKSURI = "http://keycloak-http.keycloak.svc.cluster.local:8080/realms/nebari/protocol/openid-connect/certs"
-				cfg.OIDCJWKSBackendService = "keycloak-http"
+				cfg.OIDCJWKSBackendService = testJWKSBackendService
 				cfg.OIDCJWKSBackendNamespace = "keycloak"
 				cfg.OIDCJWKSBackendPort = 8080
 				return cfg
@@ -493,7 +496,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 				if ref["group"] != "" || ref["kind"] != "Service" {
 					t.Errorf("expected core Service backendRef, got group=%q kind=%q", ref["group"], ref["kind"])
 				}
-				if ref["name"] != "keycloak-http" || ref["namespace"] != "keycloak" {
+				if ref["name"] != testJWKSBackendService || ref["namespace"] != "keycloak" {
 					t.Errorf("expected keycloak-http/keycloak backendRef, got name=%q namespace=%q", ref["name"], ref["namespace"])
 				}
 				if ref["port"] != int64(8080) {
@@ -506,7 +509,7 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			model: defaultAuthModel(),
 			cfg: func() *config.OperatorConfig {
 				cfg := defaultAuthConfig()
-				cfg.OIDCJWKSBackendService = "keycloak-http"
+				cfg.OIDCJWKSBackendService = testJWKSBackendService
 				cfg.OIDCJWKSBackendPort = 8080
 				return cfg
 			}(),
