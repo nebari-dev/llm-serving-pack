@@ -9,6 +9,10 @@ on:
 jobs:
   add-to-project:
     runs-on: ubuntu-latest
+    # Dependabot PRs run against a separate secrets store, so
+    # ADD_TO_PROJECT_PAT is empty and the action fails unauthenticated.
+    # Dependency bumps don't belong on the project board anyway.
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/add-to-project@5afcf98fcd03f1c2f92c3c83f58ae24323cc57fd # v2.0.0
         with:
