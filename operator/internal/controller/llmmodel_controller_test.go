@@ -32,8 +32,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
 )
 
 // testConfig returns a minimal OperatorConfig suitable for envtest.

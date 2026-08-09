@@ -17,12 +17,12 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/api"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/audit"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/api"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/audit"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/models"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 func main() {

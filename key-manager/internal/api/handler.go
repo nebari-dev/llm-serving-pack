@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/models"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // ModelLister provides model listing for the handler.

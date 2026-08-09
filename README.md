@@ -1,4 +1,4 @@
-# nebari-llm-serving-pack
+# llm-serving-pack
 
 A [Nebari](https://github.com/nebari-dev/nebari-infrastructure-core) software pack for serving LLMs. Deploys a Kubernetes operator that manages LLM model serving via [llm-d](https://llm-d.ai), with per-model access control, API key management, and Envoy AI Gateway integration for token counting and rate limiting.
 
@@ -19,8 +19,8 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 - Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
 - NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin). **Note**: nebari-infrastructure-core does not install this automatically yet - tracked in [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until that is done, install it manually as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
-- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Ready-to-apply example in [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml); see the [Installation guide](https://nebari-dev.github.io/nebari-llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
-- Envoy AI Gateway installed (v0.5.0+). **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
+- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Ready-to-apply example in [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml); see the [Installation guide](https://nebari-dev.github.io/llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
+- Envoy AI Gateway installed (v0.5.0+). **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) installed (InferencePool / InferenceModel CRDs).
 - A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-production`; override with `platform.tls.clusterIssuer` in the chart values.
 - DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` resolving to the shared Gateway's load balancer (a wildcard CNAME on the base domain is the simplest way). Required for HTTP-01 issuance on the shared Certificate.
@@ -253,7 +253,7 @@ The pack expects the following to be available on the cluster:
 
 ## Development
 
-See the [Local Development guide](https://nebari-dev.github.io/nebari-llm-serving-pack/local-development/) for a full walkthrough of the local dev environment.
+See the [Local Development guide](https://nebari-dev.github.io/llm-serving-pack/local-development/) for a full walkthrough of the local dev environment.
 
 ```bash
 # Create kind cluster with all dependencies
@@ -326,7 +326,7 @@ This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations app
 
 - **Single-namespace model:** All LLMModels must be in the operator's own namespace. Per-team isolation requires running separate pack installs (one namespace per team). This is a hard constraint imposed by Envoy Gateway's `apiKeyAuth`, which does not support cross-namespace Secret references.
 - **API keys are not continuously tied to group membership.** Keys are issued based on the user's OIDC groups at creation time. If a user later loses group access, existing keys continue to work. The periodic audit that revokes such keys (default interval: 5 minutes) is **off by default** - it only runs when `keyManager.oidcUserinfoURL` is configured, which ships empty. Without it, keys are never revoked on group change. Even when enabled, this is eventual consistency, not real-time revocation.
-- **JWKS path is Keycloak-specific.** The internal endpoint's JWT SecurityPolicy constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`. Non-Keycloak OIDC providers will not work out of the box. Tracked in [#61](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/61).
+- **JWKS path is Keycloak-specific.** The internal endpoint's JWT SecurityPolicy constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`. Non-Keycloak OIDC providers will not work out of the box. Tracked in [#61](https://github.com/nebari-dev/llm-serving-pack/issues/61).
 - **NVIDIA GPUs only.** AMD and Intel accelerators are not supported in v0.1.
 - **No scale-to-zero.** Idle model pods are not scaled down automatically.
 - **No per-key rate limiting or token quotas.** Rate limiting is applied at the model level via Envoy AI Gateway, not per individual API key.
@@ -334,7 +334,7 @@ This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations app
 - **No team-level shared API keys.** Each key is tied to an individual user's identity.
 - **OCI model loading uses init-container copy.** Kubernetes image volumes (alpha/beta) are not used; every pod start copies files from the OCI image to a shared emptyDir. On pods with `storage.type: emptyDir` and `preload: true`, every restart triggers a full re-download.
 - **API key and metadata storage is limited to ~1 MiB per model** (Kubernetes Secret/ConfigMap size limit). This supports several thousand keys per model; it is a known scaling ceiling for v0.1.
-- **`envoyAIGateway.install` flag is not yet implemented.** Envoy AI Gateway must be installed separately. Tracked in [#44](https://github.com/nebari-dev/nebari-llm-serving-pack/issues/44).
+- **`envoyAIGateway.install` flag is not yet implemented.** Envoy AI Gateway must be installed separately. Tracked in [#44](https://github.com/nebari-dev/llm-serving-pack/issues/44).
 - **Per-model subdomains are not yet wired into routing.** The `endpoints.external.subdomain` field is validated but unused. All models share `llm.<baseDomain>`; per-model dispatch is by the `model` field in the request body.
 
 ## License

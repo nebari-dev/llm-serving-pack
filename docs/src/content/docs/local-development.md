@@ -1,7 +1,7 @@
 ---
 title: Local Development
 ---
-This guide walks through setting up a local development environment using [kind](https://kind.sigs.k8s.io/) to test the nebari-llm-serving-pack without a full Nebari deployment.
+This guide walks through setting up a local development environment using [kind](https://kind.sigs.k8s.io/) to test the llm-serving-pack without a full Nebari deployment.
 
 > **Scope of this dev path.** The local `kind` setup exercises the
 > operator, key manager, CRD, webhook, and reconciler logic against a

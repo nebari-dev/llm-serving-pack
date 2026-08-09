@@ -30,7 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/test/utils"
+	"github.com/nebari-dev/llm-serving-pack/operator/test/utils"
 )
 
 // namespace where the project is deployed in

@@ -23,8 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/controller/reconcilers"
 )
 
 // defaultClusterTLSResyncInterval is the background resync cadence for the

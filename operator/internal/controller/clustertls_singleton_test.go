@@ -22,8 +22,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/controller/reconcilers"
 )
 
 // newFakeClientWithGateway builds a fake client that knows about the

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/models"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // discardLogger returns a slog logger that discards all output, for tests.
