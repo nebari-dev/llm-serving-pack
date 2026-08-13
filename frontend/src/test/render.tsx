@@ -3,7 +3,8 @@ import { type RenderOptions, render } from "@testing-library/react";
 import { Provider as JotaiProvider } from "jotai";
 import type { ReactElement, ReactNode } from "react";
 
-import { ThemeProvider } from "@/providers/ThemeProvider";
+import { THEME_STORAGE_KEY } from "@/app/theme";
+import { ThemeProvider } from "@/hooks/theme-provider";
 
 /**
  * Render a component wrapped in the app's providers (fresh QueryClient + Jotai
@@ -16,7 +17,7 @@ export function renderWithProviders(ui: ReactElement, options?: Omit<RenderOptio
     return (
       <QueryClientProvider client={queryClient}>
         <JotaiProvider>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider storageKey={THEME_STORAGE_KEY}>{children}</ThemeProvider>
         </JotaiProvider>
       </QueryClientProvider>
     );
