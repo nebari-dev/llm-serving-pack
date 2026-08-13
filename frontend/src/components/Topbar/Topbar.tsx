@@ -1,5 +1,5 @@
-import { ChevronDown, Monitor, Moon, Sun } from "lucide-react";
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
+import { Menu as MenuPrimitive } from "@base-ui/react/menu";
+import { ChevronDown, LogOut, Monitor, Moon, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { getAppConfig } from "@/app/config";
 import { signOut } from "@/auth/keycloak";
@@ -9,18 +9,19 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
+  DropdownMenuPortal,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { isThemeMode, type ThemeMode } from "@/hooks/useThemePreference";
+import { MenuBarActions, MenuBarBrand, NavigationMenu } from "@/components/ui/navigation-menu";
+import { useTheme } from "@/hooks/theme-provider";
+import { isThemeMode, type ThemeMode } from "@/hooks/use-theme-preference";
 import { userInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useTheme } from "@/providers/ThemeProvider";
 
 export function Topbar() {
   const { user } = useUser();
-  const { themeMode, setThemeMode } = useTheme();
+  const { themeMode, isDarkMode, setThemeMode } = useTheme();
 
   const displayName = user?.name || user?.email || "Account";
 
@@ -30,68 +31,78 @@ export function Topbar() {
   // nebari-landing header. loadAppConfig() has already resolved before mount.
   const branding = getAppConfig();
   const logoAlt = branding?.title || "Nebari";
-  const logoLight = branding?.logoUrl ?? "/nebari-logo.svg";
-  const logoDark = branding?.logoUrlDark ?? branding?.logoUrl ?? "/nebari-logo_dark.svg";
+  const logoSrc = isDarkMode
+    ? (branding?.logoUrlDark ?? branding?.logoUrl ?? "/nebari-logo_dark.svg")
+    : (branding?.logoUrl ?? "/nebari-logo.svg");
 
   return (
-    <header className="flex h-[60px] w-full items-center justify-between border-border border-b bg-header-background px-10">
-      <a href="/" className="flex items-center" aria-label="Go to homepage">
-        <img src={logoLight} alt={logoAlt} className="h-8 w-auto dark:hidden" />
-        <img src={logoDark} alt={logoAlt} className="hidden h-8 w-auto dark:block" />
-      </a>
+    <NavigationMenu className="h-14 justify-between border-header-border bg-header-background pl-4 text-header-foreground">
+      <MenuBarBrand href="/" aria-label="Go to homepage">
+        <img src={logoSrc} alt={logoAlt} className="h-8 w-auto" />
+      </MenuBarBrand>
 
-      <DropdownMenu modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
+      <MenuBarActions className="gap-2">
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger
+            variant="ghost"
             aria-label="Account menu"
-            className="flex items-center gap-3 rounded-md px-1 py-1 transition-none hover:bg-accent focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="h-auto px-2.5 py-1 hover:bg-header-action-hover hover:no-underline focus-visible:ring-offset-0 active:bg-header-action-hover data-[popup-open]:bg-header-action-hover data-[popup-open]:no-underline"
           >
-            <Avatar className="h-8 w-8">
-              <AvatarFallback className="bg-primary font-semibold text-primary-foreground text-sm">
+            <Avatar>
+              <AvatarFallback className="bg-primary font-semibold text-primary-foreground">
                 {userInitials(user?.name, user?.email)}
               </AvatarFallback>
             </Avatar>
-            <span className="font-medium text-foreground text-sm">{displayName}</span>
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" className="w-72">
-          <div className="border-b px-3 py-2">
-            <p className="font-medium text-foreground text-sm">{user?.name || "Signed in"}</p>
-            {user?.email ? <p className="text-muted-foreground text-xs">{user.email}</p> : null}
-          </div>
+            <span>{displayName}</span>
 
-          <div className="px-2 py-2">
-            <DropdownMenuRadioGroup
-              aria-label="Theme"
-              value={themeMode}
-              onValueChange={(value) => {
-                if (isThemeMode(value)) setThemeMode(value);
-              }}
-              className="flex items-center gap-1 rounded-lg bg-muted p-1"
-            >
-              <ThemeOption value="light" label="Light mode" text="Light">
-                <Sun className="h-4 w-4" />
-              </ThemeOption>
-              <ThemeOption value="dark" label="Dark mode" text="Dark">
-                <Moon className="h-4 w-4" />
-              </ThemeOption>
-              <ThemeOption value="system" label="System theme" text="System">
-                <Monitor className="h-4 w-4" />
-              </ThemeOption>
-            </DropdownMenuRadioGroup>
-          </div>
+            <ChevronDown />
+          </DropdownMenuTrigger>
 
-          <DropdownMenuSeparator />
+          <DropdownMenuPortal>
+            <DropdownMenuContent align="end" className="w-[248px] p-2">
+              <div className="border-b px-1.5 pb-2">
+                <p className="font-medium text-foreground text-sm">{user?.name || "Signed in"}</p>
+                {user?.email ? <p className="text-muted-foreground text-xs">{user.email}</p> : null}
+              </div>
 
-          <DropdownMenuItem className="cursor-pointer" onClick={() => signOut()}>
-            Sign out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </header>
+              <div className="py-2">
+                <MenuPrimitive.RadioGroup
+                  aria-label="Theme"
+                  value={themeMode}
+                  onValueChange={(value) => {
+                    if (isThemeMode(value)) setThemeMode(value);
+                  }}
+                  className="flex h-[34px] items-center gap-1 rounded-md bg-muted p-1"
+                >
+                  <ThemeOption value="light" label="Light mode" text="Light">
+                    <Sun className="h-4 w-4" />
+                  </ThemeOption>
+
+                  <ThemeOption value="dark" label="Dark mode" text="Dark">
+                    <Moon className="h-4 w-4" />
+                  </ThemeOption>
+
+                  <ThemeOption value="system" label="System theme" text="System">
+                    <Monitor className="h-4 w-4" />
+                  </ThemeOption>
+                </MenuPrimitive.RadioGroup>
+              </div>
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuItem
+                className="leading-5 text-sign-out-foreground data-[highlighted]:text-sign-out-foreground"
+                onClick={() => signOut()}
+              >
+                <LogOut className="size-4 shrink-0" aria-hidden="true" />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenuPortal>
+        </DropdownMenu>
+      </MenuBarActions>
+    </NavigationMenu>
   );
 }
 
@@ -105,22 +116,21 @@ function ThemeOption({
   label: string;
   text: string;
   children: ReactNode;
-}) {
+}): ReactNode {
   return (
-    <DropdownMenuPrimitive.RadioItem
+    <MenuPrimitive.RadioItem
       value={value}
       aria-label={label}
       title={label}
-      // Keep the menu open after switching themes so the change is visible.
-      onSelect={(event) => event.preventDefault()}
+      closeOnClick={false}
       className={cn(
-        "flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        "text-muted-foreground hover:text-foreground",
-        "data-[state=checked]:bg-background data-[state=checked]:text-foreground data-[state=checked]:shadow-sm",
+        "flex h-auto flex-1 cursor-pointer items-center justify-center gap-1 rounded-sm border border-transparent px-1.5 py-0.5 font-medium text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "text-muted-foreground-strong hover:text-foreground",
+        "data-checked:border-border-strong data-checked:bg-card data-checked:text-foreground data-checked:shadow-[0_1px_3px_0_rgba(0,0,0,0.10)]",
       )}
     >
       {children}
       <span>{text}</span>
-    </DropdownMenuPrimitive.RadioItem>
+    </MenuPrimitive.RadioItem>
   );
 }

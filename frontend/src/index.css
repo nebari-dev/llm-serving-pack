@@ -79,7 +79,14 @@
 
   /* App-specific tokens (not part of the Nebari theme) */
   --body-background: #ffffff;
+
+  /* Header semantic tokens, values copied from nebari-landing's index.css */
   --header-background: #f8f8f8;
+  --header-border: #b7b7bb;
+  --header-foreground: #262628;
+  --header-action-hover: #d9d9dc;
+  --notification-badge: #d00000;
+  --sign-out-foreground: #d2161c;
 
   --pill-category-fg: #475467;
   --text-secondary: #4e596a;
@@ -153,7 +160,14 @@
 
   /* App-specific tokens (not part of the Nebari theme) */
   --body-background: #262628;
-  --header-background: #353538;
+
+  /* Header semantic tokens, values copied from nebari-landing's index.css */
+  --header-background: var(--card);
+  --header-border: #5a5a61;
+  --header-foreground: #f8f8f8;
+  --header-action-hover: #4a4a50;
+  --notification-badge: #e00000;
+  --sign-out-foreground: #ff6b6b;
 
   --pill-category-fg: #ffffff;
   --text-secondary: #d0d5dd;
@@ -221,6 +235,11 @@
 
   --color-body-background: var(--body-background);
   --color-header-background: var(--header-background);
+  --color-header-border: var(--header-border);
+  --color-header-foreground: var(--header-foreground);
+  --color-header-action-hover: var(--header-action-hover);
+  --color-notification-badge: var(--notification-badge);
+  --color-sign-out-foreground: var(--sign-out-foreground);
 
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
