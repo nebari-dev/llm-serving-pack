@@ -281,6 +281,7 @@ Controls which network endpoints are created.
 | `spec.endpoints.external.enabled` | boolean | `true` | Create the external (API-key-authenticated) endpoint at `llm.<baseDomain>`. |
 | `spec.endpoints.external.subdomain` | string | auto | Override the auto-generated subdomain for the external endpoint. |
 | `spec.endpoints.internal.enabled` | boolean | `true` | Create the internal (JWT-authenticated) endpoint at `llm-internal.<baseDomain>`. |
+| `spec.endpoints.requestTimeout` | string | `600s` | Per-request timeout on the generated gateway routes (Gateway API duration, e.g. `600s`, `10m`). Applies to both endpoints. Without it the gateway defaults to 60s, which long or CPU-bound generations exceed. |
 
 ### spec.advanced
 
