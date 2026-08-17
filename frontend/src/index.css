@@ -12,7 +12,15 @@
    the Nebari brand palette for light and dark modes — treat them as
    upstream-managed and re-pull via `shadcn add @nebari/theme` rather than
    hand-tuning. App-specific status / pill / text-secondary tokens (which the
-   Nebari theme does not ship) are layered on top of each block. */
+   Nebari theme does not ship) are layered on top of each block.
+
+   Exception: the tokens that are pure shades of --primary / --ring
+   (--primary-hover, --sidebar-primary, --sidebar-primary-foreground,
+   --sidebar-ring) are *derived* rather than written out as literals, so a
+   runtime `primary` / `primaryForeground` / `ring` override from
+   /config.json (see app/config.ts) propagates to them instead of leaving the
+   Nebari magenta behind. Each still resolves to its previous rendered value
+   for an unbranded install. */
 
 :root {
   --radius: 0.625rem;
@@ -29,7 +37,11 @@
 
   --primary: oklch(55.06% 0.1886 311.45);
   --primary-foreground: oklch(100% 0 0);
-  --primary-hover: oklch(47.01% 0.1577 311.26);
+  /* Darker shade of --primary. Mixed in oklab (rectangular, so no hue
+     interpolation against an achromatic anchor); 15% black reproduces the
+     previous literal oklch(47.01% 0.1577 311.26) — both render #77399a/#77379a,
+     a difference of 2/255 on one channel. */
+  --primary-hover: color-mix(in oklab, var(--primary), black 15%);
 
   --secondary: oklch(95.04% 0.0042 236.5);
   --secondary-foreground: oklch(32.95% 0.0209 254.12);
@@ -63,12 +75,12 @@
 
   --sidebar: oklch(97.91% 0 0);
   --sidebar-foreground: oklch(26.94% 0.0037 286.15);
-  --sidebar-primary: oklch(55.06% 0.1886 311.45);
-  --sidebar-primary-foreground: oklch(100% 0 0);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: oklch(95.04% 0.0042 236.5);
   --sidebar-accent-foreground: oklch(32.95% 0.0209 254.12);
   --sidebar-border: oklch(78.06% 0.0056 286.27);
-  --sidebar-ring: oklch(61.98% 0.2159 311.67);
+  --sidebar-ring: var(--ring);
 
   /* Motion tokens */
   --duration-fast: 100ms;
@@ -117,7 +129,10 @@
 
   --primary: oklch(61.98% 0.2159 311.67);
   --primary-foreground: oklch(0% 0 0);
-  --primary-hover: oklch(69.98% 0.1926 311.48);
+  /* Lighter shade of --primary in dark mode. 20% white lands on
+     oklch(69.58% 0.1727 311.67) against the previous literal
+     oklch(69.98% 0.1926 311.48) — #c079ea vs #c575f4, ~0.02 oklab ΔE. */
+  --primary-hover: color-mix(in oklab, var(--primary), white 20%);
 
   --secondary: oklch(40% 0.0269 250.57);
   --secondary-foreground: oklch(95.04% 0.0042 236.5);
@@ -151,12 +166,12 @@
 
   --sidebar: oklch(26.94% 0.0037 286.15);
   --sidebar-foreground: oklch(97.91% 0 0);
-  --sidebar-primary: oklch(61.98% 0.2159 311.67);
-  --sidebar-primary-foreground: oklch(0% 0 0);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: oklch(40% 0.0269 250.57);
   --sidebar-accent-foreground: oklch(95.04% 0.0042 236.5);
   --sidebar-border: oklch(47.01% 0.0112 285.96);
-  --sidebar-ring: oklch(69.98% 0.1926 311.48);
+  --sidebar-ring: var(--ring);
 
   /* App-specific tokens (not part of the Nebari theme) */
   --body-background: #262628;
