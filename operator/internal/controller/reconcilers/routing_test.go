@@ -67,6 +67,38 @@ func modelHeaderMatchValue(t *testing.T, route *unstructured.Unstructured) strin
 	return v
 }
 
+// ruleRequestTimeout returns the timeouts.request value from the first rule of
+// the given AIGatewayRoute. It fatally fails the test if the rule carries no
+// request timeout: without one the AI Gateway controller renders HTTPRoutes
+// with a 60s default that long generations exceed.
+func ruleRequestTimeout(t *testing.T, route *unstructured.Unstructured) string {
+	t.Helper()
+	if route == nil {
+		t.Fatal("expected route to be non-nil")
+	}
+	spec, ok := route.Object["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected spec to be a map, got %T", route.Object["spec"])
+	}
+	rules, ok := spec["rules"].([]interface{})
+	if !ok || len(rules) == 0 {
+		t.Fatalf("expected at least one rule, got %v", spec["rules"])
+	}
+	rule, ok := rules[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected rule to be a map, got %T", rules[0])
+	}
+	timeouts, ok := rule["timeouts"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected rule to carry timeouts, got %v", rule["timeouts"])
+	}
+	request, ok := timeouts["request"].(string)
+	if !ok {
+		t.Fatalf("expected timeouts.request to be a string, got %T", timeouts["request"])
+	}
+	return request
+}
+
 // hostMatcherPresent reports whether the first rule of the given AIGatewayRoute
 // has a Host header matcher. Routes must NOT carry one: the Envoy AI Gateway
 // v0.5 controller will not register a model whose match rule has any header
@@ -122,6 +154,7 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 	t.Parallel()
 
 	const wantModelName = "mistralai/Mistral-7B-v0.1"
+	const customRequestTimeout = "30m"
 
 	tests := []struct {
 		name  string
@@ -295,6 +328,42 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				}
 				if got := modelHeaderMatchValue(t, result.InternalRoute); got != wantModelName {
 					t.Errorf("expected internal x-ai-eg-model match %q (subdomain ignored at routing layer), got %q", wantModelName, got)
+				}
+			},
+		},
+		{
+			name:  "Timeout unset: both routes get the generous default request timeout",
+			model: defaultRoutingModel(),
+			cfg:   defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if got := ruleRequestTimeout(t, result.ExternalRoute); got != DefaultRequestTimeout {
+					t.Errorf("expected external request timeout %q, got %q", DefaultRequestTimeout, got)
+				}
+				if got := ruleRequestTimeout(t, result.InternalRoute); got != DefaultRequestTimeout {
+					t.Errorf("expected internal request timeout %q, got %q", DefaultRequestTimeout, got)
+				}
+			},
+		},
+		{
+			name: "Timeout set: endpoints.requestTimeout overrides the default on both routes",
+			model: func() *llmv1alpha1.LLMModel {
+				m := defaultRoutingModel()
+				m.Spec.Endpoints.RequestTimeout = customRequestTimeout
+				return m
+			}(),
+			cfg: defaultRoutingConfig(),
+			check: func(t *testing.T, result *RoutingResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if got := ruleRequestTimeout(t, result.ExternalRoute); got != customRequestTimeout {
+					t.Errorf("expected external request timeout %q, got %q", customRequestTimeout, got)
+				}
+				if got := ruleRequestTimeout(t, result.InternalRoute); got != customRequestTimeout {
+					t.Errorf("expected internal request timeout %q, got %q", customRequestTimeout, got)
 				}
 			},
 		},

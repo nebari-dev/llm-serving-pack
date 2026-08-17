@@ -13,6 +13,13 @@ type RoutingResources struct {
 	InternalRoute *unstructured.Unstructured // AIGatewayRoute for internal endpoint, nil if disabled
 }
 
+// DefaultRequestTimeout is applied to generated route rules when the model
+// spec leaves endpoints.requestTimeout empty (CRs created before the field
+// existed, or unit-built objects that never pass through API defaulting).
+// Matches the CRD default: generous because CPU inference and long/thinking
+// generations easily exceed the Envoy AI Gateway's 60s HTTPRoute default.
+const DefaultRequestTimeout = "600s"
+
 // boolOrDefault returns the value of b if non-nil, otherwise returns def.
 func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always true today but the function is used across multiple call sites
 	if b == nil {
@@ -44,6 +51,11 @@ func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always t
 func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) (*RoutingResources, error) {
 	result := &RoutingResources{}
 
+	requestTimeout := model.Spec.Endpoints.RequestTimeout
+	if requestTimeout == "" {
+		requestTimeout = DefaultRequestTimeout
+	}
+
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildAIGatewayRoute(
 			model.Name+"-external",
@@ -54,6 +66,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			ExternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
+			requestTimeout,
 		)
 	}
 
@@ -67,6 +80,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			InternalHTTPSListenerName,
 			model.Name,
 			model.Spec.Model.Name,
+			requestTimeout,
 		)
 	}
 
@@ -80,6 +94,7 @@ func buildAIGatewayRoute(
 	listenerSectionName string,
 	poolName string,
 	modelName string,
+	requestTimeout string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -139,6 +154,12 @@ func buildAIGatewayRoute(
 								"kind":  "InferencePool",
 								"name":  poolName,
 							},
+						},
+						// Without an explicit timeout the AI Gateway controller
+						// renders HTTPRoutes with `request: 60s`, which long or
+						// CPU-bound generations exceed - streams die mid-token.
+						"timeouts": map[string]interface{}{
+							"request": requestTimeout,
 						},
 					},
 				},
