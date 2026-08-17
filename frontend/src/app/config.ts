@@ -20,11 +20,23 @@
  * `primaryForeground`). Applied at runtime as the kebab-case CSS custom
  * property `--primary-foreground`, scoped to `:root` (light) or `.dark`.
  * Mirrors the tokens documented as overridable in the chart's values.yaml.
+ *
+ * The names below are the supported set. `primaryHover`, `sidebarPrimary`,
+ * `sidebarPrimaryForeground` and `sidebarRing` are derived from `primary` /
+ * `primaryForeground` / `ring` in index.css, so overriding those three is
+ * normally enough — list them here only for the rarer case of wanting a
+ * shade that is not a plain derivation.
+ *
+ * Note: this is a compile-time type, not a runtime allow-list. `toCssVars()`
+ * below applies every key it is given, so an unlisted camelCase key still
+ * lands as its kebab-case custom property. That is unsupported and may break;
+ * only the names above are covered by the branding contract.
  */
 export type ThemeTokens = Partial<
   Record<
     | "primary"
     | "primaryForeground"
+    | "primaryHover"
     | "background"
     | "foreground"
     | "secondary"
@@ -35,7 +47,10 @@ export type ThemeTokens = Partial<
     | "accentForeground"
     | "border"
     | "ring"
-    | "radius",
+    | "radius"
+    | "sidebarPrimary"
+    | "sidebarPrimaryForeground"
+    | "sidebarRing",
     string
   >
 >;
