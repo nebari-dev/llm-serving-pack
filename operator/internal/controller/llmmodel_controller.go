@@ -286,7 +286,7 @@ func (r *LLMModelReconciler) reconcileAuthSecretAndConfigMap(
 	if err := r.createOrUpdateSecret(ctx, auth.APIKeySecret); err != nil {
 		return fmt.Errorf("reconciling api key secret: %w", err)
 	}
-	if err := r.createOrUpdateConfigMap(ctx, auth.APIKeyMetadataCM); err != nil {
+	if err := r.createOrUpdateConfigMapPreserveData(ctx, auth.APIKeyMetadataCM); err != nil {
 		return fmt.Errorf("reconciling api key metadata configmap: %w", err)
 	}
 	return nil
@@ -638,6 +638,22 @@ func (r *LLMModelReconciler) createOrUpdateConfigMap(ctx context.Context, cm *co
 	}
 	existing.Labels = cm.Labels
 	existing.Data = cm.Data
+	return r.Update(ctx, existing)
+}
+
+// createOrUpdateConfigMapPreserveData is for ConfigMaps whose data is owned by
+// another writer (the key-manager stores API-key metadata in them); the
+// operator only manages labels, mirroring createOrUpdateSecret.
+func (r *LLMModelReconciler) createOrUpdateConfigMapPreserveData(ctx context.Context, cm *corev1.ConfigMap) error {
+	existing := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		return r.Create(ctx, cm)
+	}
+	if err != nil {
+		return err
+	}
+	existing.Labels = cm.Labels
 	return r.Update(ctx, existing)
 }
 
