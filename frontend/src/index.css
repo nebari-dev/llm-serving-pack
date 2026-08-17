@@ -129,10 +129,12 @@
 
   --primary: oklch(61.98% 0.2159 311.67);
   --primary-foreground: oklch(0% 0 0);
-  /* Lighter shade of --primary in dark mode. 20% white lands on
-     oklch(69.58% 0.1727 311.67) against the previous literal
-     oklch(69.98% 0.1926 311.48) — #c079ea vs #c575f4, ~0.02 oklab ΔE. */
-  --primary-hover: color-mix(in oklab, var(--primary), white 20%);
+  /* Lighter shade of --primary in dark mode. 18% white lands on
+     oklch(68.82% 0.1770 311.67) against the previous literal
+     oklch(69.98% 0.1926 311.48) — #bf76e9 vs #c575f4, 0.019 oklab ΔE, the
+     closest a mix toward white can get (white contributes no chroma).
+     Kept in step with provenance-collector-pack, which shares this file. */
+  --primary-hover: color-mix(in oklab, var(--primary), white 18%);
 
   --secondary: oklch(40% 0.0269 250.57);
   --secondary-foreground: oklch(95.04% 0.0042 236.5);
