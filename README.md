@@ -320,6 +320,29 @@ make docs-check-links # build, then verify every internal link resolves
 
 The site is built and deployed to Cloudflare Pages by [`.github/workflows/docs.yml`](.github/workflows/docs.yml); the [CI/CD and Releasing](docs/src/content/docs/cicd-and-releasing.md) page documents the pipeline.
 
+## Releasing
+
+Cutting a release is **one action**: open a PR that bumps `version` in `charts/nebari-llm-serving/Chart.yaml`, and merge it. There is no tag to push by hand and no image tag to edit — `.github/workflows/release.yaml` triggers on that file changing on `main`.
+
+The merge fans out to two workflows in parallel: images are built and pushed as `sha-<short>`, and the release job pins that exact sha into the chart's four image tags, packages it, creates a GitHub Release tagged `nebari-llm-serving-<version>`, and opens a sync PR against `nebari-dev/helm-repository`.
+
+Two consequences worth knowing before you consume a release:
+
+- **The GitHub Release is not the finish line.** The chart is only installable once the helm-repository sync PR merges. Until then the version cannot be resolved — an ArgoCD Application pointed at it reports `Sync: Unknown` with a `ComparisonError` while still showing `Healthy`, so it silently stops syncing. Check the index before bumping a consumer:
+
+  ```bash
+  curl -s https://nebari-dev.github.io/helm-repository/index.yaml | \
+    yq '.entries.nebari-llm-serving[].version'
+  ```
+
+- **`values.yaml` on `main` shows `tag: "latest"`, but released charts are sha-pinned.** Pinning happens when a version is packaged, not in the tree, so the *published* chart is the record of what a version actually runs — read it with `helm show values`, not from `main`:
+
+  ```bash
+  helm show values oci://quay.io/nebari/charts/nebari-llm-serving --version <version>
+  ```
+
+Full pipeline details — the ordering caveat between the two workflows, pre-release handling, and reproducibility guarantees — are in [CI/CD and Releasing](docs/src/content/docs/cicd-and-releasing.md).
+
 ## Known Limitations
 
 This pack is at alpha maturity (`v0.1.0-alpha.x`). The following limitations apply:
