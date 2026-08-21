@@ -16,12 +16,12 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 
 ### Prerequisites
 
-- Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) deployed
+- Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) **v0.12.0 or newer** deployed. That is the floor for the `values/` overlay seam and the ArgoCD 3.4 that expands it, the `nebari-apps` ArgoCD project, and the automatic GPU operator install. Check with `nic version`.
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running
-- NVIDIA GPU Operator installed (auto-discovers GPU nodes and manages the device plugin). **Note**: nebari-infrastructure-core does not install this automatically yet - tracked in [nebari-dev/nebari-infrastructure-core#232](https://github.com/nebari-dev/nebari-infrastructure-core/issues/232). Until that is done, install it manually as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
-- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Apply it as a values overlay in your NIC config repo using [`examples/envoy-gateway-overlay.yaml`](examples/envoy-gateway-overlay.yaml), which survives `nic deploy --regen-apps`; [`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml) is the legacy full-Application form for clusters that predate NIC's `values/` layout. See the [Installation guide](https://packs.nebari.dev/llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
+- NVIDIA GPU Operator installed, so `nvidia.com/gpu` is advertised on GPU nodes. On AWS, NIC installs it for you: mark the node group `gpu: true` in your NIC config and NIC handles both the operator and the `nvidia.com/gpu` taint. On other providers, install it yourself as an ArgoCD app (see [examples/nvidia-gpu-operator.yaml](examples/nvidia-gpu-operator.yaml)).
+- **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Apply it by committing [`examples/envoy-gateway-overlay.yaml`](examples/envoy-gateway-overlay.yaml) to your NIC config repo as `values/envoy-gateway/overlays/20-ai-gateway.yaml`, which survives `nic deploy --regen-apps`. ([`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml) is the whole-Application form, for clusters NIC does not manage.) See the [Installation guide](https://packs.nebari.dev/llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
 - Envoy AI Gateway installed (v0.5.0+). **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
-- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) installed (InferencePool / InferenceModel CRDs).
+- [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) CRDs installed - v1.5.0 validated. The pack needs `InferencePool`; the llm-d End-Point Picker crashloops without it.
 - A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-production`; override with `platform.tls.clusterIssuer` in the chart values.
 - DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` resolving to the shared Gateway's load balancer (a wildcard CNAME on the base domain is the simplest way). Required for HTTP-01 issuance on the shared Certificate.
 - A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models).
@@ -41,7 +41,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
 
   sources:
     # Source 1: LLM serving pack Helm chart

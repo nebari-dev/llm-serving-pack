@@ -12,14 +12,13 @@ metadata:
   name: nebari-llm-serving
   namespace: argocd
   labels:
-    app.kubernetes.io/part-of: nebari-foundational
-    app.kubernetes.io/managed-by: nebari-infrastructure-core
+    app.kubernetes.io/part-of: nebari-llm-pack
   annotations:
     argocd.argoproj.io/sync-wave: "7"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
 
   sources:
     # Source 1: LLM serving pack Helm chart
