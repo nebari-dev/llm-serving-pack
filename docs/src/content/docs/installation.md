@@ -744,6 +744,14 @@ spec:
     targetRevision: v1.1.0
     helm:
       releaseName: envoy-ai-gateway
+      # cert-manager-backed webhook TLS. Required: the chart's default mode
+      # regenerates its CA on every ArgoCD render and breaks pod admission.
+      # See issue #84 and section 12.2.
+      values: |
+        controller:
+          mutatingWebhook:
+            certManager:
+              enable: true
   destination:
     server: https://kubernetes.default.svc
     namespace: envoy-ai-gateway-system

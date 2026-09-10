@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
 
 const docs = (name) =>
   fileURLToPath(new URL(`../src/content/docs/${name}`, import.meta.url));
@@ -202,5 +203,59 @@ describe('manifest reconciliation (NIC source of truth)', () => {
     expect(page).toMatch(/targetRevision:\s*"0\.1\.2"/);
     expect(page).not.toMatch(/path:\s*charts\/nebari-llm-serving\b/);
     expect(page).not.toMatch(/targetRevision:\s*v0\.1\.0-alpha\.9\b/);
+  });
+});
+
+const CERT_MANAGER_VALUES = {
+  controller: { mutatingWebhook: { certManager: { enable: true } } },
+};
+
+const loadAllYaml = (text) => yaml.loadAll(text).filter(Boolean);
+
+const fencedYaml = (md) =>
+  [...md.matchAll(/```yaml\n([\s\S]*?)```/g)].map((m) => m[1]);
+
+const findApp = (parsed, name) =>
+  parsed.find((d) => d?.kind === 'Application' && d?.metadata?.name === name);
+
+const exampleApps = () => loadAllYaml(readExample('envoy-ai-gateway.yaml'));
+
+const installApps = () =>
+  fencedYaml(readPage('installation.md')).flatMap((block) => {
+    try {
+      return loadAllYaml(block);
+    } catch {
+      return [];
+    }
+  });
+
+describe('AI Gateway webhook TLS is cert-manager backed', () => {
+  it('the example enables cert-manager mode on the controller Application', () => {
+    const ctrl = findApp(exampleApps(), 'envoy-ai-gateway');
+    expect(ctrl).toBeDefined();
+    expect(yaml.load(ctrl.spec.source.helm.values)).toEqual(CERT_MANAGER_VALUES);
+  });
+
+  it('does not put the values on the CRDs Application', () => {
+    const crds = findApp(exampleApps(), 'envoy-ai-gateway-crds');
+    expect(crds).toBeDefined();
+    expect(crds.spec.source.helm?.values).toBeUndefined();
+  });
+
+  it('the installation guide manifest carries byte-identical values', () => {
+    const inline = findApp(installApps(), 'envoy-ai-gateway');
+    expect(inline).toBeDefined();
+    const fromDocs = yaml.load(inline.spec.source.helm.values);
+    const fromExample = yaml.load(
+      findApp(exampleApps(), 'envoy-ai-gateway').spec.source.helm.values,
+    );
+    expect(fromDocs).toEqual(fromExample);
+    expect(fromDocs).toEqual(CERT_MANAGER_VALUES);
+  });
+
+  it('both pin the same chart version', () => {
+    const a = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
+    const b = findApp(installApps(), 'envoy-ai-gateway').spec.source.targetRevision;
+    expect(a).toBe(b);
   });
 });
