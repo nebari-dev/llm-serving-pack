@@ -25,6 +25,7 @@ export default defineConfig({
           githubHref: 'https://github.com/nebari-dev/llm-serving-pack',
         }),
       ],
+      lastUpdated: true,
       sidebar: [
         {
           label: 'Documentation',

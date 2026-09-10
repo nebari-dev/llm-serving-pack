@@ -1,7 +1,7 @@
 ---
 title: Architecture
 ---
-import { Code } from '@astrojs/starlight/components';
+import { Code } from 'astro:components';
 import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
 
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
