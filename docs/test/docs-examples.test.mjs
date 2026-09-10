@@ -253,9 +253,16 @@ describe('AI Gateway webhook TLS is cert-manager backed', () => {
     expect(fromDocs).toEqual(CERT_MANAGER_VALUES);
   });
 
-  it('both pin the same chart version', () => {
+  it('both pin the same chart version, and that version is v0.5.0', () => {
+    // Deliberately strict. Bumping the AI Gateway chart is issue #175, and it
+    // must be done together with scripts/check-render-determinism.sh and a
+    // fresh render-determinism run, because a newer chart may reintroduce
+    // render-time certificate generation. Agreement alone is not enough: a
+    // lockstep bump of both files to the same new version would otherwise
+    // pass unnoticed.
     const a = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     const b = findApp(installApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     expect(a).toBe(b);
+    expect(a).toBe('v0.5.0');
   });
 });
