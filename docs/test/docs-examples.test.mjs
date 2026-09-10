@@ -286,3 +286,38 @@ describe('render-determinism script stays in sync with the example', () => {
     expect(yaml.load(block)).toEqual(CERT_MANAGER_VALUES);
   });
 });
+
+describe('AI Gateway webhook troubleshooting states the correct root cause', () => {
+  const page = () => readPage('troubleshooting.md');
+
+  it('does not blame startup CA generation or pod rescheduling', () => {
+    const text = page();
+    expect(text).not.toMatch(/controller\s+generates/i);
+    expect(text).not.toMatch(/generates?\s+a\s+new\s+CA/i);
+    expect(text).not.toMatch(/new\s+pod\s+generates/i);
+  });
+
+  it('names render-time generation as the cause', () => {
+    expect(page()).toMatch(/render[-\s]time/i);
+  });
+
+  it('points at cert-manager mode as the remedy', () => {
+    expect(page()).toMatch(/certManager|cert-manager mode/);
+  });
+
+  it('never labels rollout restart as the fix', () => {
+    expect(page()).not.toMatch(
+      /\*\*Fix:\*\*[\s\S]{0,300}?rollout restart deploy -n envoy-ai-gateway-system/,
+    );
+  });
+
+  it('documents the dry-run admission probe', () => {
+    const text = page();
+    expect(text).toMatch(/--dry-run=server/);
+    expect(text).toMatch(/app\.kubernetes\.io\/managed-by:\s*envoy-gateway/);
+  });
+
+  it('carries the measured rotation window', () => {
+    expect(page()).toMatch(/27 seconds|27s/);
+  });
+});
