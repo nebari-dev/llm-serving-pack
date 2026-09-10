@@ -199,8 +199,11 @@ dormant for days.
 
 **Do not diagnose this by comparing checksums.** The Secret's `ca.crt` and the webhook's
 `caBundle` can differ while the webhook is perfectly healthy, and can look fine immediately after
-a re-render because no handshake has happened yet. Use the probe below, which is the only check
-that exercises the real trust path.
+a re-render because no handshake has happened yet. The reverse is also true and was measured on a
+live cluster: during certificate rotation, the Secret and the webhook can both already hold the
+new CA and therefore agree, while the pod is still serving its old certificate, so calls fail
+anyway. Agreement is not evidence of health. Use the probe below, which is the only check that
+exercises the real trust path.
 
 **Check the trust chain:**
 
@@ -243,9 +246,9 @@ Expect on sync:
   Secret `type` is immutable, the chart renders it as `Opaque`, and cert-manager requires
   `kubernetes.io/tls`. The controller does not restart and there is no observable impact.
 - If you are migrating from an already-broken state, allow about **80 seconds** before the probe
-  passes, even though the `Certificate` reports `Ready` within about 8. The remainder is the pod
-  picking up the new certificate and the API server making a fresh handshake. This is normal. Do
-  not intervene.
+  passes, even though the `Certificate` reports `Ready` within about 8 seconds. The remainder is
+  the pod picking up the new certificate and the API server making a fresh handshake. This is
+  normal. Do not intervene.
 
 There is no need to strip ArgoCD tracking metadata from the old Secret. cert-manager recreates the
 object, and the replacement carries no ArgoCD tracking.
@@ -281,9 +284,10 @@ kubectl rollout restart deploy -n envoy-ai-gateway-system ai-gateway-controller
 kubectl rollout status deploy -n envoy-ai-gateway-system ai-gateway-controller
 ```
 
-Re-run the probe above to confirm recovery. Note that the restart form is a coin flip if the
-mounted certificate is itself stale, since the controller will then patch the old CA back in.
-Prefer the direct patch.
+Re-run the probe above to confirm recovery. Both forms restore service, and live-cluster
+validation showed the restart form working reliably across three consecutive restarts. Prefer the
+direct patch regardless: it is the narrower action, and it does not take the webhook offline while
+the controller pod is replaced.
 
 ---
 

@@ -307,7 +307,7 @@ describe('AI Gateway webhook troubleshooting states the correct root cause', () 
 
   it('never labels rollout restart as the fix', () => {
     expect(page()).not.toMatch(
-      /\*\*Fix:\*\*[\s\S]{0,300}?rollout restart deploy -n envoy-ai-gateway-system/,
+      /\*\*Fix:[\s\S]{0,300}?rollout restart deploy -n envoy-ai-gateway-system/,
     );
   });
 
