@@ -266,3 +266,23 @@ describe('AI Gateway webhook TLS is cert-manager backed', () => {
     expect(a).toBe('v0.5.0');
   });
 });
+
+describe('render-determinism script stays in sync with the example', () => {
+  const script = () =>
+    readFileSync(
+      fileURLToPath(new URL('../../scripts/check-render-determinism.sh', import.meta.url)),
+      'utf8',
+    );
+
+  it('pins the same chart version as the example', () => {
+    const inScript = script().match(/^CHART_VERSION="([^"]+)"/m)?.[1];
+    const inExample = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
+    expect(inScript).toBe(inExample);
+  });
+
+  it('uses the same values as the example', () => {
+    const block = script().match(/^VALUES='([\s\S]*?)'$/m)?.[1];
+    expect(block).toBeDefined();
+    expect(yaml.load(block)).toEqual(CERT_MANAGER_VALUES);
+  });
+});
