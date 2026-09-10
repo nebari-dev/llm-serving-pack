@@ -791,6 +791,10 @@ kubectl get pods,svc -n envoy-ai-gateway-system
 kubectl get mutatingwebhookconfiguration | grep ai-gateway
 ```
 
+Expected: the controller pod `1/1 Running`, and
+`envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system` listed
+by the webhook query.
+
 Confirm cert-manager issued the webhook certificate:
 
 ```bash
@@ -1908,9 +1912,9 @@ in-cluster URLs (back-channel only).
 
 ### 12.2 AI Gateway webhook certificate becomes untrusted after a chart re-render
 
-**Status:** fixed by the cert-manager values in section 5.1. This
-section covers migrating an existing install and repairing one in
-an emergency.
+**Status:** fixed by switching to cert-manager mode, the values in
+section 5.1. This section covers migrating an existing install and
+repairing one in an emergency.
 
 **Symptom:** Envoy proxy pods cannot be created, cluster-wide. The
 API server log shows `x509: certificate signed by unknown authority
@@ -1929,7 +1933,7 @@ healthy for days.
 1. Capture a baseline so you can tell what the migration changed:
 
    ```bash
-   BASE_DOMAIN=<your cluster domain>
+   BASE_DOMAIN="<your cluster domain>"
    kubectl get certificate,secret -n envoy-ai-gateway-system
    for h in "$BASE_DOMAIN" "argocd.$BASE_DOMAIN" "keycloak.$BASE_DOMAIN"; do
      echo "$h -> $(curl -s -o /dev/null -w '%{http_code}' "https://$h/")"
@@ -1960,8 +1964,9 @@ no ArgoCD tracking.
 
 **Rollback:** remove the values block and sync. The chart re-renders
 a self-signed Secret and the controller re-patches `caBundle` on its
-next restart. You are then back to the defect this section describes,
-so treat rollback as a way to buy time, not a resting state.
+next restart. Only the forward migration above was measured on a live
+cluster; this reverse direction was not, so treat rollback as a way
+to buy time, not a validated resting state.
 
 #### Emergency repair, self-signed installs only
 

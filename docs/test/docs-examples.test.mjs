@@ -337,13 +337,21 @@ describe('AI Gateway webhook installation runbook states the correct root cause'
   });
 
   it('points at cert-manager mode as the remedy', () => {
-    expect(page()).toMatch(/certManager|cert-manager mode/);
+    expect(page()).toMatch(/cert-manager mode/);
   });
 
   it('never labels rollout restart as the fix', () => {
     expect(page()).not.toMatch(
       /\*\*Fix:[\s\S]{0,300}?rollout restart deploy -n envoy-ai-gateway-system/,
     );
+  });
+
+  it('does not publish the unsafe rollout-restart workaround', () => {
+    // Section 12.2 defers to troubleshooting.md for emergency repair, so this
+    // command form must not appear on this page at all. The `deploy/NAME -n NS`
+    // form used by the unrelated PostRouteModify crashloop fix is a different
+    // remedy for a different bug and is deliberately not matched here.
+    expect(page()).not.toMatch(/rollout restart deploy -n envoy-ai-gateway-system/);
   });
 
   it('documents the dry-run admission probe', () => {
