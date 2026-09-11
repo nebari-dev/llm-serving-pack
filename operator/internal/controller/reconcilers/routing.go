@@ -20,6 +20,8 @@ type RoutingResources struct {
 // generations easily exceed the Envoy AI Gateway's 60s HTTPRoute default.
 const DefaultRequestTimeout = "600s"
 
+const aiGatewayAPIVersion = "aigateway.envoyproxy.io/v1beta1"
+
 // boolOrDefault returns the value of b if non-nil, otherwise returns def.
 func boolOrDefault(b *bool, def bool) bool { //nolint:unparam // def is always true today but the function is used across multiple call sites
 	if b == nil {
@@ -64,6 +66,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
 			ExternalHTTPSListenerName,
+			SharedExternalHostname(cfg.BaseDomain),
 			model.Name,
 			model.Spec.Model.Name,
 			requestTimeout,
@@ -78,6 +81,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
 			InternalHTTPSListenerName,
+			SharedInternalHostname(cfg.BaseDomain),
 			model.Name,
 			model.Spec.Model.Name,
 			requestTimeout,
@@ -92,13 +96,14 @@ func buildAIGatewayRoute(
 	labels map[string]string,
 	gatewayName, gatewayNS string,
 	listenerSectionName string,
+	hostname string,
 	poolName string,
 	modelName string,
 	requestTimeout string,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "AIGatewayRoute",
 			"metadata": map[string]interface{}{
 				"name":      name,
@@ -106,6 +111,7 @@ func buildAIGatewayRoute(
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
+				"hostnames": []interface{}{hostname},
 				// sectionName scopes this HTTPRoute attachment to a single
 				// named listener on the parent Gateway. Required because the
 				// AI Gateway controller auto-appends a catch-all "route-not-

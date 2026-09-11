@@ -22,11 +22,11 @@ identity setup. Do not patch generated Envoy deployments or inject custom
 signing proxies. With Argo CD, use the AI Gateway chart's cert-manager option
 for webhook certificates instead of Helm-generated self-signed certificates.
 
-The current deployment uses Envoy Gateway 1.6.7 with AI Gateway 0.5. Upgrade
-the pair together against the [upstream compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/).
-AI Gateway 0.6 removes the legacy use of `schema.version` as an OpenAI URL
-prefix; migrate that behavior before adopting newer releases so existing
-OpenAI-compatible providers retain their paths.
+The deployment targets Envoy Gateway 1.8.1 with AI Gateway 1.1 and Gateway API
+1.5.1. The operator emits AI Gateway `v1beta1` resources and uses `schema.prefix`
+for OpenAI-compatible paths. Existing `PassthroughModel.spec.provider.schemaVersion`
+settings retain their meaning; provider manifests do not need rewriting.
+See [gateway upgrades](./gateway-upgrades/) before changing an existing installation.
 
 The common code owns Kubernetes resources, model selection, routing, access
 control, and gateway verification. Provider-specific fields stay in their

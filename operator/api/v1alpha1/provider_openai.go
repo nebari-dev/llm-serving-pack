@@ -1,6 +1,9 @@
 package v1alpha1
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 func (p ProviderSpec) resolveOpenAI() (*ResolvedProvider, error) {
 	if p.Backend != nil && p.Backend.Bedrock != nil {
@@ -9,13 +12,14 @@ func (p ProviderSpec) resolveOpenAI() (*ResolvedProvider, error) {
 	if err := p.requireCredential(CredentialAPIKey); err != nil {
 		return nil, err
 	}
-	version := p.SchemaVersion
-	if version == "" {
-		version = "v1"
+	prefix := p.SchemaVersion
+	if prefix == "" {
+		prefix = "v1"
 	}
 	return &ResolvedProvider{
-		SchemaName:    BackendOpenAI,
-		SchemaVersion: version,
+		SchemaName: BackendOpenAI,
+		// Keep the public legacy setting, but use Envoy's explicit URL prefix.
+		SchemaPrefix: "/" + strings.Trim(prefix, "/"),
 		SecurityPolicy: map[string]interface{}{
 			"type": "APIKey",
 			"apiKey": map[string]interface{}{

@@ -1,0 +1,83 @@
+---
+title: Upgrade the AI gateway
+description: Move existing installations to Envoy AI Gateway 1.1.
+---
+
+The supported deployment target is **Envoy AI Gateway 1.1.0, Envoy Gateway
+1.8.1, and Gateway API 1.5.1**. Use the released upstream Helm charts, including
+the separate AI Gateway CRD chart. The pack does not install those controllers.
+
+## Existing provider settings
+
+The operator translates the legacy `spec.provider.schemaVersion` setting into
+Envoy's `schema.prefix`: `api/v1` still reaches `/api/v1/chat/completions`, and
+the default remains `/v1`. Bedrock uses its own native paths without a prefix.
+API schema versions and URL prefixes remain separate in the provider adapter.
+
+Both served and external-provider routes use `aigateway.envoyproxy.io/v1beta1`.
+Each endpoint declares its hostname, so `/v1/models` includes its own catalog
+without depending on the other endpoint being enabled. Listener references and
+per-model authentication remain in place. Hostname scoping is not user-level
+catalog filtering; model invocation still enforces API-key scope and JWT groups.
+
+## Upgrade an installation on AI Gateway 0.5
+
+Follow the upstream [controller upgrade policy](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/RELEASES.md#upgrading-the-envoy-ai-gateway-controller)
+and [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/).
+Use staged revisions, rather than changing every controller independently:
+
+1. Record the current chart and operator revisions and inventory all gateway
+   resources, including non-LLM routes on a shared gateway. Check the intervening
+   Envoy Gateway release notes for policy changes. Keep CRDs during rollback;
+   deleting them also deletes their resources.
+2. Install the compatible Gateway API and Envoy Gateway CRDs and upgrade Envoy
+   Gateway to 1.8.1 using the official chart. CRD updates must be explicit:
+   a Helm controller upgrade alone does not reliably update installed CRDs.
+3. Before crossing AI Gateway 0.6, migrate any external OpenAI backends from
+   `schema.version` to `schema.prefix`. If the old operator still reconciles
+   these resources, pause that reconciler during the handover. Move any custom
+   `AIGatewayRoute.spec.filterConfig` into `GatewayConfig`; this pack does not
+   generate `filterConfig`.
+4. Upgrade AI Gateway CRDs and controller to 0.7, then deploy the new pack
+   operator. Version 0.7 supports hostname-scoped catalogs and the `v1beta1`
+   resources the operator now emits. Confirm that all resources reconcile before
+   proceeding to AI Gateway 1.1, using 1.0 as an intermediate controller release.
+5. Roll the Envoy data plane after each AI Gateway controller upgrade so new pods
+   receive its matching ext-proc sidecar. Use an `EnvoyProxy` pod-template
+   annotation to request the rollout; do not edit generated Deployments. Preserve
+   the ServiceAccount and cloud workload identity. With Argo CD, retain the
+   cert-manager webhook certificate configuration.
+6. Check both inference endpoints, model catalogs, streaming, rejected
+   credentials, local `InferencePool` models, and non-LLM routes. Expect active
+   connections to reconnect during a data-plane rollout. Only finish the upgrade
+   when the desired GitOps revisions and actual pod images agree.
+
+The `v1alpha1` AI Gateway API remains served upstream, but new writes use
+`v1beta1`. Reapplying resources migrates their stored representation; do not
+remove old CRD storage versions until every stored object has been migrated.
+
+For rollback, restore compatible controller/operator revisions through GitOps
+while retaining the installed CRDs. Returning to AI Gateway 0.5 also requires
+restoring its path-prefix and catalog configuration; an image-only rollback is
+not sufficient.
+
+## Scope of the upgrade
+
+AI Gateway 1.1 makes newer protocol translation, token counting, streaming
+controls, and tracing available. It does not automatically enable additional
+providers, failover, or tracing, and does not grant cloud model access. Provider
+adapters still select the appropriate upstream schema and authentication.
+
+## Check generated resources against upstream CRDs
+
+The operator's `TestGatewayAdmission` uses a local Kubernetes API server with
+the released AI Gateway CRDs. It checks admission and stored fields, including
+path prefixes and hostname scoping. No cluster or cloud credentials are used.
+
+Render `ai-gateway-crds-helm` version `v1.1.0` into a temporary directory, set
+`AI_GATEWAY_CRD_DIR` to that directory and `KUBEBUILDER_ASSETS` to the binaries
+installed by `make setup-envtest`, then run from `operator`:
+
+```sh
+go test ./internal/controller/reconcilers -run TestGatewayAdmission -v
+```

@@ -23,6 +23,7 @@ type ResolvedProvider struct {
 	Port          int32
 	SchemaName    string
 	SchemaVersion string
+	SchemaPrefix  string
 	// SecurityPolicy contains the Envoy AI Gateway upstream auth settings.
 	// The shared builder supplies targetRefs, names, labels, and ownership.
 	SecurityPolicy map[string]interface{}

@@ -61,7 +61,7 @@ func TestProviderResolve(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.SchemaVersion != "" || resolved.Hostname != "bedrock-runtime.us-west-2.amazonaws.com" {
+		if resolved.SchemaPrefix != "" || resolved.Hostname != "bedrock-runtime.us-west-2.amazonaws.com" {
 			t.Fatalf("unexpected Bedrock defaults: %+v", resolved)
 		}
 	})
@@ -107,6 +107,24 @@ func TestBedrockUsesAWSEndpointPartitions(t *testing.T) {
 			}
 			if resolved.Hostname != want || p.EndpointHostname() != want {
 				t.Fatalf("hostname = %q, want %q", resolved.Hostname, want)
+			}
+		})
+	}
+}
+
+func TestOpenAIUsesExplicitPathPrefix(t *testing.T) {
+	for _, tc := range []struct{ legacy, prefix string }{
+		{"", "/v1"}, {"v1", "/v1"}, {"api/v1", "/api/v1"},
+		{"/v1beta/openai/", "/v1beta/openai"}, {"/", "/"},
+	} {
+		t.Run(tc.legacy, func(t *testing.T) {
+			p := ProviderSpec{Hostname: "provider.example.com", SchemaVersion: tc.legacy, CredentialSecretName: "key"}
+			r, err := p.Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.SchemaPrefix != tc.prefix || r.SchemaVersion != "" {
+				t.Fatalf("prefix = %q, version = %q", r.SchemaPrefix, r.SchemaVersion)
 			}
 		})
 	}

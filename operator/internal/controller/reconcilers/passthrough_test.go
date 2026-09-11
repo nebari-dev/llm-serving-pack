@@ -167,8 +167,11 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 			t.Errorf("AIServiceBackend name = %q", b.GetName())
 		}
 		schema, _ := specMap(t, b)["schema"].(map[string]interface{})
-		if schema["name"] != "OpenAI" || schema["version"] != "api/v1" {
+		if schema["name"] != "OpenAI" || schema["prefix"] != "/api/v1" {
 			t.Errorf("schema = %v", schema)
+		}
+		if _, exists := schema["version"]; exists {
+			t.Error("OpenAI paths must use prefix, not the ignored version field")
 		}
 		ref, _ := specMap(t, b)["backendRef"].(map[string]interface{})
 		if ref["kind"] != ptKindBackend || ref["name"] != ptBackendName || ref["group"] != "gateway.envoyproxy.io" {
@@ -450,8 +453,8 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 
 		intRules := routeRules(t, res.InternalRoute)
 		intDeclared, _ := intRules[0].(map[string]interface{})
-		if _, has := intDeclared["modelsOwnedBy"]; has {
-			t.Errorf("internal route must not set modelsOwnedBy (avoids /v1/models duplicates)")
+		if intDeclared["modelsOwnedBy"] != ptCRName {
+			t.Error("internal route must register models in its hostname-scoped catalog")
 		}
 	})
 

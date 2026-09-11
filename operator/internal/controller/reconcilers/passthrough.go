@@ -91,11 +91,6 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.ExternalGatewayNS,
 			ExternalHTTPSListenerName,
 			SharedExternalHostname(cfg.BaseDomain),
-			// modelsOwnedBy only on the external route: the gateway's
-			// /v1/models endpoint aggregates declared models across every
-			// route on the Gateway, so declaring them on both endpoints
-			// would list each model twice.
-			true,
 		)
 		result.ExternalSecurityPolicy = buildAPIKeyAuthSecurityPolicy(
 			pm.Name+"-external-auth",
@@ -116,7 +111,6 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.InternalGatewayNS,
 			InternalHTTPSListenerName,
 			SharedInternalHostname(cfg.BaseDomain),
-			false,
 		)
 		result.InternalSecurityPolicy = buildJWTSecurityPolicy(
 			pm.Name+"-internal-auth",
@@ -200,9 +194,12 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 	if provider.SchemaVersion != "" {
 		schema["version"] = provider.SchemaVersion
 	}
+	if provider.SchemaPrefix != "" {
+		schema["prefix"] = provider.SchemaPrefix
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "AIServiceBackend",
 			"metadata": map[string]interface{}{
 				"name":      pm.Name,
@@ -230,7 +227,7 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 	}}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "BackendSecurityPolicy",
 			"metadata": map[string]interface{}{
 				"name":      pm.Name + "-upstream-auth",
@@ -243,15 +240,8 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 }
 
 // buildPassthroughRoute renders the AIGatewayRoute for one endpoint of a
-// PassthroughModel. Rule order within this route matters only for
-// readability. NOTE: since served-model rules lost their Host matcher
-// (AI Gateway v0.5 model registration; #116), header-count precedence no
-// longer orders a served rule (x-ai-eg-model) against the opt-in catch-all
-// rule (Host). Live-validated on EG v1.6.7 / AI Gateway v0.5: dispatch is
-// decided by the ext_proc's model registry, so served/declared ids always
-// reach their own rule regardless of route age, and unregistered ids 404 at
-// the ext_proc before route matching - which leaves the catch-all rule
-// currently inert (see the comment in the CatchAll block below).
+// PassthroughModel. Hostnames scope the model catalog; model headers select
+// upstreams. Both endpoints register models independently.
 //
 // sectionName scoping is load-bearing for the same reason as in
 // buildAIGatewayRoute: the AI Gateway controller appends a catch-all
@@ -265,7 +255,6 @@ func buildPassthroughRoute(
 	gatewayName, gatewayNS string,
 	listenerSectionName string,
 	hostname string,
-	declareModels bool,
 ) *unstructured.Unstructured {
 	hostHeader := map[string]interface{}{
 		"type":  "Exact",
@@ -293,21 +282,13 @@ func buildPassthroughRoute(
 			"backendRefs": passthroughBackendRefs(pm),
 			"timeouts":    map[string]interface{}{"request": "120s"},
 		}
-		if declareModels {
-			declared["modelsOwnedBy"] = pm.Name
-		}
+		declared["modelsOwnedBy"] = pm.Name
 		rules = append(rules, declared)
 	}
 
 	if pm.Spec.Models.CatchAll {
-		// The catch-all rule (opt-in; catchAll defaults false) keeps the Host
-		// matcher. It carries no x-ai-eg-model header, so it is not a
-		// model-registration rule and is not affected by the AI Gateway v0.5
-		// issue fixed for the declared-model rules (#116). Live-tested on
-		// EG v1.6.7 / AI Gateway v0.5: the ext_proc 404s any model id not
-		// registered by some rule before route matching runs, so this rule
-		// currently receives no traffic. Kept for a future AI Gateway version
-		// where unregistered ids fall through to route matching.
+		// The optional catch-all does not register models. Whether unknown
+		// models reach it depends on the upstream ext-proc's model registry.
 		rules = append(rules, map[string]interface{}{
 			"matches": []interface{}{
 				map[string]interface{}{
@@ -321,7 +302,7 @@ func buildPassthroughRoute(
 
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "AIGatewayRoute",
 			"metadata": map[string]interface{}{
 				"name":      name,
@@ -329,6 +310,7 @@ func buildPassthroughRoute(
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
+				"hostnames": []interface{}{hostname},
 				"parentRefs": []interface{}{
 					map[string]interface{}{
 						"name":        gatewayName,
