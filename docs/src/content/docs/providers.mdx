@@ -1,0 +1,117 @@
+---
+title: Provider integrations
+---
+
+External providers use the same model declarations, API-key and JWT endpoints,
+and group access controls. A backend variant selects its native API, address,
+and upstream authentication. Existing OpenAI-compatible configurations remain
+valid without an explicit backend. [AWS Bedrock](/bedrock/) is the first
+non-OpenAI backend; other native backends are not enabled yet.
+
+## Responsibilities
+
+Use the provider's SDK and services for endpoint resolution, credentials,
+catalog queries, pagination, native requests, and stream decoding. Envoy AI
+Gateway already translates inference requests and authenticates upstream.
+The pack selects that behavior; it does not implement another translator or
+cloud credential chain.
+
+Deploy with the released Envoy Helm charts and documented Gateway API resources.
+Use `EnvoyProxy` for data-plane settings and the provider's documented workload
+identity setup. Do not patch generated Envoy deployments or inject custom
+signing proxies. With Argo CD, use the AI Gateway chart's cert-manager option
+for webhook certificates instead of Helm-generated self-signed certificates.
+
+The common code owns Kubernetes resources, model selection, routing, access
+control, and gateway verification. Provider-specific fields stay in their
+typed variant and SDK adapter. In particular, workload identity does not imply
+AWS: each variant supplies the appropriate Envoy upstream security policy.
+
+## Discover and select models
+
+The shared CLI lives in `dev/providers`:
+
+```sh
+python3 -m venv dev/providers/.venv
+dev/providers/.venv/bin/pip install -r dev/providers/requirements.txt
+dev/providers/.venv/bin/python dev/providers/provider.py --help
+dev/providers/.venv/bin/python dev/providers/provider.py --backend bedrock --help
+```
+
+Each adapter provides three operations:
+
+| Operation | Result |
+| --- | --- |
+| `discover()` | Current targets with `modelId` and provider-specific evidence. |
+| `provider_spec()` | Typed provider settings for a manifest, never credential values. |
+| `verify_native(model_id)` | Bounded native completion and streaming checks through the provider's SDK. |
+
+`discover` prints the catalog. `manifest` selects explicit IDs from that catalog
+and emits a `PassthroughModel` with the requested name, namespace, and groups.
+Neither command invokes models, applies resources, or changes cloud permissions.
+Backend-specific options go before the command; selection options follow it.
+See the [Bedrock commands](/bedrock/#discover-models-from-aws) for a working example.
+
+A catalog entry is not proof of inference access or API compatibility. Verify
+selected IDs before publishing them. Discovery does not automatically expand
+access, and the operator does not poll cloud catalogs. Desktop clients continue
+to read the gateway's `/v1/models` endpoint for declared models.
+
+## Verify both gateway endpoints
+
+Supply these environment variables from your secret manager or shell session:
+
+- `PROVIDER_TEST_API_KEY`: a valid key scoped to the selected provider.
+- `PROVIDER_TEST_DENIED_API_KEY`: a valid key for a different provider/model.
+- `PROVIDER_TEST_JWT`: a valid JWT with a matching access group.
+- `PROVIDER_TEST_DENIED_JWT`: a valid JWT without a matching access group.
+
+Use a private provider with `access.groups`. An invalid or expired credential
+does not establish whether authorization rejects a valid caller with the wrong scope.
+
+For example, with Bedrock:
+
+```sh
+dev/providers/.venv/bin/python dev/providers/provider.py \
+  --backend bedrock --profile YOUR_AWS_PROFILE --region us-west-2 verify \
+  --external-url https://llm.example.com \
+  --internal-url https://llm-internal.example.com \
+  --model-id amazon.nova-lite-v1:0
+```
+
+Every backend runs the same gateway checks: regular and streaming responses,
+HTTP 401 without credentials, and HTTP 403 for the wrong scope. Successful
+responses must contain assistant text; streams also require a finish reason
+and `[DONE]`. Requests use HTTPS with certificate verification and no redirects.
+Tokens and response text are not printed.
+
+Native checks use the caller's cloud credentials; gateway checks exercise the
+gateway's credentials. Each stage reports its own failure, and an error in one
+does not suppress the other endpoint or later models. Any failure produces a
+nonzero exit status. Gateway checks add four permitted inference calls per model;
+Bedrock adds two native calls. All use the same harmless prompt and a 32-token limit.
+
+## Add a provider
+
+Keep each follow-up PR focused on one backend:
+
+1. Add its typed `ProviderBackend` variant and enum value. Add a credential
+   variant only if the existing choices cannot describe its authentication.
+2. Add a resolver beside `provider_openai.go` and `provider_bedrock.go`, and
+   dispatch to it from `ProviderSpec.Resolve`. Use provider-owned endpoint rules
+   where available. Return the address, Envoy schema, and upstream security
+   policy settings; do not add cloud-specific fields to `ResolvedProvider`.
+3. Add an SDK adapter under `dev/providers/backends` and register it in
+   `provider.py`. Implement the three operations above and expose only its
+   required SDK options. Raise `ProviderError` with a credential-safe error code.
+   Preserve native IDs and availability evidence instead of maintaining a
+   hardcoded model list or inventing a universal availability status.
+4. Add admission and resource-output coverage, SDK-backed fixtures using the
+   provider's stubber or emulator where available, and an example. Regenerate
+   the CRD and its Helm copy. Exercise the native API and both gateway endpoints
+   against the deployed Envoy version before claiming live support.
+
+Routes, model declarations, key issuance, group authorization, manifest
+selection, and gateway checks stay unchanged. A test-only second adapter
+exercises the shared workflow without AWS options. This keeps the next Azure,
+Vertex, or Anthropic-direct change confined to its own variant and adapter.

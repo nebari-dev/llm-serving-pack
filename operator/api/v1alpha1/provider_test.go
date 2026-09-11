@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,11 @@ func TestProviderResolve(t *testing.T) {
 	}{
 		{"missing region", func(p *ProviderSpec) { p.Backend.Bedrock = nil }, "region"},
 		{"invalid region", func(p *ProviderSpec) { p.Backend.Bedrock.Region = "us-west-2/other" }, "region"},
+		{"query in region", func(p *ProviderSpec) { p.Backend.Bedrock.Region = "us-west-2?other" }, "region"},
+		{"invalid region with private endpoint", func(p *ProviderSpec) {
+			p.Hostname = "bedrock.example.com"
+			p.Backend.Bedrock.Region = "us-west-2#other"
+		}, "region"},
 		{"unknown backend", func(p *ProviderSpec) { p.Backend.Type = "Other" }, "backend.type"},
 		{"wrong variant", func(p *ProviderSpec) { p.Backend.Type = BackendOpenAI }, "backend.bedrock"},
 		{"wrong credential", func(p *ProviderSpec) { p.Credential = &ProviderCredential{Type: CredentialAPIKey} }, "credential.type"},
@@ -66,7 +72,8 @@ func TestProviderResolve(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved.Hostname != p.Hostname || resolved.Region != "us-west-2" || resolved.SchemaName != "AWSBedrock" {
+		auth := resolved.SecurityPolicy["awsCredentials"].(map[string]interface{})
+		if resolved.Hostname != p.Hostname || auth["region"] != "us-west-2" || resolved.SchemaName != "AWSBedrock" {
 			t.Fatalf("unexpected resolved address: %+v", resolved)
 		}
 	})
@@ -79,8 +86,28 @@ func TestProviderResolve(t *testing.T) {
 		p.Backend = &ProviderBackend{Type: BackendOpenAI}
 		p.Credential = &ProviderCredential{Type: CredentialAPIKey}
 		explicit, err := p.Resolve()
-		if err != nil || *legacy != *explicit {
+		if err != nil || !reflect.DeepEqual(legacy, explicit) {
 			t.Fatalf("explicit provider changed legacy behavior: %+v, %v", explicit, err)
 		}
 	})
+}
+
+func TestBedrockUsesAWSEndpointPartitions(t *testing.T) {
+	for region, want := range map[string]string{
+		"us-west-2":     "bedrock-runtime.us-west-2.amazonaws.com",
+		"cn-north-1":    "bedrock-runtime.cn-north-1.amazonaws.com.cn",
+		"us-gov-west-1": "bedrock-runtime.us-gov-west-1.amazonaws.com",
+		"us-iso-east-1": "bedrock-runtime.us-iso-east-1.c2s.ic.gov",
+	} {
+		t.Run(region, func(t *testing.T) {
+			p := ProviderSpec{Backend: &ProviderBackend{Type: BackendBedrock, Bedrock: &BedrockBackend{Region: region}}}
+			resolved, err := p.Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Hostname != want || p.EndpointHostname() != want {
+				t.Fatalf("hostname = %q, want %q", resolved.Hostname, want)
+			}
+		})
+	}
 }

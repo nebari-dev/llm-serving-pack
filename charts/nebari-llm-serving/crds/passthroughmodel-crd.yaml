@@ -117,9 +117,10 @@ spec:
                         description: bedrock contains the AWS Bedrock-specific settings.
                         properties:
                           region:
-                            description: region is the AWS region used for the Bedrock
-                              runtime endpoint and SigV4.
-                            pattern: ^[a-z]{2}(-[a-z]+)+-[0-9]+$
+                            description: |-
+                              region is the AWS region used for the Bedrock runtime endpoint and SigV4.
+                              Endpoint and partition rules come from the AWS SDK.
+                            minLength: 1
                             type: string
                         required:
                         - region

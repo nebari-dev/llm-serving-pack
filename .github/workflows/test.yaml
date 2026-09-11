@@ -7,13 +7,13 @@ on:
     branches: [main]
 
 jobs:
-  test-bedrock-tools:
-    name: Test Bedrock discovery and verification
+  test-provider-tools:
+    name: Test provider discovery and verification
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Exercise AWS SDK contracts without cloud credentials
-        working-directory: dev/bedrock
+      - name: Exercise provider adapters and shared gateway checks
+        working-directory: dev/providers
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -r requirements.txt

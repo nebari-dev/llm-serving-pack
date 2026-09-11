@@ -2,7 +2,7 @@
 # The Envoy AI Gateway dataplane must have AWS workload identity configured
 # (EKS Pod Identity or IRSA) with bedrock:InvokeModel and
 # bedrock:InvokeModelWithResponseStream permissions. Discover and verify IDs
-# for your account/region with dev/bedrock/bedrock.py before applying.
+# for your account/region with dev/providers/provider.py --backend bedrock before applying.
 apiVersion: llm.nebari.dev/v1alpha1
 kind: PassthroughModel
 metadata:

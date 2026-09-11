@@ -94,7 +94,8 @@ type ProviderBackend struct {
 // BedrockBackend configures AWS Bedrock Converse.
 type BedrockBackend struct {
 	// region is the AWS region used for the Bedrock runtime endpoint and SigV4.
-	// +kubebuilder:validation:Pattern=`^[a-z]{2}(-[a-z]+)+-[0-9]+$`
+	// Endpoint and partition rules come from the AWS SDK.
+	// +kubebuilder:validation:MinLength=1
 	// +required
 	Region string `json:"region"`
 }

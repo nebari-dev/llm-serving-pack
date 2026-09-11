@@ -4,6 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -221,23 +222,12 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 }
 
 func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
-	spec := map[string]interface{}{
-		"targetRefs": []interface{}{map[string]interface{}{
-			"group": "aigateway.envoyproxy.io",
-			"kind":  "AIServiceBackend",
-			"name":  pm.Name,
-		}},
-	}
-	if provider.CredentialType == llmv1alpha1.CredentialWorkloadIdentity {
-		spec["type"] = "AWSCredentials"
-		spec["awsCredentials"] = map[string]interface{}{"region": provider.Region}
-	} else {
-		spec["type"] = "APIKey"
-		spec["apiKey"] = map[string]interface{}{
-			// Platform-owned provider key (Secret key "apiKey").
-			"secretRef": map[string]interface{}{"name": provider.SecretName},
-		}
-	}
+	spec := runtime.DeepCopyJSON(provider.SecurityPolicy)
+	spec["targetRefs"] = []interface{}{map[string]interface{}{
+		"group": "aigateway.envoyproxy.io",
+		"kind":  "AIServiceBackend",
+		"name":  pm.Name,
+	}}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",

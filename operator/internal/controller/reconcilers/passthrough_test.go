@@ -75,6 +75,31 @@ func specMap(t *testing.T, obj *unstructured.Unstructured) map[string]interface{
 	return spec
 }
 
+func TestUpstreamAuthBuilderDoesNotAssumeAWS(t *testing.T) {
+	// A future backend supplies its own policy payload. The shared renderer
+	// must preserve it without translating workload identity into AWS fields.
+	settings := map[string]interface{}{
+		"type":                   "FutureCloudCredentials",
+		"futureCloudCredentials": map[string]interface{}{"audience": "example"},
+	}
+	provider := &llmv1alpha1.ResolvedProvider{SecurityPolicy: settings}
+	policy := buildProviderBackendSecurityPolicy(testPassthroughModel(), nil, provider)
+	spec := specMap(t, policy)
+	if spec["type"] != settings["type"] || !reflect.DeepEqual(spec["futureCloudCredentials"], settings["futureCloudCredentials"]) {
+		t.Fatalf("provider policy was changed: %#v", spec)
+	}
+	if _, ok := spec["awsCredentials"]; ok {
+		t.Fatal("shared builder introduced AWS credentials")
+	}
+	if _, ok := settings["targetRefs"]; ok {
+		t.Fatal("builder mutated the resolved provider")
+	}
+	spec["futureCloudCredentials"].(map[string]interface{})["audience"] = "changed"
+	if settings["futureCloudCredentials"].(map[string]interface{})["audience"] != "example" {
+		t.Fatal("builder shares mutable provider settings")
+	}
+}
+
 func routeRules(t *testing.T, route *unstructured.Unstructured) []interface{} {
 	t.Helper()
 	rules, ok := specMap(t, route)["rules"].([]interface{})
