@@ -6,15 +6,15 @@ CLUSTER_NAME ?= llm-serving-test
 # key-manager there. kind names its context "kind-<cluster>".
 KUBECTL := kubectl --context kind-$(CLUSTER_NAME)
 
-# Dependency versions. These move together: Envoy AI Gateway v0.5.x requires
-# Envoy Gateway v1.6.x and Gateway API v1.4.0 (see
+# Dependency versions. These move together: Envoy AI Gateway v1.1.x uses
+# Envoy Gateway v1.8.1 and Gateway API v1.5.1 (see
 # https://aigateway.envoyproxy.io/docs/compatibility/). Bump them as a set
 # when upgrading the AI Gateway.
 CERT_MANAGER_VERSION ?= v1.17.2
-GATEWAY_API_VERSION ?= v1.4.0
+GATEWAY_API_VERSION ?= v1.5.1
 GIE_VERSION ?= v1.4.0
-ENVOY_GATEWAY_VERSION ?= v1.6.7
-AI_GATEWAY_VERSION ?= v0.5.0
+ENVOY_GATEWAY_VERSION ?= v1.8.1
+AI_GATEWAY_VERSION ?= v1.1.0
 
 # Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side,
 # which conflicts with the standalone install in `setup` (owned by a different

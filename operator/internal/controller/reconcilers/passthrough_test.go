@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -61,6 +62,24 @@ func testPassthroughModel() *llmv1alpha1.PassthroughModel {
 	}
 }
 
+func TestProviderHostnameNormalizationReachesBackendAndTLS(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Provider.Hostname = "Api.Example.COM."
+	r, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints, _, err := unstructured.NestedSlice(r.Backend.Object, "spec", "endpoints")
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("backend endpoints: %v, %v", endpoints, err)
+	}
+	hostname := endpoints[0].(map[string]interface{})["fqdn"].(map[string]interface{})["hostname"]
+	tlsHostname, _, err := unstructured.NestedString(r.BackendTLSPolicy.Object, "spec", "validation", "hostname")
+	if err != nil || hostname != "api.example.com" || tlsHostname != hostname {
+		t.Fatalf("backend/TLS mismatch: %v, %q, %v", hostname, tlsHostname, err)
+	}
+}
+
 // specMap digs spec out of an unstructured or fails the test.
 func specMap(t *testing.T, obj *unstructured.Unstructured) map[string]interface{} {
 	t.Helper()
@@ -72,6 +91,31 @@ func specMap(t *testing.T, obj *unstructured.Unstructured) map[string]interface{
 		t.Fatalf("expected spec to be a map, got %T", obj.Object["spec"])
 	}
 	return spec
+}
+
+func TestUpstreamAuthBuilderDoesNotAssumeAWS(t *testing.T) {
+	// A future backend supplies its own policy payload. The shared renderer
+	// must preserve it without translating workload identity into AWS fields.
+	settings := map[string]interface{}{
+		"type":                   "FutureCloudCredentials",
+		"futureCloudCredentials": map[string]interface{}{"audience": "example"},
+	}
+	provider := &llmv1alpha1.ResolvedProvider{SecurityPolicy: settings}
+	policy := buildProviderBackendSecurityPolicy(testPassthroughModel(), nil, provider)
+	spec := specMap(t, policy)
+	if spec["type"] != settings["type"] || !reflect.DeepEqual(spec["futureCloudCredentials"], settings["futureCloudCredentials"]) {
+		t.Fatalf("provider policy was changed: %#v", spec)
+	}
+	if _, ok := spec["awsCredentials"]; ok {
+		t.Fatal("shared builder introduced AWS credentials")
+	}
+	if _, ok := settings["targetRefs"]; ok {
+		t.Fatal("builder mutated the resolved provider")
+	}
+	spec["futureCloudCredentials"].(map[string]interface{})["audience"] = "changed"
+	if settings["futureCloudCredentials"].(map[string]interface{})["audience"] != "example" {
+		t.Fatal("builder shares mutable provider settings")
+	}
 }
 
 func routeRules(t *testing.T, route *unstructured.Unstructured) []interface{} {
@@ -141,8 +185,11 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 			t.Errorf("AIServiceBackend name = %q", b.GetName())
 		}
 		schema, _ := specMap(t, b)["schema"].(map[string]interface{})
-		if schema["name"] != "OpenAI" || schema["version"] != "api/v1" {
+		if schema["name"] != "OpenAI" || schema["prefix"] != "/api/v1" {
 			t.Errorf("schema = %v", schema)
+		}
+		if _, exists := schema["version"]; exists {
+			t.Error("OpenAI paths must use prefix, not the ignored version field")
 		}
 		ref, _ := specMap(t, b)["backendRef"].(map[string]interface{})
 		if ref["kind"] != ptKindBackend || ref["name"] != ptBackendName || ref["group"] != "gateway.envoyproxy.io" {
@@ -169,6 +216,95 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 			t.Errorf("targetRef = %v", target)
 		}
 	})
+}
+
+func TestBuildPassthroughResourcesBedrockUsesConverseAndWorkloadIdentity(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{
+		Backend: &llmv1alpha1.ProviderBackend{
+			Type:    "Bedrock",
+			Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+		},
+		Credential: &llmv1alpha1.ProviderCredential{Type: "WorkloadIdentity"},
+	}
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+
+	fqdn := specMap(t, res.Backend)["endpoints"].([]interface{})[0].(map[string]interface{})["fqdn"].(map[string]interface{})
+	if fqdn["hostname"] != "bedrock-runtime.us-west-2.amazonaws.com" {
+		t.Errorf("Bedrock hostname = %v", fqdn["hostname"])
+	}
+	schema := specMap(t, res.AIServiceBackend)["schema"].(map[string]interface{})
+	if schema["name"] != "AWSBedrock" {
+		t.Errorf("Bedrock schema = %v", schema)
+	}
+	if _, exists := schema["version"]; exists {
+		t.Error("Bedrock must not receive the legacy OpenAI path prefix")
+	}
+	policy := specMap(t, res.BackendSecurityPolicy)
+	if policy["type"] != "AWSCredentials" {
+		t.Errorf("Bedrock auth type = %v", policy["type"])
+	}
+	awsCredentials := policy["awsCredentials"].(map[string]interface{})
+	if awsCredentials["region"] != "us-west-2" {
+		t.Errorf("Bedrock auth region = %v", awsCredentials["region"])
+	}
+	if len(awsCredentials) != 1 {
+		t.Error("AWS policy must rely on the default credential chain, without a credentialsFile")
+	}
+	if _, found := policy["apiKey"]; found {
+		t.Error("Bedrock policy must not contain an API key")
+	}
+}
+
+func TestBedrockRetainsRoutesAndAccessControl(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Models.CatchAll = false
+	pm.Spec.Models.Declared = []string{
+		"us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"amazon.nova-lite-v1:0",
+		"us.meta.llama3-1-8b-instruct-v1:0",
+	}
+	baseline, err := BuildPassthroughResources(pm, testPassthroughConfig(), []string{"allowed-key"}, []string{"own-keys", "other-keys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{Backend: &llmv1alpha1.ProviderBackend{
+		Type: llmv1alpha1.BackendBedrock, Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+	}}
+	bedrock, err := BuildPassthroughResources(pm, testPassthroughConfig(), []string{"allowed-key"}, []string{"own-keys", "other-keys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]*unstructured.Unstructured{
+		{baseline.ExternalRoute, bedrock.ExternalRoute},
+		{baseline.InternalRoute, bedrock.InternalRoute},
+		{baseline.ExternalSecurityPolicy, bedrock.ExternalSecurityPolicy},
+		{baseline.InternalSecurityPolicy, bedrock.InternalSecurityPolicy},
+	} {
+		if !reflect.DeepEqual(pair[0].Object, pair[1].Object) {
+			t.Errorf("provider selection changed routing or access control for %s", pair[0].GetName())
+		}
+	}
+	for _, route := range []*unstructured.Unstructured{bedrock.ExternalRoute, bedrock.InternalRoute} {
+		rule := routeRules(t, route)[0].(map[string]interface{})
+		matches := rule["matches"].([]interface{})
+		if len(matches) != len(pm.Spec.Models.Declared) {
+			t.Fatalf("%s does not route every Bedrock model", route.GetName())
+		}
+		for i, match := range matches {
+			header := match.(map[string]interface{})["headers"].([]interface{})[0].(map[string]interface{})
+			if header["value"] != pm.Spec.Models.Declared[i] {
+				t.Errorf("model ID was rewritten: %v", header["value"])
+			}
+		}
+	}
+	pm.Spec.Provider.Backend.Bedrock = nil
+	if resources, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil); err == nil || resources != nil {
+		t.Fatal("invalid Bedrock configuration must not produce resources")
+	}
 }
 
 func TestBuildPassthroughResourcesKeySecretAndConfigMap(t *testing.T) {
@@ -304,7 +440,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("declared rule lists models and ownedBy on external only", func(t *testing.T) {
+	t.Run("declared rule registers models on both endpoints", func(t *testing.T) {
 		extRules := routeRules(t, res.ExternalRoute)
 		declared, _ := extRules[0].(map[string]interface{})
 		if declared["modelsOwnedBy"] != ptCRName {
@@ -335,8 +471,8 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 
 		intRules := routeRules(t, res.InternalRoute)
 		intDeclared, _ := intRules[0].(map[string]interface{})
-		if _, has := intDeclared["modelsOwnedBy"]; has {
-			t.Errorf("internal route must not set modelsOwnedBy (avoids /v1/models duplicates)")
+		if intDeclared["modelsOwnedBy"] != ptCRName {
+			t.Error("internal route must register models in its hostname-scoped catalog")
 		}
 	})
 

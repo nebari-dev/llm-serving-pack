@@ -1,8 +1,9 @@
 ---
 title: Architecture
 ---
-import { Code } from 'astro:components';
+import Code from '../../components/ExampleCode.astro';
 import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+import bedrockExample from '../../../../examples/passthrough-bedrock.yaml?raw';
 
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
 
@@ -222,6 +223,12 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
   per-model and only its inputs are fleet-wide.
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
+Served models report `SecurityPoliciesReady` in their status conditions. Failed
+policy writes set `ApplyFailed` and trigger controller retries. A missing
+`SecurityPolicy` CRD sets `GatewayCRDUnavailable`; model provisioning continues
+while policy creation is retried every 15 seconds. `Applied` means the policies
+were written, not that Envoy has finished applying them to traffic.
+
 ### Internal endpoint
 
 For JupyterLab, in-cluster chat UIs, notebooks.
@@ -266,9 +273,15 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 ## PassthroughModel CRD
 
-Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
+A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external provider, such as OpenRouter or AWS Bedrock. The operator creates routing and the same two authentication layers used by served models. The key manager lists these providers alongside LLMModels so users can mint keys through the same UI.
 
 <Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
+
+Existing resources keep the OpenAI-compatible API-key defaults. Bedrock selects
+Converse and AWS workload identity; [the Bedrock guide](/bedrock/) covers live
+model discovery and verification:
+
+<Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
 
 For a step-by-step walkthrough see [Route to an external provider](/quickstart/#route-to-an-external-provider); for the full field reference see the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference).
 
@@ -278,8 +291,8 @@ Generated resources (all in the CR's namespace, no serving stack):
 |---|---|
 | Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
 | BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
-| AIServiceBackend (`<name>`) | OpenAI schema with the provider's path prefix |
-| BackendSecurityPolicy (`<name>-upstream-auth`) | Injects the platform-owned provider API key upstream |
+| AIServiceBackend (`<name>`) | Selected provider schema, such as OpenAI or AWSBedrock |
+| BackendSecurityPolicy (`<name>-upstream-auth`) | Selected provider credential, such as API key or AWS workload identity |
 | AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, external only) and/or Host-only catch-all rule |
 | SecurityPolicy (`<name>-external-auth` / `-internal-auth`) | Same apiKeyAuth / JWT pair as served models |
 | Secret (`<name>-api-keys`) + ConfigMap (`<name>-api-key-metadata`) | Per-provider user API keys, managed by the key-manager |

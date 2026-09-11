@@ -72,6 +72,27 @@ func TestWatcher_Sync(t *testing.T) {
 	}
 }
 
+func TestWatcher_BedrockIdentityAndGroupFilter(t *testing.T) {
+	pm := makePassthroughModel("bedrock", "default", "", boolPtr(false), []string{"bedrock-users"})
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{
+		Backend: &llmv1alpha1.ProviderBackend{
+			Type: llmv1alpha1.BackendBedrock, Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+		},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pm).Build()
+	w := models.NewWatcher(fakeClient)
+	if err := w.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listed := w.ListModels()
+	if len(listed) != 1 || listed[0].Provider != "bedrock-runtime.us-west-2.amazonaws.com" || listed[0].ModelName == "" {
+		t.Fatalf("Bedrock must have a provider identity: %+v", listed)
+	}
+	if len(w.FilterModelsForUser([]string{"bedrock-users"})) != 1 || len(w.FilterModelsForUser([]string{"other-team"})) != 0 {
+		t.Fatal("Bedrock must retain group filtering")
+	}
+}
+
 func TestWatcher_ListModels(t *testing.T) {
 	scheme := buildScheme(t)
 

@@ -11,6 +11,26 @@ export const readPage = (name) => readFileSync(docs(name), 'utf8');
 export const readExample = (name) => readFileSync(example(name), 'utf8');
 
 describe('architecture: PassthroughModel embed', () => {
+  it('uses themed code blocks with captions for both provider examples', () => {
+    const page = readPage('architecture.mdx');
+    expect(page).toContain("import Code from '../../components/ExampleCode.astro'");
+    expect(page).not.toContain('astro:components');
+    for (const [binding, filename] of [
+      ['passthroughExample', 'passthrough-openrouter.yaml'],
+      ['bedrockExample', 'passthrough-bedrock.yaml'],
+    ]) {
+      expect(page).toContain(`<Code code={${binding}} lang="yaml" title="examples/${filename}" />`);
+    }
+  });
+
+  it('adapts imported example code to the selected site theme', () => {
+    const component = readFileSync(new URL('../src/components/ExampleCode.astro', import.meta.url), 'utf8');
+    expect(component).toContain("themes={{ light: 'github-light-default', dark: 'github-dark-default' }}");
+    expect(component).toContain("[data-theme='dark']");
+    expect(component).toContain('var(--shiki-dark)');
+    expect(component).toContain('<figcaption>{title}</figcaption>');
+  });
+
   it('is an .mdx page that embeds the real example file', () => {
     expect(existsSync(docs('architecture.mdx'))).toBe(true);
     const page = readPage('architecture.mdx');
@@ -68,10 +88,19 @@ describe('configuration', () => {
     for (const f of [
       'provider.hostname', 'provider.port', 'provider.schemaVersion',
       'provider.credentialSecretName', 'models.catchAll', 'models.declared',
-      'access', 'endpoints',
+      'provider.backend', 'provider.backend.bedrock.region',
+      'provider.credential', 'access', 'endpoints',
     ]) {
       expect(page).toContain(f);
     }
+  });
+
+  it('documents the Bedrock workload-identity example', () => {
+    const page = readPage('configuration.mdx');
+    const example = readExample('passthrough-bedrock.yaml');
+    expect(page).toContain('examples/passthrough-bedrock.yaml?raw');
+    expect(example).toContain('type: Bedrock');
+    expect(example).toContain('type: WorkloadIdentity');
   });
 
   it('embeds minimal and advanced examples instead of inlining them', () => {

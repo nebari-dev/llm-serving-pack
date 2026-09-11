@@ -106,8 +106,53 @@ spec:
                     type: array
                 type: object
               provider:
-                description: provider is the upstream OpenAI-compatible endpoint
+                description: provider selects the upstream backend, address, and credential
                 properties:
+                  backend:
+                    description: |-
+                      backend selects the upstream API schema. An omitted backend preserves
+                      the OpenAI-compatible behavior of existing resources.
+                    properties:
+                      bedrock:
+                        description: bedrock contains the AWS Bedrock-specific settings.
+                        properties:
+                          region:
+                            description: |-
+                              region is the AWS region used for the Bedrock runtime endpoint and SigV4.
+                              Endpoint and partition rules come from the AWS SDK.
+                            minLength: 1
+                            type: string
+                        required:
+                        - region
+                        type: object
+                      type:
+                        default: OpenAI
+                        description: |-
+                          type is OpenAI for the legacy OpenAI-compatible path or Bedrock for the
+                          AWS Bedrock Converse API.
+                        enum:
+                        - OpenAI
+                        - Bedrock
+                        type: string
+                    required:
+                    - type
+                    type: object
+                  credential:
+                    description: |-
+                      credential selects how the gateway authenticates to the provider. When
+                      omitted, OpenAI-compatible providers use credentialSecretName and
+                      Bedrock uses AWS workload identity.
+                    properties:
+                      type:
+                        description: type is APIKey or WorkloadIdentity. Bedrock requires
+                          WorkloadIdentity.
+                        enum:
+                        - APIKey
+                        - WorkloadIdentity
+                        type: string
+                    required:
+                    - type
+                    type: object
                   credentialSecretName:
                     description: |-
                       credentialSecretName names a Secret in the PassthroughModel's own
@@ -116,7 +161,9 @@ spec:
                     minLength: 1
                     type: string
                   hostname:
-                    description: hostname of the provider, e.g. openrouter.ai
+                    description: |-
+                      hostname of the provider, e.g. openrouter.ai. Bedrock derives its regional
+                      runtime hostname when omitted; set this to use a private endpoint.
                     minLength: 1
                     type: string
                   port:
@@ -133,9 +180,6 @@ spec:
                       AIServiceBackend OpenAI schema, e.g. "api/v1" for OpenRouter or
                       "v1" for api.openai.com.
                     type: string
-                required:
-                - credentialSecretName
-                - hostname
                 type: object
             required:
             - access

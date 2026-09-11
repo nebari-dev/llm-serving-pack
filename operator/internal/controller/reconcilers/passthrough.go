@@ -4,6 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
@@ -46,6 +47,10 @@ func PassthroughStandardLabels(pm *llmv1alpha1.PassthroughModel) map[string]stri
 // for the given PassthroughModel. No serving, storage, or scheduling
 // resources are involved; the provider serves the models, we route to it.
 func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig, clientIDs []string, credentialSecretNames []string) (*PassthroughResources, error) {
+	provider, err := pm.Spec.Provider.Resolve()
+	if err != nil {
+		return nil, err
+	}
 	labels := PassthroughStandardLabels(pm)
 	authLabels := map[string]string{}
 	for k, v := range labels {
@@ -56,10 +61,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 	authLabels["llm.nebari.dev/model-name"] = pm.Name
 
 	result := &PassthroughResources{
-		Backend:               buildProviderBackend(pm, labels),
-		BackendTLSPolicy:      buildProviderBackendTLSPolicy(pm, labels),
-		AIServiceBackend:      buildProviderAIServiceBackend(pm, labels),
-		BackendSecurityPolicy: buildProviderBackendSecurityPolicy(pm, labels),
+		Backend:               buildProviderBackend(pm, labels, provider),
+		BackendTLSPolicy:      buildProviderBackendTLSPolicy(pm, labels, provider),
+		AIServiceBackend:      buildProviderAIServiceBackend(pm, labels, provider),
+		BackendSecurityPolicy: buildProviderBackendSecurityPolicy(pm, labels, provider),
 		APIKeySecret: &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      APIKeySecretName(pm.Name),
@@ -86,11 +91,6 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.ExternalGatewayNS,
 			ExternalHTTPSListenerName,
 			SharedExternalHostname(cfg.BaseDomain),
-			// modelsOwnedBy only on the external route: the gateway's
-			// /v1/models endpoint aggregates declared models across every
-			// route on the Gateway, so declaring them on both endpoints
-			// would list each model twice.
-			true,
 		)
 		result.ExternalSecurityPolicy = buildAPIKeyAuthSecurityPolicy(
 			pm.Name+"-external-auth",
@@ -111,7 +111,6 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.InternalGatewayNS,
 			InternalHTTPSListenerName,
 			SharedInternalHostname(cfg.BaseDomain),
-			false,
 		)
 		result.InternalSecurityPolicy = buildJWTSecurityPolicy(
 			pm.Name+"-internal-auth",
@@ -136,11 +135,7 @@ func providerBackendName(pm *llmv1alpha1.PassthroughModel) string {
 	return pm.Name + "-backend"
 }
 
-func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
-	port := pm.Spec.Provider.Port
-	if port == 0 {
-		port = 443
-	}
+func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
@@ -154,8 +149,8 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 				"endpoints": []interface{}{
 					map[string]interface{}{
 						"fqdn": map[string]interface{}{
-							"hostname": pm.Spec.Provider.Hostname,
-							"port":     int64(port),
+							"hostname": provider.Hostname,
+							"port":     int64(provider.Port),
 						},
 					},
 				},
@@ -164,7 +159,7 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 	}
 }
 
-func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
+func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			// BackendTLSPolicy is GA as v1 in the Gateway API Standard channel
@@ -187,21 +182,24 @@ func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[
 				},
 				"validation": map[string]interface{}{
 					"wellKnownCACertificates": "System",
-					"hostname":                pm.Spec.Provider.Hostname,
+					"hostname":                provider.Hostname,
 				},
 			},
 		},
 	}
 }
 
-func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
-	schemaVersion := pm.Spec.Provider.SchemaVersion
-	if schemaVersion == "" {
-		schemaVersion = "v1"
+func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
+	schema := map[string]interface{}{"name": provider.SchemaName}
+	if provider.SchemaVersion != "" {
+		schema["version"] = provider.SchemaVersion
+	}
+	if provider.SchemaPrefix != "" {
+		schema["prefix"] = provider.SchemaPrefix
 	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "AIServiceBackend",
 			"metadata": map[string]interface{}{
 				"name":      pm.Name,
@@ -209,13 +207,7 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
-				// All supported providers speak the OpenAI wire protocol;
-				// schemaVersion carries the provider's path prefix (e.g.
-				// "api/v1" for OpenRouter).
-				"schema": map[string]interface{}{
-					"name":    "OpenAI",
-					"version": schemaVersion,
-				},
+				"schema": schema,
 				"backendRef": map[string]interface{}{
 					"group": "gateway.envoyproxy.io",
 					"kind":  "Backend",
@@ -226,49 +218,30 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 	}
 }
 
-func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
+func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
+	spec := runtime.DeepCopyJSON(provider.SecurityPolicy)
+	spec["targetRefs"] = []interface{}{map[string]interface{}{
+		"group": "aigateway.envoyproxy.io",
+		"kind":  "AIServiceBackend",
+		"name":  pm.Name,
+	}}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "BackendSecurityPolicy",
 			"metadata": map[string]interface{}{
 				"name":      pm.Name + "-upstream-auth",
 				"namespace": pm.Namespace,
 				"labels":    labelsToInterface(labels),
 			},
-			"spec": map[string]interface{}{
-				"targetRefs": []interface{}{
-					map[string]interface{}{
-						"group": "aigateway.envoyproxy.io",
-						"kind":  "AIServiceBackend",
-						"name":  pm.Name,
-					},
-				},
-				"type": "APIKey",
-				"apiKey": map[string]interface{}{
-					// Platform-owned provider key (Secret key "apiKey"),
-					// injected upstream by the gateway. End users
-					// authenticate with their own keys or JWTs and never
-					// see this credential.
-					"secretRef": map[string]interface{}{
-						"name": pm.Spec.Provider.CredentialSecretName,
-					},
-				},
-			},
+			"spec": spec,
 		},
 	}
 }
 
 // buildPassthroughRoute renders the AIGatewayRoute for one endpoint of a
-// PassthroughModel. Rule order within this route matters only for
-// readability. NOTE: since served-model rules lost their Host matcher
-// (AI Gateway v0.5 model registration; #116), header-count precedence no
-// longer orders a served rule (x-ai-eg-model) against the opt-in catch-all
-// rule (Host). Live-validated on EG v1.6.7 / AI Gateway v0.5: dispatch is
-// decided by the ext_proc's model registry, so served/declared ids always
-// reach their own rule regardless of route age, and unregistered ids 404 at
-// the ext_proc before route matching - which leaves the catch-all rule
-// currently inert (see the comment in the CatchAll block below).
+// PassthroughModel. Hostnames scope the model catalog; model headers select
+// upstreams. Both endpoints register models independently.
 //
 // sectionName scoping is load-bearing for the same reason as in
 // buildAIGatewayRoute: the AI Gateway controller appends a catch-all
@@ -282,7 +255,6 @@ func buildPassthroughRoute(
 	gatewayName, gatewayNS string,
 	listenerSectionName string,
 	hostname string,
-	declareModels bool,
 ) *unstructured.Unstructured {
 	hostHeader := map[string]interface{}{
 		"type":  "Exact",
@@ -310,21 +282,13 @@ func buildPassthroughRoute(
 			"backendRefs": passthroughBackendRefs(pm),
 			"timeouts":    map[string]interface{}{"request": "120s"},
 		}
-		if declareModels {
-			declared["modelsOwnedBy"] = pm.Name
-		}
+		declared["modelsOwnedBy"] = pm.Name
 		rules = append(rules, declared)
 	}
 
 	if pm.Spec.Models.CatchAll {
-		// The catch-all rule (opt-in; catchAll defaults false) keeps the Host
-		// matcher. It carries no x-ai-eg-model header, so it is not a
-		// model-registration rule and is not affected by the AI Gateway v0.5
-		// issue fixed for the declared-model rules (#116). Live-tested on
-		// EG v1.6.7 / AI Gateway v0.5: the ext_proc 404s any model id not
-		// registered by some rule before route matching runs, so this rule
-		// currently receives no traffic. Kept for a future AI Gateway version
-		// where unregistered ids fall through to route matching.
+		// The optional catch-all does not register models. Whether unknown
+		// models reach it depends on the upstream ext-proc's model registry.
 		rules = append(rules, map[string]interface{}{
 			"matches": []interface{}{
 				map[string]interface{}{
@@ -338,7 +302,7 @@ func buildPassthroughRoute(
 
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
-			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
+			"apiVersion": aiGatewayAPIVersion,
 			"kind":       "AIGatewayRoute",
 			"metadata": map[string]interface{}{
 				"name":      name,
@@ -346,6 +310,7 @@ func buildPassthroughRoute(
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
+				"hostnames": []interface{}{hostname},
 				"parentRefs": []interface{}{
 					map[string]interface{}{
 						"name":        gatewayName,

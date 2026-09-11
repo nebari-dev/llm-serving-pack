@@ -157,6 +157,15 @@ var _ = Describe("PassthroughModel Controller", func() {
 			Expect(pm.Status.Endpoints.External).To(Equal("https://llm.example.com"))
 			Expect(pm.Status.Endpoints.Internal).To(Equal("https://llm-internal.example.com"))
 			Expect(pm.Status.ObservedGeneration).To(Equal(pm.Generation))
+
+			disabled := false
+			pm.Spec.Endpoints.External.Enabled = &disabled
+			Expect(k8sClient.Update(ctx, pm)).To(Succeed())
+			_, err = r.Reconcile(ctx, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, req.NamespacedName, pm)).To(Succeed())
+			Expect(pm.Status.Endpoints.External).To(BeEmpty())
+			Expect(pm.Status.Endpoints.Internal).To(Equal("https://llm-internal.example.com"))
 		})
 
 		It("cleans up the Secret and ConfigMap on deletion", func() {

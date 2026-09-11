@@ -71,6 +71,7 @@ type PassthroughModelReconciler struct {
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=backends;securitypolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=aigateway.envoyproxy.io,resources=aigatewayroutes;aiservicebackends;backendsecuritypolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=backendtlspolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get
 
 // Reconcile provisions all gateway and auth resources for a PassthroughModel.
 func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -132,6 +133,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// moves on), each failure is captured in a status condition and the
 	// reconcile is requeued so the resources are retried once the CRDs exist.
 	conditions := []metav1.Condition{}
+	cleanupPending := false
 
 	backendErr := r.applyAll(ctx, log, pm,
 		resources.Backend,
@@ -146,7 +148,13 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		externalErr := r.applyAll(ctx, log, pm, resources.ExternalRoute, resources.ExternalSecurityPolicy)
 		conditions = append(conditions, conditionFor(CondExternalEndpointReady, externalErr, "external route and apiKeyAuth policy applied"))
 	} else {
-		conditions = append(conditions, disabledCondition(CondExternalEndpointReady))
+		pending, err := r.removeEndpoint(ctx, pm, "external")
+		cleanupPending = cleanupPending || pending
+		if err != nil {
+			conditions = append(conditions, conditionFor(CondExternalEndpointReady, err, ""))
+		} else {
+			conditions = append(conditions, disabledCondition(CondExternalEndpointReady))
+		}
 	}
 
 	internalEnabled := resources.InternalRoute != nil
@@ -154,12 +162,18 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		internalErr := r.applyAll(ctx, log, pm, resources.InternalRoute, resources.InternalSecurityPolicy)
 		conditions = append(conditions, conditionFor(CondInternalEndpointReady, internalErr, "internal route and JWT policy applied"))
 	} else {
-		conditions = append(conditions, disabledCondition(CondInternalEndpointReady))
+		pending, err := r.removeEndpoint(ctx, pm, "internal")
+		cleanupPending = cleanupPending || pending
+		if err != nil {
+			conditions = append(conditions, conditionFor(CondInternalEndpointReady, err, ""))
+		} else {
+			conditions = append(conditions, disabledCondition(CondInternalEndpointReady))
+		}
 	}
 
 	phase := llmv1alpha1.PassthroughPhaseReady
 	for _, c := range conditions {
-		if c.Status == metav1.ConditionFalse && c.Reason == "ApplyFailed" {
+		if c.Status == metav1.ConditionFalse && c.Reason == reasonApplyFailed {
 			phase = llmv1alpha1.PassthroughPhaseError
 		}
 	}
@@ -172,6 +186,9 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// Retry: the usual cause is the AI Gateway CRDs not being
 		// installed yet (install ordering on a fresh cluster).
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
+	}
+	if cleanupPending {
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -274,6 +291,8 @@ func (r *PassthroughModelReconciler) createOrUpdateUnstructured(ctx context.Cont
 		return err
 	}
 	obj.SetResourceVersion(existing.GetResourceVersion())
+	// Upstream controllers own their cleanup finalizers, including catalog removal.
+	obj.SetFinalizers(existing.GetFinalizers())
 	return r.Update(ctx, obj)
 }
 
@@ -282,7 +301,7 @@ func conditionFor(condType string, err error, okMessage string) metav1.Condition
 		return metav1.Condition{
 			Type:    condType,
 			Status:  metav1.ConditionFalse,
-			Reason:  "ApplyFailed",
+			Reason:  reasonApplyFailed,
 			Message: err.Error(),
 		}
 	}
@@ -323,6 +342,7 @@ func (r *PassthroughModelReconciler) updateStatus(
 	}
 
 	// Shared endpoint URLs, same hostname pair as every served model.
+	fresh.Status.Endpoints = llmv1alpha1.EndpointStatus{}
 	if r.Config != nil {
 		if boolOrDefaultStatus(fresh.Spec.Endpoints.External.Enabled) {
 			fresh.Status.Endpoints.External = "https://" + reconcilers.SharedExternalHostname(r.Config.BaseDomain)
