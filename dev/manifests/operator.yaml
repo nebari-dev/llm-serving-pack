@@ -71,6 +71,10 @@ rules:
     resources: ["securitypolicies", "backends"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # PassthroughModel provider TLS validation toward the external provider.
+  # Observe AI Gateway-owned routes before removing endpoint authentication.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["backendtlspolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

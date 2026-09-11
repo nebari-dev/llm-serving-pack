@@ -71,6 +71,7 @@ type PassthroughModelReconciler struct {
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=backends;securitypolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=aigateway.envoyproxy.io,resources=aigatewayroutes;aiservicebackends;backendsecuritypolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=backendtlspolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get
 
 // Reconcile provisions all gateway and auth resources for a PassthroughModel.
 func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
