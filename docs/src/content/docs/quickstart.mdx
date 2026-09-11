@@ -10,7 +10,7 @@ For a full production-grade setup (air-gapped clusters, HuggingFace token secret
 
 ## Prerequisites
 
-- Kubernetes 1.28+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) **v0.12.0 or newer** deployed - check with `nic version` ([Installation &sect;1](/installation/#1-what-this-runbook-assumes))
+- Kubernetes 1.32+ cluster with [Nebari Infrastructure Core](https://github.com/nebari-dev/nebari-infrastructure-core) **v0.12.0 or newer** deployed - check with `nic version` ([Installation &sect;1](/installation/#1-what-this-runbook-assumes))
 - [nebari-operator](https://github.com/nebari-dev/nebari-operator) running ([Installation &sect;2.7](/installation/#27-confirm-the-nebari-operator-has-the-expected-keycloak-env-vars))
 - NVIDIA GPU Operator installed. On AWS, NIC does this for you when the node group is marked `gpu: true`; on other providers install it via ArgoCD (see [`examples/nvidia-gpu-operator.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/nvidia-gpu-operator.yaml)). ([Installation &sect;3](/installation/#3-confirm-the-gpu-operator))
 - **Envoy Gateway** configured for AI Gateway integration - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. Commit [`examples/envoy-gateway-overlay.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-gateway-overlay.yaml) to your NIC config repo as `values/envoy-gateway/overlays/20-ai-gateway.yaml`. ([Installation &sect;6](/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for full wiring details)
