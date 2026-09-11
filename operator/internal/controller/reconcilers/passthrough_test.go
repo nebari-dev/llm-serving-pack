@@ -422,7 +422,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 		}
 	})
 
-	t.Run("declared rule lists models and ownedBy on external only", func(t *testing.T) {
+	t.Run("declared rule registers models on both endpoints", func(t *testing.T) {
 		extRules := routeRules(t, res.ExternalRoute)
 		declared, _ := extRules[0].(map[string]interface{})
 		if declared["modelsOwnedBy"] != ptCRName {

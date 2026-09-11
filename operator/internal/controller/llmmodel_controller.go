@@ -761,6 +761,8 @@ func (r *LLMModelReconciler) createOrUpdateUnstructured(
 		return err
 	}
 	obj.SetResourceVersion(existing.GetResourceVersion())
+	// Upstream controllers own their cleanup finalizers, including catalog removal.
+	obj.SetFinalizers(existing.GetFinalizers())
 	return r.Update(ctx, obj)
 }
 
