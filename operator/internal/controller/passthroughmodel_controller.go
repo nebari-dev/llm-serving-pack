@@ -173,7 +173,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	phase := llmv1alpha1.PassthroughPhaseReady
 	for _, c := range conditions {
-		if c.Status == metav1.ConditionFalse && c.Reason == "ApplyFailed" {
+		if c.Status == metav1.ConditionFalse && c.Reason == reasonApplyFailed {
 			phase = llmv1alpha1.PassthroughPhaseError
 		}
 	}
@@ -188,7 +188,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	if cleanupPending {
-		return ctrl.Result{RequeueAfter: time.Second}, nil
+		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -301,7 +301,7 @@ func conditionFor(condType string, err error, okMessage string) metav1.Condition
 		return metav1.Condition{
 			Type:    condType,
 			Status:  metav1.ConditionFalse,
-			Reason:  "ApplyFailed",
+			Reason:  reasonApplyFailed,
 			Message: err.Error(),
 		}
 	}

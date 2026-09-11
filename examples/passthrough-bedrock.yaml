@@ -1,4 +1,5 @@
 # PassthroughModel routing Bedrock Converse models through the shared endpoints.
+# Region and model IDs are illustrative; availability depends on your account and region.
 # The Envoy AI Gateway dataplane must have AWS workload identity configured
 # (EKS Pod Identity or IRSA) with bedrock:InvokeModel and
 # bedrock:InvokeModelWithResponseStream permissions. Discover and verify IDs

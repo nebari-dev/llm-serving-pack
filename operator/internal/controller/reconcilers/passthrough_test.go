@@ -62,6 +62,24 @@ func testPassthroughModel() *llmv1alpha1.PassthroughModel {
 	}
 }
 
+func TestProviderHostnameNormalizationReachesBackendAndTLS(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Provider.Hostname = "Api.Example.COM."
+	r, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoints, _, err := unstructured.NestedSlice(r.Backend.Object, "spec", "endpoints")
+	if err != nil || len(endpoints) != 1 {
+		t.Fatalf("backend endpoints: %v, %v", endpoints, err)
+	}
+	hostname := endpoints[0].(map[string]interface{})["fqdn"].(map[string]interface{})["hostname"]
+	tlsHostname, _, err := unstructured.NestedString(r.BackendTLSPolicy.Object, "spec", "validation", "hostname")
+	if err != nil || hostname != "api.example.com" || tlsHostname != hostname {
+		t.Fatalf("backend/TLS mismatch: %v, %q, %v", hostname, tlsHostname, err)
+	}
+}
+
 // specMap digs spec out of an unstructured or fails the test.
 func specMap(t *testing.T, obj *unstructured.Unstructured) map[string]interface{} {
 	t.Helper()

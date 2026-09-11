@@ -69,6 +69,9 @@ func (p ProviderSpec) Resolve() (*ResolvedProvider, error) {
 	if resolved.Hostname == "" {
 		return nil, fmt.Errorf("spec.provider.hostname must not be empty")
 	}
+	// DNS names are case-insensitive; one terminal dot denotes the DNS root.
+	// Normalize the resolved address without rewriting the stored provider spec.
+	resolved.Hostname = strings.TrimSuffix(strings.ToLower(resolved.Hostname), ".")
 	if problems := validation.IsDNS1123Subdomain(resolved.Hostname); len(problems) > 0 {
 		return nil, fmt.Errorf("spec.provider.hostname must be a bare hostname: %s", strings.Join(problems, "; "))
 	}

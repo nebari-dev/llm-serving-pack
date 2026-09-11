@@ -103,7 +103,7 @@ type BedrockBackend struct {
 // ProviderCredential selects provider authentication independently from the
 // provider's wire schema.
 type ProviderCredential struct {
-	// type is APIKey or WorkloadIdentity. Bedrock defaults to WorkloadIdentity.
+	// type is APIKey or WorkloadIdentity. Bedrock requires WorkloadIdentity.
 	// +kubebuilder:validation:Enum=APIKey;WorkloadIdentity
 	Type string `json:"type"`
 }

@@ -144,8 +144,8 @@ spec:
                       Bedrock uses AWS workload identity.
                     properties:
                       type:
-                        description: type is APIKey or WorkloadIdentity. Bedrock defaults
-                          to WorkloadIdentity.
+                        description: type is APIKey or WorkloadIdentity. Bedrock requires
+                          WorkloadIdentity.
                         enum:
                         - APIKey
                         - WorkloadIdentity

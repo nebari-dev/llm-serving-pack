@@ -8,6 +8,9 @@ and upstream authentication. Existing OpenAI-compatible configurations remain
 valid without an explicit backend. [AWS Bedrock](/bedrock/) is the first
 non-OpenAI backend; other native backends are not enabled yet.
 
+Bedrock requires `WorkloadIdentity`; omitting `provider.credential` selects it.
+Bedrock API-key authentication is not supported by this adapter.
+
 ## Responsibilities
 
 Use the provider's SDK and services for endpoint resolution, credentials,

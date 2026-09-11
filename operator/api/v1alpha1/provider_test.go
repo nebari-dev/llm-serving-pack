@@ -129,3 +129,32 @@ func TestOpenAIUsesExplicitPathPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderHostnameCompatibility(t *testing.T) {
+	for _, backend := range []string{BackendOpenAI, BackendBedrock} {
+		for _, hostname := range []string{"api.example.com", "Api.Example.COM", "api.example.com.", "Api.Example.COM."} {
+			t.Run(backend+"/"+hostname, func(t *testing.T) {
+				p := ProviderSpec{Hostname: hostname, CredentialSecretName: "key"}
+				if backend == BackendBedrock {
+					p.CredentialSecretName = ""
+					p.Backend = &ProviderBackend{Type: backend, Bedrock: &BedrockBackend{Region: "us-west-2"}}
+				}
+				r, err := p.Resolve()
+				if err != nil || r.Hostname != "api.example.com" {
+					t.Fatalf("resolved hostname: %+v, %v", r, err)
+				}
+				if p.Hostname != hostname {
+					t.Fatal("normalization changed stored input")
+				}
+			})
+		}
+	}
+	for _, hostname := range []string{"api_example.com", "api.example.com..", "api..example.com", " api.example.com", "https://api.example.com", "api.example.com:443", "api.example.com/path", "."} {
+		t.Run(hostname, func(t *testing.T) {
+			p := ProviderSpec{Hostname: hostname, CredentialSecretName: "key"}
+			if _, err := p.Resolve(); err == nil {
+				t.Fatalf("invalid hostname accepted: %q", hostname)
+			}
+		})
+	}
+}

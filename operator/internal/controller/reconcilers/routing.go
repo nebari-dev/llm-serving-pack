@@ -20,6 +20,8 @@ type RoutingResources struct {
 // generations easily exceed the Envoy AI Gateway's 60s HTTPRoute default.
 const DefaultRequestTimeout = "600s"
 
+// See docs/src/content/docs/gateway-upgrades.mdx for compatible releases and
+// the migration procedure before changing the generated gateway API version.
 const aiGatewayAPIVersion = "aigateway.envoyproxy.io/v1beta1"
 
 // boolOrDefault returns the value of b if non-nil, otherwise returns def.
