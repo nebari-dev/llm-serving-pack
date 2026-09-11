@@ -30,6 +30,16 @@ jobs:
           go-version-file: operator/go.mod
           cache-dependency-path: operator/go.sum
 
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Render released AI Gateway CRDs for admission checks
+        run: |
+          ai_gateway_crd_dir=$(mktemp -d)
+          helm template aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm \
+            --version v1.1.0 > "$ai_gateway_crd_dir/ai-gateway.yaml"
+          echo "AI_GATEWAY_CRD_DIR=$ai_gateway_crd_dir" >> "$GITHUB_ENV"
+
       - name: Run tests
         working-directory: operator
         run: make test
