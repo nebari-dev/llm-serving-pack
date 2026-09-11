@@ -42,6 +42,10 @@ Use staged revisions, rather than changing every controller independently:
    operator. Version 0.7 supports hostname-scoped catalogs and the `v1beta1`
    resources the operator now emits. Confirm that all resources reconcile before
    proceeding to AI Gateway 1.1, using 1.0 as an intermediate controller release.
+   AI Gateway 1.0 has a namespace-discovery bug when the Gateway lives in the
+   Envoy Gateway controller's namespace: it cannot refresh the sidecar config.
+   In that layout, retain the previous data-plane pod and proceed to 1.1, which
+   [deduplicates the namespace lookup](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/internal/controller/gateway.go#L1353).
 5. Roll the Envoy data plane after each AI Gateway controller upgrade so new pods
    receive its matching ext-proc sidecar. Use an `EnvoyProxy` pod-template
    annotation to request the rollout; do not edit generated Deployments. Preserve
