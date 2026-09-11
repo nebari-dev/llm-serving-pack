@@ -3,6 +3,7 @@ title: Architecture
 ---
 import { Code } from '@astrojs/starlight/components';
 import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+import bedrockExample from '../../../../examples/passthrough-bedrock.yaml?raw';
 
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
 
@@ -270,6 +271,12 @@ Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A Passthr
 
 <Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
 
+The backend and credential are independent. Existing resources keep the
+OpenAI-compatible API-key defaults; Bedrock selects `AWSBedrock` and AWS
+workload identity:
+
+<Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
+
 For a step-by-step walkthrough see [Route to an external provider](/quickstart/#route-to-an-external-provider); for the full field reference see the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference).
 
 Generated resources (all in the CR's namespace, no serving stack):
@@ -278,8 +285,8 @@ Generated resources (all in the CR's namespace, no serving stack):
 |---|---|
 | Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
 | BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
-| AIServiceBackend (`<name>`) | OpenAI schema with the provider's path prefix |
-| BackendSecurityPolicy (`<name>-upstream-auth`) | Injects the platform-owned provider API key upstream |
+| AIServiceBackend (`<name>`) | Selected provider schema, such as OpenAI or AWSBedrock |
+| BackendSecurityPolicy (`<name>-upstream-auth`) | Selected provider credential, such as API key or AWS workload identity |
 | AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, external only) and/or Host-only catch-all rule |
 | SecurityPolicy (`<name>-external-auth` / `-internal-auth`) | Same apiKeyAuth / JWT pair as served models |
 | Secret (`<name>-api-keys`) + ConfigMap (`<name>-api-key-metadata`) | Per-provider user API keys, managed by the key-manager |

@@ -68,10 +68,19 @@ describe('configuration', () => {
     for (const f of [
       'provider.hostname', 'provider.port', 'provider.schemaVersion',
       'provider.credentialSecretName', 'models.catchAll', 'models.declared',
-      'access', 'endpoints',
+      'provider.backend', 'provider.backend.bedrock.region',
+      'provider.credential', 'access', 'endpoints',
     ]) {
       expect(page).toContain(f);
     }
+  });
+
+  it('documents the Bedrock workload-identity example', () => {
+    const page = readPage('configuration.mdx');
+    const example = readExample('passthrough-bedrock.yaml');
+    expect(page).toContain('examples/passthrough-bedrock.yaml?raw');
+    expect(example).toContain('type: Bedrock');
+    expect(example).toContain('type: WorkloadIdentity');
   });
 
   it('embeds minimal and advanced examples instead of inlining them', () => {

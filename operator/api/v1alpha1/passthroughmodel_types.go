@@ -21,8 +21,7 @@ import (
 )
 
 // PassthroughModelSpec defines routing and access control for an external
-// OpenAI-compatible provider (OpenRouter, api.openai.com, a self-hosted
-// vLLM elsewhere, ...). The operator provisions gateway routing and the
+// external provider. The operator provisions gateway routing and the
 // same two auth layers it builds for served models, but no storage,
 // serving, or scheduling resources.
 type PassthroughModelSpec struct {
@@ -44,9 +43,18 @@ type PassthroughModelSpec struct {
 
 // ProviderSpec identifies the upstream provider and its credential.
 type ProviderSpec struct {
+	// backend selects the upstream API schema. An omitted backend preserves
+	// the OpenAI-compatible behavior of existing resources.
+	// +optional
+	Backend *ProviderBackend `json:"backend,omitempty"`
+	// credential selects how the gateway authenticates to the provider. When
+	// omitted, OpenAI-compatible providers use credentialSecretName and
+	// Bedrock uses AWS workload identity.
+	// +optional
+	Credential *ProviderCredential `json:"credential,omitempty"`
 	// hostname of the provider, e.g. openrouter.ai
 	// +kubebuilder:validation:MinLength=1
-	// +required
+	// +optional
 	Hostname string `json:"hostname"`
 	// port of the provider endpoint (TLS is always used)
 	// +kubebuilder:default=443
@@ -64,8 +72,38 @@ type ProviderSpec struct {
 	// namespace whose "apiKey" key holds the provider API key. The
 	// gateway injects it upstream; end users never see it.
 	// +kubebuilder:validation:MinLength=1
-	// +required
+	// +optional
 	CredentialSecretName string `json:"credentialSecretName"`
+}
+
+// ProviderBackend selects a concrete upstream API variant. Adding a provider
+// is additive: it introduces a new variant and does not change the shared
+// PassthroughModel routing or access-control fields.
+type ProviderBackend struct {
+	// type is OpenAI for the legacy OpenAI-compatible path or Bedrock for the
+	// AWS Bedrock Converse API.
+	// +kubebuilder:validation:Enum=OpenAI;Bedrock
+	// +kubebuilder:default=OpenAI
+	Type string `json:"type"`
+	// bedrock contains the AWS Bedrock-specific settings.
+	// +optional
+	Bedrock *BedrockBackend `json:"bedrock,omitempty"`
+}
+
+// BedrockBackend configures AWS Bedrock Converse.
+type BedrockBackend struct {
+	// region is the AWS region used for the Bedrock runtime endpoint and SigV4.
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Region string `json:"region"`
+}
+
+// ProviderCredential selects provider authentication independently from the
+// provider's wire schema.
+type ProviderCredential struct {
+	// type is APIKey or WorkloadIdentity. Bedrock defaults to WorkloadIdentity.
+	// +kubebuilder:validation:Enum=APIKey;WorkloadIdentity
+	Type string `json:"type"`
 }
 
 // PassthroughModels selects which model ids reach the provider.

@@ -193,6 +193,21 @@ func validatePassthroughAccess(pm *llmv1alpha1.PassthroughModel) error {
 // validateProvider rejects obviously broken provider configs the CRD schema
 // alone cannot express.
 func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
+	if pm.Spec.Provider.Backend != nil && strings.EqualFold(pm.Spec.Provider.Backend.Type, "Bedrock") {
+		if pm.Spec.Provider.Backend.Bedrock == nil || strings.TrimSpace(pm.Spec.Provider.Backend.Bedrock.Region) == "" {
+			return fmt.Errorf("spec.provider.backend.bedrock.region must not be empty")
+		}
+		if pm.Spec.Provider.Credential != nil && !strings.EqualFold(pm.Spec.Provider.Credential.Type, "WorkloadIdentity") {
+			return fmt.Errorf("Bedrock requires spec.provider.credential.type=WorkloadIdentity")
+		}
+		return nil
+	}
+	if pm.Spec.Provider.Backend != nil && !strings.EqualFold(pm.Spec.Provider.Backend.Type, "OpenAI") {
+		return fmt.Errorf("spec.provider.backend.type must be OpenAI or Bedrock")
+	}
+	if pm.Spec.Provider.Credential != nil && !strings.EqualFold(pm.Spec.Provider.Credential.Type, "APIKey") {
+		return fmt.Errorf("OpenAI-compatible providers require spec.provider.credential.type=APIKey")
+	}
 	if strings.TrimSpace(pm.Spec.Provider.Hostname) == "" {
 		return fmt.Errorf("spec.provider.hostname must not be empty")
 	}

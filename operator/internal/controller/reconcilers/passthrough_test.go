@@ -171,6 +171,41 @@ func TestBuildPassthroughResourcesProviderPlumbing(t *testing.T) {
 	})
 }
 
+func TestBuildPassthroughResourcesBedrockUsesConverseAndWorkloadIdentity(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{
+		Backend: &llmv1alpha1.ProviderBackend{
+			Type:    "Bedrock",
+			Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+		},
+		Credential: &llmv1alpha1.ProviderCredential{Type: "WorkloadIdentity"},
+	}
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+
+	fqdn := specMap(t, res.Backend)["endpoints"].([]interface{})[0].(map[string]interface{})["fqdn"].(map[string]interface{})
+	if fqdn["hostname"] != "bedrock-runtime.us-west-2.amazonaws.com" {
+		t.Errorf("Bedrock hostname = %v", fqdn["hostname"])
+	}
+	schema := specMap(t, res.AIServiceBackend)["schema"].(map[string]interface{})
+	if schema["name"] != "AWSBedrock" {
+		t.Errorf("Bedrock schema = %v", schema)
+	}
+	policy := specMap(t, res.BackendSecurityPolicy)
+	if policy["type"] != "AWSCredentials" {
+		t.Errorf("Bedrock auth type = %v", policy["type"])
+	}
+	awsCredentials := policy["awsCredentials"].(map[string]interface{})
+	if awsCredentials["region"] != "us-west-2" {
+		t.Errorf("Bedrock auth region = %v", awsCredentials["region"])
+	}
+	if _, found := policy["apiKey"]; found {
+		t.Error("Bedrock policy must not contain an API key")
+	}
+}
+
 func TestBuildPassthroughResourcesKeySecretAndConfigMap(t *testing.T) {
 	pm := testPassthroughModel()
 	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})

@@ -1,6 +1,9 @@
 package reconcilers
 
 import (
+	"fmt"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -154,7 +157,7 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 				"endpoints": []interface{}{
 					map[string]interface{}{
 						"fqdn": map[string]interface{}{
-							"hostname": pm.Spec.Provider.Hostname,
+							"hostname": providerHostname(pm),
 							"port":     int64(port),
 						},
 					},
@@ -187,7 +190,7 @@ func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[
 				},
 				"validation": map[string]interface{}{
 					"wellKnownCACertificates": "System",
-					"hostname":                pm.Spec.Provider.Hostname,
+					"hostname":                providerHostname(pm),
 				},
 			},
 		},
@@ -195,9 +198,9 @@ func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[
 }
 
 func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
-	schemaVersion := pm.Spec.Provider.SchemaVersion
-	if schemaVersion == "" {
-		schemaVersion = "v1"
+	schema := map[string]interface{}{"name": "OpenAI", "version": schemaVersion(pm)}
+	if isBedrock(pm) {
+		schema = map[string]interface{}{"name": "AWSBedrock"}
 	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -209,13 +212,7 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 				"labels":    labelsToInterface(labels),
 			},
 			"spec": map[string]interface{}{
-				// All supported providers speak the OpenAI wire protocol;
-				// schemaVersion carries the provider's path prefix (e.g.
-				// "api/v1" for OpenRouter).
-				"schema": map[string]interface{}{
-					"name":    "OpenAI",
-					"version": schemaVersion,
-				},
+				"schema": schema,
 				"backendRef": map[string]interface{}{
 					"group": "gateway.envoyproxy.io",
 					"kind":  "Backend",
@@ -227,6 +224,23 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 }
 
 func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
+	spec := map[string]interface{}{
+		"targetRefs": []interface{}{map[string]interface{}{
+			"group": "aigateway.envoyproxy.io",
+			"kind":  "AIServiceBackend",
+			"name":  pm.Name,
+		}},
+	}
+	if isBedrock(pm) {
+		spec["type"] = "AWSCredentials"
+		spec["awsCredentials"] = map[string]interface{}{"region": bedrockRegion(pm)}
+	} else {
+		spec["type"] = "APIKey"
+		spec["apiKey"] = map[string]interface{}{
+			// Platform-owned provider key (Secret key "apiKey").
+			"secretRef": map[string]interface{}{"name": pm.Spec.Provider.CredentialSecretName},
+		}
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "aigateway.envoyproxy.io/v1alpha1",
@@ -236,27 +250,34 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 				"namespace": pm.Namespace,
 				"labels":    labelsToInterface(labels),
 			},
-			"spec": map[string]interface{}{
-				"targetRefs": []interface{}{
-					map[string]interface{}{
-						"group": "aigateway.envoyproxy.io",
-						"kind":  "AIServiceBackend",
-						"name":  pm.Name,
-					},
-				},
-				"type": "APIKey",
-				"apiKey": map[string]interface{}{
-					// Platform-owned provider key (Secret key "apiKey"),
-					// injected upstream by the gateway. End users
-					// authenticate with their own keys or JWTs and never
-					// see this credential.
-					"secretRef": map[string]interface{}{
-						"name": pm.Spec.Provider.CredentialSecretName,
-					},
-				},
-			},
+			"spec": spec,
 		},
 	}
+}
+
+func isBedrock(pm *llmv1alpha1.PassthroughModel) bool {
+	return pm.Spec.Provider.Backend != nil && strings.EqualFold(pm.Spec.Provider.Backend.Type, "Bedrock")
+}
+
+func bedrockRegion(pm *llmv1alpha1.PassthroughModel) string {
+	if pm.Spec.Provider.Backend != nil && pm.Spec.Provider.Backend.Bedrock != nil {
+		return pm.Spec.Provider.Backend.Bedrock.Region
+	}
+	return ""
+}
+
+func providerHostname(pm *llmv1alpha1.PassthroughModel) string {
+	if isBedrock(pm) {
+		return fmt.Sprintf("bedrock-runtime.%s.amazonaws.com", bedrockRegion(pm))
+	}
+	return pm.Spec.Provider.Hostname
+}
+
+func schemaVersion(pm *llmv1alpha1.PassthroughModel) string {
+	if pm.Spec.Provider.SchemaVersion != "" {
+		return pm.Spec.Provider.SchemaVersion
+	}
+	return "v1"
 }
 
 // buildPassthroughRoute renders the AIGatewayRoute for one endpoint of a

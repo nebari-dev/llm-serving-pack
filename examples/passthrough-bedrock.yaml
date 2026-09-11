@@ -1,0 +1,24 @@
+# PassthroughModel routing Bedrock Converse models through the shared endpoints.
+# The Envoy AI Gateway dataplane must have AWS workload identity configured
+# (EKS Pod Identity or IRSA) with bedrock:InvokeModel permissions.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: bedrock
+  namespace: nebari-llm-serving-system
+spec:
+  provider:
+    backend:
+      type: Bedrock
+      bedrock:
+        region: us-west-2
+    credential:
+      type: WorkloadIdentity
+  models:
+    declared:
+      - anthropic.claude-3-5-sonnet-20241022-v2:0
+      - us.amazon.nova-lite-v1:0
+      - us.meta.llama3-2-11b-instruct-v1:0
+  access:
+    groups:
+      - llm
