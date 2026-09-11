@@ -19,6 +19,9 @@ Each endpoint declares its hostname, so `/v1/models` includes its own catalog
 without depending on the other endpoint being enabled. Listener references and
 per-model authentication remain in place. Hostname scoping is not user-level
 catalog filtering; model invocation still enforces API-key scope and JWT groups.
+Disabling a provider endpoint removes its route and catalog entries. Its auth
+policy stays until the generated HTTPRoute is gone, and issued keys are preserved
+for re-enabling the endpoint.
 
 ## Upgrade an installation on AI Gateway 0.5
 
