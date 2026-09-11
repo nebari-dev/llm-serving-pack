@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -193,6 +194,9 @@ func TestBuildPassthroughResourcesBedrockUsesConverseAndWorkloadIdentity(t *test
 	if schema["name"] != "AWSBedrock" {
 		t.Errorf("Bedrock schema = %v", schema)
 	}
+	if _, exists := schema["version"]; exists {
+		t.Error("Bedrock must not receive the legacy OpenAI path prefix")
+	}
 	policy := specMap(t, res.BackendSecurityPolicy)
 	if policy["type"] != "AWSCredentials" {
 		t.Errorf("Bedrock auth type = %v", policy["type"])
@@ -201,8 +205,59 @@ func TestBuildPassthroughResourcesBedrockUsesConverseAndWorkloadIdentity(t *test
 	if awsCredentials["region"] != "us-west-2" {
 		t.Errorf("Bedrock auth region = %v", awsCredentials["region"])
 	}
+	if len(awsCredentials) != 1 {
+		t.Error("AWS policy must rely on the default credential chain, without a credentialsFile")
+	}
 	if _, found := policy["apiKey"]; found {
 		t.Error("Bedrock policy must not contain an API key")
+	}
+}
+
+func TestBedrockRetainsRoutesAndAccessControl(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Models.CatchAll = false
+	pm.Spec.Models.Declared = []string{
+		"us.anthropic.claude-haiku-4-5-20251001-v1:0",
+		"amazon.nova-lite-v1:0",
+		"us.meta.llama3-1-8b-instruct-v1:0",
+	}
+	baseline, err := BuildPassthroughResources(pm, testPassthroughConfig(), []string{"allowed-key"}, []string{"own-keys", "other-keys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{Backend: &llmv1alpha1.ProviderBackend{
+		Type: llmv1alpha1.BackendBedrock, Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+	}}
+	bedrock, err := BuildPassthroughResources(pm, testPassthroughConfig(), []string{"allowed-key"}, []string{"own-keys", "other-keys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pair := range [][2]*unstructured.Unstructured{
+		{baseline.ExternalRoute, bedrock.ExternalRoute},
+		{baseline.InternalRoute, bedrock.InternalRoute},
+		{baseline.ExternalSecurityPolicy, bedrock.ExternalSecurityPolicy},
+		{baseline.InternalSecurityPolicy, bedrock.InternalSecurityPolicy},
+	} {
+		if !reflect.DeepEqual(pair[0].Object, pair[1].Object) {
+			t.Errorf("provider selection changed routing or access control for %s", pair[0].GetName())
+		}
+	}
+	for _, route := range []*unstructured.Unstructured{bedrock.ExternalRoute, bedrock.InternalRoute} {
+		rule := routeRules(t, route)[0].(map[string]interface{})
+		matches := rule["matches"].([]interface{})
+		if len(matches) != len(pm.Spec.Models.Declared) {
+			t.Fatalf("%s does not route every Bedrock model", route.GetName())
+		}
+		for i, match := range matches {
+			header := match.(map[string]interface{})["headers"].([]interface{})[0].(map[string]interface{})
+			if header["value"] != pm.Spec.Models.Declared[i] {
+				t.Errorf("model ID was rewritten: %v", header["value"])
+			}
+		}
+	}
+	pm.Spec.Provider.Backend.Bedrock = nil
+	if resources, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil); err == nil || resources != nil {
+		t.Fatal("invalid Bedrock configuration must not produce resources")
 	}
 }
 

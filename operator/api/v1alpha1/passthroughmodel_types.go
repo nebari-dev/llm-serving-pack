@@ -21,11 +21,11 @@ import (
 )
 
 // PassthroughModelSpec defines routing and access control for an external
-// external provider. The operator provisions gateway routing and the
+// provider. The operator provisions gateway routing and the
 // same two auth layers it builds for served models, but no storage,
 // serving, or scheduling resources.
 type PassthroughModelSpec struct {
-	// provider is the upstream OpenAI-compatible endpoint
+	// provider selects the upstream backend, address, and credential
 	// +required
 	Provider ProviderSpec `json:"provider"`
 	// models selects which model ids route to this provider
@@ -52,10 +52,11 @@ type ProviderSpec struct {
 	// Bedrock uses AWS workload identity.
 	// +optional
 	Credential *ProviderCredential `json:"credential,omitempty"`
-	// hostname of the provider, e.g. openrouter.ai
+	// hostname of the provider, e.g. openrouter.ai. Bedrock derives its regional
+	// runtime hostname when omitted; set this to use a private endpoint.
 	// +kubebuilder:validation:MinLength=1
 	// +optional
-	Hostname string `json:"hostname"`
+	Hostname string `json:"hostname,omitempty"`
 	// port of the provider endpoint (TLS is always used)
 	// +kubebuilder:default=443
 	// +kubebuilder:validation:Minimum=1
@@ -73,7 +74,7 @@ type ProviderSpec struct {
 	// gateway injects it upstream; end users never see it.
 	// +kubebuilder:validation:MinLength=1
 	// +optional
-	CredentialSecretName string `json:"credentialSecretName"`
+	CredentialSecretName string `json:"credentialSecretName,omitempty"`
 }
 
 // ProviderBackend selects a concrete upstream API variant. Adding a provider
@@ -93,7 +94,7 @@ type ProviderBackend struct {
 // BedrockBackend configures AWS Bedrock Converse.
 type BedrockBackend struct {
 	// region is the AWS region used for the Bedrock runtime endpoint and SigV4.
-	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[a-z]{2}(-[a-z]+)+-[0-9]+$`
 	// +required
 	Region string `json:"region"`
 }

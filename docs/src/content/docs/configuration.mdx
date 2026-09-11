@@ -331,16 +331,16 @@ The operator writes these fields to `status`; they are read-only.
 
 ## PassthroughModel CRD reference
 
-`PassthroughModel` (`passthroughmodels.llm.nebari.dev`, group `llm.nebari.dev/v1alpha1`) routes the shared endpoints to an external OpenAI-compatible provider instead of a locally served model. It provisions gateway routing and the same two auth layers as `LLMModel`, but no storage, serving, or scheduling. Required fields: `spec.provider`, `spec.access`.
+`PassthroughModel` (`passthroughmodels.llm.nebari.dev`, group `llm.nebari.dev/v1alpha1`) routes the shared endpoints to an external provider. It provisions gateway routing and the same two authentication layers as `LLMModel`, but no storage, serving, or scheduling. Required fields: `spec.provider`, `spec.access`.
 
 ### spec.provider
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `spec.provider.backend` | object | No | Selects a typed provider backend. Omitted means the existing OpenAI-compatible behavior. |
+| `spec.provider.backend.type` | string | No (default `OpenAI`) | `OpenAI` or `Bedrock`. Omit the backend block to preserve legacy OpenAI behavior. |
 | `spec.provider.backend.bedrock.region` | string | Bedrock only | AWS region used for the Bedrock runtime endpoint and SigV4. |
-| `spec.provider.credential` | object | No | Selects provider authentication independently. Bedrock uses `WorkloadIdentity`; OpenAI-compatible providers use `APIKey`. |
-| `spec.provider.hostname` | string | OpenAI only | Provider hostname, e.g. `openrouter.ai` (bare host, TLS assumed). |
+| `spec.provider.credential.type` | string | No | `APIKey` for OpenAI or `WorkloadIdentity` for Bedrock. Defaults to the supported credential for the selected backend. Unsupported combinations are rejected. |
+| `spec.provider.hostname` | string | Required for OpenAI | Bare provider hostname. Bedrock defaults to its regional runtime hostname; an explicit hostname overrides the address and TLS server name. |
 | `spec.provider.port` | integer | No (default `443`) | Provider port. |
 | `spec.provider.schemaVersion` | string | No (default `v1`) | Upstream API path prefix, e.g. `api/v1` for OpenRouter, `v1` for api.openai.com. |
 | `spec.provider.credentialSecretName` | string | OpenAI only | Secret in the PassthroughModel's namespace whose `apiKey` key holds the provider API key. Injected upstream; end users never see it. |
@@ -374,6 +374,11 @@ authentication to Envoy's AWS default credential chain (EKS Pod Identity or
 IRSA):
 
 <Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
+
+See [AWS Bedrock](/bedrock/) for live model discovery, gateway workload identity,
+and verification through both endpoints. Bedrock rejects static-key configuration
+and custom OpenAI path prefixes. Future providers add a backend variant and
+credential support without changing model declarations or access control.
 
 ---
 

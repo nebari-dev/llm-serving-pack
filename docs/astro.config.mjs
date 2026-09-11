@@ -31,6 +31,7 @@ export default defineConfig({
           label: 'Documentation',
           items: [
             { label: 'Quickstart', slug: 'quickstart' },
+            { label: 'AWS Bedrock', slug: 'bedrock' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Local Development', slug: 'local-development' },
             { label: 'UI Development', slug: 'ui-development' },

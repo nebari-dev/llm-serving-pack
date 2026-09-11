@@ -1,0 +1,184 @@
+---
+title: AWS Bedrock
+---
+import { Code } from 'astro:components';
+import bedrockExample from '../../../../examples/passthrough-bedrock.yaml?raw';
+
+Use Bedrock models through the pack's existing `/v1/chat/completions` API.
+Envoy AI Gateway translates requests to Bedrock Converse, including streaming.
+Users authenticate with their pack API key externally or an OIDC JWT internally;
+`access.groups` controls access as it does for other providers.
+
+## Discover models from AWS
+
+Run the discovery command from the repository root with Python 3.10+:
+
+```sh
+python3 -m venv dev/bedrock/.venv
+dev/bedrock/.venv/bin/pip install -r dev/bedrock/requirements.txt
+dev/bedrock/.venv/bin/python dev/bedrock/bedrock.py \
+  --profile YOUR_AWS_PROFILE --region us-west-2 discover \
+  --provider Anthropic --provider Amazon --provider Meta
+```
+
+Each run reads AWS's current catalog using Boto3. Omit `--provider` to include
+all providers. Omit `--profile` to use the SDK's default credential chain,
+including workload identity when running in a pod.
+
+The command combines `ListFoundationModels` with paginated
+`ListInferenceProfiles`. It includes active models with text input and output
+that have an on-demand target or an inference profile. It preserves the IDs
+AWS returns and uses ARNs for account-specific application profiles. It excludes
+profiles whose foundation models are absent from the active regional catalog.
+
+It also reports `GetFoundationModelAvailability` results, including authorization,
+entitlement, agreement, and region availability. Missing permission to read
+availability is reported on that entry; failure to list the catalog stops the command.
+
+**Listed does not mean verified.** AWS's listing APIs do not identify every
+model's Converse compatibility, IAM permission, or destination-region access.
+The output marks Converse support `unverified`. Availability information can
+also lag a newly enabled model. Use `verify` to establish whether the selected
+IDs actually answer Converse requests. Discovery does not invoke models or
+automatically expand a group's access.
+
+## Verify selected models against AWS
+
+Select exact IDs from discovery, then run:
+
+```sh
+dev/bedrock/.venv/bin/python dev/bedrock/bedrock.py \
+  --profile YOUR_AWS_PROFILE --region us-west-2 verify \
+  --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+  --model-id amazon.nova-lite-v1:0 \
+  --model-id us.meta.llama3-1-8b-instruct-v1:0
+```
+
+This makes two billable requests per ID: one `Converse` and one `ConverseStream`,
+each capped at 32 output tokens with automatic retries disabled. It checks
+assistant text, completion markers, and token usage. It reports failures per
+model and exits nonzero if any request fails. It does not retry a failed model
+with a different ID or region.
+
+The check uses the caller's AWS identity. It does **not** verify the gateway's
+workload identity or the pack's access controls. The report says `gateway: not tested`
+until both gateway URLs are supplied.
+
+## Configure the gateway's AWS identity
+
+The **Envoy data-plane pod running the AI Gateway `extproc` container** needs
+Bedrock permissions. Giving the pack operator or key manager an AWS role does
+not grant those permissions to the gateway.
+
+Configure EKS Pod Identity or IRSA for the data-plane ServiceAccount on each
+Gateway used by the external and internal endpoints. If both endpoints share
+one data plane, one association is sufficient. Use the Envoy Gateway
+`EnvoyProxy` configuration to select that ServiceAccount. Preserve the existing
+Gateway configuration and listeners when integrating with a shared cluster.
+
+Grant the gateway role `bedrock:InvokeModel` and
+`bedrock:InvokeModelWithResponseStream` for the selected models. Cross-region
+inference profiles also require access to their destination foundation-model
+resources; select an allowed geographic profile for your deployment. Model
+availability, subscriptions, and organization policies still apply.
+
+The human or automation running discovery additionally needs
+`bedrock:ListFoundationModels`, `bedrock:ListInferenceProfiles`, and
+`bedrock:GetFoundationModelAvailability`. Those catalog permissions are not
+required by the pack operator.
+
+See [AWS's Pod Identity guide](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html),
+[AWS's IRSA guide](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html),
+and [Envoy AI Gateway's AWS setup](https://aigateway.envoyproxy.io/docs/0.5/getting-started/connect-providers/aws-bedrock/).
+
+## Create a provider
+
+The following manifest shows the interface; model availability depends on the
+account and region. Replace its IDs with those discovered and verified above.
+
+<Code code={bedrockExample} lang="yaml" />
+
+To generate a manifest using IDs from the current catalog:
+
+```sh
+dev/bedrock/.venv/bin/python dev/bedrock/bedrock.py \
+  --profile YOUR_AWS_PROFILE --region us-west-2 manifest \
+  --name bedrock --namespace nebari-llm-serving-system --group llm \
+  --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+  --model-id amazon.nova-lite-v1:0 \
+  --model-id us.meta.llama3-1-8b-instruct-v1:0 > bedrock.json
+```
+
+JSON is accepted by Kubernetes. Review the output and apply it through your
+normal deployment process. The command never applies resources. Repeat
+discovery when updating the model list; the operator does not poll AWS.
+
+Both endpoints are enabled by default. Declare every model ID explicitly:
+Envoy AI Gateway v0.5 does not route undeclared IDs through `catchAll`.
+The operator configures `schema.name: AWSBedrock` and an `AWSCredentials`
+policy containing only `region`. It creates no upstream credential Secret.
+Its per-provider user API-key Secret is separate and still required for
+external client authentication.
+
+An existing cluster needs this PR's CRD and operator before applying the
+manifest. Helm does not upgrade installed CRDs automatically; update the
+`PassthroughModel` CRD through your cluster's CRD deployment process.
+`Ready` means the operator applied resources, not that it successfully called AWS.
+
+## Verify both pack endpoints
+
+Use credentials from the deployed pack:
+
+- `BEDROCK_TEST_API_KEY`: a valid key scoped to the Bedrock provider.
+- `BEDROCK_TEST_DENIED_API_KEY`: a valid key for a different provider/model.
+- `BEDROCK_TEST_JWT`: a valid JWT whose groups include a Bedrock access group.
+- `BEDROCK_TEST_DENIED_JWT`: a valid JWT with no matching access group.
+
+Supply these as environment variables from your secret manager or shell session.
+Use a private provider (`access.groups` without `public: true`). An invalid or
+expired credential is not a substitute for a valid credential with the wrong scope.
+
+```sh
+dev/bedrock/.venv/bin/python dev/bedrock/bedrock.py \
+  --profile YOUR_AWS_PROFILE --region us-west-2 verify \
+  --external-url https://llm.example.com \
+  --internal-url https://llm-internal.example.com \
+  --model-id us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+  --model-id amazon.nova-lite-v1:0 \
+  --model-id us.meta.llama3-1-8b-instruct-v1:0
+```
+
+For each model the command checks the AWS SDK directly, then both endpoints
+in regular and streaming mode. It requires HTTP 401 without a credential,
+HTTP 403 for the wrong scope, and assistant text for the permitted caller.
+Streaming responses must contain text, a finish reason, and `[DONE]`.
+It uses HTTPS with certificate verification and refuses redirects.
+
+These checks add four successful gateway inference requests per model to the
+two direct AWS requests. A failure does not count as a skipped success, and
+response text and authentication tokens are not printed.
+
+## Automated coverage and additional providers
+
+The credential-free CI job uses AWS's `botocore.stub.Stubber` to validate SDK
+request parameters and response shapes. It covers pagination, inactive and
+provisioned-only models, profile IDs, availability errors, and manifest selection.
+Additional fixtures cover truncated streams and denied gateway requests.
+These are contract checks; only an explicit `verify` run exercises AWS.
+
+Provider defaults and validation live in `ProviderSpec.Resolve`. The shared
+gateway builders consume its resolved address, schema, and credential settings.
+To enable another backend, add its typed variant, resolution and credential
+rendering, admission coverage, and an example. Routes, model declarations,
+key issuance, and group authorization stay shared. Azure and GCP can add their
+own credential variants; Anthropic direct can reuse API-key credentials with
+its native schema. Those backends are not enabled by this change.
+
+AWS references:
+
+- [ListFoundationModels](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListFoundationModels.html)
+- [ListInferenceProfiles](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_ListInferenceProfiles.html)
+- [GetFoundationModelAvailability](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationModelAvailability.html)
+- [Converse](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
+- [ConverseStream](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html)
+- [AWS SDK Stubber](https://botocore.amazonaws.com/v1/documentation/api/latest/reference/stubber.html)

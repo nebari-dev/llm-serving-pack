@@ -267,13 +267,13 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 ## PassthroughModel CRD
 
-Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
+A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external provider, such as OpenRouter or AWS Bedrock. The operator creates routing and the same two authentication layers used by served models. The key manager lists these providers alongside LLMModels so users can mint keys through the same UI.
 
 <Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
 
-The backend and credential are independent. Existing resources keep the
-OpenAI-compatible API-key defaults; Bedrock selects `AWSBedrock` and AWS
-workload identity:
+Existing resources keep the OpenAI-compatible API-key defaults. Bedrock selects
+Converse and AWS workload identity; [the Bedrock guide](/bedrock/) covers live
+model discovery and verification:
 
 <Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
 

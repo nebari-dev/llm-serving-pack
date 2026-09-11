@@ -106,7 +106,7 @@ spec:
                     type: array
                 type: object
               provider:
-                description: provider is the upstream OpenAI-compatible endpoint
+                description: provider selects the upstream backend, address, and credential
                 properties:
                   backend:
                     description: |-
@@ -119,7 +119,7 @@ spec:
                           region:
                             description: region is the AWS region used for the Bedrock
                               runtime endpoint and SigV4.
-                            minLength: 1
+                            pattern: ^[a-z]{2}(-[a-z]+)+-[0-9]+$
                             type: string
                         required:
                         - region
@@ -160,7 +160,9 @@ spec:
                     minLength: 1
                     type: string
                   hostname:
-                    description: hostname of the provider, e.g. openrouter.ai
+                    description: |-
+                      hostname of the provider, e.g. openrouter.ai. Bedrock derives its regional
+                      runtime hostname when omitted; set this to use a private endpoint.
                     minLength: 1
                     type: string
                   port:

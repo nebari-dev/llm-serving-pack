@@ -7,6 +7,18 @@ on:
     branches: [main]
 
 jobs:
+  test-bedrock-tools:
+    name: Test Bedrock discovery and verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Exercise AWS SDK contracts without cloud credentials
+        working-directory: dev/bedrock
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+          .venv/bin/python -m unittest discover -v
+
   test-operator:
     name: Test operator
     runs-on: ubuntu-latest

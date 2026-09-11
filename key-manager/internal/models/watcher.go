@@ -88,11 +88,11 @@ func (w *Watcher) Sync(ctx context.Context) error {
 		updated[key] = ModelInfo{
 			Name:        pm.Name,
 			Namespace:   pm.Namespace,
-			ModelName:   pm.Spec.Provider.Hostname,
+			ModelName:   pm.Spec.Provider.EndpointHostname(),
 			Public:      public,
 			Groups:      groups,
 			Passthrough: true,
-			Provider:    pm.Spec.Provider.Hostname,
+			Provider:    pm.Spec.Provider.EndpointHostname(),
 		}
 	}
 
