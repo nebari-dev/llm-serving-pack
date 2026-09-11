@@ -26,7 +26,7 @@ The deployment targets Envoy Gateway 1.8.1 with AI Gateway 1.1 and Gateway API
 1.5.1. The operator emits AI Gateway `v1beta1` resources and uses `schema.prefix`
 for OpenAI-compatible paths. Existing `PassthroughModel.spec.provider.schemaVersion`
 settings retain their meaning; provider manifests do not need rewriting.
-See [gateway upgrades](./gateway-upgrades/) before changing an existing installation.
+See [gateway upgrades](/gateway-upgrades/) before changing an existing installation.
 
 The common code owns Kubernetes resources, model selection, routing, access
 control, and gateway verification. Provider-specific fields stay in their
