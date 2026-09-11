@@ -274,6 +274,25 @@ class VerificationTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 bedrock.check_sse(io.BytesIO(body))
 
+    def test_bedrock_terminal_marker_with_one_newline(self):
+        # Bedrock's translator emits complete SSE events, then a [DONE] line
+        # with only one newline. This matches the live v0.5.0 gateway output.
+        text = b'data: {"choices":[{"delta":{"content":"Hello!"}}]}\n\n'
+        finish = b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        for ending in (b"\n", b"\r\n", b"\n\n"):
+            with self.subTest(ending=ending):
+                bedrock.check_sse(io.BytesIO(text + finish + b"data: [DONE]" + ending))
+        for body in (
+            text + finish,
+            text + finish + b"data: [DONE]",
+            text + finish + b"data: [DON\n",
+            text + b"data: [DONE]\n",
+            finish + b"data: [DONE]\n",
+            text + finish + b'data: {"choices":[]}',
+        ):
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                bedrock.check_sse(io.BytesIO(body))
+
     def test_gateway_credentials_require_both_endpoints_before_aws_calls(self):
         with patch.dict(os.environ, {}, clear=True), patch.object(
             bedrock.boto3, "Session"

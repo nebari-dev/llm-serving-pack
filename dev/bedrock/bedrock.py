@@ -190,7 +190,9 @@ def gateway_url(value):
 def check_sse(response):
     text, finished, done = False, False, False
     data = []
+    line_complete = False
     for raw in response:
+        line_complete = raw.endswith(b"\n")
         line = raw.decode("utf-8").rstrip("\r\n")
         if line.startswith("data:"):
             data.append(line[5:].lstrip())
@@ -206,6 +208,10 @@ def check_sse(response):
             for choice in chunk.get("choices", []):
                 text |= bool((choice.get("delta", {}).get("content") or "").strip())
                 finished |= bool(choice.get("finish_reason"))
+    # Envoy AI Gateway ends Bedrock streams with "data: [DONE]\n", without
+    # an extra blank line. Accept that terminal marker at EOF, but not an
+    # unterminated line or a pending JSON event from a truncated response.
+    done |= line_complete and data == ["[DONE]"]
     if not (text and finished and done):
         raise ValueError("gateway stream ended without text, finish reason, or [DONE]")
 
