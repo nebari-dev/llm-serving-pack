@@ -5,7 +5,8 @@ import { createStore, Provider as JotaiProvider } from "jotai";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ThemeProvider } from "@/providers/ThemeProvider";
+import { THEME_STORAGE_KEY } from "@/app/theme";
+import { ThemeProvider } from "@/hooks/theme-provider";
 import { dialogAtom } from "@/store/dialogAtoms";
 import { CreateKeyDialog } from "./CreateKeyDialog";
 
@@ -50,7 +51,7 @@ function renderOpen() {
     return (
       <QueryClientProvider client={queryClient}>
         <JotaiProvider store={store}>
-          <ThemeProvider>{children}</ThemeProvider>
+          <ThemeProvider storageKey={THEME_STORAGE_KEY}>{children}</ThemeProvider>
         </JotaiProvider>
       </QueryClientProvider>
     );

@@ -202,9 +202,17 @@ frontend:
     # CSS variable overrides injected at runtime - no image rebuild required.
     # Values are validated in the browser and rejected if they contain CSS
     # injection characters (';', '{', '}', quotes, url(), javascript:, etc.).
-    # Supported tokens: primary, primaryForeground, background, foreground,
-    # secondary, secondaryForeground, muted, mutedForeground, accent,
-    # accentForeground, border, ring, radius.
+    # Supported tokens: primary, primaryForeground, primaryHover, background,
+    # foreground, secondary, secondaryForeground, muted, mutedForeground,
+    # accent, accentForeground, border, ring, radius, sidebarPrimary,
+    # sidebarPrimaryForeground, sidebarRing.
+    # primaryHover, sidebarPrimary, sidebarPrimaryForeground and sidebarRing
+    # are derived from primary / primaryForeground / ring, so setting those
+    # three is normally enough - list the derived ones only to pin a shade
+    # that is not a plain derivation.
+    # Any other camelCase key is still passed through to the browser as the
+    # matching --kebab-case custom property, but is unsupported and may stop
+    # working without notice; only the tokens above are part of the contract.
     # Example:
     #   theme:
     #     light:

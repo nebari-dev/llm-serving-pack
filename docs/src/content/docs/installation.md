@@ -16,15 +16,30 @@ has been exercised end-to-end so far. For local development against
 
 ## 1. What this runbook assumes
 
-This runbook starts from a NIC-foundational Nebari cluster. NIC ships,
-out of the box, the components below; if any are missing or in a
-different namespace on your cluster, adjust the commands accordingly.
+This runbook starts from a NIC-foundational Nebari cluster.
+
+> **Requires NIC v0.12.0 or newer.** That release is the floor for
+> everything below: it ships the `values/<app>/overlays/` seam that
+> section 6 uses ([nebari-infrastructure-core#499][nic499]) together
+> with ArgoCD 3.4.4, which is the first version that expands the
+> overlay glob at all. Earlier releases also lack the `nebari-apps`
+> ArgoCD project that section 8 installs the pack into (v0.10.0) and
+> the automatic GPU operator install that section 3 relies on
+> (v0.9.0). Check with `nic version`. On an older cluster, upgrade NIC
+> before starting - the alternative is a set of hand-edits that the
+> next `nic deploy --regen-apps` silently reverts.
+
+[nic499]: https://github.com/nebari-dev/nebari-infrastructure-core/pull/499
+
+NIC ships, out of the box, the components below; if any are missing or
+in a different namespace on your cluster, adjust the commands
+accordingly.
 
 | Component | Namespace | Purpose |
 |---|---|---|
 | ArgoCD | `argocd` | GitOps controller. New apps in this runbook get installed via ArgoCD `Application` manifests committed to your cluster-config repo. |
 | cert-manager | `cert-manager` | Issues TLS certs for the gateway and for pack-managed Certificates. |
-| Envoy Gateway | `envoy-gateway-system` | Gateway API data plane. **Will be reconfigured in section 5** to wire up the AI Gateway extension manager. |
+| Envoy Gateway | `envoy-gateway-system` | Gateway API data plane. **Will be reconfigured in section 6** to wire up the AI Gateway extension manager. |
 | Keycloak | `keycloak` | OIDC provider. Provides the `groups` claim to JWT-protected endpoints. The admin Secret is `keycloak-admin-credentials`. |
 | Longhorn | `longhorn-system` | Default StorageClass `longhorn` (RWX). Used for the model PVC. |
 | AWS Load Balancer Controller | `kube-system` | Provisions NLBs for the Gateway resources (AWS only). |
@@ -34,11 +49,12 @@ different namespace on your cluster, adjust the commands accordingly.
 
 In addition you need:
 
-- **At least one GPU node** in the cluster. AWS users: a `g6e.xlarge`
-  (1x L40S, 48 GB VRAM) or larger node from a node group running the
-  AL2023 NVIDIA AMI is the validated baseline. The NVIDIA device
-  plugin will be installed in section 3, so the node will not yet
-  show `nvidia.com/gpu` in its capacity.
+- **At least one GPU node** in the cluster, from a node group marked
+  `gpu: true` in your NIC config. AWS users: a `g6e.xlarge` (1x L40S,
+  48 GB VRAM) or larger node from a node group running the AL2023
+  NVIDIA AMI is the validated baseline. That `gpu: true` flag is what
+  makes NIC install the NVIDIA GPU Operator and taint the node
+  `nvidia.com/gpu=true:NoSchedule`; see section 3.
 - **NVIDIA driver 580 or later** on every GPU node. As of llm-d
   v0.7.0 the serving images (`llm-d-cuda:v0.7.0`) ship the CUDA 13.0.2
   runtime, which requires driver branch 580+. Nodes on an older driver
@@ -57,7 +73,9 @@ In addition you need:
   you will set `platform.tls.clusterIssuer` to match in section 8).
 - **A cluster-config git repo** that ArgoCD's AppProject is configured
   to read from. New `Application` manifests in this runbook will be
-  committed there; the path is up to you (e.g. `clusters/<name>/apps/`).
+  committed there, under a path of your own choosing (shown throughout
+  as `clusters/<name>/pack-apps/`) - **not** NIC's foundational `apps/`
+  directory, which NIC regenerates.
 
 > **Note on existing workarounds:** if you are coming from the v0
 > install path on an older cluster, the runbook deliberately does not
@@ -91,9 +109,24 @@ kubectl get pods -n argocd
 kubectl get appproject -n argocd
 ```
 
-Expected: every ArgoCD pod is Ready; an AppProject named `foundational`
-(or whichever project NIC put new apps into) is present. Note its name -
-you will set it as `spec.project` on every new Application below.
+Expected: every ArgoCD pod is Ready, and **both** the `foundational`
+and `nebari-apps` AppProjects are present.
+
+Every Application this runbook adds uses `project: nebari-apps`, not
+`foundational`. Since NIC v0.10.0 the `foundational` project derives
+its allowed `sourceRepos` and `destinations` from NIC's own app
+templates, so an Application pointing at a pack chart is refused there;
+`nebari-apps` is the project NIC provides for exactly this
+([argocd-project-scoping][nicproj]). If you are migrating a pack that
+predates this, move it:
+
+```bash
+kubectl patch application <pack> -n argocd --type merge \
+  -p '{"spec":{"project":"nebari-apps"}}'
+```
+
+If `nebari-apps` is missing, your NIC predates v0.10.0 - see the
+version requirement in section 1.
 
 ### 2.3 Confirm DNS resolves to the Gateway LB
 
@@ -129,9 +162,13 @@ curl -sS -o /dev/null -w "HTTPS %{http_code}\n" --max-time 10 -k "https://${GATE
 Expected: every Certificate is `READY=True`, and the curl returns an
 HTTP status (any 4xx is fine - it just means no route matches yet, but
 TLS handshake worked). If you see "connection reset by peer", the
-gateway has no usable cert. The known fresh-install case where this
-happens is documented in section 12.1 (NIC `nebari-gateway-cert` stuck
-on first install).
+gateway has no usable cert. A Certificate stuck `Ready=False` here used
+to be the common fresh-install failure; NIC fixed the underlying
+HTTP-01 challenge race in v0.4.0, so on a supported version this should
+pass. If it does not, check
+`kubectl describe certificate -n envoy-gateway-system nebari-gateway-cert`
+for the ACME order's actual error before proceeding - nothing later in
+this runbook works without a usable cert.
 
 ### 2.6 Confirm Keycloak is reachable internally and externally
 
@@ -170,21 +207,37 @@ operator being able to mint Keycloak clients.
 
 If all checks pass, proceed to section 3.
 
-## 3. Install nvidia-gpu-operator
+## 3. Confirm the GPU operator
 
-The pack's model pods request `nvidia.com/gpu` from Kubernetes. NIC's
-GPU node group runs the AL2023 NVIDIA AMI which already ships the
-kernel driver, so all that is needed is the container toolkit and the
-device plugin. The NVIDIA GPU Operator chart installs both, plus
-node-feature-discovery so GPU nodes get the right labels.
+The pack's model pods request `nvidia.com/gpu` from Kubernetes, which
+means something has to advertise that resource on the node. On AWS,
+NIC does it for you.
+
+> **On AWS this section is a verification step, not an install step.**
+> Since NIC v0.9.0, any node group marked `gpu: true` in your NIC
+> config makes NIC install the NVIDIA GPU Operator itself, via Helm,
+> during `nic deploy`
+> ([nebari-infrastructure-core#348][nic348]). It installs into the
+> `gpu-operator` namespace with `driver` and `toolkit` disabled,
+> because the AL2023 NVIDIA AMI already ships both - the operator adds
+> only the device plugin. Nothing to commit; skip to 3.2. Other
+> providers still install it themselves (3.1).
+
+[nic348]: https://github.com/nebari-dev/nebari-infrastructure-core/pull/348
+
+Because NIC disables the driver, **the AMI's driver version is the one
+you get** - the operator will not upgrade it for you. That makes the
+580+ requirement below an AMI requirement.
 
 > **Driver version (llm-d v0.7.0):** the AMI's pre-installed driver must
 > be branch 580 or later, because the `llm-d-cuda:v0.7.0` serving images
-> use the CUDA 13.0.2 runtime. If your AMI ships an older driver, either
-> use a newer AMI or let the GPU Operator manage the driver
-> (`driver.enabled=true`) pinned to a 580+ branch. Verify after the
-> operator is up with `kubectl logs -n nvidia-gpu-operator <driver-or-validator-pod>`
-> or `nvidia-smi` on the node.
+> use the CUDA 13.0.2 runtime. On AWS the fix for an older driver is a
+> newer AMI: NIC installs the operator with `driver.enabled: false` and
+> exposes no config surface to change that, so the operator will not
+> install a driver for you. If you are running the 3.1 install yourself,
+> you have the second option of setting `driver.enabled: true` pinned to
+> a 580+ branch. Verify either way with `nvidia-smi` on the node, or
+> from the operator's driver/validator pod logs.
 
 ### 3.0 k3s / on-prem GPU nodes (host-managed driver + toolkit)
 
@@ -300,10 +353,23 @@ version = 2
 > `python3 -c "import tomllib; tomllib.load(open('config.toml.tmpl','rb'))"`
 > **before** restarting k3s.
 
-### 3.1 Add the ArgoCD Application
+### 3.1 Non-AWS providers: add the ArgoCD Application
 
-Commit this file to your cluster-config repo at the path your `nebari-root`
-app-of-apps reads from (e.g. `clusters/<name>/apps/nvidia-gpu-operator.yaml`):
+> **Skip this on AWS.** NIC already installed the operator (see the
+> note at the top of this section). Adding a second GPU Operator
+> release alongside NIC's will fight over the same DaemonSets.
+
+NIC's automatic install is AWS-only. On other providers, commit this
+file to your cluster-config repo - but **not** into NIC's foundational
+`apps/` directory. NIC's own guidance is to keep non-foundational
+Applications out of that path ([argocd-project-scoping][nicproj]), and
+`nic deploy --regen-apps` rewrites everything it owns there. Use a path
+of your own that ArgoCD reads (e.g.
+`clusters/<name>/pack-apps/nvidia-gpu-operator.yaml`), or apply it once
+with `kubectl apply -f` - the Application's own source is the upstream
+chart, so it is self-sustaining after that:
+
+[nicproj]: https://github.com/nebari-dev/nebari-infrastructure-core/blob/main/docs/operations/argocd-project-scoping.md
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -313,13 +379,12 @@ metadata:
   namespace: argocd
   labels:
     app.kubernetes.io/part-of: nebari-llm-pack
-    app.kubernetes.io/managed-by: nebari-infrastructure-core
   annotations:
     argocd.argoproj.io/sync-wave: "2"
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
   source:
     chart: gpu-operator
     repoURL: https://helm.ngc.nvidia.com/nvidia
@@ -361,9 +426,10 @@ spec:
 > the device plugin. If your nodes ship neither, set `driver.enabled: true` so
 > the operator installs the driver as well.
 
-`git push` the file. ArgoCD's `nebari-root` app-of-apps picks it up on
-its next refresh (typically within a minute; you can force it with
-`kubectl annotate application -n argocd nebari-root argocd.argoproj.io/refresh=hard --overwrite`).
+`git push` the file, then make ArgoCD aware of it. Because it lives
+outside NIC's `apps/` directory, `nebari-root` will not pick it up: either
+apply it once with `kubectl apply -f`, or add it to an app-of-apps of
+your own that watches your `pack-apps/` path.
 
 > **Why this exact chart version:** versions before `v25.10.x` of the
 > `gpu-operator` chart render `spec.validator.plugin: null` in the
@@ -374,8 +440,13 @@ its next refresh (typically within a minute; you can force it with
 
 ### 3.2 Wait for the operator pods to become Ready
 
+The namespace depends on who installed the operator: NIC installs into
+`gpu-operator`, while the Application in 3.1 uses
+`nvidia-gpu-operator`.
+
 ```bash
-kubectl get pods -n nvidia-gpu-operator -w
+kubectl get pods -n gpu-operator -w          # NIC-installed (AWS)
+kubectl get pods -n nvidia-gpu-operator -w   # installed via 3.1
 ```
 
 Expected (after ~3-5 minutes): every pod is `Running` or `Completed`.
@@ -395,11 +466,20 @@ nvidia-gpu-operator-node-feature-discovery-worker-...             1/1     Runnin
 nvidia-operator-validator-XXXXX                                   1/1     Running
 ```
 
-The ArgoCD Application may report `OutOfSync` even when everything is
-working. This is a known artifact of the gpu-operator chart's
-PreSync/PostSync hooks: hook objects are created and pruned during
-each sync, leaving ArgoCD's last-observed manifest set out of sync
-with the live state. The operative signal is the pod set above.
+That set is from the 3.1 install. On a NIC-installed cluster expect two
+differences: there is **no** `nvidia-container-toolkit-daemonset`,
+because NIC disables the toolkit, and the node-feature-discovery pods
+are named `gpu-operator-node-feature-discovery-*` after NIC's release
+name rather than `nvidia-gpu-operator-*`. The pod that actually matters
+either way is `nvidia-device-plugin-daemonset`, which is what makes
+3.3 pass.
+
+If you installed via 3.1, the ArgoCD Application may report
+`OutOfSync` even when everything is working. This is a known artifact
+of the gpu-operator chart's PreSync/PostSync hooks: hook objects are
+created and pruned during each sync, leaving ArgoCD's last-observed
+manifest set out of sync with the live state. The operative signal is
+the pod set above.
 
 ### 3.3 Verify nvidia.com/gpu is exposed
 
@@ -421,6 +501,14 @@ metadata:
   name: gpu-smoke
 spec:
   restartPolicy: Never
+  # NIC taints gpu: true node groups nvidia.com/gpu=true:NoSchedule, and
+  # nothing injects a matching toleration on EKS, so a bare GPU pod stays
+  # Pending. The pack's own model pods get this toleration from the
+  # operator; a hand-written test pod has to carry it.
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
   containers:
     - name: gpu-smoke
       image: nvcr.io/nvidia/cuda:12.4.0-base-ubi9
@@ -435,11 +523,14 @@ kubectl delete pod gpu-smoke
 ```
 
 Expected: `kubectl logs gpu-smoke` prints something like
-`GPU 0: NVIDIA L40S (UUID: GPU-...)`. If the pod sits Pending, the
-device plugin is not reporting GPUs to the kubelet; check
-`kubectl describe node <gpu-node>` for `nvidia.com/gpu` under
-`Capacity` and `Allocatable`, and `kubectl logs -n
-nvidia-gpu-operator <device-plugin-pod>` for errors.
+`GPU 0: NVIDIA L40S (UUID: GPU-...)`. If the pod sits Pending, read the
+reason off `kubectl describe pod gpu-smoke` before anything else: a
+`node(s) had untolerated taint` message means the toleration above is
+missing or mistyped, whereas `Insufficient nvidia.com/gpu` means the
+device plugin is not reporting GPUs to the kubelet. For the latter,
+check `kubectl describe node <gpu-node>` for `nvidia.com/gpu` under
+`Capacity` and `Allocatable`, and the device-plugin pod's logs for
+errors.
 
 > **k3s / host-managed runtime (section 3.0):** if the pod runs but
 > the logs show `exec: "nvidia-smi": executable file not found in
@@ -461,20 +552,27 @@ must exist on the cluster before the pack itself reconciles any
 - **Envoy AI Gateway CRDs** (`AIGatewayRoute`, `AIServiceBackend`,
   `BackendSecurityPolicy`, `GatewayConfig`, `MCPRoute`) - the
   `nebari-llm-operator` creates these per LLMModel and the AI
-  Gateway controller (section 6) reconciles them.
+  Gateway controller (section 5) reconciles them.
 - **gateway-api-inference-extension CRDs** (`InferencePool`,
   `InferenceObjective`, `InferenceModelRewrite`, `InferencePoolImport`)
   - the llm-d End-Point Picker (EPP) container looks up
   `InferencePool` at startup and crashloops without it.
 
-Both bundles install the CRDs only; controllers come in section 6 (AI
-Gateway) and are not required for the inference-extension on this
+Both bundles install the CRDs only; the AI Gateway controller comes in
+section 5, and no controller is required for the inference-extension on this
 runbook (the EPP is bundled inside the LLMModel pod the operator
 creates).
 
 ### 4.1 Add the ArgoCD Applications
 
-`clusters/<name>/apps/envoy-ai-gateway-crds.yaml`:
+> **Where these files go.** Not in NIC's foundational `apps/`
+> directory - that path belongs to NIC and `nic deploy --regen-apps`
+> rewrites what it owns there. Use a directory of your own that ArgoCD
+> reads, shown below as `clusters/<name>/pack-apps/`, or apply the
+> manifests once with `kubectl apply -f`; each Application's source is
+> an upstream chart or repo, so it sustains itself from then on.
+
+`clusters/<name>/pack-apps/envoy-ai-gateway-crds.yaml`:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -489,7 +587,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
   source:
     chart: ai-gateway-crds-helm
     repoURL: docker.io/envoyproxy
@@ -507,7 +605,7 @@ spec:
       backoff: { duration: 5s, factor: 2, maxDuration: 3m }
 ```
 
-`clusters/<name>/apps/gateway-api-inference-extension.yaml` - this one
+`clusters/<name>/pack-apps/gateway-api-inference-extension.yaml` - this one
 points at a kustomize directory in your repo (because the upstream
 release ships a flat manifests.yaml that ArgoCD cannot Helm-template):
 
@@ -524,7 +622,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
   source:
     repoURL: https://github.com/<your-org>/<cluster-config-repo>.git
     targetRevision: main
@@ -549,8 +647,10 @@ resources:
   - https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.5.0/manifests.yaml
 ```
 
-`git push` all three files. ArgoCD's `nebari-root` should pick them
-up; force-refresh if it doesn't.
+`git push` all three files, then apply the two Applications with
+`kubectl apply -f` (or through your own app-of-apps). `nebari-root`
+watches only NIC's `apps/` directory, so it will not adopt them on its
+own.
 
 ### 4.2 Verify CRDs are present
 
@@ -601,7 +701,7 @@ controller's Service, and bringing them up in this order avoids noisy
 
 ### 5.1 Add the ArgoCD Application
 
-`clusters/<name>/apps/envoy-ai-gateway.yaml`:
+`clusters/<name>/pack-apps/envoy-ai-gateway.yaml`:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -616,7 +716,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
   source:
     chart: ai-gateway-helm
     repoURL: docker.io/envoyproxy
@@ -634,7 +734,9 @@ spec:
       backoff: { duration: 5s, factor: 2, maxDuration: 3m }
 ```
 
-`git push`, force-refresh the root if needed.
+`git push`, then apply it with `kubectl apply -f` (or through your own
+app-of-apps) - it lives outside NIC's `apps/` directory, so `nebari-root`
+will not adopt it.
 
 ### 5.2 Verify the controller, service, and webhook
 
@@ -675,55 +777,116 @@ These values come straight from the upstream
 `envoyproxy/ai-gateway` reference at
 [`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml).
 
-### 6.1 Edit NIC's envoy-gateway Application
+### 6.1 Commit a values overlay
 
-Locate the file in your cluster-config repo where NIC's
-envoy-gateway ArgoCD Application lives. NIC ships it with a minimal
-`spec.source.helm.values` block: just `controllerName`, deployment
-resources, and Service type. Merge in the new keys without removing
-any existing ones:
+NIC owns `values/envoy-gateway/base.yaml` and rewrites it on every
+`nic deploy --regen-apps`. It never writes to or deletes from
+`values/envoy-gateway/overlays/`, so a file you put there is
+permanent.
 
-```yaml
-spec:
-  source:
-    helm:
-      values: |
-        config:
-          envoyGateway:
-            gateway:
-              controllerName: gateway.envoyproxy.io/gatewayclass-controller
-            extensionApis:
-              enableEnvoyPatchPolicy: true
-              enableBackend: true                  # required for AI Gateway
-            extensionManager:
-              hooks:
-                xdsTranslator:
-                  translation:
-                    listener: { includeAll: true }
-                    route:    { includeAll: true }
-                    cluster:  { includeAll: true }
-                    secret:   { includeAll: true }
-                  post:
-                    - Translation
-                    - Cluster
-                    - Route
-              service:
-                fqdn:
-                  hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
-                  port: 1063
-              backendResources:
-                - group: inference.networking.k8s.io
-                  kind: InferencePool
-                  version: v1
-        # ... preserve any existing deployment / service / podDisruptionBudget
-        # values that NIC was already setting; only the config.envoyGateway
-        # subtree changes.
+Copy [`examples/envoy-gateway-overlay.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-gateway-overlay.yaml)
+into your cluster-config repo:
+
+```bash
+mkdir -p <git_repository.path>/values/envoy-gateway/overlays
+cp examples/envoy-gateway-overlay.yaml \
+   <git_repository.path>/values/envoy-gateway/overlays/20-ai-gateway.yaml
+git add <git_repository.path>/values/envoy-gateway/overlays/20-ai-gateway.yaml
+git commit -m "Add AI Gateway extension wiring to envoy-gateway"
+git push
 ```
 
-`git push`. ArgoCD will sync the chart with the new values; the
-`envoy-gateway-config` ConfigMap is updated, but the running
-controller process does not pick up changes until the deployment
-restarts.
+The overlay contains **only** the keys that differ from NIC's base
+values:
+
+```yaml
+config:
+  envoyGateway:
+    extensionApis:
+      enableEnvoyPatchPolicy: true
+      enableBackend: true                  # required for AI Gateway
+    extensionManager:
+      hooks:
+        xdsTranslator:
+          translation:
+            listener: { includeAll: true }
+            route:    { includeAll: true }
+            cluster:  { includeAll: true }
+            secret:   { includeAll: true }
+          post:
+            - Translation
+            - Cluster
+            - Route
+      service:
+        fqdn:
+          hostname: ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local
+          port: 1063
+      backendResources:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          version: v1
+```
+
+Note what is **not** in it. Helm deep-merges maps, so
+`config.envoyGateway.gateway.controllerName` from `base.yaml` survives
+even though the overlay also writes under `config.envoyGateway`. The
+deployment resources, replica count and Service type stay as NIC set
+them. You do not restate them, and you do not risk dropping one by
+transcribing it wrongly.
+
+The `20-` prefix matters: overlays apply in lexical filename order and
+the last file wins on a key collision. Keeping this pack's overlay at
+`20-` leaves `30-` and later free for operator overrides.
+
+> **Do not hand-edit the Application instead.** NIC regenerates
+> `apps/*.yaml` from its own templates, so values edited directly into
+> `spec.sources[0].helm` are discarded by the next
+> `nic deploy --regen-apps`, taking the AI Gateway wiring with them.
+> The failure is quiet: routes start returning 404 or 500 again with
+> nothing in the ArgoCD UI to explain it. The overlay directory is the
+> only override point NIC promises not to touch.
+
+ArgoCD picks the commit up on its next sync, with no `nic` run needed,
+and updates the `envoy-gateway-config` ConfigMap. The running
+controller process does not reload that ConfigMap until the deployment
+restarts, which is 6.2.
+
+#### Confirm the overlay was actually read
+
+The `overlays/*.yaml` glob is expanded by ArgoCD's **repo-server**, and
+only on ArgoCD 3.4 or later. On an older repo-server the glob is
+discarded silently: the overlay has no effect, the Application still
+reports Synced/Healthy, and nothing is logged at the default level.
+NIC has shipped ArgoCD 3.4.4 since v0.12.0, so this should pass - but
+verify it rather than assume, because the failure looks like nothing at
+all:
+
+```bash
+kubectl -n argocd logs deploy/argocd-repo-server -c repo-server \
+  | grep "resolved value files" | grep envoy-gateway | tail -1
+```
+
+Expected: a line naming **two** paths, `values/envoy-gateway/base.yaml`
+followed by your `overlays/20-ai-gateway.yaml`. That proves both that
+the repo-server is 3.4+ (the log statement does not exist in 3.3.x) and
+that the glob matched your file.
+
+Only `base.yaml` on the line means the glob matched nothing - check the
+filename and that you pushed to the branch NIC deploys from. No output
+at all is inconclusive rather than a failure: the line is emitted only
+when the repo-server actually renders the app, so a manifest-cache hit,
+a restarted pod, or a second replica that did not serve the render all
+produce silence. Force a render and re-check:
+
+```bash
+kubectl -n argocd patch app envoy-gateway --type merge \
+  -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}'
+```
+
+> If you upgraded ArgoCD in place without running `nic deploy
+> --regen-apps`, a committed overlay can stay inert for up to 24 hours:
+> the manifest cache key does not include the ArgoCD version, and the
+> repo cache defaults to 24h. The hard refresh above clears it.
 
 ### 6.2 Restart the envoy-gateway controller
 
@@ -870,7 +1033,7 @@ controller, inference-extension CRDs, GPU operator, Keycloak, the NIC
 
 ### 8.1 Add the ArgoCD Application
 
-`clusters/<name>/apps/nebari-llm-serving.yaml`:
+`clusters/<name>/pack-apps/nebari-llm-serving.yaml`:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -885,7 +1048,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
   source:
     repoURL: quay.io/nebari/charts
     chart: nebari-llm-serving
@@ -954,7 +1117,9 @@ If you want to split traffic across two physical Gateways instead
 (e.g. one with a public LB, one with an internal-only LB), point
 `platform.gateway.internal` at a different Gateway resource.
 
-`git push`, force-refresh the root if needed.
+`git push`, then apply it with `kubectl apply -f` (or through your own
+app-of-apps) - it lives outside NIC's `apps/` directory, so `nebari-root`
+will not adopt it.
 
 ### 8.2 Verify the install
 
@@ -1576,28 +1741,17 @@ require manual intervention until upstream fixes ship. Each links to
 a tracking issue. Once the fix ships, the pre-step can be removed
 from this runbook.
 
-### 12.1 NIC certificate stuck on fresh install
+> **Already fixed upstream, so no longer listed here:** the
+> `nebari-gateway-cert` stuck `Ready=False` on a fresh deploy, which
+> needed the Certificate deleted by hand. NIC now sets
+> `maxConcurrentChallenges: 1` on cert-manager, which serializes the
+> HTTP-01 challenges that were racing on overlapping SANs
+> ([nebari-infrastructure-core#267][nic267]). Shipped in NIC v0.4.0,
+> well below this runbook's v0.12.0 floor.
 
-**Symptom:** After a fresh NIC deployment, `nebari-gateway-cert` in
-`envoy-gateway-system` stays `Ready=False` with a failed ACME order.
-The gateway's HTTPS listener has no usable cert and external
-connections are refused.
+[nic267]: https://github.com/nebari-dev/nebari-infrastructure-core/issues/267
 
-**Tracking issue:** [nebari-dev/nebari-infrastructure-core#267](https://github.com/nebari-dev/nebari-infrastructure-core/issues/267)
-
-**Workaround:** Delete the Certificate and let ArgoCD recreate it:
-
-```bash
-kubectl delete certificate -n envoy-gateway-system nebari-gateway-cert
-# ArgoCD selfHeal recreates it; wait for Ready=True (~2 min)
-kubectl get certificate -n envoy-gateway-system nebari-gateway-cert -w
-```
-
-NIC should ship with `cert-manager.maxConcurrentChallenges: 1` to
-prevent HTTP-01 solver races on overlapping SANs
-(nebari-dev/nebari-infrastructure-core#259).
-
-### 12.2 SecurityPolicy uses in-cluster Keycloak URLs for browser-facing endpoints (obsolete for the key-manager)
+### 12.1 SecurityPolicy uses in-cluster Keycloak URLs for browser-facing endpoints (obsolete for the key-manager)
 
 > **No longer applies to the key-manager.** This was an issue with the
 > old gateway oauth2-proxy cookie flow, where an Envoy `SecurityPolicy`
@@ -1625,7 +1779,7 @@ This version uses `KEYCLOAK_EXTERNAL_URL` for
 the browser hits) while keeping `tokenEndpoint` and `issuer` as
 in-cluster URLs (back-channel only).
 
-### 12.3 AI Gateway webhook certificate becomes untrusted after pod rescheduling
+### 12.2 AI Gateway webhook certificate becomes untrusted after pod rescheduling
 
 **Symptom:** The envoy proxy deployment
 (`envoy-envoy-gateway-system-nebari-gateway-*`) is stuck at `0/1`

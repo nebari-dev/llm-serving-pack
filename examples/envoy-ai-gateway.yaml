@@ -34,7 +34,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
 
   source:
     chart: ai-gateway-crds-helm
@@ -69,7 +69,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
 
   source:
     chart: ai-gateway-helm

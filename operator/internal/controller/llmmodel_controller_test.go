@@ -275,6 +275,38 @@ var _ = Describe("LLMModel Controller", func() {
 				Namespace: testNamespace,
 			}, cm)).To(Succeed())
 		})
+
+		It("preserves key data written by the key-manager across reconciles", func() {
+			By("creating the LLMModel and reconciling")
+			model := newMinimalModel(modelName)
+			Expect(k8sClient.Create(ctx, model)).To(Succeed())
+			r := newReconciler()
+			Expect(reconcileUntilStable(r, ctx, reconcileRequest(modelName))).To(Succeed())
+
+			By("simulating the key-manager writing a key + metadata")
+			secret := &corev1.Secret{}
+			secretKey := types.NamespacedName{Name: modelName + "-api-keys", Namespace: testNamespace}
+			Expect(k8sClient.Get(ctx, secretKey, secret)).To(Succeed())
+			secret.Data = map[string][]byte{"key-abc123": []byte("sk-secret-value")}
+			Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+
+			cm := &corev1.ConfigMap{}
+			cmKey := types.NamespacedName{Name: modelName + "-api-key-metadata", Namespace: testNamespace}
+			Expect(k8sClient.Get(ctx, cmKey, cm)).To(Succeed())
+			cm.Data = map[string]string{"key-abc123": `{"name":"my key","created_by":"user"}`}
+			Expect(k8sClient.Update(ctx, cm)).To(Succeed())
+
+			By("reconciling again")
+			Expect(reconcileUntilStable(r, ctx, reconcileRequest(modelName))).To(Succeed())
+
+			By("verifying the Secret data survived the reconcile")
+			Expect(k8sClient.Get(ctx, secretKey, secret)).To(Succeed())
+			Expect(secret.Data).To(HaveKey("key-abc123"))
+
+			By("verifying the metadata ConfigMap data survived the reconcile")
+			Expect(k8sClient.Get(ctx, cmKey, cm)).To(Succeed())
+			Expect(cm.Data).To(HaveKey("key-abc123"))
+		})
 	})
 
 	Describe("Deletion with finalizer cleanup", func() {

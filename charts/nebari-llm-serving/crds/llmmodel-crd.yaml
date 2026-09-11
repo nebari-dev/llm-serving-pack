@@ -1243,6 +1243,16 @@ spec:
                           is created
                         type: boolean
                     type: object
+                  requestTimeout:
+                    default: 600s
+                    description: |-
+                      requestTimeout is the per-request timeout on the generated gateway
+                      routes (Gateway API Duration, e.g. "600s", "10m"). Without it the
+                      Envoy AI Gateway defaults HTTPRoutes to 60s, which CPU inference and
+                      long generations easily exceed - streams die mid-token. Applies to
+                      both the external and internal endpoint.
+                    pattern: ^([0-9]{1,5}(h|m|s|ms)){1,4}$
+                    type: string
                 type: object
               model:
                 description: model specifies the LLM to serve

@@ -1,5 +1,17 @@
 # Envoy Gateway ArgoCD Application with AI-Gateway-compatible values.
 #
+# NOT THE PATH FOR A NIC-MANAGED CLUSTER. Use
+# examples/envoy-gateway-overlay.yaml instead: NIC regenerates
+# apps/*.yaml from its own templates, so inline helm values edited into
+# the Application here are silently discarded by the next
+# `nic deploy --regen-apps`, taking the AI Gateway wiring with them. A
+# values overlay under values/envoy-gateway/overlays/ survives
+# regeneration.
+#
+# This whole-Application form is for clusters where you own the Envoy
+# Gateway install outright and nothing regenerates it - a standalone
+# deployment of this pack, or a cluster NIC does not manage.
+#
 # The nebari-llm-serving-pack relies on Envoy AI Gateway's ext_proc
 # filter to extract the `model` field from OpenAI-style request bodies
 # and dispatch per-model. For that filter to be programmed into

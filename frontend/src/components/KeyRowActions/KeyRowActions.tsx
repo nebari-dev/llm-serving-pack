@@ -1,12 +1,13 @@
 import { useSetAtom } from "jotai";
 import { MoreVertical, Trash2 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuGroupLabel,
   DropdownMenuItem,
-  DropdownMenuLabel,
+  DropdownMenuPortal,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { ApiKey } from "@/lib/types";
@@ -17,21 +18,23 @@ export function KeyRowActions({ apiKey }: { apiKey: ApiKey }) {
   const setDialog = useSetAtom(dialogAtom);
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Key actions">
-          <MoreVertical className="size-4" />
-        </Button>
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger variant="ghost" className="w-8 px-0" aria-label="Key actions">
+        <MoreVertical className="size-4" />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel className="text-muted-foreground text-xs">Danger</DropdownMenuLabel>
-        <DropdownMenuItem
-          variant="destructive"
-          onSelect={() => setDialog({ type: "revoke", key: apiKey })}
-        >
-          <Trash2 className="size-4" /> Revoke
-        </DropdownMenuItem>
-      </DropdownMenuContent>
+      <DropdownMenuPortal>
+        <DropdownMenuContent align="end">
+          <DropdownMenuGroup>
+            <DropdownMenuGroupLabel>Danger</DropdownMenuGroupLabel>
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => setDialog({ type: "revoke", key: apiKey })}
+            >
+              <Trash2 className="size-4" /> Revoke
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenuPortal>
     </DropdownMenu>
   );
 }

@@ -2,6 +2,13 @@
 # Required for GPU nodes to advertise nvidia.com/gpu as an allocatable
 # resource. Without this, GPU-requiring pods stay Pending.
 #
+# NOT NEEDED ON AWS. Since NIC v0.9.0, marking a node group `gpu: true`
+# in your NIC config makes NIC install the GPU Operator itself during
+# `nic deploy`, into the `gpu-operator` namespace. Applying this
+# alongside it gives you two releases fighting over the same DaemonSets.
+# Use this only on providers NIC does not cover (k3s, on-prem, GCP,
+# Azure).
+#
 # Use this values block when your GPU nodes boot from an AMI that ships BOTH
 # the NVIDIA driver and the container toolkit: it disables both so the
 # operator only adds the device plugin. If your AMI ships the driver but not
@@ -17,7 +24,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: foundational
+  project: nebari-apps
 
   source:
     chart: gpu-operator

@@ -187,6 +187,15 @@ type EndpointSpec struct {
 	// internal configures the internal (JWT) endpoint
 	// +optional
 	Internal InternalEndpointSpec `json:"internal,omitempty"`
+	// requestTimeout is the per-request timeout on the generated gateway
+	// routes (Gateway API Duration, e.g. "600s", "10m"). Without it the
+	// Envoy AI Gateway defaults HTTPRoutes to 60s, which CPU inference and
+	// long generations easily exceed - streams die mid-token. Applies to
+	// both the external and internal endpoint.
+	// +optional
+	// +kubebuilder:default="600s"
+	// +kubebuilder:validation:Pattern=`^([0-9]{1,5}(h|m|s|ms)){1,4}$`
+	RequestTimeout string `json:"requestTimeout,omitempty"`
 }
 
 type ExternalEndpointSpec struct {
