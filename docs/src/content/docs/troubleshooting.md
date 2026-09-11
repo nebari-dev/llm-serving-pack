@@ -281,12 +281,12 @@ kubectl rollout restart deploy -n envoy-gateway-system envoy-gateway
 
 **Upstream 401 / auth errors from the provider.** The gateway injects the key from `spec.provider.credentialSecretName`. Inspect the credential condition first:
 
-```console
-$ kubectl -n nebari-llm-serving-system get passthroughmodel <name> \
-    -o jsonpath='{range .status.conditions[?(@.type=="CredentialResolved")]}{.status} {.reason}: {.message}{"\n"}{end}'
+```bash
+kubectl -n nebari-llm-serving-system get passthroughmodel <name> \
+  -o jsonpath='{range .status.conditions[?(@.type=="UpstreamCredentialResolved")]}{.status} {.reason}: {.message}{"\n"}{end}'
 ```
 
-`SecretNotFound` means the referenced Secret does not exist in the PassthroughModel's namespace. `APIKeyMissing` means the Secret exists but its `apiKey` entry is absent or empty. Create or update the Secret with that exact key name; the operator watches referenced credential Secrets and refreshes the condition automatically. `Resolved` confirms only that the entry is non-empty. If the provider still returns 401, replace an invalid, expired, or revoked key.
+`SecretNotFound` means the referenced Secret does not exist in the PassthroughModel's namespace. `APIKeyMissing` means the Secret exists but its `apiKey` entry is absent or empty. `LookupFailed` indicates a temporary Kubernetes API or cache read error; inspect the condition message and operator health. Create or update the Secret with that exact key name; the operator watches referenced credential Secrets and refreshes the condition automatically. `Resolved` confirms only that the entry is non-empty. If the provider still returns 401, replace an invalid, expired, or revoked key.
 
 **PassthroughModel stuck with `ApplyFailed`.** This condition usually means the Envoy AI Gateway CRDs are not installed; the operator requeues every minute rather than failing outright. Check the CR and the CRDs:
 

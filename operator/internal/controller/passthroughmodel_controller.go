@@ -43,9 +43,9 @@ import (
 
 // Condition types reported on PassthroughModel status.
 const (
-	// CondCredentialResolved reports whether the provider credential Secret
-	// exists and contains a non-empty apiKey entry.
-	CondCredentialResolved = "CredentialResolved"
+	// CondUpstreamCredentialResolved reports whether the provider Secret has a non-empty API key.
+	// "Upstream" distinguishes it from inbound client API-key Secrets.
+	CondUpstreamCredentialResolved = "UpstreamCredentialResolved"
 	// CondBackendConfigured covers the provider plumbing: Backend,
 	// BackendTLSPolicy, AIServiceBackend, BackendSecurityPolicy.
 	CondBackendConfigured = "BackendConfigured"
@@ -95,10 +95,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	credentialCondition, err := resolvePassthroughCredential(ctx, r.Client, pm)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("resolving provider credential: %w", err)
-	}
+	credentialCondition := resolveUpstreamCredential(ctx, r.Client, pm)
 	conditions := []metav1.Condition{credentialCondition}
 
 	clientIDs, err := apiKeyClientIDs(ctx, r.Client, pm.Name, pm.Namespace)
@@ -360,13 +357,18 @@ func boolOrDefaultStatus(b *bool) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index registration happens before the manager starts its cache.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&llmv1alpha1.PassthroughModel{},
-		passthroughCredentialSecretIndex,
-		indexPassthroughModelByCredentialSecret,
+		upstreamCredentialSecretIndex,
+		indexPassthroughModelByUpstreamCredentialSecret,
 	); err != nil {
 		return fmt.Errorf("indexing PassthroughModels by credential Secret: %w", err)
+	}
+	operatorNamespace := ""
+	if r.Config != nil {
+		operatorNamespace = r.Config.OperatorNamespace
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -381,8 +383,9 @@ func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				return enqueuePassthroughModelsForCredentialSecret(ctx, r.Client, obj)
+				return enqueuePassthroughModelsForUpstreamCredentialSecret(ctx, r.Client, obj)
 			}),
+			builder.WithPredicates(upstreamCredentialSecretInNamespacePredicate(operatorNamespace)),
 		).
 		Named("passthroughmodel").
 		Complete(r)
