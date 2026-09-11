@@ -22,6 +22,12 @@ identity setup. Do not patch generated Envoy deployments or inject custom
 signing proxies. With Argo CD, use the AI Gateway chart's cert-manager option
 for webhook certificates instead of Helm-generated self-signed certificates.
 
+The current deployment uses Envoy Gateway 1.6.7 with AI Gateway 0.5. Upgrade
+the pair together against the [upstream compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/).
+AI Gateway 0.6 removes the legacy use of `schema.version` as an OpenAI URL
+prefix; migrate that behavior before adopting newer releases so existing
+OpenAI-compatible providers retain their paths.
+
 The common code owns Kubernetes resources, model selection, routing, access
 control, and gateway verification. Provider-specific fields stay in their
 typed variant and SDK adapter. In particular, workload identity does not imply
@@ -82,7 +88,8 @@ dev/providers/.venv/bin/python dev/providers/provider.py \
 Every backend runs the same gateway checks: regular and streaming responses,
 HTTP 401 without credentials, and HTTP 403 for the wrong scope. Successful
 responses must contain assistant text; streams also require a finish reason
-and `[DONE]`. Requests use HTTPS with certificate verification and no redirects.
+and `[DONE]`. Each selected model must also appear in `/v1/models`, the catalog
+used by Desktop. Requests use HTTPS with certificate verification and no redirects.
 Tokens and response text are not printed.
 
 Native checks use the caller's cloud credentials; gateway checks exercise the

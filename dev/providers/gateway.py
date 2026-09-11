@@ -62,8 +62,21 @@ def check_sse(response):
         raise ValueError("gateway stream ended without text, finish reason, or [DONE]")
 
 
+def verify_catalog(url, model_id, token, opener=None):
+    opener = opener or build_opener(NoRedirects())
+    url = gateway_url(url).removesuffix("/chat/completions") + "/models"
+    request = Request(url, headers={"Authorization": "Bearer " + token})
+    with opener.open(request, timeout=60) as response:
+        if response.status != 200:
+            raise ValueError(f"gateway catalog returned HTTP {response.status}")
+        result = json.load(response)
+    if model_id not in {model.get("id") for model in result.get("data", [])}:
+        raise ValueError("selected model is absent from the gateway catalog")
+
+
 def verify_gateway(url, model_id, token, denied_token, opener=None):
     opener = opener or build_opener(NoRedirects())
+    base_url = url
     url = gateway_url(url)
     for credential, expected in [(None, 401), (denied_token, 403), (token, 200)]:
         for streaming in [False, True]:
@@ -106,7 +119,9 @@ def verify_gateway(url, model_id, token, denied_token, opener=None):
                         ).strip()
                     ):
                         raise ValueError("gateway did not return assistant text")
+    verify_catalog(base_url, model_id, token, opener)
     return {
+        "catalog": "verified",
         "completion": "verified",
         "stream": "verified",
         "unauthenticated": 401,

@@ -14,7 +14,7 @@ class GatewayTests(unittest.TestCase):
 
         def open_request(request, timeout):
             requests.append(request)
-            body = json.loads(request.data)
+            body = json.loads(request.data) if request.data else None
             auth = request.headers.get("Authorization")
             status = {None: 401, "Bearer wrong-scope": 403, "Bearer permitted": 200}[
                 auth
@@ -22,7 +22,12 @@ class GatewayTests(unittest.TestCase):
             response_body = b"{}"
             content_type = "application/json"
             if status == 200:
-                if body["stream"]:
+                if body is None:
+                    self.assertEqual(
+                        request.full_url, "https://llm.example.com/v1/models"
+                    )
+                    response_body = b'{"object":"list","data":[{"id":"model"}]}'
+                elif body["stream"]:
                     content_type = "text/event-stream"
                     response_body = b'data: {"choices":[{"delta":{"content":null},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
                 else:
@@ -38,9 +43,10 @@ class GatewayTests(unittest.TestCase):
             "https://llm.example.com/v1", "model", "permitted", "wrong-scope", opener
         )
         self.assertEqual(result["wrongScope"], 403)
-        self.assertEqual(len(requests), 6)
+        self.assertEqual(result["catalog"], "verified")
+        self.assertEqual(len(requests), 7)
         self.assertEqual(
-            [json.loads(r.data)["stream"] for r in requests], [False, True] * 3
+            [json.loads(r.data)["stream"] for r in requests[:6]], [False, True] * 3
         )
 
         def unauthenticated(*args, **kw):
@@ -53,6 +59,22 @@ class GatewayTests(unittest.TestCase):
             gateway.verify_gateway(
                 "https://llm.example.com", "model", "permitted", "wrong-scope", opener
             )
+
+    def test_catalog_requires_selected_model(self):
+        for status, body, error in [
+            (200, b'{"data":[{"id":"another-model"}]}', "absent"),
+            (200, b'{"data":[]}', "absent"),
+            (503, b"{}", "HTTP 503"),
+        ]:
+            with self.subTest(status=status, body=body):
+                response = io.BytesIO(body)
+                response.status = status
+                opener = MagicMock()
+                opener.open.return_value = response
+                with self.assertRaisesRegex(ValueError, error):
+                    gateway.verify_catalog(
+                        "https://llm.example.com", "model", "token", opener
+                    )
 
     def test_sse_rejects_truncated_or_error_responses(self):
         for body in [
