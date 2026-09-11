@@ -23,6 +23,10 @@ Disabling a provider endpoint removes its route and catalog entries. Its auth
 policy stays until the generated HTTPRoute is gone, and issued keys are preserved
 for re-enabling the endpoint.
 
+If the gateway is already on a supported release and only the pack is changing,
+roll the AI Gateway controller after installing the new operator. This lets it
+restore cleanup finalizers that older pack operators removed from its resources.
+
 ## Upgrade an installation on AI Gateway 0.5
 
 Follow the upstream [controller upgrade policy](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/RELEASES.md#upgrading-the-envoy-ai-gateway-controller)
