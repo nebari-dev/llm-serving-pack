@@ -15,6 +15,8 @@ This is a design-complete specification for a v1 that includes the policy engine
 **Name in the UI:** Gateway.
 **Request-path filter:** Warden.
 
+**Upstream naming:** Envoy AI Gateway is being renamed Agent Router. This document uses the older name; treat them as the same project and verify CRD and chart names against the current upstream release.
+
 ---
 
 ## 1. Summary

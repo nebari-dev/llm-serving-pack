@@ -4,6 +4,8 @@ A hackathon challenge: build a control plane and operations console for [Envoy A
 
 > One endpoint in front of every model, where every request is routed by policy, metered in dollars, and recorded as evidence.
 
+> **Naming note:** Envoy AI Gateway is being renamed **Agent Router**. The spec and this README still say "Envoy AI Gateway" throughout. Read the two names as the same project, and expect upstream docs, CRD names, and Helm charts to shift as the rename lands.
+
 **Fork this repo to take part.** It ships with the spec in [`docs/spec.md`](docs/spec.md) and nothing else. What you build on top of it is up to you.
 
 ## The challenge
