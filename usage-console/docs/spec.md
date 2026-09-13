@@ -10,7 +10,7 @@ Spec v0.1 · Draft for review
 
 This is a design-complete specification for a v1 that includes the policy engine. Anything marked **VERIFY** is an assumption that must be tested against Envoy AI Gateway v1.x before it hardens into a dependency.
 
-**Internal codename:** Project Stargate. Internal use only — it does not appear in the UI, the repo name, docs, or anything published.
+**Codename:** Project Stargate. Use it for the repo and hackathon chatter; it stays out of the UI and any shipped docs.
 **Shipping name:** Nebari Gateway Console.
 **Name in the UI:** Gateway.
 **Request-path filter:** Warden.

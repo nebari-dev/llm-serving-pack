@@ -1,14 +1,14 @@
-# Nebari Gateway Console
+# Project Stargate
 
-A control plane and operations console for [Envoy AI Gateway](https://aigateway.envoyproxy.io/).
+A hackathon challenge: build a control plane and operations console for [Envoy AI Gateway](https://aigateway.envoyproxy.io/).
 
 > One endpoint in front of every model, where every request is routed by policy, metered in dollars, and recorded as evidence.
 
-This repo is a hackathon workspace for building the console described in [`docs/spec.md`](docs/spec.md). The spec is the source of truth. Read it before writing code, and keep it updated when a decision changes.
+**Fork this repo to take part.** It ships with the spec in [`docs/spec.md`](docs/spec.md) and nothing else. What you build on top of it is up to you.
 
-## What we're building
+## The challenge
 
-Envoy AI Gateway gives you a provider-agnostic data plane: one OpenAI-compatible API, cross-provider translation, fallback, token-aware rate limiting, quota policy, sealed upstream credentials, and an MCP gateway. What it does not give you is an operations surface. This project builds that surface plus two request-path capabilities the gateway leaves open:
+Envoy AI Gateway gives you a provider-agnostic data plane: one OpenAI-compatible API, cross-provider translation, fallback, token-aware rate limiting, quota policy, sealed upstream credentials, and an MCP gateway. What it does not give you is an operations surface. The spec describes one, shipping as the **Nebari Gateway Console**, plus two request-path capabilities the gateway leaves open:
 
 1. **Outbound data protection.** Detect and redact sensitive data before egress, rehydrate on return.
 2. **Inbound response inspection.** Treat model output as untrusted: prompt-injection artifacts, rogue tool calls, exfiltration patterns.
@@ -23,6 +23,8 @@ Three audiences read the same request stream through different lenses:
 
 ## Architecture at a glance
 
+The spec proposes this shape. Treat it as a starting point, not a mandate.
+
 - **Console UI** — React 19, TypeScript, Tailwind v4, nebari-design. Talks to the control plane over REST + SSE with a typed client generated from OpenAPI.
 - **Control plane (Go)** — API server, reconciler (server-side apply to AI Gateway CRDs), policy compiler, snapshot service, receipt query.
 - **Warden (Go)** — the Envoy `ext_proc` filter. The only new component in the request path.
@@ -31,6 +33,8 @@ Three audiences read the same request stream through different lenses:
 Full component map, resource-ownership model, and data model are in spec §4 and §5.
 
 ## Delivery phases
+
+The spec lays out five phases. For a hackathon, Phase 0 and Phase 1 are the realistic target. Anything past that is a stretch goal.
 
 | Phase | Focus | Exit criterion |
 |---|---|---|
@@ -42,16 +46,14 @@ Full component map, resource-ownership model, and data model are in spec §4 and
 
 The riskiest work is in the request path, so it goes first. Nothing about the UI can be validated on fabricated data.
 
-## Ground rules
+## Things worth knowing before you start
 
 - **The console must never become the only way to operate the gateway.** Every console-owned resource exports to YAML. Deleting the console leaves a working gateway.
 - Anything marked **VERIFY** in the spec is an assumption. Test it against Envoy AI Gateway 1.x before depending on it.
-- Read spec §13 (implementation gotchas) before touching buffers, pricing, streaming token counts, or session IDs.
+- Spec §13 lists implementation gotchas around buffer limits, price snapshots, streaming token counts, and session IDs. Read it before you hit them the hard way.
 
 ## Repo layout
 
 ```
 docs/spec.md    The specification. Start here.
 ```
-
-Application code lands in follow-up commits as the hackathon progresses.
