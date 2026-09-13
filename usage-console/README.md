@@ -23,9 +23,18 @@ Three audiences read the same request stream through different lenses:
 | Finance / FinOps | Know where the money went, cap it |
 | Security / compliance | Prove what left the perimeter |
 
+## What's fixed and what's up to you
+
+Two things are non-negotiable:
+
+1. **Envoy AI Gateway (Agent Router) is the data plane.** Build on it, don't replace it.
+2. **A really nice, genuinely useful UI.** That's the point of the exercise. Judge every decision by whether it makes the console better to use.
+
+Everything else in the spec is a suggested implementation. The design system, the database, the control-plane language, the receipt store, and the telemetry pipeline are all fair game to swap if you have a good reason or just know something else better. Keep the intent of the spec (receipts, ownership visibility, export to YAML) and pick the tools that get you there fastest.
+
 ## Architecture at a glance
 
-The spec proposes this shape. Treat it as a starting point, not a mandate.
+The spec's suggested shape:
 
 - **Console UI** — React 19, TypeScript, Tailwind v4, nebari-design. Talks to the control plane over REST + SSE with a typed client generated from OpenAPI.
 - **Control plane (Go)** — API server, reconciler (server-side apply to AI Gateway CRDs), policy compiler, snapshot service, receipt query.
