@@ -79,6 +79,9 @@ func TestWatcher_BedrockIdentityAndGroupFilter(t *testing.T) {
 			Type: llmv1alpha1.BackendBedrock, Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
 		},
 	}
+	// The operator publishes the resolved address; the key-manager displays
+	// it without resolving (or linking) any provider backend itself.
+	pm.Status.ProviderHostname = "bedrock-runtime.us-west-2.amazonaws.com"
 	fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(pm).Build()
 	w := models.NewWatcher(fakeClient)
 	if err := w.Sync(context.Background()); err != nil {

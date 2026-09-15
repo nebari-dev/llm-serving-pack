@@ -8,6 +8,7 @@ import (
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
 // PassthroughResources holds every resource generated for a PassthroughModel.
@@ -24,6 +25,10 @@ type PassthroughResources struct {
 
 	APIKeySecret     *corev1.Secret
 	APIKeyMetadataCM *corev1.ConfigMap
+
+	// ProviderHostname is the resolved upstream address, published to
+	// PassthroughModelStatus so display clients never resolve providers.
+	ProviderHostname string
 
 	ExternalRoute          *unstructured.Unstructured // nil if external disabled
 	InternalRoute          *unstructured.Unstructured // nil if internal disabled
@@ -47,7 +52,7 @@ func PassthroughStandardLabels(pm *llmv1alpha1.PassthroughModel) map[string]stri
 // for the given PassthroughModel. No serving, storage, or scheduling
 // resources are involved; the provider serves the models, we route to it.
 func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.OperatorConfig, clientIDs []string, credentialSecretNames []string) (*PassthroughResources, error) {
-	provider, err := pm.Spec.Provider.Resolve()
+	rp, err := provider.Resolve(pm.Spec.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -61,10 +66,11 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 	authLabels["llm.nebari.dev/model-name"] = pm.Name
 
 	result := &PassthroughResources{
-		Backend:               buildProviderBackend(pm, labels, provider),
-		BackendTLSPolicy:      buildProviderBackendTLSPolicy(pm, labels, provider),
-		AIServiceBackend:      buildProviderAIServiceBackend(pm, labels, provider),
-		BackendSecurityPolicy: buildProviderBackendSecurityPolicy(pm, labels, provider),
+		ProviderHostname:      rp.Hostname,
+		Backend:               buildProviderBackend(pm, labels, rp),
+		BackendTLSPolicy:      buildProviderBackendTLSPolicy(pm, labels, rp),
+		AIServiceBackend:      buildProviderAIServiceBackend(pm, labels, rp),
+		BackendSecurityPolicy: buildProviderBackendSecurityPolicy(pm, labels, rp),
 		APIKeySecret: &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      APIKeySecretName(pm.Name),
@@ -84,7 +90,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 
 	if boolOrDefault(pm.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildPassthroughRoute(
-			pm.Name+"-external",
+			PassthroughRouteName(pm.Name, "external"),
 			pm,
 			labels,
 			cfg.ExternalGatewayName,
@@ -93,10 +99,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			SharedExternalHostname(cfg.BaseDomain),
 		)
 		result.ExternalSecurityPolicy = buildAPIKeyAuthSecurityPolicy(
-			pm.Name+"-external-auth",
+			PassthroughAuthPolicyName(pm.Name, "external"),
 			pm.Namespace,
 			labelsToInterface(labels),
-			pm.Name+"-external",
+			PassthroughRouteName(pm.Name, "external"),
 			credentialSecretNames,
 			clientIDs,
 		)
@@ -104,7 +110,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 
 	if boolOrDefault(pm.Spec.Endpoints.Internal.Enabled, true) {
 		result.InternalRoute = buildPassthroughRoute(
-			pm.Name+"-internal",
+			PassthroughRouteName(pm.Name, "internal"),
 			pm,
 			labels,
 			cfg.InternalGatewayName,
@@ -113,10 +119,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			SharedInternalHostname(cfg.BaseDomain),
 		)
 		result.InternalSecurityPolicy = buildJWTSecurityPolicy(
-			pm.Name+"-internal-auth",
+			PassthroughAuthPolicyName(pm.Name, "internal"),
 			pm.Namespace,
 			labelsToInterface(labels),
-			pm.Name+"-internal",
+			PassthroughRouteName(pm.Name, "internal"),
 			cfg,
 			isPublicAccess(pm.Spec.Access),
 			pm.Spec.Access.Groups,
@@ -135,7 +141,7 @@ func providerBackendName(pm *llmv1alpha1.PassthroughModel) string {
 	return pm.Name + "-backend"
 }
 
-func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
+func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, rp *provider.Resolved) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
@@ -149,8 +155,8 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 				"endpoints": []interface{}{
 					map[string]interface{}{
 						"fqdn": map[string]interface{}{
-							"hostname": provider.Hostname,
-							"port":     int64(provider.Port),
+							"hostname": rp.Hostname,
+							"port":     int64(rp.Port),
 						},
 					},
 				},
@@ -159,7 +165,7 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 	}
 }
 
-func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
+func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, rp *provider.Resolved) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			// BackendTLSPolicy is GA as v1 in the Gateway API Standard channel
@@ -182,20 +188,20 @@ func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[
 				},
 				"validation": map[string]interface{}{
 					"wellKnownCACertificates": "System",
-					"hostname":                provider.Hostname,
+					"hostname":                rp.Hostname,
 				},
 			},
 		},
 	}
 }
 
-func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
-	schema := map[string]interface{}{"name": provider.SchemaName}
-	if provider.SchemaVersion != "" {
-		schema["version"] = provider.SchemaVersion
+func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]string, rp *provider.Resolved) *unstructured.Unstructured {
+	schema := map[string]interface{}{"name": rp.SchemaName}
+	if rp.SchemaVersion != "" {
+		schema["version"] = rp.SchemaVersion
 	}
-	if provider.SchemaPrefix != "" {
-		schema["prefix"] = provider.SchemaPrefix
+	if rp.SchemaPrefix != "" {
+		schema["prefix"] = rp.SchemaPrefix
 	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -218,8 +224,8 @@ func buildProviderAIServiceBackend(pm *llmv1alpha1.PassthroughModel, labels map[
 	}
 }
 
-func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, provider *llmv1alpha1.ResolvedProvider) *unstructured.Unstructured {
-	spec := runtime.DeepCopyJSON(provider.SecurityPolicy)
+func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string, rp *provider.Resolved) *unstructured.Unstructured {
+	spec := runtime.DeepCopyJSON(rp.SecurityPolicy)
 	spec["targetRefs"] = []interface{}{map[string]interface{}{
 		"group": "aigateway.envoyproxy.io",
 		"kind":  "AIServiceBackend",

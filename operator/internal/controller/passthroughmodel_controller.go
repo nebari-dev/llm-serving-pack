@@ -111,7 +111,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			Reason:  "BuildFailed",
 			Message: err.Error(),
 		}
-		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, []metav1.Condition{buildCond}); statusErr != nil {
+		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, "", []metav1.Condition{buildCond}); statusErr != nil {
 			log.Error(statusErr, "failed to update status after build error")
 		}
 		return ctrl.Result{}, fmt.Errorf("building passthrough resources: %w", err)
@@ -129,9 +129,9 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	// Gateway kinds tolerate a missing CRD: a failed apply does not fail the
-	// whole reconcile. Unlike the LLMModel reconciler (which only logs and
-	// moves on), each failure is captured in a status condition and the
-	// reconcile is requeued so the resources are retried once the CRDs exist.
+	// whole reconcile. Each failure is captured in a status condition and the
+	// reconcile is requeued so the resources are retried once the CRDs exist
+	// (the same surface-and-requeue convention as the LLMModel reconciler).
 	conditions := []metav1.Condition{}
 	cleanupPending := false
 
@@ -172,19 +172,30 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	phase := llmv1alpha1.PassthroughPhaseReady
+	crdPending := false
 	for _, c := range conditions {
-		if c.Status == metav1.ConditionFalse && c.Reason == reasonApplyFailed {
+		if c.Status != metav1.ConditionFalse {
+			continue
+		}
+		switch c.Reason {
+		case reasonApplyFailed:
 			phase = llmv1alpha1.PassthroughPhaseError
+		case reasonGatewayCRDUnavailable:
+			// Expected during install ordering on a fresh cluster; the
+			// endpoint is still not usable, so the phase reads Error.
+			phase = llmv1alpha1.PassthroughPhaseError
+			crdPending = true
 		}
 	}
 
-	if err := r.updateStatus(ctx, log, pm, phase, conditions); err != nil {
+	if err := r.updateStatus(ctx, log, pm, phase, resources.ProviderHostname, conditions); err != nil {
 		return ctrl.Result{}, err
 	}
 
+	if crdPending {
+		return ctrl.Result{RequeueAfter: gatewayCRDRequeue}, nil
+	}
 	if phase == llmv1alpha1.PassthroughPhaseError {
-		// Retry: the usual cause is the AI Gateway CRDs not being
-		// installed yet (install ordering on a fresh cluster).
 		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	if cleanupPending {
@@ -241,7 +252,7 @@ func (r *PassthroughModelReconciler) applyAll(ctx context.Context, log controlle
 		if err := controllerutil.SetControllerReference(owner, obj, r.Scheme); err != nil {
 			return fmt.Errorf("setting owner on %s/%s: %w", obj.GetKind(), obj.GetName(), err)
 		}
-		if err := r.createOrUpdateUnstructured(ctx, obj); err != nil {
+		if err := createOrUpdateUnstructured(ctx, r.Client, obj); err != nil {
 			log.Error(err, "failed to reconcile resource - CRD may not be installed",
 				"kind", obj.GetKind(), "name", obj.GetName())
 			if firstErr == nil {
@@ -280,28 +291,16 @@ func (r *PassthroughModelReconciler) createOrUpdateConfigMap(ctx context.Context
 	return r.Update(ctx, existing)
 }
 
-func (r *PassthroughModelReconciler) createOrUpdateUnstructured(ctx context.Context, obj *unstructured.Unstructured) error {
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(obj.GroupVersionKind())
-	err := r.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, obj)
-	}
-	if err != nil {
-		return err
-	}
-	obj.SetResourceVersion(existing.GetResourceVersion())
-	// Upstream controllers own their cleanup finalizers, including catalog removal.
-	obj.SetFinalizers(existing.GetFinalizers())
-	return r.Update(ctx, obj)
-}
-
 func conditionFor(condType string, err error, okMessage string) metav1.Condition {
 	if err != nil {
+		reason := reasonApplyFailed
+		if meta.IsNoMatchError(err) {
+			reason = reasonGatewayCRDUnavailable
+		}
 		return metav1.Condition{
 			Type:    condType,
 			Status:  metav1.ConditionFalse,
-			Reason:  reasonApplyFailed,
+			Reason:  reason,
 			Message: err.Error(),
 		}
 	}
@@ -327,6 +326,7 @@ func (r *PassthroughModelReconciler) updateStatus(
 	log controllerLogger,
 	pm *llmv1alpha1.PassthroughModel,
 	phase llmv1alpha1.PassthroughModelPhase,
+	providerHostname string,
 	conditions []metav1.Condition,
 ) error {
 	fresh := &llmv1alpha1.PassthroughModel{}
@@ -336,6 +336,9 @@ func (r *PassthroughModelReconciler) updateStatus(
 
 	fresh.Status.Phase = phase
 	fresh.Status.ObservedGeneration = fresh.Generation
+	// Empty on a build failure: the provider could not be resolved, so no
+	// address is claimed. Display clients read this instead of resolving.
+	fresh.Status.ProviderHostname = providerHostname
 	for _, c := range conditions {
 		c.ObservedGeneration = fresh.Generation
 		meta.SetStatusCondition(&fresh.Status.Conditions, c)

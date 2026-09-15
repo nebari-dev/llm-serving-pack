@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
 // Shared literals for the passthrough fixtures, named to avoid colliding
@@ -100,8 +101,8 @@ func TestUpstreamAuthBuilderDoesNotAssumeAWS(t *testing.T) {
 		"type":                   "FutureCloudCredentials",
 		"futureCloudCredentials": map[string]interface{}{"audience": "example"},
 	}
-	provider := &llmv1alpha1.ResolvedProvider{SecurityPolicy: settings}
-	policy := buildProviderBackendSecurityPolicy(testPassthroughModel(), nil, provider)
+	rp := &provider.Resolved{SecurityPolicy: settings}
+	policy := buildProviderBackendSecurityPolicy(testPassthroughModel(), nil, rp)
 	spec := specMap(t, policy)
 	if spec["type"] != settings["type"] || !reflect.DeepEqual(spec["futureCloudCredentials"], settings["futureCloudCredentials"]) {
 		t.Fatalf("provider policy was changed: %#v", spec)

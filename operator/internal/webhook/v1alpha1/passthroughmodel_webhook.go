@@ -34,6 +34,7 @@ import (
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
 // nolint:unused
@@ -193,7 +194,7 @@ func validatePassthroughAccess(pm *llmv1alpha1.PassthroughModel) error {
 // validateProvider rejects obviously broken provider configs the CRD schema
 // alone cannot express.
 func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
-	_, err := pm.Spec.Provider.Resolve()
+	_, err := provider.Resolve(pm.Spec.Provider)
 	return err
 }
 

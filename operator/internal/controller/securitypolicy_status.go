@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +18,10 @@ import (
 const (
 	condSecurityPoliciesReady = "SecurityPoliciesReady"
 	reasonApplyFailed         = "ApplyFailed"
+	// A missing AI Gateway CRD is one state with one description: both
+	// controllers report it with this reason and retry on this interval.
+	reasonGatewayCRDUnavailable = "GatewayCRDUnavailable"
+	gatewayCRDRequeue           = 15 * time.Second
 )
 
 // Missing CRDs do not block serving-stack installation, but must be retried.
@@ -26,7 +31,7 @@ func (r *LLMModelReconciler) reconcileSecurityPolicies(ctx context.Context, mode
 		if policy == nil {
 			continue
 		}
-		if applyErr := r.createOrUpdateUnstructured(ctx, policy); applyErr != nil {
+		if applyErr := createOrUpdateUnstructured(ctx, r.Client, policy); applyErr != nil {
 			if meta.IsNoMatchError(applyErr) {
 				pending = true
 			} else {
@@ -42,7 +47,7 @@ func (r *LLMModelReconciler) reconcileSecurityPolicies(ctx context.Context, mode
 	if err != nil {
 		condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, reasonApplyFailed, err.Error()
 	} else if pending {
-		condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, "GatewayCRDUnavailable", "SecurityPolicy CRD is not installed; waiting to apply endpoint authentication"
+		condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, reasonGatewayCRDUnavailable, "SecurityPolicy CRD is not installed; waiting to apply endpoint authentication"
 	}
 	fresh := &llmv1alpha1.LLMModel{}
 	if statusErr := r.Get(ctx, client.ObjectKeyFromObject(model), fresh); statusErr != nil {

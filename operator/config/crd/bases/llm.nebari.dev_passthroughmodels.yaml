@@ -18,7 +18,7 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .spec.provider.hostname
+    - jsonPath: .status.providerHostname
       name: Provider
       type: string
     - jsonPath: .metadata.creationTimestamp
@@ -176,9 +176,11 @@ spec:
                   schemaVersion:
                     default: v1
                     description: |-
-                      schemaVersion is the upstream API path prefix passed to the
-                      AIServiceBackend OpenAI schema, e.g. "api/v1" for OpenRouter or
-                      "v1" for api.openai.com.
+                      schemaVersion is the upstream API schema version, passed through to
+                      the AIServiceBackend schema for backends that take one. The OpenAI
+                      backend uses it as the URL path prefix, e.g. "api/v1" for OpenRouter
+                      or "v1" for api.openai.com. Versionless backends (Bedrock Converse)
+                      reject values other than the CRD default.
                     type: string
                 type: object
             required:
@@ -265,6 +267,12 @@ spec:
                 enum:
                 - Ready
                 - Error
+                type: string
+              providerHostname:
+                description: |-
+                  providerHostname is the resolved upstream address, e.g. the regional
+                  Bedrock runtime endpoint. Display clients such as the key-manager read
+                  it from here; only the operator resolves provider backends.
                 type: string
             type: object
         required:

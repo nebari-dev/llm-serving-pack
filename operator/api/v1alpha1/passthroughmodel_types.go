@@ -63,9 +63,11 @@ type ProviderSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int32 `json:"port,omitempty"`
-	// schemaVersion is the upstream API path prefix passed to the
-	// AIServiceBackend OpenAI schema, e.g. "api/v1" for OpenRouter or
-	// "v1" for api.openai.com.
+	// schemaVersion is the upstream API schema version, passed through to
+	// the AIServiceBackend schema for backends that take one. The OpenAI
+	// backend uses it as the URL path prefix, e.g. "api/v1" for OpenRouter
+	// or "v1" for api.openai.com. Versionless backends (Bedrock Converse)
+	// reject values other than the CRD default.
 	// +kubebuilder:default=v1
 	// +optional
 	SchemaVersion string `json:"schemaVersion,omitempty"`
@@ -166,12 +168,17 @@ type PassthroughModelStatus struct {
 	// endpoints contains the shared endpoint URLs
 	// +optional
 	Endpoints EndpointStatus `json:"endpoints,omitempty"`
+	// providerHostname is the resolved upstream address, e.g. the regional
+	// Bedrock runtime endpoint. Display clients such as the key-manager read
+	// it from here; only the operator resolves provider backends.
+	// +optional
+	ProviderHostname string `json:"providerHostname,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.spec.provider.hostname`
+// +kubebuilder:printcolumn:name="Provider",type=string,JSONPath=`.status.providerHostname`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // PassthroughModel is the Schema for the passthroughmodels API

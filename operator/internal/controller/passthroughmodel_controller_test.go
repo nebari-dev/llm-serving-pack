@@ -142,7 +142,8 @@ var _ = Describe("PassthroughModel Controller", func() {
 			Expect(k8sClient.Get(ctx, req.NamespacedName, pm)).To(Succeed())
 
 			// No AI Gateway CRDs in envtest: every gateway apply fails, so
-			// phase is Error and conditions carry ApplyFailed.
+			// phase is Error and conditions carry GatewayCRDUnavailable
+			// (the same reason the LLMModel reconciler reports for this state).
 			Expect(pm.Status.Phase).To(Equal(llmv1alpha1.PassthroughPhaseError))
 			var backendCond *metav1.Condition
 			for i := range pm.Status.Conditions {
@@ -152,10 +153,12 @@ var _ = Describe("PassthroughModel Controller", func() {
 			}
 			Expect(backendCond).NotTo(BeNil())
 			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
-			Expect(backendCond.Reason).To(Equal("ApplyFailed"))
+			Expect(backendCond.Reason).To(Equal(reasonGatewayCRDUnavailable))
 
 			Expect(pm.Status.Endpoints.External).To(Equal("https://llm.example.com"))
 			Expect(pm.Status.Endpoints.Internal).To(Equal("https://llm-internal.example.com"))
+			// The resolved address is published for display clients (key-manager).
+			Expect(pm.Status.ProviderHostname).To(Equal("openrouter.ai"))
 			Expect(pm.Status.ObservedGeneration).To(Equal(pm.Generation))
 
 			disabled := false
