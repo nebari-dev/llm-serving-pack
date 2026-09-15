@@ -3,7 +3,9 @@
 import io
 import json
 import unittest
-from unittest.mock import MagicMock
+from email.message import Message
+from unittest.mock import MagicMock, patch
+from urllib.request import HTTPRedirectHandler, Request
 
 import gateway
 
@@ -103,6 +105,40 @@ class GatewayTests(unittest.TestCase):
         ):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 gateway.check_sse(io.BytesIO(body))
+
+    def test_sse_bounds_trickling_streams_by_lines_and_elapsed_time(self):
+        def trickle():
+            while True:
+                yield b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":null}]}\n'
+                yield b"\n"
+
+        with self.assertRaisesRegex(ValueError, "budget"):
+            gateway.check_sse(trickle(), max_lines=10)
+        # One reading for the deadline, then a first line past it.
+        with patch.object(gateway.time, "monotonic", side_effect=[0.0, 61.0]):
+            with self.assertRaisesRegex(ValueError, "budget"):
+                gateway.check_sse(trickle())
+
+    def test_redirects_are_never_followed_with_gateway_credentials(self):
+        request = Request(
+            "https://llm.example.com/v1/chat/completions",
+            data=b"{}",
+            headers={"Authorization": "Bearer permitted"},
+            method="POST",
+        )
+        headers = Message()
+        headers["Location"] = "https://evil.example/v1/chat/completions"
+        arguments = (
+            request,
+            io.BytesIO(b""),
+            302,
+            "Found",
+            headers,
+            headers["Location"],
+        )
+        # The stdlib handler would follow this redirect; ours must not.
+        self.assertIsNotNone(HTTPRedirectHandler().redirect_request(*arguments))
+        self.assertIsNone(gateway.NoRedirects().redirect_request(*arguments))
 
     def test_rejects_gateway_urls_that_could_leak_credentials(self):
         for url in [

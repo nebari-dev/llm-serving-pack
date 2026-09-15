@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -33,11 +34,16 @@ def gateway_url(value):
     return value.rstrip("/").removesuffix("/v1") + "/v1/chat/completions"
 
 
-def check_sse(response):
+def check_sse(response, timeout=60, max_lines=1000):
+    # The socket timeout bounds each read, not the stream. Bound total time
+    # and lines so a gateway trickling data cannot block verification.
+    deadline = time.monotonic() + timeout
     text, finished, done = False, False, False
     data = []
     line_complete = False
-    for raw in response:
+    for count, raw in enumerate(response, start=1):
+        if count > max_lines or time.monotonic() > deadline:
+            raise ValueError("gateway stream exceeded the verification budget")
         line_complete = raw.endswith(b"\n")
         line = raw.decode("utf-8").rstrip("\r\n")
         if line.startswith("data:"):

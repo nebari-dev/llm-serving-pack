@@ -1,5 +1,6 @@
 """The small interface implemented by each provider's SDK adapter."""
 
+import argparse
 from typing import Protocol
 
 PROMPT = "Reply with one short greeting."
@@ -11,6 +12,15 @@ class ProviderError(Exception):
 
 
 class Provider(Protocol):
+    @staticmethod
+    def add_arguments(parser: argparse.ArgumentParser) -> None:
+        """Register backend-specific CLI options; called on the class before parsing."""
+        ...
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        """Build the adapter from parsed arguments, deferring network calls."""
+        ...
+
     def provider_spec(self) -> dict:
         """Return the PassthroughModel provider settings, never credential values."""
         ...
