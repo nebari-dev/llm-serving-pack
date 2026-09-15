@@ -47,6 +47,22 @@ describe('architecture: PassthroughModel embed', () => {
   });
 });
 
+describe('ExampleCode adoption', () => {
+  it('every page embedding examples uses ExampleCode, not astro:components', () => {
+    for (const name of [
+      'architecture.mdx',
+      'bedrock.mdx',
+      'configuration.mdx',
+      'quickstart.mdx',
+      'shared-storage.mdx',
+    ]) {
+      const page = readPage(name);
+      expect(page).toContain("import Code from '../../components/ExampleCode.astro'");
+      expect(page).not.toContain('astro:components');
+    }
+  });
+});
+
 describe('new example manifests', () => {
   it('minimal.yaml uses the operator namespace the webhook requires', () => {
     const m = readExample('models/minimal.yaml');

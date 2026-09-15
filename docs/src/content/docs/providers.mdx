@@ -47,7 +47,9 @@ dev/providers/.venv/bin/python dev/providers/provider.py --help
 dev/providers/.venv/bin/python dev/providers/provider.py --backend bedrock --help
 ```
 
-Each adapter provides three operations:
+Each adapter is a class with two CLI hooks and three operations. The class
+provides `add_arguments(parser)` (a static method that registers its own CLI
+options) and a constructor taking the parsed arguments. Instances provide:
 
 | Operation | Result |
 | --- | --- |
@@ -107,10 +109,14 @@ Keep each follow-up PR focused on one backend:
 
 1. Add its typed `ProviderBackend` variant and enum value. Add a credential
    variant only if the existing choices cannot describe its authentication.
-2. Add a resolver beside `provider_openai.go` and `provider_bedrock.go`, and
-   dispatch to it from `ProviderSpec.Resolve`. Use provider-owned endpoint rules
-   where available. Return the address, Envoy schema, and upstream security
-   policy settings; do not add cloud-specific fields to `ResolvedProvider`.
+2. Add a resolver beside `openai.go` and `bedrock.go` in
+   `operator/internal/provider`, and dispatch to it from `provider.Resolve`.
+   Use provider-owned endpoint rules where available. Return the address, Envoy
+   schema, and upstream security policy settings; do not add cloud-specific
+   fields to `Resolved`, and do not import SDKs from `api/v1alpha1`. The
+   operator publishes the resolved address on `PassthroughModelStatus`, so
+   nothing outside it (key-manager included) resolves providers or links
+   their SDKs.
 3. Add an SDK adapter under `dev/providers/backends` and register it in
    `provider.py`. Implement the three operations above and expose only its
    required SDK options. Raise `ProviderError` with a credential-safe error code.

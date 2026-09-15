@@ -279,7 +279,7 @@ kubectl rollout restart deploy -n envoy-gateway-system envoy-gateway
 
 ## External provider (PassthroughModel) not working
 
-**Upstream 401 / auth errors from the provider.** The gateway injects the key from `spec.provider.credentialSecretName`. Confirm the Secret exists in the operator namespace and has an `apiKey` key:
+**Upstream 401 / auth errors from an OpenAI-compatible provider.** The gateway injects the key from `spec.provider.credentialSecretName`. Confirm the Secret exists in the operator namespace and has an `apiKey` key:
 
 ```bash
 kubectl -n nebari-llm-serving-system get secret <credentialSecretName> \
@@ -288,7 +288,17 @@ kubectl -n nebari-llm-serving-system get secret <credentialSecretName> \
 
 If empty or the wrong key name, recreate it: the key MUST be named `apiKey`.
 
-**PassthroughModel stuck with `ApplyFailed`.** This condition usually means the Envoy AI Gateway CRDs are not installed; the operator requeues every minute rather than failing outright. Check the CR and the CRDs:
+**Upstream auth errors from Bedrock (SigV4 signing failures, `AccessDeniedException`, `UnrecognizedClientException`).** A Bedrock provider authenticates with workload identity; there is no upstream credential Secret to check (the webhook rejects `credentialSecretName` on workload identity). The AWS identity belongs to the Envoy data-plane pod running the AI Gateway `extproc` container, not the operator. Check the EKS Pod Identity association or IRSA annotation on the data-plane ServiceAccount, that the role grants `bedrock:InvokeModel` / `bedrock:InvokeModelWithResponseStream` for the declared models, and that `spec.provider.backend.bedrock.region` matches where the models are enabled:
+
+```bash
+aws eks list-pod-identity-associations --cluster-name <cluster>
+kubectl -n envoy-gateway-system get sa \
+  -o custom-columns='NAME:.metadata.name,ROLE:.metadata.annotations.eks\.amazonaws\.com/role-arn'
+```
+
+The `<name>-api-keys` Secret is the key-manager's user API-key store, not an upstream credential; a 401 issued by the gateway itself points at the user's minted key, not the AWS identity.
+
+**PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
 ```bash
 kubectl -n nebari-llm-serving-system get passthroughmodel <name> \

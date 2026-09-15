@@ -1,7 +1,7 @@
 ---
 title: AWS Bedrock
 ---
-import { Code } from 'astro:components';
+import Code from '../../components/ExampleCode.astro';
 import bedrockExample from '../../../../examples/passthrough-bedrock.yaml?raw';
 
 Use Bedrock models through the pack's existing `/v1/chat/completions` API.
@@ -78,7 +78,11 @@ Gateway configuration and listeners when integrating with a shared cluster.
 
 The operator resolves regional endpoints with the AWS SDK for Go v2. It does
 not maintain AWS hostname suffixes or a region allowlist, and admission does
-not contact AWS or load credentials.
+not contact AWS or load credentials. `spec.provider.hostname` overrides the
+resolved address for private endpoints; SigV4 still signs for
+`spec.provider.backend.bedrock.region`, so an AWS-owned override (an
+`amazonaws` name, including VPC endpoint DNS) must contain that region and a
+cross-region override is rejected at admission.
 
 Grant the gateway role `bedrock:InvokeModel` and
 `bedrock:InvokeModelWithResponseStream` for the selected models. Cross-region
@@ -93,14 +97,14 @@ required by the pack operator.
 
 See [AWS's Pod Identity guide](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html),
 [AWS's IRSA guide](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html),
-and [Envoy AI Gateway's AWS setup](https://aigateway.envoyproxy.io/docs/0.5/getting-started/connect-providers/aws-bedrock/).
+and [Envoy AI Gateway's Connect AWS Bedrock guide](https://theagentrouter.ai/docs/getting-started/connect-providers/aws-bedrock/).
 
 ## Create a provider
 
 The following manifest shows the interface; model availability depends on the
 account and region. Replace its IDs with those discovered and verified above.
 
-<Code code={bedrockExample} lang="yaml" />
+<Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
 
 To generate a manifest using IDs from the current catalog:
 
@@ -118,14 +122,16 @@ normal deployment process. The command never applies resources. Repeat
 discovery when updating the model list; the operator does not poll AWS.
 
 Both endpoints are enabled by default. Declare every model ID explicitly:
-Envoy AI Gateway v0.5 does not route undeclared IDs through `catchAll`.
+whether an undeclared ID reaches the provider through `catchAll` depends on
+the gateway ext-proc's model registry and is not guaranteed.
 The operator configures `schema.name: AWSBedrock` and an `AWSCredentials`
 policy containing only `region`. It creates no upstream credential Secret.
 Its per-provider user API-key Secret is separate and still required for
 external client authentication.
 
-An existing cluster needs this PR's CRD and operator before applying the
-manifest. Helm does not upgrade installed CRDs automatically; update the
+An existing cluster needs the pack release that introduces the Bedrock backend
+and credential fields in the `PassthroughModel` CRD, plus the matching operator,
+before applying the manifest. Helm does not upgrade installed CRDs automatically; update the
 `PassthroughModel` CRD through your cluster's CRD deployment process.
 `Ready` means the operator applied resources, not that it successfully called AWS.
 

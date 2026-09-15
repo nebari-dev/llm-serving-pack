@@ -173,8 +173,8 @@ kubectl -n llm-operator-system get secrets -l llm.nebari.dev/model
 
 ## 9. Test an external provider (PassthroughModel)
 
-A `PassthroughModel` routes the shared endpoints to an external OpenAI-compatible
-provider rather than a locally served model. This path runs end to end on kind
+A `PassthroughModel` routes the shared endpoints to an external provider, such
+as OpenRouter or AWS Bedrock, rather than a locally served model. This path runs end to end on kind
 because the provider does the inference. These steps use OpenRouter and assume a
 real OpenRouter API key.
 

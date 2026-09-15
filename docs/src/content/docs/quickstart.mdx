@@ -1,7 +1,7 @@
 ---
 title: Quickstart
 ---
-import { Code } from 'astro:components';
+import Code from '../../components/ExampleCode.astro';
 import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
 
 Get a model serving in five minutes. This page covers the fast path: deploy the pack, apply one `LLMModel`, and call the API.
@@ -213,9 +213,9 @@ response = client.chat.completions.create(
 
 ## Route to an external provider
 
-Instead of serving a model locally, a `PassthroughModel` points the shared endpoints at an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM). Users get the same two auth layers and mint keys in the same UI; the platform's provider key is injected upstream and never exposed.
+Instead of serving a model locally, a `PassthroughModel` points the shared endpoints at an external provider, such as OpenRouter or AWS Bedrock. Users get the same two auth layers and mint keys in the same UI; the platform's provider credential is applied upstream and never exposed.
 
-First create a Secret holding the platform's provider key (the `apiKey` field), in the operator namespace:
+These steps use OpenRouter, an OpenAI-compatible provider authenticated with an API key; for Bedrock's workload-identity setup see [AWS Bedrock](/bedrock/). First create a Secret holding the platform's provider key (the `apiKey` field), in the operator namespace:
 
 ```bash
 kubectl create secret generic openrouter-api-key -n nebari-llm-serving-system \
