@@ -80,9 +80,10 @@ The operator resolves regional endpoints with the AWS SDK for Go v2. It does
 not maintain AWS hostname suffixes or a region allowlist, and admission does
 not contact AWS or load credentials. `spec.provider.hostname` overrides the
 resolved address for private endpoints; SigV4 still signs for
-`spec.provider.backend.bedrock.region`, so an AWS-owned override (an
-`amazonaws` name, including VPC endpoint DNS) must contain that region and a
-cross-region override is rejected at admission.
+`spec.provider.backend.bedrock.region`. SDK-recognized Bedrock runtime names,
+including VPC endpoint DNS and isolated partitions, must match that signing
+region and partition. Cross-region overrides are rejected at admission;
+custom private DNS names remain the operator's responsibility.
 
 Grant the gateway role `bedrock:InvokeModel` and
 `bedrock:InvokeModelWithResponseStream` for the selected models. Cross-region

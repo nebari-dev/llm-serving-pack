@@ -55,6 +55,10 @@ jobs:
           go-version-file: key-manager/go.mod
           cache-dependency-path: key-manager/go.sum
 
+      - name: Check module tidiness
+        working-directory: key-manager
+        run: go mod tidy -diff
+
       - name: Run tests
         working-directory: key-manager
         run: go test ./...

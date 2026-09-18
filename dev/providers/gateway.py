@@ -9,6 +9,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from base import MAX_TOKENS, PROMPT
 
+VERIFY_TIMEOUT = 60
+
 
 class NoRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -34,7 +36,7 @@ def gateway_url(value):
     return value.rstrip("/").removesuffix("/v1") + "/v1/chat/completions"
 
 
-def check_sse(response, timeout=60, max_lines=1000):
+def check_sse(response, timeout=VERIFY_TIMEOUT, max_lines=1000):
     # The socket timeout bounds each read; this bounds the stream as a whole.
     # A stall inside a single read is still bounded only by that socket timeout.
     deadline = time.monotonic() + timeout
@@ -72,7 +74,7 @@ def verify_catalog(url, model_id, token, opener=None):
     opener = opener or build_opener(NoRedirects())
     url = gateway_url(url).removesuffix("/chat/completions") + "/models"
     request = Request(url, headers={"Authorization": "Bearer " + token})
-    with opener.open(request, timeout=60) as response:
+    with opener.open(request, timeout=VERIFY_TIMEOUT) as response:
         if response.status != 200:
             raise ValueError(f"gateway catalog returned HTTP {response.status}")
         result = json.load(response)
@@ -99,7 +101,7 @@ def verify_gateway(url, model_id, token, denied_token, opener=None):
                 url, data=json.dumps(body).encode(), headers=headers, method="POST"
             )
             try:
-                response = opener.open(request, timeout=60)
+                response = opener.open(request, timeout=VERIFY_TIMEOUT)
             except HTTPError as error:
                 response = error
             with response:
@@ -114,7 +116,7 @@ def verify_gateway(url, model_id, token, denied_token, opener=None):
                         "Content-Type", ""
                     ):
                         raise ValueError("gateway did not return an SSE stream")
-                    check_sse(response)
+                    check_sse(response, timeout=VERIFY_TIMEOUT)
                 else:
                     result = json.load(response)
                     choices = result.get("choices", [])

@@ -16,7 +16,7 @@ func TestGatewayUpdatesPreserveUpstreamFinalizers(t *testing.T) {
 	c := fake.NewClientBuilder().Build()
 	desired := endpointObject("aigateway.envoyproxy.io", "v1beta1", "AIGatewayRoute", "default", "model-external")
 	desired.Object["spec"] = map[string]interface{}{"hostnames": []interface{}{"old.example.com"}}
-	if err := createOrUpdateUnstructured(ctx, c, desired.DeepCopy()); err != nil {
+	if err := applyModelResourcePreservingFinalizers(ctx, c, desired.DeepCopy()); err != nil {
 		t.Fatal(err)
 	}
 	current := desired.DeepCopy()
@@ -27,12 +27,14 @@ func TestGatewayUpdatesPreserveUpstreamFinalizers(t *testing.T) {
 	// Simulate finalizers installed by other controllers after creation.
 	finalizers := []string{"aigateway.envoyproxy.io/finalizer", "other.example.com/cleanup"}
 	current.SetFinalizers(finalizers)
+	current.SetLabels(map[string]string{"old": "value"})
 	if err := c.Update(ctx, current); err != nil {
 		t.Fatal(err)
 	}
 	desired.Object["spec"] = map[string]interface{}{"hostnames": []interface{}{"new.example.com"}}
+	desired.SetLabels(map[string]string{"desired": "value"})
 	for range 2 {
-		if err := createOrUpdateUnstructured(ctx, c, desired.DeepCopy()); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, c, desired.DeepCopy()); err != nil {
 			t.Fatal(err)
 		}
 		if err := c.Get(ctx, key, current); err != nil {
@@ -43,6 +45,9 @@ func TestGatewayUpdatesPreserveUpstreamFinalizers(t *testing.T) {
 		}
 		if !reflect.DeepEqual(current.Object["spec"], desired.Object["spec"]) {
 			t.Fatal("desired spec was not updated")
+		}
+		if !reflect.DeepEqual(current.GetLabels(), desired.GetLabels()) {
+			t.Fatal("model resource metadata was not replaced")
 		}
 	}
 	if err := c.Delete(ctx, current); err != nil {

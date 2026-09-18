@@ -132,6 +132,36 @@ func TestBedrockUsesAWSEndpointPartitions(t *testing.T) {
 	}
 }
 
+func TestBedrockOverrideSigningRegion(t *testing.T) {
+	for _, tc := range []struct {
+		region, hostname string
+		valid            bool
+	}{
+		{"us-west-2", "bedrock-runtime.us-west-2.amazonaws.com", true},
+		{"us-west-2", "bedrock-runtime-fips.us-west-2.amazonaws.com", true},
+		{"us-west-2", "BEDROCK-RUNTIME.US-WEST-2.API.AWS.", true},
+		{"us-west-2", "vpce-123.bedrock-runtime.us-west-2.vpce.amazonaws.com", true},
+		{"us-west-2", "us-west-2.bedrock-runtime.us-east-1.vpce.amazonaws.com", false},
+		{"us-west-2", "BEDROCK-RUNTIME.US-EAST-1.AMAZONAWS.COM.", false},
+		{"us-west-2", "bedrock-runtime-fips.us-east-1.amazonaws.com", false},
+		{"us-west-2", "bedrock-runtime.us-east-1.api.aws", false},
+		{"cn-north-1", "bedrock-runtime.cn-northwest-1.amazonaws.com.cn", false},
+		{"us-gov-west-1", "bedrock-runtime.us-gov-east-1.amazonaws.com", false},
+		{"us-iso-east-1", "bedrock-runtime.us-iso-west-1.c2s.ic.gov", false},
+		{"us-iso-east-1", "vpce-123.bedrock-runtime.us-iso-east-1.vpce.c2s.ic.gov", true},
+		{"us-west-2", "bedrock-runtime.us-east-1.example.com", true},
+		{"us-west-2", "private.example.com", true},
+	} {
+		t.Run(tc.hostname, func(t *testing.T) {
+			p := llmv1alpha1.ProviderSpec{Hostname: tc.hostname, Backend: &llmv1alpha1.ProviderBackend{Type: llmv1alpha1.BackendBedrock, Bedrock: &llmv1alpha1.BedrockBackend{Region: tc.region}}}
+			_, err := Resolve(p)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestOpenAIUsesExplicitPathPrefix(t *testing.T) {
 	for _, tc := range []struct{ legacy, prefix string }{
 		{"", "/v1"}, {"v1", "/v1"}, {"api/v1", "/api/v1"},

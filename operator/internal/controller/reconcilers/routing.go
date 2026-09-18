@@ -62,7 +62,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 
 	if boolOrDefault(model.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildAIGatewayRoute(
-			model.Name+"-external",
+			ModelRouteName(model.Name, "external"),
 			model.Namespace,
 			StandardLabels(model),
 			cfg.ExternalGatewayName,
@@ -77,7 +77,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 
 	if boolOrDefault(model.Spec.Endpoints.Internal.Enabled, true) {
 		result.InternalRoute = buildAIGatewayRoute(
-			model.Name+"-internal",
+			ModelRouteName(model.Name, "internal"),
 			model.Namespace,
 			StandardLabels(model),
 			cfg.InternalGatewayName,

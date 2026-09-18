@@ -90,7 +90,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 
 	if boolOrDefault(pm.Spec.Endpoints.External.Enabled, true) {
 		result.ExternalRoute = buildPassthroughRoute(
-			PassthroughRouteName(pm.Name, "external"),
+			ModelRouteName(pm.Name, "external"),
 			pm,
 			labels,
 			cfg.ExternalGatewayName,
@@ -99,10 +99,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			SharedExternalHostname(cfg.BaseDomain),
 		)
 		result.ExternalSecurityPolicy = buildAPIKeyAuthSecurityPolicy(
-			PassthroughAuthPolicyName(pm.Name, "external"),
+			ModelAuthPolicyName(pm.Name, "external"),
 			pm.Namespace,
 			labelsToInterface(labels),
-			PassthroughRouteName(pm.Name, "external"),
+			ModelRouteName(pm.Name, "external"),
 			credentialSecretNames,
 			clientIDs,
 		)
@@ -110,7 +110,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 
 	if boolOrDefault(pm.Spec.Endpoints.Internal.Enabled, true) {
 		result.InternalRoute = buildPassthroughRoute(
-			PassthroughRouteName(pm.Name, "internal"),
+			ModelRouteName(pm.Name, "internal"),
 			pm,
 			labels,
 			cfg.InternalGatewayName,
@@ -119,10 +119,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			SharedInternalHostname(cfg.BaseDomain),
 		)
 		result.InternalSecurityPolicy = buildJWTSecurityPolicy(
-			PassthroughAuthPolicyName(pm.Name, "internal"),
+			ModelAuthPolicyName(pm.Name, "internal"),
 			pm.Namespace,
 			labelsToInterface(labels),
-			PassthroughRouteName(pm.Name, "internal"),
+			ModelRouteName(pm.Name, "internal"),
 			cfg,
 			isPublicAccess(pm.Spec.Access),
 			pm.Spec.Access.Groups,

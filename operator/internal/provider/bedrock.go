@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -27,14 +26,6 @@ func resolveBedrock(p llmv1alpha1.ProviderSpec) (*Resolved, error) {
 	if !smithyhttp.ValidHostLabel(region) {
 		return nil, fmt.Errorf("spec.provider.backend.bedrock.region must be a valid DNS label")
 	}
-	// The hostname override exists for private endpoints. SigV4 signs for
-	// spec region, so an AWS-owned hostname (public or VPC endpoint DNS)
-	// must carry that region; custom private DNS names are accepted as-is.
-	if override := strings.TrimSuffix(strings.ToLower(p.Hostname), "."); strings.Contains(override, ".amazonaws.") {
-		if !slices.Contains(strings.Split(override, "."), region) {
-			return nil, fmt.Errorf("spec.provider.hostname region does not match spec.provider.backend.bedrock.region %s; requests would be signed for the wrong region", region)
-		}
-	}
 	// AWS owns endpoint and partition rules. This resolver is local: admission
 	// does not load credentials or call AWS. It also works for isolated regions.
 	endpoint, err := bedrockruntime.NewDefaultEndpointResolverV2().ResolveEndpoint(
@@ -42,6 +33,9 @@ func resolveBedrock(p llmv1alpha1.ProviderSpec) (*Resolved, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("spec.provider.backend.bedrock.region: %w", err)
+	}
+	if err := validateBedrockOverride(p.Hostname, region); err != nil {
+		return nil, err
 	}
 	return &Resolved{
 		Hostname:   endpoint.URI.Hostname(),
@@ -51,4 +45,39 @@ func resolveBedrock(p llmv1alpha1.ProviderSpec) (*Resolved, error) {
 			"awsCredentials": map[string]interface{}{"region": region},
 		},
 	}, nil
+}
+
+// Recognize public and VPC Bedrock runtime DNS using the SDK's partition rules.
+// A region in an unrelated label (e.g. a VPC endpoint prefix) is not evidence
+// of the signing region. Custom DNS remains an operator-managed escape hatch.
+func validateBedrockOverride(hostname, region string) error {
+	hostname = strings.TrimSuffix(strings.ToLower(hostname), ".")
+	labels := strings.Split(hostname, ".")
+	for i, label := range labels {
+		if (label != "bedrock-runtime" && label != "bedrock-runtime-fips") || i+2 >= len(labels) {
+			continue
+		}
+		hostRegion := labels[i+1]
+		fips := label == "bedrock-runtime-fips"
+		dualStack := strings.HasSuffix(hostname, ".api.aws")
+		params := bedrockruntime.EndpointParameters{Region: &hostRegion, UseFIPS: &fips, UseDualStack: &dualStack}
+		endpoint, err := bedrockruntime.NewDefaultEndpointResolverV2().ResolveEndpoint(context.Background(), params)
+		if err != nil {
+			continue
+		}
+		suffix := strings.Join(labels[i:], ".")
+		// VPC endpoint DNS inserts "vpce" immediately after the region.
+		if labels[i+2] == "vpce" {
+			suffix = strings.Join(append(append([]string{}, labels[i:i+2]...), labels[i+3:]...), ".")
+		}
+		if suffix != endpoint.URI.Hostname() {
+			continue
+		}
+		params.Region = &region
+		expected, err := bedrockruntime.NewDefaultEndpointResolverV2().ResolveEndpoint(context.Background(), params)
+		if err != nil || suffix != expected.URI.Hostname() {
+			return fmt.Errorf("spec.provider.hostname region does not match spec.provider.backend.bedrock.region %s; requests would be signed for the wrong region", region)
+		}
+	}
+	return nil
 }

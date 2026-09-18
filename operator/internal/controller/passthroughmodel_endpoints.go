@@ -19,7 +19,7 @@ import (
 // Keep authentication until the AI Gateway-owned HTTPRoute is gone: removing
 // the policy first could briefly expose the upstream without authentication.
 func (r *PassthroughModelReconciler) removeEndpoint(ctx context.Context, pm *llmv1alpha1.PassthroughModel, endpoint string) (pending bool, err error) {
-	route := endpointObject("aigateway.envoyproxy.io", "v1beta1", "AIGatewayRoute", pm.Namespace, reconcilers.PassthroughRouteName(pm.Name, endpoint))
+	route := endpointObject("aigateway.envoyproxy.io", "v1beta1", "AIGatewayRoute", pm.Namespace, reconcilers.ModelRouteName(pm.Name, endpoint))
 	if pending, err = r.removeControlledObject(ctx, pm, route); pending || err != nil {
 		return pending, err
 	}
@@ -27,13 +27,13 @@ func (r *PassthroughModelReconciler) removeEndpoint(ctx context.Context, pm *llm
 	// manager's cache (no informer, so no list/watch). That holds unless
 	// manager.Options.Client.Cache.Unstructured is enabled; doing so would turn
 	// the missing list/watch grant into a cache-sync failure here, not IsForbidden.
-	httpRoute := endpointObject("gateway.networking.k8s.io", "v1", "HTTPRoute", pm.Namespace, reconcilers.PassthroughRouteName(pm.Name, endpoint))
+	httpRoute := endpointObject("gateway.networking.k8s.io", "v1", "HTTPRoute", pm.Namespace, reconcilers.ModelRouteName(pm.Name, endpoint))
 	if err := r.Get(ctx, client.ObjectKeyFromObject(httpRoute), httpRoute); err == nil {
 		return true, nil // Wait for AI Gateway/Kubernetes to remove its generated route.
 	} else if !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 		return false, err
 	}
-	policy := endpointObject("gateway.envoyproxy.io", "v1alpha1", "SecurityPolicy", pm.Namespace, reconcilers.PassthroughAuthPolicyName(pm.Name, endpoint))
+	policy := endpointObject("gateway.envoyproxy.io", "v1alpha1", "SecurityPolicy", pm.Namespace, reconcilers.ModelAuthPolicyName(pm.Name, endpoint))
 	return r.removeControlledObject(ctx, pm, policy)
 }
 

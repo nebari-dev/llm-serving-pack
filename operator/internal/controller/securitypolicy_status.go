@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,10 +17,6 @@ import (
 const (
 	condSecurityPoliciesReady = "SecurityPoliciesReady"
 	reasonApplyFailed         = "ApplyFailed"
-	// A missing AI Gateway CRD is one state with one description: both
-	// controllers report it with this reason and retry on this interval.
-	reasonGatewayCRDUnavailable = "GatewayCRDUnavailable"
-	gatewayCRDRequeue           = 15 * time.Second
 )
 
 // Missing CRDs do not block serving-stack installation, but must be retried.
@@ -31,7 +26,7 @@ func (r *LLMModelReconciler) reconcileSecurityPolicies(ctx context.Context, mode
 		if policy == nil {
 			continue
 		}
-		if applyErr := createOrUpdateUnstructured(ctx, r.Client, policy); applyErr != nil {
+		if applyErr := applyModelResourcePreservingFinalizers(ctx, r.Client, policy); applyErr != nil {
 			if meta.IsNoMatchError(applyErr) {
 				pending = true
 			} else {

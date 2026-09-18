@@ -370,7 +370,7 @@ func (r *LLMModelReconciler) reconcileModelServiceResources(
 	// PodMonitor (optional CRD)
 	if resources.PodMonitor != nil {
 		resources.PodMonitor.SetNamespace(model.Namespace)
-		if err := createOrUpdateUnstructured(ctx, r.Client, resources.PodMonitor); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, resources.PodMonitor); err != nil {
 			log.Error(err, "failed to reconcile PodMonitor - CRD may not be installed, skipping")
 		}
 	}
@@ -387,7 +387,7 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 ) error {
 	// InferencePool (unstructured CRD - non-fatal if missing)
 	pool.InferencePool.SetNamespace(model.Namespace)
-	if err := createOrUpdateUnstructured(ctx, r.Client, pool.InferencePool); err != nil {
+	if err := applyModelResourcePreservingFinalizers(ctx, r.Client, pool.InferencePool); err != nil {
 		log.Error(err, "failed to reconcile InferencePool - CRD may not be installed, skipping")
 	}
 
@@ -457,13 +457,13 @@ func (r *LLMModelReconciler) reconcileRoutingResources(
 ) error { //nolint:unparam // error return kept for future extensibility
 	if routing.ExternalRoute != nil {
 		routing.ExternalRoute.SetNamespace(model.Namespace)
-		if err := createOrUpdateUnstructured(ctx, r.Client, routing.ExternalRoute); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, routing.ExternalRoute); err != nil {
 			log.Error(err, "failed to reconcile external AIGatewayRoute - CRD may not be installed, skipping")
 		}
 	}
 	if routing.InternalRoute != nil {
 		routing.InternalRoute.SetNamespace(model.Namespace)
-		if err := createOrUpdateUnstructured(ctx, r.Client, routing.InternalRoute); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, routing.InternalRoute); err != nil {
 			log.Error(err, "failed to reconcile internal AIGatewayRoute - CRD may not be installed, skipping")
 		}
 	}

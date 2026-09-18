@@ -15,6 +15,7 @@ class GatewayTests(unittest.TestCase):
         requests = []
 
         def open_request(request, timeout):
+            self.assertEqual(timeout, gateway.VERIFY_TIMEOUT)
             requests.append(request)
             body = json.loads(request.data) if request.data else None
             auth = request.headers.get("Authorization")
@@ -41,9 +42,19 @@ class GatewayTests(unittest.TestCase):
 
         opener = MagicMock()
         opener.open.side_effect = open_request
-        result = gateway.verify_gateway(
-            "https://llm.example.com/v1", "model", "permitted", "wrong-scope", opener
-        )
+        with patch.object(
+            gateway, "check_sse", wraps=gateway.check_sse
+        ) as check_stream:
+            result = gateway.verify_gateway(
+                "https://llm.example.com/v1",
+                "model",
+                "permitted",
+                "wrong-scope",
+                opener,
+            )
+            self.assertEqual(
+                check_stream.call_args.kwargs["timeout"], gateway.VERIFY_TIMEOUT
+            )
         self.assertEqual(result["wrongScope"], 403)
         self.assertEqual(result["catalog"], "verified")
         self.assertEqual(len(requests), 7)
@@ -108,7 +119,7 @@ class GatewayTests(unittest.TestCase):
 
     def test_sse_bounds_trickling_streams_by_lines_and_elapsed_time(self):
         def trickle():
-            while True:
+            for _ in range(6):
                 yield b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":null}]}\n'
                 yield b"\n"
 

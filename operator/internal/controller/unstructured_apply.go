@@ -9,10 +9,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// createOrUpdateUnstructured is the one apply path for gateway-owned kinds in
-// both model reconcilers, so fixes to it (like finalizer preservation) land in
-// every controller at once.
-func createOrUpdateUnstructured(ctx context.Context, c client.Client, obj *unstructured.Unstructured) error {
+// applyModelResourcePreservingFinalizers creates or replaces resources managed by
+// the LLMModel and PassthroughModel reconcilers, retaining upstream finalizers.
+// Unlike ClusterTLS's spec-only patch, this also replaces desired metadata.
+func applyModelResourcePreservingFinalizers(ctx context.Context, c client.Client, obj *unstructured.Unstructured) error {
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(obj.GroupVersionKind())
 	err := c.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing)

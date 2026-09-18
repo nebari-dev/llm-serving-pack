@@ -252,7 +252,7 @@ func (r *PassthroughModelReconciler) applyAll(ctx context.Context, log controlle
 		if err := controllerutil.SetControllerReference(owner, obj, r.Scheme); err != nil {
 			return fmt.Errorf("setting owner on %s/%s: %w", obj.GetKind(), obj.GetName(), err)
 		}
-		if err := createOrUpdateUnstructured(ctx, r.Client, obj); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, obj); err != nil {
 			log.Error(err, "failed to reconcile resource - CRD may not be installed",
 				"kind", obj.GetKind(), "name", obj.GetName())
 			if firstErr == nil {

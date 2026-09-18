@@ -70,16 +70,16 @@ func APIKeyMetadataConfigMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
 }
 
-// PassthroughRouteName returns the AIGatewayRoute name for one shared endpoint
-// ("external" or "internal") of a PassthroughModel. The endpoint-disable
+// ModelRouteName returns the AIGatewayRoute name for one shared endpoint
+// ("external" or "internal") of either model kind. The endpoint-disable
 // cleanup deletes by these names; keep construction and deletion in sync.
-func PassthroughRouteName(modelName, endpoint string) string {
+func ModelRouteName(modelName, endpoint string) string {
 	return modelName + "-" + endpoint
 }
 
-// PassthroughAuthPolicyName returns the SecurityPolicy name guarding that route.
-func PassthroughAuthPolicyName(modelName, endpoint string) string {
-	return PassthroughRouteName(modelName, endpoint) + "-auth"
+// ModelAuthPolicyName returns the SecurityPolicy name guarding that route.
+func ModelAuthPolicyName(modelName, endpoint string) string {
+	return ModelRouteName(modelName, endpoint) + "-auth"
 }
 
 // EffectiveSubdomain returns the subdomain that would be used for this LLMModel

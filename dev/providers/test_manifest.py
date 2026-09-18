@@ -13,26 +13,48 @@ CRD = (
     Path(__file__).resolve().parents[2]
     / "charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml"
 )
-TYPES = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int}
+TYPES = {
+    "object": dict,
+    "array": list,
+    "string": str,
+    "boolean": bool,
+    "integer": int,
+    "number": (int, float),
+}
 
 
 def schema_errors(instance, schema, path):
     """Return structural mismatches against an openAPIV3Schema fragment.
 
-    Checks type, required, enum, and declared properties: enough to catch
+    Checks type, unions, required, enum, and declared properties: enough to catch
     values the API server would reject and fields it would silently prune.
     """
     kind = schema.get("type")
-    if kind and not isinstance(instance, TYPES[kind]):
+    if kind and kind not in TYPES:
+        return [f"{path}: unsupported schema type {kind!r}"]
+    if kind and (
+        not isinstance(instance, TYPES[kind])
+        or (kind in ("integer", "number") and isinstance(instance, bool))
+    ):
         return [f"{path}: expected {kind}, got {type(instance).__name__}"]
     errors = []
+    for keyword in ("oneOf", "anyOf"):
+        if keyword in schema:
+            matches = sum(
+                not schema_errors(instance, branch, path) for branch in schema[keyword]
+            )
+            if (keyword == "oneOf" and matches != 1) or (
+                keyword == "anyOf" and matches == 0
+            ):
+                errors.append(f"{path}: {keyword} matched {matches} branches")
     if "enum" in schema and instance not in schema["enum"]:
         errors.append(f"{path}: {instance!r} not in enum {schema['enum']}")
-    if kind == "object" and "properties" in schema:
-        properties = schema["properties"]
+    if isinstance(instance, dict):
         for key in schema.get("required", []):
             if key not in instance:
                 errors.append(f"{path}.{key}: required property missing")
+    if isinstance(instance, dict) and "properties" in schema:
+        properties = schema["properties"]
         for key, value in instance.items():
             if key not in properties:
                 errors.append(f"{path}.{key}: not declared in the CRD schema")
@@ -45,6 +67,34 @@ def schema_errors(instance, schema, path):
 
 
 class ManifestSchemaTests(unittest.TestCase):
+    def test_schema_types_and_unions(self):
+        self.assertTrue(schema_errors(True, {"type": "integer"}, "$"))
+        self.assertTrue(schema_errors(True, {"type": "number"}, "$"))
+        self.assertEqual(schema_errors(1.5, {"type": "number"}, "$"), [])
+        self.assertIn(
+            "unsupported schema type", schema_errors(1, {"type": "future"}, "$")[0]
+        )
+        for keyword in ("oneOf", "anyOf"):
+            schema = {keyword: [{"type": "integer"}, {"type": "string"}]}
+            self.assertEqual(schema_errors(1, schema, "$"), [])
+            self.assertEqual(schema_errors("x", schema, "$"), [])
+            self.assertTrue(schema_errors(True, schema, "$"))
+        branches = [{"type": "integer"}, {"type": "number"}]
+        self.assertTrue(schema_errors(1, {"oneOf": branches}, "$"))
+        self.assertEqual(schema_errors(1, {"anyOf": branches}, "$"), [])
+        self.assertTrue(schema_errors({}, {"oneOf": [{"required": ["bedrock"]}]}, "$"))
+
+    def test_committed_provider_examples_satisfy_crd(self):
+        examples = CRD.parents[3] / "examples"
+        for name in ("passthrough-bedrock.yaml", "passthrough-openrouter.yaml"):
+            with self.subTest(example=name):
+                found = False
+                for resource in yaml.safe_load_all((examples / name).read_text()):
+                    if resource and resource.get("kind") == self.kind:
+                        found = True
+                        self.assertEqual(self.resource_errors(resource), [])
+                self.assertTrue(found, "example contains no PassthroughModel")
+
     @classmethod
     def setUpClass(cls):
         crd = yaml.safe_load(CRD.read_text())
