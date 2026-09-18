@@ -51,8 +51,8 @@ This creates a kind cluster named `llm-serving-test` and installs:
 - Test `GatewayClass` and `Gateway` resources
 
 Dependency versions are pinned at the top of `dev/Makefile`. They move as a
-set: Envoy AI Gateway v0.5.x requires Envoy Gateway v1.6.x and Gateway API
-v1.4.0 (see the [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/)).
+set: Envoy AI Gateway v1.1 uses Envoy Gateway v1.8.1 and Gateway API
+v1.5.1 (see the [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/)).
 
 The setup takes a few minutes. You can watch progress in the terminal output.
 
@@ -173,8 +173,8 @@ kubectl -n llm-operator-system get secrets -l llm.nebari.dev/model
 
 ## 9. Test an external provider (PassthroughModel)
 
-A `PassthroughModel` routes the shared endpoints to an external OpenAI-compatible
-provider rather than a locally served model. This path runs end to end on kind
+A `PassthroughModel` routes the shared endpoints to an external provider, such
+as OpenRouter or AWS Bedrock, rather than a locally served model. This path runs end to end on kind
 because the provider does the inference. These steps use OpenRouter and assume a
 real OpenRouter API key.
 

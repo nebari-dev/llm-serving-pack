@@ -70,6 +70,12 @@ rules:
   - apiGroups: ["gateway.envoyproxy.io"]
     resources: ["securitypolicies", "backends"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Observe AI Gateway-owned routes before removing endpoint authentication.
+  # get alone suffices: unstructured reads bypass the manager's cache, so no
+  # informer needs list/watch (see PassthroughModelReconciler.removeEndpoint).
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get"]
   # PassthroughModel provider TLS validation toward the external provider.
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["backendtlspolicies"]

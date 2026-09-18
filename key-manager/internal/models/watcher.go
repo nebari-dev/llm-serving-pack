@@ -85,14 +85,22 @@ func (w *Watcher) Sync(ctx context.Context) error {
 		groups := make([]string, len(pm.Spec.Access.Groups))
 		copy(groups, pm.Spec.Access.Groups)
 
+		// The operator publishes the resolved provider address on status, so
+		// the key-manager never resolves backends (or links their SDKs). The
+		// spec hostname covers CRs an older operator has not reconciled yet;
+		// providers without one (Bedrock) show empty until first reconcile.
+		hostname := pm.Status.ProviderHostname
+		if hostname == "" {
+			hostname = pm.Spec.Provider.Hostname
+		}
 		updated[key] = ModelInfo{
 			Name:        pm.Name,
 			Namespace:   pm.Namespace,
-			ModelName:   pm.Spec.Provider.Hostname,
+			ModelName:   hostname,
 			Public:      public,
 			Groups:      groups,
 			Passthrough: true,
-			Provider:    pm.Spec.Provider.Hostname,
+			Provider:    hostname,
 		}
 	}
 

@@ -1,0 +1,44 @@
+---
+import { Code } from 'astro:components';
+
+interface Props {
+  code: string;
+  lang: string;
+  title: string;
+}
+
+const { code, lang, title } = Astro.props;
+---
+
+<figure class="example-code not-content">
+  <figcaption>{title}</figcaption>
+  <Code code={code} lang={lang} themes={{ light: 'github-light-default', dark: 'github-dark-default' }} />
+</figure>
+
+<style>
+  figure {
+    margin: var(--sl-content-gap-y) 0;
+    overflow: hidden;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--nbr-radius-sm);
+  }
+  figcaption {
+    padding: 0.5rem 1rem;
+    background: var(--sl-color-gray-6);
+    border-bottom: 1px solid var(--sl-color-gray-5);
+    font-family: var(--sl-font-mono);
+    font-size: var(--sl-text-sm);
+    overflow-wrap: anywhere;
+  }
+  .example-code :global(pre) {
+    margin: 0;
+    padding: 1rem;
+    font-size: var(--sl-text-code);
+    line-height: 1.5;
+  }
+  :global([data-theme='dark']) .example-code :global(pre),
+  :global([data-theme='dark']) .example-code :global(pre span) {
+    color: var(--shiki-dark) !important;
+    background-color: var(--shiki-dark-bg) !important;
+  }
+</style>

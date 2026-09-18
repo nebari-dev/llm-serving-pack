@@ -174,8 +174,8 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 					t.Fatal("expected ExternalRoute to be non-nil")
 				}
 				r := result.ExternalRoute
-				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1alpha1" {
-					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1alpha1, got %q", r.GetAPIVersion())
+				if r.GetAPIVersion() != aiGatewayAPIVersion {
+					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1beta1, got %q", r.GetAPIVersion())
 				}
 				if r.GetKind() != "AIGatewayRoute" {
 					t.Errorf("expected kind AIGatewayRoute, got %q", r.GetKind())
@@ -283,8 +283,8 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 					t.Fatal("expected InternalRoute to be non-nil")
 				}
 				r := result.InternalRoute
-				if r.GetAPIVersion() != "aigateway.envoyproxy.io/v1alpha1" {
-					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1alpha1, got %q", r.GetAPIVersion())
+				if r.GetAPIVersion() != aiGatewayAPIVersion {
+					t.Errorf("expected apiVersion aigateway.envoyproxy.io/v1beta1, got %q", r.GetAPIVersion())
 				}
 				if r.GetKind() != "AIGatewayRoute" {
 					t.Errorf("expected kind AIGatewayRoute, got %q", r.GetKind())

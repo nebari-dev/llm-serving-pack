@@ -1,8 +1,9 @@
 ---
 title: Architecture
 ---
-import { Code } from 'astro:components';
+import Code from '../../components/ExampleCode.astro';
 import passthroughExample from '../../../../examples/passthrough-openrouter.yaml?raw';
+import bedrockExample from '../../../../examples/passthrough-bedrock.yaml?raw';
 
 This page explains how the Nebari LLM serving pack is designed: what components it deploys, how the operator reconciles `LLMModel` resources, how the two authentication paths work, how the key manager operates, and what security guarantees the design provides.
 
@@ -172,7 +173,7 @@ Escape hatch: set `platform.gateway.manageSharedListeners: false`. The operator 
 
 Every model on the cluster shares a single hostname pair: `llm.<baseDomain>` for the external endpoint and `llm-internal.<baseDomain>` for the internal endpoint. One TLS certificate covering both names serves every model.
 
-Per-model routing happens via the `x-ai-eg-model` request header. The Envoy AI Gateway controller automatically extracts the `model` field from the JSON request body and surfaces it as that header. Each `LLMModel` produces an `AIGatewayRoute` whose single rule matches `x-ai-eg-model: <spec.model.name>` exactly; `sectionName` on the parentRef scopes the route to its listener, whose own hostname pins the FQDN. (The rule previously also matched the shared `Host` header, but the AI Gateway v0.5 controller does not register a model whose match rule carries any header beyond `x-ai-eg-model`, so the Host matcher was removed; see [#116](https://github.com/nebari-dev/llm-serving-pack/issues/116).) Clients set `model` in the request body, the same way they would against api.openai.com - no per-model URL is required.
+Per-model routing happens via the `x-ai-eg-model` request header. The Envoy AI Gateway controller automatically extracts the `model` field from the JSON request body and surfaces it as that header. Each `LLMModel` produces an `AIGatewayRoute` whose single rule matches `x-ai-eg-model: <spec.model.name>` exactly; `sectionName` on the parentRef scopes the route to its listener, whose own hostname pins the FQDN. (The rule previously also matched the shared `Host` header, but the AI Gateway controller did not register a model whose match rule carried any header beyond `x-ai-eg-model`, so the Host matcher was removed; see [#116](https://github.com/nebari-dev/llm-serving-pack/issues/116).) Clients set `model` in the request body, the same way they would against api.openai.com - no per-model URL is required.
 
 The `endpoints.external.subdomain` field on `LLMModel` is currently unused at the routing layer. It is retained on the CRD for a future DNS-01 / wildcard cert path. See [Configuration](/configuration/) for field details.
 
@@ -222,6 +223,12 @@ Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth Securit
   per-model and only its inputs are fleet-wide.
 - API key Secret referenced from the SecurityPolicy without crossing namespace boundaries (Envoy Gateway's `apiKeyAuth` does not honor cross-namespace `credentialRefs`)
 
+Served models report `SecurityPoliciesReady` in their status conditions. Failed
+policy writes set `ApplyFailed` and trigger controller retries. A missing
+`SecurityPolicy` CRD sets `GatewayCRDUnavailable`; model provisioning continues
+while policy creation is retried every 15 seconds. `Applied` means the policies
+were written, not that Envoy has finished applying them to traffic.
+
 ### Internal endpoint
 
 For JupyterLab, in-cluster chat UIs, notebooks.
@@ -266,9 +273,15 @@ The operator combines these pack-level values with each `LLMModel`'s `access.gro
 
 ## PassthroughModel CRD
 
-Issue [#95](https://github.com/nebari-dev/llm-serving-pack/issues/95). A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external OpenAI-compatible provider (OpenRouter, api.openai.com, a remote vLLM) instead of a locally served model. The operator provisions gateway plumbing and the same two auth layers served models get; the key-manager lists PassthroughModels next to LLMModels so users mint API keys for external providers through the same UI.
+A PassthroughModel routes the shared `llm.<baseDomain>` / `llm-internal.<baseDomain>` endpoints to an external provider, such as OpenRouter or AWS Bedrock. The operator creates routing and the same two authentication layers used by served models. The key manager lists these providers alongside LLMModels so users can mint keys through the same UI.
 
 <Code code={passthroughExample} lang="yaml" title="examples/passthrough-openrouter.yaml" />
+
+Existing resources keep the OpenAI-compatible API-key defaults. Bedrock selects
+Converse and AWS workload identity; [the Bedrock guide](/bedrock/) covers live
+model discovery and verification:
+
+<Code code={bedrockExample} lang="yaml" title="examples/passthrough-bedrock.yaml" />
 
 For a step-by-step walkthrough see [Route to an external provider](/quickstart/#route-to-an-external-provider); for the full field reference see the [PassthroughModel CRD reference](/configuration/#passthroughmodel-crd-reference).
 
@@ -278,21 +291,21 @@ Generated resources (all in the CR's namespace, no serving stack):
 |---|---|
 | Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
 | BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
-| AIServiceBackend (`<name>`) | OpenAI schema with the provider's path prefix |
-| BackendSecurityPolicy (`<name>-upstream-auth`) | Injects the platform-owned provider API key upstream |
-| AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, external only) and/or Host-only catch-all rule |
+| AIServiceBackend (`<name>`) | Selected provider schema, such as OpenAI or AWSBedrock |
+| BackendSecurityPolicy (`<name>-upstream-auth`) | Selected provider credential, such as API key or AWS workload identity |
+| AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, on both routes) and/or Host-only catch-all rule |
 | SecurityPolicy (`<name>-external-auth` / `-internal-auth`) | Same apiKeyAuth / JWT pair as served models |
 | Secret (`<name>-api-keys`) + ConfigMap (`<name>-api-key-metadata`) | Per-provider user API keys, managed by the key-manager |
 
 Semantics worth knowing:
 
 - **Two auth layers.** Users authenticate to the cluster gateway (their own API key externally, Keycloak JWT internally); the gateway injects the platform's provider credential upstream. Users never see the provider key.
-- **Served models win (validated live on EG v1.6.7 / AI Gateway v0.5).** The mechanism changed with the Host-matcher removal ([#116](https://github.com/nebari-dev/llm-serving-pack/issues/116)): dispatch is decided by the AI Gateway ext_proc's model registry, not by Gateway API header-count precedence. A request whose `model` is a served or declared id is routed to that model's own rule via `x-ai-eg-model`, regardless of route age - verified with a `catchAll: true` PassthroughModel whose routes were older than the served model's.
-- **`catchAll: true` is currently inert on AI Gateway v0.5.** The ext_proc returns 404 ("model not configured in the Gateway") for any model id not registered by some route rule, before HTTPRoute matching runs, so the catch-all rule (a Host-only match) never receives traffic - undeclared ids cannot reach the provider through it. Declared models are unaffected. The field is retained for a future AI Gateway version where unregistered ids fall through to route matching.
-- **`modelsOwnedBy` is set on the external route only.** The gateway's `/v1/models` endpoint aggregates declared models across every route on the Gateway; declaring on both endpoints lists each model twice.
+- **Served models win.** Since the Host-matcher removal ([#116](https://github.com/nebari-dev/llm-serving-pack/issues/116)), dispatch is decided by the AI Gateway ext_proc's model registry, not by Gateway API header-count precedence. A request whose `model` is a served or declared id is routed to that model's own rule via `x-ai-eg-model`, regardless of route age.
+- **`catchAll: true` renders a Host-only rule; whether unknown models reach it depends on the upstream ext-proc's model registry.** If the ext_proc rejects model ids not registered by any route rule (404, "model not configured in the Gateway") before HTTPRoute matching runs, the catch-all rule never receives traffic. Declared models are unaffected either way. Declare every provider model id explicitly rather than relying on catch-all fall-through.
+- **`modelsOwnedBy` is set on both routes.** Each endpoint's `/v1/models` aggregates only the routes declaring its own hostname, so each endpoint carries its own catalog without depending on the other endpoint being enabled.
 - **Catch-all conflicts are not validated.** Two catch-all PassthroughModels on the same gateway race for unclaimed model ids the same way two identical HTTPRoutes would; the webhook validates per-CR only, consistent with the LLMModel webhook dropping cross-CR collision checks. Document one catch-all per cluster as the supported shape.
 - **Names are unique across both kinds.** Both an LLMModel and a PassthroughModel derive their api-keys Secret name as `<name>-api-keys`, so sharing a name would make the two controllers fight over one Secret. Both webhooks reject a CR whose name is already taken by the other kind in the same namespace. The key-manager cache also keeps kind-prefixed entries as defense in depth.
-- **Status.** Phase is `Ready`/`Error` with conditions `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs surface as `ApplyFailed` conditions with a one-minute requeue rather than failing reconciliation outright. This surface-and-requeue handling is the intended operator-wide convention for a degraded gateway-apply. The older LLMModel reconciler instead logs-and-continues for the same case; converging it onto this convention is tracked as a follow-up.
+- **Status.** Phase is `Ready`/`Error` with conditions `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`; missing AI Gateway CRDs surface as `GatewayCRDUnavailable` conditions with a 15-second requeue rather than failing reconciliation outright, and real apply failures as `ApplyFailed` with a one-minute requeue. Both controllers share the reason string and the interval, but the LLMModel reconciler applies this convention to its `SecurityPolicy` only: a failed `AIGatewayRoute` apply is logged and skipped with no condition and no requeue, so a served model can report `Ready` while unroutable. Converging the remaining LLMModel applies is tracked in [#109](https://github.com/nebari-dev/llm-serving-pack/issues/109).
 - **Generated gateway resources are reconciled on-change-only.** Because the AI Gateway kinds (`Backend`, `BackendTLSPolicy`, `AIServiceBackend`, `BackendSecurityPolicy`, `AIGatewayRoute`, `SecurityPolicy`) are applied as unstructured objects, `SetupWithManager` registers `For(&PassthroughModel{})` plus a watch on operator-managed api-keys Secrets, and does not `Owns(...)` them. If a generated resource is deleted out-of-band, it is not recreated until the next PassthroughModel edit or the next api-keys Secret change in the namespace (any key mint or revoke re-reconciles every model).
 
 ---

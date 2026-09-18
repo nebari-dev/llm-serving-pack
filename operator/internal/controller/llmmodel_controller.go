@@ -124,8 +124,8 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// 6. Reconcile auth resources (Secret + ConfigMap, both in the model's namespace)
-	var authResources *reconcilers.AuthResources
+	// 6. Reconcile auth resources in the model's namespace.
+	authPending := false
 	if r.Config != nil {
 		clientIDs, err := apiKeyClientIDs(ctx, r.Client, model.Name, model.Namespace)
 		if err != nil {
@@ -135,11 +135,19 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("listing api key secrets: %w", err)
 		}
-		authResources, err = reconcilers.BuildAuthResources(model, r.Config, clientIDs, credentialSecretNames)
+		authResources, err := reconcilers.BuildAuthResources(model, r.Config, clientIDs, credentialSecretNames)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("building auth resources: %w", err)
 		}
 		if err := r.reconcileAuthSecretAndConfigMap(ctx, authResources); err != nil {
+			return ctrl.Result{}, err
+		}
+		// Every route on the shared listener needs the current credential
+		// pool before ext_proc selects a model. Do not leave old policies in
+		// place while this model downloads or starts: that rejects keys for
+		// newly added providers and delays key revocation.
+		authPending, err = r.reconcileSecurityPolicies(ctx, model, authResources)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -192,17 +200,14 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{}, err
 		}
 
-		// SecurityPolicies (from auth resources built in step 7)
-		if authResources != nil {
-			if err := r.reconcileSecurityPolicies(ctx, log, authResources); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
 	}
 
 	// 12. Update status
 	if err := r.updateStatus(ctx, log, model, phase); err != nil {
 		return ctrl.Result{}, err
+	}
+	if authPending {
+		return ctrl.Result{RequeueAfter: gatewayCRDRequeue}, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -365,7 +370,7 @@ func (r *LLMModelReconciler) reconcileModelServiceResources(
 	// PodMonitor (optional CRD)
 	if resources.PodMonitor != nil {
 		resources.PodMonitor.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, resources.PodMonitor); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, resources.PodMonitor); err != nil {
 			log.Error(err, "failed to reconcile PodMonitor - CRD may not be installed, skipping")
 		}
 	}
@@ -382,7 +387,7 @@ func (r *LLMModelReconciler) reconcileInferencePoolResources(
 ) error {
 	// InferencePool (unstructured CRD - non-fatal if missing)
 	pool.InferencePool.SetNamespace(model.Namespace)
-	if err := r.createOrUpdateUnstructured(ctx, pool.InferencePool); err != nil {
+	if err := applyModelResourcePreservingFinalizers(ctx, r.Client, pool.InferencePool); err != nil {
 		log.Error(err, "failed to reconcile InferencePool - CRD may not be installed, skipping")
 	}
 
@@ -452,33 +457,14 @@ func (r *LLMModelReconciler) reconcileRoutingResources(
 ) error { //nolint:unparam // error return kept for future extensibility
 	if routing.ExternalRoute != nil {
 		routing.ExternalRoute.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, routing.ExternalRoute); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, routing.ExternalRoute); err != nil {
 			log.Error(err, "failed to reconcile external AIGatewayRoute - CRD may not be installed, skipping")
 		}
 	}
 	if routing.InternalRoute != nil {
 		routing.InternalRoute.SetNamespace(model.Namespace)
-		if err := r.createOrUpdateUnstructured(ctx, routing.InternalRoute); err != nil {
+		if err := applyModelResourcePreservingFinalizers(ctx, r.Client, routing.InternalRoute); err != nil {
 			log.Error(err, "failed to reconcile internal AIGatewayRoute - CRD may not be installed, skipping")
-		}
-	}
-	return nil
-}
-
-// reconcileSecurityPolicies creates or updates SecurityPolicy resources.
-func (r *LLMModelReconciler) reconcileSecurityPolicies(
-	ctx context.Context,
-	log controllerLogger,
-	auth *reconcilers.AuthResources,
-) error { //nolint:unparam // error return kept for future extensibility
-	if auth.ExternalSecurityPolicy != nil {
-		if err := r.createOrUpdateUnstructured(ctx, auth.ExternalSecurityPolicy); err != nil {
-			log.Error(err, "failed to reconcile external SecurityPolicy - CRD may not be installed, skipping")
-		}
-	}
-	if auth.InternalSecurityPolicy != nil {
-		if err := r.createOrUpdateUnstructured(ctx, auth.InternalSecurityPolicy); err != nil {
-			log.Error(err, "failed to reconcile internal SecurityPolicy - CRD may not be installed, skipping")
 		}
 	}
 	return nil
@@ -742,26 +728,6 @@ func (r *LLMModelReconciler) createOrUpdateRoleBinding(ctx context.Context, rb *
 	existing.Subjects = rb.Subjects
 	existing.Labels = rb.Labels
 	return r.Update(ctx, existing)
-}
-
-// createOrUpdateUnstructured creates or updates an unstructured resource.
-// Errors for optional CRD-based resources should be logged by the caller rather than
-// failing the reconciliation.
-func (r *LLMModelReconciler) createOrUpdateUnstructured(
-	ctx context.Context,
-	obj *unstructured.Unstructured,
-) error {
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(obj.GroupVersionKind())
-	err := r.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing)
-	if apierrors.IsNotFound(err) {
-		return r.Create(ctx, obj)
-	}
-	if err != nil {
-		return err
-	}
-	obj.SetResourceVersion(existing.GetResourceVersion())
-	return r.Update(ctx, obj)
 }
 
 // SetupWithManager sets up the controller with the Manager.

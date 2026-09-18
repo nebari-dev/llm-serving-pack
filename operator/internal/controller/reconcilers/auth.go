@@ -120,10 +120,10 @@ func buildAPIKeyMetadataConfigMap(model *llmv1alpha1.LLMModel, labels map[string
 
 func buildExternalSecurityPolicy(model *llmv1alpha1.LLMModel, clientIDs []string, credentialSecretNames []string) *unstructured.Unstructured {
 	return buildAPIKeyAuthSecurityPolicy(
-		model.Name+"-external-auth",
+		ModelAuthPolicyName(model.Name, "external"),
 		model.Namespace,
 		labelsToInterface(StandardLabels(model)),
-		model.Name+"-external",
+		ModelRouteName(model.Name, "external"),
 		credentialSecretNames,
 		clientIDs,
 	)
@@ -229,10 +229,10 @@ func buildAPIKeyAuthorization(clientIDs []string) map[string]interface{} {
 
 func buildInternalSecurityPolicy(model *llmv1alpha1.LLMModel, cfg *config.OperatorConfig) *unstructured.Unstructured {
 	return buildJWTSecurityPolicy(
-		model.Name+"-internal-auth",
+		ModelAuthPolicyName(model.Name, "internal"),
 		model.Namespace,
 		labelsToInterface(StandardLabels(model)),
-		model.Name+"-internal",
+		ModelRouteName(model.Name, "internal"),
 		cfg,
 		isPublic(model),
 		model.Spec.Access.Groups,

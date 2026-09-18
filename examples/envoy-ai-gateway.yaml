@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   - Kubernetes 1.32+
-#   - Envoy Gateway v1.6+ installed WITH the AI-Gateway-compatible
+#   - Envoy Gateway v1.8.1+ installed WITH the AI-Gateway-compatible
 #     values (extensionApis.enableBackend, extensionManager pointing at
 #     this controller, backendResources allowing InferencePool). See
 #     ./envoy-gateway.yaml for the complete configuration. Nebari
@@ -39,7 +39,7 @@ spec:
   source:
     chart: ai-gateway-crds-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v0.5.0
+    targetRevision: v1.1.0
 
   destination:
     server: https://kubernetes.default.svc
@@ -74,7 +74,7 @@ spec:
   source:
     chart: ai-gateway-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v0.5.0
+    targetRevision: v1.1.0
 
   destination:
     server: https://kubernetes.default.svc

@@ -19,10 +19,12 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 )
@@ -53,6 +55,25 @@ var _ = Describe("PassthroughModel Webhook", func() {
 	bgCtx := context.Background()
 
 	Context("ValidateCreate", func() {
+		It("admits and updates the Bedrock example without legacy hostname or Secret fields", func() {
+			ns := newManagedNamespace("pt-bedrock-admission")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+			data, err := os.ReadFile("../../../../examples/passthrough-bedrock.yaml")
+			Expect(err).NotTo(HaveOccurred())
+			pm := &llmv1alpha1.PassthroughModel{}
+			Expect(yaml.Unmarshal(data, pm)).To(Succeed())
+			pm.Namespace = ns.Name
+			Expect(k8sClient.Create(bgCtx, pm)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, pm) })
+			Expect(pm.Spec.Provider.Hostname).To(BeEmpty())
+			Expect(pm.Spec.Provider.CredentialSecretName).To(BeEmpty())
+			pm.Spec.Provider.Backend.Bedrock.Region = "us-east-1"
+			Expect(k8sClient.Update(bgCtx, pm)).To(Succeed())
+			pm.Spec.Provider.CredentialSecretName = "unintended-static-key"
+			Expect(k8sClient.Update(bgCtx, pm)).NotTo(Succeed())
+		})
+
 		It("should accept a valid PassthroughModel in a managed namespace", func() {
 			ns := newManagedNamespace("pt-managed-create-valid")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())

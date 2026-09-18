@@ -34,6 +34,7 @@ import (
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
 // nolint:unused
@@ -193,29 +194,8 @@ func validatePassthroughAccess(pm *llmv1alpha1.PassthroughModel) error {
 // validateProvider rejects obviously broken provider configs the CRD schema
 // alone cannot express.
 func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
-	if strings.TrimSpace(pm.Spec.Provider.Hostname) == "" {
-		return fmt.Errorf("spec.provider.hostname must not be empty")
-	}
-	if strings.Contains(pm.Spec.Provider.Hostname, "://") {
-		return fmt.Errorf(
-			"spec.provider.hostname must be a bare hostname (got %q); drop the URL scheme",
-			pm.Spec.Provider.Hostname,
-		)
-	}
-	// The Backend fqdn.hostname must be a bare DNS name: no port (set
-	// spec.provider.port instead), no path, and no embedded whitespace.
-	if strings.ContainsAny(pm.Spec.Provider.Hostname, "/:") ||
-		strings.ContainsAny(pm.Spec.Provider.Hostname, " \t\n\r") {
-		return fmt.Errorf(
-			"spec.provider.hostname must be a bare hostname (got %q); "+
-				"drop any port, path, or whitespace (use spec.provider.port for the port)",
-			pm.Spec.Provider.Hostname,
-		)
-	}
-	if strings.TrimSpace(pm.Spec.Provider.CredentialSecretName) == "" {
-		return fmt.Errorf("spec.provider.credentialSecretName must not be empty")
-	}
-	return nil
+	_, err := provider.Resolve(pm.Spec.Provider)
+	return err
 }
 
 // validateEndpoints rejects a PassthroughModel with both shared endpoints

@@ -70,6 +70,18 @@ func APIKeyMetadataConfigMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
 }
 
+// ModelRouteName returns the AIGatewayRoute name for one shared endpoint
+// ("external" or "internal") of either model kind. The endpoint-disable
+// cleanup deletes by these names; keep construction and deletion in sync.
+func ModelRouteName(modelName, endpoint string) string {
+	return modelName + "-" + endpoint
+}
+
+// ModelAuthPolicyName returns the SecurityPolicy name guarding that route.
+func ModelAuthPolicyName(modelName, endpoint string) string {
+	return ModelRouteName(modelName, endpoint) + "-auth"
+}
+
 // EffectiveSubdomain returns the subdomain that would be used for this LLMModel
 // if per-model hostname routing were in effect. As of v0.1.0-alpha.3 the routing
 // layer no longer uses subdomains - all models share a single external/internal

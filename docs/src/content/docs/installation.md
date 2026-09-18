@@ -591,7 +591,7 @@ spec:
   source:
     chart: ai-gateway-crds-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v0.5.0
+    targetRevision: v1.1.0
     helm:
       releaseName: envoy-ai-gateway-crds
   destination:
@@ -720,7 +720,7 @@ spec:
   source:
     chart: ai-gateway-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v0.5.0
+    targetRevision: v1.1.0
     helm:
       releaseName: envoy-ai-gateway
   destination:
@@ -775,7 +775,7 @@ install does not include:
 
 These values come straight from the upstream
 `envoyproxy/ai-gateway` reference at
-[`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v0.5.0/manifests/envoy-gateway-values.yaml).
+[`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/manifests/envoy-gateway-values.yaml).
 
 ### 6.1 Commit a values overlay
 
