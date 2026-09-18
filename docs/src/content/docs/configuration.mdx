@@ -340,9 +340,9 @@ The operator writes these fields to `status`; they are read-only.
 | `spec.provider.backend.type` | string | No (default `OpenAI`) | `OpenAI` or `Bedrock`. Omit the backend block to preserve legacy OpenAI behavior. |
 | `spec.provider.backend.bedrock.region` | string | Bedrock only | AWS region used for the Bedrock runtime endpoint and SigV4. |
 | `spec.provider.credential.type` | string | No | OpenAI requires `APIKey`; Bedrock requires `WorkloadIdentity`. Omitting the credential selects the supported type. Unsupported combinations are rejected. |
-| `spec.provider.hostname` | string | Required for OpenAI | Bare provider hostname. Bedrock defaults to its regional runtime hostname; an explicit hostname overrides the address and TLS server name (for private endpoints), and an AWS-owned override must contain the configured region. |
+| `spec.provider.hostname` | string | Required for OpenAI | Bare provider hostname. Bedrock defaults to its regional runtime hostname; an explicit hostname overrides the address and TLS server name (for private endpoints), and an `amazonaws` override must contain the configured region (see [AWS Bedrock](/bedrock/)). |
 | `spec.provider.port` | integer | No (default `443`) | Provider port. |
-| `spec.provider.schemaVersion` | string | No (default `v1`) | Upstream API path prefix, e.g. `api/v1` for OpenRouter, `v1` for api.openai.com. |
+| `spec.provider.schemaVersion` | string | No (default `v1`) | Upstream API path prefix for OpenAI-compatible backends, e.g. `api/v1` for OpenRouter, `v1` for api.openai.com. Bedrock rejects any value other than the default. |
 | `spec.provider.credentialSecretName` | string | OpenAI only | Secret in the PassthroughModel's namespace whose `apiKey` key holds the provider API key. Injected upstream; end users never see it. |
 
 ### spec.models

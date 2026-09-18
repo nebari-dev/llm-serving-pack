@@ -35,8 +35,8 @@ def gateway_url(value):
 
 
 def check_sse(response, timeout=60, max_lines=1000):
-    # The socket timeout bounds each read, not the stream. Bound total time
-    # and lines so a gateway trickling data cannot block verification.
+    # The socket timeout bounds each read; this bounds the stream as a whole.
+    # A stall inside a single read is still bounded only by that socket timeout.
     deadline = time.monotonic() + timeout
     text, finished, done = False, False, False
     data = []
