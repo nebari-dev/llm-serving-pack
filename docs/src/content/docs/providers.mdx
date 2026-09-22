@@ -68,6 +68,24 @@ selected IDs before publishing them. Discovery does not automatically expand
 access, and the operator does not poll cloud catalogs. Desktop clients continue
 to read the gateway's `/v1/models` endpoint for declared models.
 
+## Hosting origin on /v1/models
+
+Each model's `owned_by` on the gateway's `/v1/models` endpoint reports where
+the model is served, so clients can distinguish in-cluster models from
+provider-proxied ones without knowledge of resource names:
+
+- `self-hosted` — served in-cluster by an `LLMModel`.
+- `bedrock` — proxied to AWS Bedrock by a `PassthroughModel`.
+- `openai` — proxied to an OpenAI-compatible provider by a `PassthroughModel`.
+
+These values are a contract: clients key hosting and compliance labeling off
+them, and a new provider variant must define its origin before it can ship
+(`HostingOrigin` in the operator API enforces the mapping). The pack states
+where a model is served; it makes no claims about a provider's data retention —
+retention labeling is a client-side policy built on this field, and advertising
+provider retention attributes per model is deferred until a model-metadata
+channel exists beyond this single string.
+
 ## Verify both gateway endpoints
 
 Supply these environment variables from your secret manager or shell session:

@@ -56,6 +56,10 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 	if err != nil {
 		return nil, err
 	}
+	origin, err := pm.Spec.Provider.Origin()
+	if err != nil {
+		return nil, err
+	}
 	labels := PassthroughStandardLabels(pm)
 	authLabels := map[string]string{}
 	for k, v := range labels {
@@ -92,6 +96,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 		result.ExternalRoute = buildPassthroughRoute(
 			ModelRouteName(pm.Name, "external"),
 			pm,
+			origin,
 			labels,
 			cfg.ExternalGatewayName,
 			cfg.ExternalGatewayNS,
@@ -112,6 +117,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 		result.InternalRoute = buildPassthroughRoute(
 			ModelRouteName(pm.Name, "internal"),
 			pm,
+			origin,
 			labels,
 			cfg.InternalGatewayName,
 			cfg.InternalGatewayNS,
@@ -257,6 +263,7 @@ func buildProviderBackendSecurityPolicy(pm *llmv1alpha1.PassthroughModel, labels
 func buildPassthroughRoute(
 	name string,
 	pm *llmv1alpha1.PassthroughModel,
+	origin llmv1alpha1.HostingOrigin,
 	labels map[string]string,
 	gatewayName, gatewayNS string,
 	listenerSectionName string,
@@ -288,7 +295,9 @@ func buildPassthroughRoute(
 			"backendRefs": passthroughBackendRefs(pm),
 			"timeouts":    map[string]interface{}{"request": "120s"},
 		}
-		declared["modelsOwnedBy"] = pm.Name
+		// owned_by on /v1/models is the hosting-origin contract (backend
+		// type, e.g. "bedrock"), never the deployment-chosen CR name.
+		declared["modelsOwnedBy"] = string(origin)
 		rules = append(rules, declared)
 	}
 
