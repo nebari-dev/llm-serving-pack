@@ -32,11 +32,51 @@ const providers: {
   envKey: string
 }[] = [
   { id: 'openai', label: 'OpenAI', description: 'API key', auth: 'key', models: 12, baseUrl: 'https://api.openai.com/v1', envKey: 'OPENAI_API_KEY' },
-  { id: 'anthropic', label: 'Anthropic', description: 'API key', auth: 'key', models: 6, baseUrl: 'https://api.anthropic.com/v1', envKey: 'ANTHROPIC_API_KEY' },
-  { id: 'bedrock', label: 'Bedrock', description: 'Cloud identity (OIDC)', auth: 'oidc', models: 18, baseUrl: 'https://bedrock-runtime.eu-central-1.amazonaws.com', envKey: 'AWS_ACCESS_KEY_ID' },
-  { id: 'azure', label: 'Azure OpenAI', description: 'API key', auth: 'key', models: 9, baseUrl: 'https://acme.openai.azure.com/openai/v1', envKey: 'AZURE_OPENAI_API_KEY' },
-  { id: 'vertex', label: 'Vertex', description: 'Cloud identity (OIDC)', auth: 'oidc', models: 11, baseUrl: 'https://europe-west4-aiplatform.googleapis.com/v1', envKey: 'GOOGLE_APPLICATION_CREDENTIALS' },
-  { id: 'self-hosted', label: 'Self-hosted', description: 'vLLM, TGI, Ollama', auth: 'url', models: 1, baseUrl: 'http://vllm.internal:8000/v1', envKey: 'VLLM_API_KEY' },
+  {
+    id: 'anthropic',
+    label: 'Anthropic',
+    description: 'API key',
+    auth: 'key',
+    models: 6,
+    baseUrl: 'https://api.anthropic.com/v1',
+    envKey: 'ANTHROPIC_API_KEY',
+  },
+  {
+    id: 'bedrock',
+    label: 'Bedrock',
+    description: 'Cloud identity (OIDC)',
+    auth: 'oidc',
+    models: 18,
+    baseUrl: 'https://bedrock-runtime.eu-central-1.amazonaws.com',
+    envKey: 'AWS_ACCESS_KEY_ID',
+  },
+  {
+    id: 'azure',
+    label: 'Azure OpenAI',
+    description: 'API key',
+    auth: 'key',
+    models: 9,
+    baseUrl: 'https://acme.openai.azure.com/openai/v1',
+    envKey: 'AZURE_OPENAI_API_KEY',
+  },
+  {
+    id: 'vertex',
+    label: 'Vertex',
+    description: 'Cloud identity (OIDC)',
+    auth: 'oidc',
+    models: 11,
+    baseUrl: 'https://europe-west4-aiplatform.googleapis.com/v1',
+    envKey: 'GOOGLE_APPLICATION_CREDENTIALS',
+  },
+  {
+    id: 'self-hosted',
+    label: 'Self-hosted',
+    description: 'vLLM, TGI, Ollama',
+    auth: 'url',
+    models: 1,
+    baseUrl: 'http://vllm.internal:8000/v1',
+    envKey: 'VLLM_API_KEY',
+  },
 ]
 
 const GATEWAY_URL = 'https://gw.acme.dev/v1'
@@ -45,27 +85,14 @@ const LANG_KEY = 'gw:onboarding-lang'
 
 type Lang = 'python' | 'typescript' | 'curl'
 
-type TestState =
-  | { kind: 'idle' }
-  | { kind: 'testing' }
-  | { kind: 'ok'; ms: number }
-  | { kind: 'error'; message: string }
+type TestState = { kind: 'idle' } | { kind: 'testing' } | { kind: 'ok'; ms: number } | { kind: 'error'; message: string }
 
-function Step({
-  n,
-  title,
-  done,
-  children,
-}: {
-  n: number
-  title: string
-  done?: boolean
-  children: ReactNode
-}) {
+function Step({ n, title, done, children }: { n: number; title: string; done?: boolean; children: ReactNode }) {
   return (
     <section
+      id={`onb-step-${n}`}
       aria-labelledby={`step-${n}`}
-      className="rounded-md border border-border bg-card p-6 motion-safe:animate-slide-up-fade"
+      className="scroll-mt-6 rounded-md border border-border bg-card p-6 motion-safe:animate-slide-up-fade"
     >
       <h2 id={`step-${n}`} className="mb-4 flex items-center gap-2.5 text-lg leading-6 font-semibold">
         <span
@@ -136,6 +163,7 @@ export function OnboardingPage() {
   const [providerId, setProviderId] = useState<ProviderId>('openai')
   const [secret, setSecret] = useState('')
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
+  const [firstReceiptId, setFirstReceiptId] = useState<string | null>(null)
   const provider = providers.find((p) => p.id === providerId)!
 
   const runTest = () => {
@@ -168,133 +196,234 @@ export function OnboardingPage() {
   }
 
   const connected = test.kind === 'ok'
+  const landed = firstReceiptId !== null
+  const steps: StepInfo[] = [
+    { n: 1, title: 'Connect a provider', hint: connected ? provider.label : 'Pick one, test the key', status: connected ? 'done' : 'current' },
+    { n: 2, title: 'Swap two lines', hint: 'Base URL and key', status: !connected ? 'upcoming' : landed ? 'done' : 'current' },
+    {
+      n: 3,
+      title: 'First request',
+      hint: landed ? 'Receipt ready' : connected ? 'Waiting…' : 'Lands live here',
+      status: !connected ? 'upcoming' : landed ? 'done' : 'waiting',
+    },
+  ]
 
   return (
     <div data-density="comfortable" className="flex flex-col">
-      <PageHeader
-        title="Connect a provider"
-        description="Point one app at the gateway. It's a base URL and a key swap — about a minute."
-      />
-      <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-8">
-        <Step n={1} title="Connect your first provider" done={connected}>
-          <RadioGroup
-            aria-label="Provider"
-            value={providerId}
-            onValueChange={(v) => {
-              setProviderId(v as ProviderId)
-              setSecret('')
-              setTest({ kind: 'idle' })
-            }}
-            className="grid grid-cols-2 gap-2 sm:grid-cols-3"
-            orientation="vertical"
-          >
-            {providers.map((p) => (
-              <RadioGroupItem
-                key={p.id}
-                value={p.id}
-                variant="box"
-                description={p.description}
-                className={(s) => cn(s.checked && 'border-primary bg-card')}
-              >
-                {p.label}
-              </RadioGroupItem>
-            ))}
-          </RadioGroup>
+      <PageHeader title="Connect a provider" description="Point one app at the gateway. It's a base URL and a key swap — about a minute." />
+      <div className="mx-auto grid w-full max-w-4xl gap-8 px-6 py-8 md:grid-cols-[12rem_minmax(0,1fr)] md:gap-10">
+        <StepMap steps={steps} />
+        <div className="flex min-w-0 flex-col gap-6">
+          <Step n={1} title="Connect your first provider" done={connected}>
+            <RadioGroup
+              aria-label="Provider"
+              value={providerId}
+              onValueChange={(v) => {
+                setProviderId(v as ProviderId)
+                setSecret('')
+                setTest({ kind: 'idle' })
+              }}
+              className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+              orientation="vertical"
+            >
+              {providers.map((p) => (
+                <RadioGroupItem
+                  key={p.id}
+                  value={p.id}
+                  variant="box"
+                  description={p.description}
+                  className={(s) => cn(s.checked && 'border-primary bg-card')}
+                >
+                  {p.label}
+                </RadioGroupItem>
+              ))}
+            </RadioGroup>
 
-          <div className="mt-5 flex flex-col gap-4">
-            {provider.auth === 'key' && (
-              <Field>
-                <FieldLabel>{provider.label} API key</FieldLabel>
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="sk-…"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  aria-invalid={test.kind === 'error' || undefined}
-                  className="font-mono"
-                />
-                <FieldDescription>Tested once, then sealed. Never returned to callers.</FieldDescription>
-              </Field>
-            )}
-            {provider.auth === 'oidc' && (
-              <Field>
-                <FieldLabel>{provider.id === 'bedrock' ? 'IAM role to assume' : 'Service account to impersonate'}</FieldLabel>
-                <Input
-                  spellCheck={false}
-                  placeholder={
-                    provider.id === 'bedrock'
-                      ? 'arn:aws:iam::123456789012:role/nebari-gateway'
-                      : 'nebari-gateway@acme-prod.iam.gserviceaccount.com'
-                  }
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  aria-invalid={test.kind === 'error' || undefined}
-                  className="font-mono"
-                />
-                <FieldDescription>
-                  No long-lived key. The gateway exchanges its cluster identity for short-lived credentials on each refresh.
-                </FieldDescription>
-              </Field>
-            )}
-            {provider.auth === 'url' && (
-              <Field>
-                <FieldLabel>Base URL</FieldLabel>
-                <Input
-                  spellCheck={false}
-                  placeholder="http://vllm.internal:8000/v1"
-                  value={secret}
-                  onChange={(e) => setSecret(e.target.value)}
-                  aria-invalid={test.kind === 'error' || undefined}
-                  className="font-mono"
-                />
-                <FieldDescription>Any OpenAI-compatible server reachable from the cluster. Traffic stays in-cluster.</FieldDescription>
-              </Field>
-            )}
+            <div className="mt-5 flex flex-col gap-4">
+              {provider.auth === 'key' && (
+                <Field>
+                  <FieldLabel>{provider.label} API key</FieldLabel>
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="sk-…"
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    aria-invalid={test.kind === 'error' || undefined}
+                    className="font-mono"
+                  />
+                  <FieldDescription>Tested once, then sealed. Never returned to callers.</FieldDescription>
+                </Field>
+              )}
+              {provider.auth === 'oidc' && (
+                <Field>
+                  <FieldLabel>{provider.id === 'bedrock' ? 'IAM role to assume' : 'Service account to impersonate'}</FieldLabel>
+                  <Input
+                    spellCheck={false}
+                    placeholder={
+                      provider.id === 'bedrock' ? 'arn:aws:iam::123456789012:role/nebari-gateway' : 'nebari-gateway@acme-prod.iam.gserviceaccount.com'
+                    }
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    aria-invalid={test.kind === 'error' || undefined}
+                    className="font-mono"
+                  />
+                  <FieldDescription>
+                    No long-lived key. The gateway exchanges its cluster identity for short-lived credentials on each refresh.
+                  </FieldDescription>
+                </Field>
+              )}
+              {provider.auth === 'url' && (
+                <Field>
+                  <FieldLabel>Base URL</FieldLabel>
+                  <Input
+                    spellCheck={false}
+                    placeholder="http://vllm.internal:8000/v1"
+                    value={secret}
+                    onChange={(e) => setSecret(e.target.value)}
+                    aria-invalid={test.kind === 'error' || undefined}
+                    className="font-mono"
+                  />
+                  <FieldDescription>Any OpenAI-compatible server reachable from the cluster. Traffic stays in-cluster.</FieldDescription>
+                </Field>
+              )}
 
-            <div className="flex flex-wrap items-center gap-3">
-              <Button onClick={runTest} loading={test.kind === 'testing'} loadingText="Testing connection…" variant={connected ? 'outline' : 'default'}>
-                {connected ? 'Test again' : 'Test connection'}
-              </Button>
-              <div aria-live="polite" className="min-w-0 text-sm">
-                {test.kind === 'ok' && (
-                  <span className="inline-flex items-center gap-1.5 text-v-allowed-fg">
-                    <CircleCheck className="size-4" aria-hidden="true" />
-                    Connected to {provider.label} · {provider.models} {provider.models === 1 ? 'model' : 'models'} available ·{' '}
-                    <Duration ms={test.ms} />
-                  </span>
-                )}
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  onClick={runTest}
+                  loading={test.kind === 'testing'}
+                  loadingText="Testing connection…"
+                  variant={connected ? 'outline' : 'default'}
+                >
+                  {connected ? 'Test again' : 'Test connection'}
+                </Button>
+                <div aria-live="polite" className="min-w-0 text-sm">
+                  {test.kind === 'ok' && (
+                    <span className="inline-flex items-center gap-1.5 text-v-allowed-fg">
+                      <CircleCheck className="size-4" aria-hidden="true" />
+                      Connected to {provider.label} · {provider.models} {provider.models === 1 ? 'model' : 'models'} available ·{' '}
+                      <Duration ms={test.ms} />
+                    </span>
+                  )}
+                </div>
               </div>
+              {test.kind === 'error' && (
+                <p role="alert" className="flex items-start gap-2 text-sm text-destructive-foreground">
+                  <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {test.message}
+                </p>
+              )}
+              {test.kind === 'idle' && provider.auth === 'key' && (
+                <p className="text-xs text-muted-foreground">Mockup tip: any key works; one starting with “bad” shows the failure state.</p>
+              )}
             </div>
-            {test.kind === 'error' && (
-              <p role="alert" className="flex items-start gap-2 text-sm text-destructive-foreground">
-                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                {test.message}
-              </p>
-            )}
-            {test.kind === 'idle' && provider.auth === 'key' && (
-              <p className="text-xs text-muted-foreground">Mockup tip: any key works; one starting with “bad” shows the failure state.</p>
-            )}
+          </Step>
+
+          {connected && <GatewayKeyStep provider={provider} />}
+          {connected && <FirstRequestStep receiptId={firstReceiptId} onLand={setFirstReceiptId} />}
+
+          <div className="flex flex-col items-start gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground-strong">
+              No traffic of your own yet? Explore the demo tenant — a week of synthetic traffic, several teams, one blown budget, a handful of blocked
+              requests.
+            </p>
+            <Button variant="outline" render={<Link to="/" />} className="shrink-0">
+              <span className="rounded-sm border border-border-strong px-1 text-[11px] leading-4 font-semibold">Demo</span>
+              Open the demo tenant
+              <ArrowRight />
+            </Button>
           </div>
-        </Step>
-
-        {connected && <GatewayKeyStep provider={provider} />}
-        {connected && <FirstRequestStep />}
-
-        <div className="flex flex-col items-start gap-3 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-muted-foreground-strong">
-            No traffic of your own yet? Explore the demo tenant — a week of synthetic traffic, several teams, one blown budget, a
-            handful of blocked requests.
-          </p>
-          <Button variant="outline" render={<Link to="/" />} className="shrink-0">
-            <span className="rounded-sm border border-border-strong px-1 text-[11px] leading-4 font-semibold">Demo</span>
-            Open the demo tenant
-            <ArrowRight />
-          </Button>
         </div>
       </div>
     </div>
+  )
+}
+
+type StepStatus = 'done' | 'current' | 'waiting' | 'upcoming'
+type StepInfo = { n: number; title: string; hint: string; status: StepStatus }
+
+/**
+ * Where-am-I map beside the steps: numbered circles joined by a rail.
+ * Done steps get a check, the current step a primary ring, a step that is
+ * waiting on the outside world a dashed ring. Reached steps scroll into view;
+ * upcoming ones are inert until the previous step completes.
+ */
+function StepMap({ steps }: { steps: StepInfo[] }) {
+  const doneCount = steps.filter((s) => s.status === 'done').length
+  const go = (n: number) => {
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    document.getElementById(`onb-step-${n}`)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })
+  }
+  return (
+    <nav aria-label="Setup progress" className="md:sticky md:top-6 md:self-start">
+      <p className="mb-3 text-xs text-muted-foreground">
+        {doneCount === steps.length ? 'All set' : `${doneCount} of ${steps.length} done`} · about a minute
+      </p>
+      <ol className="flex gap-2 md:flex-col md:gap-0">
+        {steps.map((s, i) => {
+          const last = i === steps.length - 1
+          const reachable = s.status !== 'upcoming'
+          return (
+            <li key={s.n} className="relative flex-1 md:flex-none md:pb-6 md:last:pb-0">
+              {!last && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'absolute hidden w-px md:block md:top-8 md:bottom-1 md:left-[0.9375rem]',
+                    s.status === 'done' ? 'bg-v-allowed-border' : 'bg-border',
+                  )}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => reachable && go(s.n)}
+                aria-disabled={!reachable || undefined}
+                aria-current={s.status === 'current' || s.status === 'waiting' ? 'step' : undefined}
+                className={cn(
+                  'group flex w-full items-start gap-3 rounded-md p-0.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  reachable ? 'cursor-pointer' : 'cursor-default',
+                )}
+              >
+                <span
+                  className={cn(
+                    'relative z-[1] flex size-7 shrink-0 items-center justify-center rounded-full border bg-canvas text-xs font-semibold',
+                    s.status === 'done' && 'border-v-allowed-border bg-v-allowed-bg text-v-allowed-fg',
+                    s.status === 'current' && 'border-2 border-primary text-foreground',
+                    s.status === 'waiting' && 'border-2 border-dashed border-primary text-foreground',
+                    s.status === 'upcoming' && 'border-border text-muted-foreground',
+                  )}
+                  aria-hidden="true"
+                >
+                  {s.status === 'done' ? <Check className="size-3.5" /> : s.n}
+                </span>
+                <span className="flex min-w-0 flex-col pt-0.5">
+                  <span
+                    className={cn(
+                      'text-sm leading-5',
+                      s.status === 'upcoming' ? 'text-muted-foreground' : 'font-medium text-foreground',
+                      reachable && 'group-hover:underline underline-offset-4',
+                    )}
+                  >
+                    {s.title}
+                  </span>
+                  <span className="hidden truncate text-xs text-muted-foreground md:block">{s.hint}</span>
+                  <span className="sr-only">
+                    {s.status === 'done'
+                      ? '(done)'
+                      : s.status === 'upcoming'
+                        ? '(not started)'
+                        : s.status === 'waiting'
+                          ? '(waiting)'
+                          : '(current step)'}
+                  </span>
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
   )
 }
 
@@ -361,14 +490,13 @@ function GatewayKeyStep({ provider }: { provider: (typeof providers)[number] }) 
   )
 }
 
-function FirstRequestStep() {
+function FirstRequestStep({ receiptId, onLand }: { receiptId: string | null; onLand: (id: string) => void }) {
   const { openReceipt } = useApp()
   const rows = useReceipts()
-  const [receiptId, setReceiptId] = useState<string | null>(null)
 
   const land = () => {
     const first = receiptStream.getSnapshot().find((r) => !r.inFlight && r.verdict === 'allowed') ?? receiptStream.getSnapshot()[0]
-    if (first) setReceiptId(first.id)
+    if (first) onLand(first.id)
   }
 
   useEffect(() => {
@@ -392,11 +520,7 @@ function FirstRequestStep() {
           <p className="text-sm text-muted-foreground">
             Run your app with the new base URL. This panel turns into that request's receipt the moment it lands.
           </p>
-          <button
-            type="button"
-            onClick={land}
-            className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
-          >
+          <button type="button" onClick={land} className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
             Send a test request for me
           </button>
         </div>
@@ -411,12 +535,7 @@ function FirstRequestStep() {
           <VerdictBadge verdict={r.verdict} />
           <span className="font-mono text-sm">
             {r.requestedModel}
-            {r.requestedModel !== r.resolvedModel && (
-              <>
-                {' '}
-                → {r.resolvedModel}
-              </>
-            )}
+            {r.requestedModel !== r.resolvedModel && <> → {r.resolvedModel}</>}
           </span>
           <span className="text-sm text-muted-foreground">
             via <span className="font-mono text-foreground">{r.backend}</span>
