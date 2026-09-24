@@ -29,7 +29,7 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Backend, backends as seedBackends, modelById, type Provenance, type Route, routes, type SyncState } from '@/data/mock'
+import { type Backend, backends as seedBackends, modelById, type Provenance, type Route, routes, type SyncState } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { backendDiff, type BackendSpec, backendSpecs, backendYaml, routeYaml } from './routing-yaml'
 

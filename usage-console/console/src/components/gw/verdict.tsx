@@ -1,6 +1,6 @@
 import { Ban, Check, EyeOff, Scissors, Shuffle, TriangleAlert } from 'lucide-react'
 import type { ComponentProps } from 'react'
-import type { Verdict } from '@/data/mock'
+import type { Verdict } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
 // §7.7: verdict is never conveyed by color alone — every verdict carries a

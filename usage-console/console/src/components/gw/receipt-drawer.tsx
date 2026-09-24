@@ -1,11 +1,11 @@
 import { ArrowRight, Copy, Download, Eye, Link2, Lock, Printer, ShieldAlert } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { changes, modelById, type Receipt } from '@/data/mock'
+import { changes, modelById, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
@@ -38,6 +38,9 @@ export function ReceiptDrawer() {
   const { receiptId, closeReceipt } = useApp()
   useReceipts() // re-render when an in-flight receipt settles
   const r = receiptId ? receiptStream.byId.get(receiptId) : undefined
+  useEffect(() => {
+    if (receiptId && !r) receiptStream.ensure(receiptId)
+  }, [receiptId, r])
   return (
     <Drawer open={!!receiptId} onOpenChange={(o) => !o && closeReceipt()} side="right">
       <DrawerContent style={{ ['--drawer-content-width' as string]: 'min(46rem, 100vw)' }}>

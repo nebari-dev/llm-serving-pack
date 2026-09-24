@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgets, modelById, spendSeries } from '@/data/mock'
+import { type Budget, budgets, modelById, spendSeries } from '@/data/catalog'
 import { int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, useApp } from '@/state/app-state'

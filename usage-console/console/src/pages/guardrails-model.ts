@@ -1,4 +1,4 @@
-import type { PolicyRule } from '@/data/mock'
+import type { PolicyRule } from '@/data/catalog'
 
 // Structured rule model for the builder (§5.3). Rules are stored structured,
 // not as text — the JSON and YAML-ish renderings below are views of this.

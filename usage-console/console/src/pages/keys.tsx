@@ -8,7 +8,7 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, budgets, keys as seedKeys, teams } from '@/data/mock'
+import { type ApiKey, budgets, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
 import { clock, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
@@ -61,12 +61,12 @@ export function KeysPage() {
       <RevokeKeyDialog
         apiKey={revoking}
         onOpenChange={(o) => !o && setRevoking(null)}
-        onRevoke={(k) => {
-          update(k.id, { status: 'revoked', requests24h: 0 })
+        onRevoke={async (k) => {
+          update(k.id, await revokeKey(k))
           setRevoking(null)
         }}
       />
-      <RotateKeyDialog apiKey={rotating} onOpenChange={(o) => !o && setRotating(null)} onRotate={(k) => update(k.id, { status: 'rotating' })} />
+      <RotateKeyDialog apiKey={rotating} onOpenChange={(o) => !o && setRotating(null)} onRotate={(k) => update(k.id, k)} />
     </>
   )
 

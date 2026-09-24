@@ -3,7 +3,7 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import App from '@/App'
-import { seedReceipts } from '@/data/mock'
+import { seedReceipts } from '@/data/catalog'
 
 beforeAll(() => {
   window.matchMedia ??= ((q: string) => ({

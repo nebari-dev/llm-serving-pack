@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { makeReceipt, type Receipt, seedReceipts } from '@/data/mock'
+import { API_BASE, api, dataMode, type Receipt, seedReceipts } from '@/data/catalog'
+import { makeReceipt } from '@/data/mock'
 
 // Global console state (§7.4): one time range shared across surfaces, the
 // tenant/environment, density, and the live receipt stream.
@@ -47,12 +48,17 @@ type Listener = () => void
 class ReceiptStream {
   private rows: Receipt[] = seedReceipts
   private listeners = new Set<Listener>()
-  private timer?: number
+  private started = false
+  private pending = new Set<string>()
   byId = new Map<string, Receipt>(seedReceipts.map((r) => [r.id, r]))
 
   subscribe = (l: Listener) => {
     this.listeners.add(l)
-    if (!this.timer) this.start()
+    if (!this.started) {
+      this.started = true
+      if (dataMode === 'api') this.connect()
+      else this.simulate()
+    }
     return () => {
       this.listeners.delete(l)
     }
@@ -64,32 +70,51 @@ class ReceiptStream {
     for (const l of this.listeners) l()
   }
 
-  private start() {
+  // Live receipts from the control plane (§6 /stream/traffic). The same id
+  // arrives twice for streamed requests: in flight, then settled. EventSource
+  // reconnects on its own after a drop.
+  private connect() {
+    const es = new EventSource(`${API_BASE}/stream/traffic`)
+    es.addEventListener('receipt', (e) => this.upsert(JSON.parse((e as MessageEvent<string>).data) as Receipt))
+  }
+
+  /** Loads a receipt outside the live window (deep links) into byId. */
+  ensure(id: string) {
+    if (dataMode !== 'api' || this.byId.has(id) || this.pending.has(id)) return
+    this.pending.add(id)
+    api<Receipt>(`/receipts/${encodeURIComponent(id)}`)
+      .then((r) => {
+        this.byId.set(r.id, r)
+        // Not added to the live rows, but subscribers compare snapshots by
+        // identity, so hand out a new array to make readers of byId re-render.
+        this.rows = this.rows.slice()
+        this.emit()
+      })
+      .catch(() => {})
+      .finally(() => this.pending.delete(id))
+  }
+
+  private simulate() {
     const tick = () => {
       const streaming = Math.random() < 0.35
       const r = makeReceipt(Date.now(), Math.random, { inFlight: streaming })
-      this.push(r)
+      this.upsert(r)
       if (streaming) {
         // Tokens arrive last (§13): settle the row in place when the stream ends.
-        window.setTimeout(() => this.settle(r.id), 1800 + Math.random() * 2600)
+        window.setTimeout(() => {
+          const cur = this.byId.get(r.id)
+          if (cur) this.upsert({ ...cur, inFlight: false })
+        }, 1800 + Math.random() * 2600)
       }
-      this.timer = window.setTimeout(tick, 700 + Math.random() * 1400)
+      window.setTimeout(tick, 700 + Math.random() * 1400)
     }
-    this.timer = window.setTimeout(tick, 900)
+    window.setTimeout(tick, 900)
   }
 
-  private push(r: Receipt) {
+  private upsert(r: Receipt) {
+    const known = this.byId.has(r.id)
     this.byId.set(r.id, r)
-    this.rows = [r, ...this.rows].slice(0, 600)
-    this.emit()
-  }
-
-  private settle(id: string) {
-    const r = this.byId.get(id)
-    if (!r) return
-    const settled = { ...r, inFlight: false }
-    this.byId.set(id, settled)
-    this.rows = this.rows.map((x) => (x.id === id ? settled : x))
+    this.rows = known ? this.rows.map((x) => (x.id === r.id ? r : x)) : [r, ...this.rows].slice(0, 600)
     this.emit()
   }
 }

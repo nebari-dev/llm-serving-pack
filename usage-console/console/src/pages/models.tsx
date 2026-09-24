@@ -7,7 +7,7 @@ import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { backends, modelById, models, type Provenance } from '@/data/mock'
+import { backends, modelById, models, type Provenance } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
 // §7.4 Models → Catalog · Aliases · Pricing. §5.2 model_catalog,

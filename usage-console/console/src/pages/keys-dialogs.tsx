@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, budgets, models, teams } from '@/data/mock'
+import { type ApiKey, budgets, createKey, models, rotateKey, teams } from '@/data/catalog'
 import { int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -18,12 +18,6 @@ import { cn } from '@/lib/utils'
 // blast radius and typed confirmation, rotate with an overlap window.
 
 const regions = ['us-east', 'eu-central', 'eu-west', 'eu-private']
-
-function newSecret() {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
-  const body = Array.from({ length: 40 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')
-  return `ngw_live_${body}`
-}
 
 /** Shows a secret exactly once. Done stays disabled until the user acknowledges storing it. */
 function SecretOnce({ secret, onDone, context }: { secret: string; onDone: () => void; context: string }) {
@@ -74,6 +68,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   const [customDate, setCustomDate] = useState('')
   const [neverAck, setNeverAck] = useState(false)
   const [tried, setTried] = useState(false)
+  const [busy, setBusy] = useState(false)
 
   const nameValid = /^[a-z][a-z0-9-]{2,39}$/.test(name)
   const expiryValid = expiry !== '' && (expiry !== 'custom' || !!customDate) && (expiry !== 'never' || neverAck)
@@ -95,28 +90,30 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
 
   const toggle = (list: string[], v: string, on: boolean) => (on ? [...list, v] : list.filter((x) => x !== v))
 
-  const submit = () => {
+  const submit = async () => {
     setTried(true)
-    if (!valid) return
-    const s = newSecret()
+    if (!valid || busy) return
     const expiresAt =
       expiry === 'never' ? null : expiry === 'custom' ? customDate : new Date(Date.now() + Number(expiry) * 86_400_000).toISOString().slice(0, 10)
-    onCreate({
-      id: 'k' + Math.random().toString(36).slice(2, 7),
-      name,
-      prefix: s.slice(0, 13),
-      team,
-      project: project.trim(),
-      allowedModels: allowed,
-      allowedRegions,
-      budgetId: budget === 'team' ? budgets.find((b) => b.scope === team)?.id : undefined,
-      expiresAt,
-      lastUsed: 'never',
-      requests24h: 0,
-      status: 'active',
-    })
-    setSecret(s)
-    setStep('secret')
+    setBusy(true)
+    try {
+      const res = await createKey({
+        name,
+        team,
+        project: project.trim(),
+        allowedModels: allowed,
+        allowedRegions,
+        budgetId: budget === 'team' ? budgets.find((b) => b.scope === team)?.id : undefined,
+        expiresAt,
+      })
+      onCreate(res.key)
+      setSecret(res.secret)
+      setStep('secret')
+    } catch (e) {
+      toast.add({ title: 'Could not create key', description: e instanceof Error ? e.message : String(e), type: 'error' })
+    } finally {
+      setBusy(false)
+    }
   }
 
   const teamBudget = budgets.find((b) => b.scope === team)
@@ -274,7 +271,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   )
 }
 
-export function RevokeKeyDialog({ apiKey, onOpenChange, onRevoke }: { apiKey: ApiKey | null; onOpenChange: (o: boolean) => void; onRevoke: (k: ApiKey) => void }) {
+export function RevokeKeyDialog({ apiKey, onOpenChange, onRevoke }: { apiKey: ApiKey | null; onOpenChange: (o: boolean) => void; onRevoke: (k: ApiKey) => Promise<void> }) {
   const [typed, setTyped] = useState('')
   const k = apiKey
   return (
@@ -289,12 +286,16 @@ export function RevokeKeyDialog({ apiKey, onOpenChange, onRevoke }: { apiKey: Ap
         {k && (
           <form
             className="flex flex-col gap-4"
-            onSubmit={(e) => {
+            onSubmit={async (e) => {
               e.preventDefault()
               if (typed !== k.name) return
-              onRevoke(k)
-              toast.add({ title: 'Key revoked', description: `${k.name} now returns 401 invalid_key. Recorded in the audit log.`, type: 'success' })
-              setTyped('')
+              try {
+                await onRevoke(k)
+                toast.add({ title: 'Key revoked', description: `${k.name} now returns 401 invalid_key. Recorded in the audit log.`, type: 'success' })
+                setTyped('')
+              } catch (err) {
+                toast.add({ title: 'Could not revoke key', description: err instanceof Error ? err.message : String(err), type: 'error' })
+              }
             }}
           >
             <DialogHeader>
@@ -374,6 +375,7 @@ type Overlap = '1' | '24' | '48' | '168'
 export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: ApiKey | null; onOpenChange: (o: boolean) => void; onRotate: (k: ApiKey) => void }) {
   const [overlap, setOverlap] = useState<Overlap>('48')
   const [secret, setSecret] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   const k = apiKey
   const close = () => {
     onOpenChange(false)
@@ -454,9 +456,18 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
                 Cancel
               </Button>
               <Button
-                onClick={() => {
-                  setSecret(newSecret())
-                  onRotate(k)
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true)
+                  try {
+                    const res = await rotateKey(k, Number(overlap))
+                    setSecret(res.secret)
+                    onRotate(res.key)
+                  } catch (e) {
+                    toast.add({ title: 'Could not rotate key', description: e instanceof Error ? e.message : String(e), type: 'error' })
+                  } finally {
+                    setBusy(false)
+                  }
                 }}
               >
                 Issue new secret

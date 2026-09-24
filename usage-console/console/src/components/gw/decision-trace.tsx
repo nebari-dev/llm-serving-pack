@@ -1,5 +1,5 @@
 import { Check, CircleSlash, TriangleAlert, X } from 'lucide-react'
-import type { TraceStep } from '@/data/mock'
+import type { TraceStep } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
 // §7.5.4 / §8 DecisionTrace — "the most important component in the product".

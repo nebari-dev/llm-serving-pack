@@ -1,4 +1,4 @@
-import type { Backend, Route } from '@/data/mock'
+import type { Backend, Route } from '@/data/catalog'
 
 // Generated config for the "View generated YAML" / Export affordances (§7.5.6).
 // CRD kinds appear here and only here (§7.3).

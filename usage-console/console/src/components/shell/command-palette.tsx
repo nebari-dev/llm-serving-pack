@@ -2,7 +2,7 @@ import { Boxes, FileText, KeyRound, Route, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { backends, keys, models, rules } from '@/data/mock'
+import { backends, keys, models, rules } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp } from '@/state/app-state'
 

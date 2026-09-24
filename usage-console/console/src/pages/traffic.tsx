@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
-import { backends, keys, models, type Receipt, teams, type Verdict } from '@/data/mock'
+import { backends, keys, models, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, useApp, useReceipts } from '@/state/app-state'

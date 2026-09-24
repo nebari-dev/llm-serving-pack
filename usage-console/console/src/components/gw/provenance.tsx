@@ -1,5 +1,5 @@
 import { CircleCheck, CircleDashed, CircleX, GitBranch, Link2, MonitorCog, TriangleAlert } from 'lucide-react'
-import type { Provenance, SyncState } from '@/data/mock'
+import type { Provenance, SyncState } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { StateChip } from './verdict'
 

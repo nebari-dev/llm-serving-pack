@@ -3,7 +3,7 @@
 // distributes the seeded daily-by-team series across keys, projects and
 // models so the breakdown and the trend reconcile to the same totals.
 
-import { keys, modelById, spendSeries, teams } from '@/data/mock'
+import { keys, modelById, spendSeries, teams } from '@/data/catalog'
 import type { TimeRange } from '@/state/app-state'
 
 export type Dim = 'team' | 'project' | 'key' | 'model' | 'provider'
