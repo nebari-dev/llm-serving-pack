@@ -67,4 +67,5 @@ The riskiest work is in the request path, so it goes first. Nothing about the UI
 
 ```
 docs/spec.md    The specification. Start here.
+console/        Front-end mockup of the Gateway console on nebari-design (see console/README.md).
 ```

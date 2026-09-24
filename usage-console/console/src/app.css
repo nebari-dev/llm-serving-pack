@@ -1,0 +1,153 @@
+/*
+ * App-level tokens for the Gateway console, layered on the nebari theme.
+ * globals.css is the vendored @nebari/theme and stays untouched; everything
+ * here references its primitive ramps so both themes stay in lockstep.
+ *
+ * Spec §7.2 / §8: five semantic state colors and no others —
+ * allowed, redacted, rerouted, blocked, degraded. Each has a foreground,
+ * a soft background, a border tint, and a solid "bar" for the row-edge marker.
+ */
+@import './globals.css';
+
+:root {
+  /* verdict ramp */
+  --v-allowed-fg: var(--green-700);
+  --v-allowed-bg: var(--green-50);
+  --v-allowed-border: var(--green-200);
+  --v-allowed-bar: var(--green-500);
+
+  --v-redacted-fg: var(--blue-700);
+  --v-redacted-bg: var(--blue-50);
+  --v-redacted-border: var(--blue-200);
+  --v-redacted-bar: var(--blue-600);
+
+  --v-rerouted-fg: var(--accent-teal-700);
+  --v-rerouted-bg: var(--accent-teal-50);
+  --v-rerouted-border: var(--accent-teal-200);
+  --v-rerouted-bar: var(--accent-teal-500);
+
+  --v-blocked-fg: var(--red-700);
+  --v-blocked-bg: var(--red-50);
+  --v-blocked-border: var(--red-200);
+  --v-blocked-bar: var(--red-600);
+
+  --v-degraded-fg: var(--yellow-700);
+  --v-degraded-bg: var(--yellow-50);
+  --v-degraded-border: var(--yellow-300);
+  --v-degraded-bar: var(--yellow-400);
+
+  /* environment accent (§7.4) */
+  --env-production: var(--primary-magenta-600);
+  --env-staging: var(--zinc-500);
+
+  /* header recipe tokens (nebari-ui skill, app-defined) */
+  --header-action-hover: #d9d9dc;
+  --notification-badge: #d00000;
+  --sign-out-foreground: #d2161c;
+
+  /* density scale (§7.2): row height + cell padding */
+  --row-h: 2.75rem;
+  --cell-px: 1rem;
+}
+
+.dark {
+  --v-allowed-fg: var(--green-300);
+  --v-allowed-bg: var(--green-950);
+  --v-allowed-border: var(--green-800);
+  --v-allowed-bar: var(--green-400);
+
+  --v-redacted-fg: var(--blue-300);
+  --v-redacted-bg: var(--blue-950);
+  --v-redacted-border: var(--blue-800);
+  --v-redacted-bar: var(--blue-400);
+
+  --v-rerouted-fg: var(--accent-teal-300);
+  --v-rerouted-bg: var(--accent-teal-950);
+  --v-rerouted-border: var(--accent-teal-800);
+  --v-rerouted-bar: var(--accent-teal-400);
+
+  --v-blocked-fg: var(--red-300);
+  --v-blocked-bg: var(--red-950);
+  --v-blocked-border: var(--red-800);
+  --v-blocked-bar: var(--red-400);
+
+  --v-degraded-fg: var(--yellow-200);
+  --v-degraded-bg: var(--yellow-950);
+  --v-degraded-border: var(--yellow-800);
+  --v-degraded-bar: var(--yellow-300);
+
+  --env-production: var(--primary-magenta-500);
+  --env-staging: var(--zinc-400);
+
+  --header-action-hover: #4a4a50;
+  --notification-badge: #e00000;
+  --sign-out-foreground: #ff6b6b;
+}
+
+[data-density='comfortable'] {
+  --row-h: 2.75rem;
+  --cell-px: 1rem;
+}
+[data-density='compact'] {
+  --row-h: 2.25rem;
+  --cell-px: 0.75rem;
+}
+[data-density='dense'] {
+  --row-h: 1.75rem;
+  --cell-px: 0.5rem;
+}
+
+@theme inline {
+  --color-v-allowed-fg: var(--v-allowed-fg);
+  --color-v-allowed-bg: var(--v-allowed-bg);
+  --color-v-allowed-border: var(--v-allowed-border);
+  --color-v-allowed-bar: var(--v-allowed-bar);
+  --color-v-redacted-fg: var(--v-redacted-fg);
+  --color-v-redacted-bg: var(--v-redacted-bg);
+  --color-v-redacted-border: var(--v-redacted-border);
+  --color-v-redacted-bar: var(--v-redacted-bar);
+  --color-v-rerouted-fg: var(--v-rerouted-fg);
+  --color-v-rerouted-bg: var(--v-rerouted-bg);
+  --color-v-rerouted-border: var(--v-rerouted-border);
+  --color-v-rerouted-bar: var(--v-rerouted-bar);
+  --color-v-blocked-fg: var(--v-blocked-fg);
+  --color-v-blocked-bg: var(--v-blocked-bg);
+  --color-v-blocked-border: var(--v-blocked-border);
+  --color-v-blocked-bar: var(--v-blocked-bar);
+  --color-v-degraded-fg: var(--v-degraded-fg);
+  --color-v-degraded-bg: var(--v-degraded-bg);
+  --color-v-degraded-border: var(--v-degraded-border);
+  --color-v-degraded-bar: var(--v-degraded-bar);
+  --color-env-production: var(--env-production);
+  --color-env-staging: var(--env-staging);
+  --color-header-action-hover: var(--header-action-hover);
+  --color-notification-badge: var(--notification-badge);
+  --color-sign-out-foreground: var(--sign-out-foreground);
+
+  --animate-row-arrive: gw-row-arrive var(--duration-loading) var(--ease-standard) both;
+}
+
+/*
+ * The one motion on the traffic surface (§7.2): a new row's background
+ * settles from a highlight to transparent. No slide, no fade-in.
+ * Under reduced motion the row keeps a static left-edge marker instead
+ * (see .row-new in StreamTable).
+ */
+@keyframes gw-row-arrive {
+  from {
+    background-color: color-mix(in oklch, var(--primary) 12%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-canvas;
+    font-feature-settings: 'cv11';
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
