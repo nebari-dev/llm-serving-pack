@@ -1,0 +1,385 @@
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jbouder/stargate/server/internal/model"
+)
+
+// NotifyChannel carries "<id> <ts-ms>" for every receipt insert or settle.
+const NotifyChannel = "receipts"
+
+var receiptCols = []string{
+	"id", "ts", "tenant_id", "trace_id", "session_id", "duration_ms", "ttft_ms", "key_id", "key_name", "team", "project", "actor",
+	"requested_model", "resolved_model", "backend", "provider", "region", "route_reason", "fallback_from",
+	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis",
+	"verdict", "inbound_verdict", "redactions", "rules", "status", "error_code", "error_detail",
+	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace",
+}
+
+func nullStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func receiptValues(r *model.Receipt) []any {
+	js := func(v any) []byte {
+		if v == nil {
+			return nil
+		}
+		b, _ := json.Marshal(v)
+		return b
+	}
+	var basis []byte
+	if r.CostBasis != nil {
+		basis = js(r.CostBasis)
+	}
+	return []any{
+		r.ID, time.UnixMilli(r.TS), r.TenantID, r.TraceID, nullStr(r.SessionID), r.DurationMS, r.TTFTMS, r.KeyID, r.KeyName, r.Team, r.Project, nullStr(r.Actor),
+		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
+		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis,
+		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
+		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace),
+	}
+}
+
+// PutReceipt upserts a receipt (in-flight first, settled later) and notifies
+// listeners in the same transaction.
+func (s *Store) PutReceipt(ctx context.Context, r *model.Receipt) error {
+	vals := receiptValues(r)
+	ph, set := "", ""
+	for i, c := range receiptCols {
+		if i > 0 {
+			ph += ","
+		}
+		ph += fmt.Sprintf("$%d", i+1)
+		if c != "id" && c != "ts" {
+			if set != "" {
+				set += ","
+			}
+			set += c + " = EXCLUDED." + c
+		}
+	}
+	tx, err := s.Receipts.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	cols := ""
+	for i, c := range receiptCols {
+		if i > 0 {
+			cols += ","
+		}
+		cols += c
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO receipts (`+cols+`) VALUES (`+ph+`) ON CONFLICT (id, ts) DO UPDATE SET `+set, vals...); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, NotifyChannel, fmt.Sprintf("%s %d", r.ID, r.TS)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CopyReceipts bulk-loads settled receipts without notifying (backfill).
+func (s *Store) CopyReceipts(ctx context.Context, rs []*model.Receipt) error {
+	_, err := s.Receipts.CopyFrom(ctx, pgx.Identifier{"receipts"}, receiptCols, pgx.CopyFromSlice(len(rs), func(i int) ([]any, error) {
+		return receiptValues(rs[i]), nil
+	}))
+	return err
+}
+
+// RefreshAggregates materializes the continuous aggregates over a window,
+// e.g. after a backfill.
+func (s *Store) RefreshAggregates(ctx context.Context, from, to time.Time) error {
+	for _, v := range []string{"receipts_5m", "receipts_daily"} {
+		if _, err := s.Receipts.Exec(ctx, `CALL refresh_continuous_aggregate($1::regclass, $2::timestamptz, $3::timestamptz)`, v, from, to); err != nil {
+			return fmt.Errorf("%s: %w", v, err)
+		}
+	}
+	return nil
+}
+
+const selectReceipt = `SELECT id, ts, tenant_id, trace_id, coalesce(session_id, ''), duration_ms, ttft_ms, key_id, key_name, team, project, coalesce(actor, ''),
+	requested_model, resolved_model, backend, provider, region, route_reason, coalesce(fallback_from, ''),
+	input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd::float8,
+	verdict, inbound_verdict, redactions, rules, status, coalesce(error_code, ''), coalesce(error_detail, ''),
+	request_hash, response_hash, content_captured, in_flight, route_trace FROM receipts`
+
+func scanReceipt(row pgx.Row) (model.Receipt, error) {
+	var r model.Receipt
+	var ts time.Time
+	var red, rules, trace []byte
+	err := row.Scan(&r.ID, &ts, &r.TenantID, &r.TraceID, &r.SessionID, &r.DurationMS, &r.TTFTMS, &r.KeyID, &r.KeyName, &r.Team, &r.Project, &r.Actor,
+		&r.RequestedModel, &r.ResolvedModel, &r.Backend, &r.Provider, &r.Region, &r.RouteReason, &r.FallbackFrom,
+		&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CostUSD,
+		&r.Verdict, &r.InboundVerdict, &red, &rules, &r.Status, &r.ErrorCode, &r.ErrorDetail,
+		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace)
+	if err != nil {
+		return r, err
+	}
+	r.TS = ts.UnixMilli()
+	for _, p := range []struct {
+		b []byte
+		v any
+	}{{red, &r.Redactions}, {rules, &r.Rules}, {trace, &r.Trace}} {
+		if err := json.Unmarshal(p.b, p.v); err != nil {
+			return r, err
+		}
+	}
+	return r, nil
+}
+
+// Receipt fetches one receipt. ts narrows the chunk scan when known (0 = any).
+func (s *Store) Receipt(ctx context.Context, tenant, id string, tsMS int64) (model.Receipt, error) {
+	var row pgx.Row
+	if tsMS > 0 {
+		row = s.Receipts.QueryRow(ctx, selectReceipt+` WHERE tenant_id = $1 AND id = $2 AND ts = $3`, tenant, id, time.UnixMilli(tsMS))
+	} else {
+		row = s.Receipts.QueryRow(ctx, selectReceipt+` WHERE tenant_id = $1 AND id = $2 AND ts > now() - interval '30 days'`, tenant, id)
+	}
+	r, err := scanReceipt(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}
+
+// RecentReceipts returns the newest receipts, newest first, optionally only
+// those before a cursor (epoch ms) for paging.
+func (s *Store) RecentReceipts(ctx context.Context, tenant string, limit int, beforeMS int64) ([]model.Receipt, error) {
+	before := time.Now().Add(time.Minute)
+	if beforeMS > 0 {
+		before = time.UnixMilli(beforeMS)
+	}
+	rows, _ := s.Receipts.Query(ctx, selectReceipt+` WHERE tenant_id = $1 AND ts < $2 AND ts > now() - interval '30 days' ORDER BY ts DESC LIMIT $3`, tenant, before, limit)
+	return collect(rows, func(r pgx.Rows) (model.Receipt, error) { return scanReceipt(r) })
+}
+
+// TrafficSeries returns verdict counts per bucket, oldest first, with empty
+// buckets filled so the chart x-axis stays regular.
+func (s *Store) TrafficSeries(ctx context.Context, tenant string, bucket time.Duration, points int) ([]model.SeriesPoint, error) {
+	end := time.Now().Truncate(bucket).Add(bucket)
+	start := end.Add(-bucket * time.Duration(points))
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT time_bucket($2::interval, bucket) AS t, verdict, sum(requests)::int
+		FROM receipts_5m WHERE tenant_id = $1 AND bucket >= $3
+		GROUP BY 1, 2`, tenant, fmt.Sprintf("%d seconds", int(bucket.Seconds())), start)
+	type row struct {
+		t time.Time
+		v string
+		n int
+	}
+	got, err := collect(rows, func(r pgx.Rows) (row, error) {
+		var x row
+		return x, r.Scan(&x.t, &x.v, &x.n)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.SeriesPoint, points)
+	for i := range out {
+		out[i].T = start.Add(bucket * time.Duration(i)).UnixMilli()
+	}
+	for _, x := range got {
+		i := int(x.t.Sub(start) / bucket)
+		if i < 0 || i >= points {
+			continue
+		}
+		p := &out[i]
+		switch x.v {
+		case "allowed":
+			p.Allowed += x.n
+		case "redacted":
+			p.Redacted += x.n
+		case "rerouted":
+			p.Rerouted += x.n
+		case "blocked":
+			p.Blocked += x.n
+		case "truncated":
+			p.Truncated += x.n
+		}
+	}
+	return out, nil
+}
+
+// SpendSeries returns daily spend by team for the last n UTC days, oldest first.
+func (s *Store) SpendSeries(ctx context.Context, tenant string, days int, teams []string) ([]model.SpendPoint, error) {
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	start := today.AddDate(0, 0, -(days - 1))
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT bucket, team, sum(cost_usd)::float8 FROM receipts_daily
+		WHERE tenant_id = $1 AND bucket >= $2 GROUP BY 1, 2`, tenant, start)
+	type row struct {
+		t    time.Time
+		team string
+		usd  float64
+	}
+	got, err := collect(rows, func(r pgx.Rows) (row, error) {
+		var x row
+		return x, r.Scan(&x.t, &x.team, &x.usd)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.SpendPoint, days)
+	for i := range out {
+		out[i] = model.SpendPoint{Day: start.AddDate(0, 0, i).Format("01-02"), ByTeam: map[string]float64{}}
+		for _, t := range teams {
+			out[i].ByTeam[t] = 0
+		}
+	}
+	for _, x := range got {
+		i := int(x.t.UTC().Sub(start) / (24 * time.Hour))
+		if i >= 0 && i < days {
+			out[i].ByTeam[x.team] += x.usd
+		}
+	}
+	return out, nil
+}
+
+type KeyUsage struct {
+	Requests24h int
+	LastUsed    *time.Time
+}
+
+func (s *Store) KeyUsage(ctx context.Context, tenant string) (map[string]KeyUsage, error) {
+	out := map[string]KeyUsage{}
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT key_id, sum(requests)::int FROM receipts_5m
+		WHERE tenant_id = $1 AND bucket > now() - interval '24 hours' GROUP BY 1`, tenant)
+	counts, err := collect(rows, func(r pgx.Rows) (struct {
+		id string
+		n  int
+	}, error) {
+		var x struct {
+			id string
+			n  int
+		}
+		return x, r.Scan(&x.id, &x.n)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range counts {
+		out[c.id] = KeyUsage{Requests24h: c.n}
+	}
+	rows, _ = s.Receipts.Query(ctx, `
+		SELECT key_id, max(ts) FROM receipts
+		WHERE tenant_id = $1 AND ts > now() - interval '30 days' GROUP BY 1`, tenant)
+	last, err := collect(rows, func(r pgx.Rows) (struct {
+		id string
+		t  time.Time
+	}, error) {
+		var x struct {
+			id string
+			t  time.Time
+		}
+		return x, r.Scan(&x.id, &x.t)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range last {
+		u := out[l.id]
+		t := l.t
+		u.LastUsed = &t
+		out[l.id] = u
+	}
+	return out, nil
+}
+
+// MonthSpend is month-to-date spend (UTC) keyed by team id and by key id.
+type MonthSpend struct {
+	ByTeam map[string]float64
+	ByKey  map[string]float64
+}
+
+func (s *Store) MonthToDate(ctx context.Context, tenant string) (MonthSpend, error) {
+	ms := MonthSpend{ByTeam: map[string]float64{}, ByKey: map[string]float64{}}
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT team, key_id, sum(cost_usd)::float8 FROM receipts_daily
+		WHERE tenant_id = $1 AND bucket >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+		GROUP BY 1, 2`, tenant)
+	defer rows.Close()
+	for rows.Next() {
+		var team, key string
+		var usd float64
+		if err := rows.Scan(&team, &key, &usd); err != nil {
+			return ms, err
+		}
+		ms.ByTeam[team] += usd
+		ms.ByKey[key] += usd
+	}
+	return ms, rows.Err()
+}
+
+type RuleCounts struct{ Last24h, Last7d int }
+
+// RuleCounts counts matched rule evaluations. It reads raw receipts because
+// continuous aggregates can't unnest jsonb arrays.
+func (s *Store) RuleCounts(ctx context.Context, tenant string) (map[string]RuleCounts, error) {
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT e->>'ruleId',
+		       count(*) FILTER (WHERE r.ts > now() - interval '24 hours')::int,
+		       count(*)::int
+		FROM receipts r, jsonb_array_elements(r.rules) e
+		WHERE r.tenant_id = $1 AND r.ts > now() - interval '7 days' AND (e->>'matched')::boolean
+		GROUP BY 1`, tenant)
+	out := map[string]RuleCounts{}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var c RuleCounts
+		if err := rows.Scan(&id, &c.Last24h, &c.Last7d); err != nil {
+			return nil, err
+		}
+		out[id] = c
+	}
+	return out, rows.Err()
+}
+
+type BackendStats struct {
+	P50       int
+	ErrorRate float64
+	Requests  int
+}
+
+// BackendStats covers the last hour of settled traffic per backend.
+func (s *Store) BackendStats(ctx context.Context, tenant string) (map[string]BackendStats, error) {
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT backend,
+		       percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::int,
+		       (100.0 * count(*) FILTER (WHERE status >= 500 OR status = 429) / count(*))::float8,
+		       count(*)::int
+		FROM receipts
+		WHERE tenant_id = $1 AND ts > now() - interval '1 hour' AND NOT in_flight AND status <> 403
+		GROUP BY 1`, tenant)
+	out := map[string]BackendStats{}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var b BackendStats
+		if err := rows.Scan(&name, &b.P50, &b.ErrorRate, &b.Requests); err != nil {
+			return nil, err
+		}
+		out[name] = b
+	}
+	return out, rows.Err()
+}
+
+// ReceiptAnyTenant fetches by id + ts only; the notify listener uses it.
+func (s *Store) ReceiptAnyTenant(ctx context.Context, id string, tsMS int64) (model.Receipt, error) {
+	r, err := scanReceipt(s.Receipts.QueryRow(ctx, selectReceipt+` WHERE id = $1 AND ts = $2`, id, time.UnixMilli(tsMS)))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return r, ErrNotFound
+	}
+	return r, err
+}

@@ -1,0 +1,331 @@
+// Package api is the control-plane REST + SSE surface the console reads
+// (spec §6), scoped as /api/v1/{tenant}/...
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"math"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/store"
+)
+
+type Server struct {
+	Store *store.Store
+	Hub   *Hub
+	// Tenants this server answers for. Auth (OIDC, §6) is not wired yet, so
+	// every caller acts as DevActor.
+	Tenants  []string
+	DevActor string
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	h := func(pattern string, fn func(http.ResponseWriter, *http.Request, string) (any, error)) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			tenant := r.PathValue("tenant")
+			if !slices.Contains(s.Tenants, tenant) {
+				writeJSON(w, 404, errBody("tenant_not_found", "unknown tenant "+tenant))
+				return
+			}
+			v, err := fn(w, r, tenant)
+			switch {
+			case errors.Is(err, store.ErrNotFound):
+				writeJSON(w, 404, errBody("not_found", "not found"))
+			case errors.Is(err, store.ErrConflict):
+				writeJSON(w, 409, errBody("conflict", err.Error()))
+			case errors.As(err, new(badRequest)):
+				writeJSON(w, 400, errBody("bad_request", err.Error()))
+			case err != nil:
+				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
+				writeJSON(w, 500, errBody("internal", "internal error"))
+			case v != nil:
+				writeJSON(w, http.StatusOK, v)
+			}
+		})
+	}
+	const p = "/api/v1/{tenant}"
+	h("GET "+p+"/teams", s.teams)
+	h("GET "+p+"/models", s.models)
+	h("GET "+p+"/backends", s.backends)
+	h("GET "+p+"/routes", s.routes)
+	h("GET "+p+"/keys", s.keys)
+	h("POST "+p+"/keys", s.createKey)
+	h("POST "+p+"/keys/{id}/revoke", s.revokeKey)
+	h("POST "+p+"/keys/{id}/rotate", s.rotateKey)
+	h("GET "+p+"/budgets", s.budgets)
+	h("GET "+p+"/rules", s.rules)
+	h("GET "+p+"/detectors", s.detectors)
+	h("GET "+p+"/changes", s.changes)
+	h("GET "+p+"/receipts", s.receipts)
+	h("GET "+p+"/receipts/{id}", s.receipt)
+	h("GET "+p+"/series/traffic", s.trafficSeries)
+	h("GET "+p+"/series/spend", s.spendSeries)
+	h("GET "+p+"/stream/traffic", s.streamTraffic)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	return mux
+}
+
+type badRequest string
+
+func (b badRequest) Error() string { return string(b) }
+
+func errBody(code, msg string) map[string]any {
+	return map[string]any{"error": map[string]any{"code": code, "message": msg}}
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func intParam(r *http.Request, name string, def, lo, hi int) int {
+	v, err := strconv.Atoi(r.URL.Query().Get(name))
+	if err != nil {
+		return def
+	}
+	return min(max(v, lo), hi)
+}
+
+func (s *Server) teams(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.Teams(r.Context(), t)
+}
+
+func (s *Server) models(_ http.ResponseWriter, r *http.Request, _ string) (any, error) {
+	return s.Store.Models(r.Context())
+}
+
+func (s *Server) routes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.Routes(r.Context(), t)
+}
+
+func (s *Server) detectors(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.Detectors(r.Context(), t)
+}
+
+func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500))
+}
+
+// backends overlays live p50 and error rate from the last hour of receipts.
+// Health stays as configured until health probes exist.
+func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	bs, err := s.Store.Backends(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := s.Store.BackendStats(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bs {
+		if st, ok := stats[bs[i].Name]; ok && st.Requests >= 5 {
+			bs[i].P50, bs[i].ErrorRate = st.P50, math.Round(st.ErrorRate*10)/10
+		}
+	}
+	return bs, nil
+}
+
+func (s *Server) keys(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	ks, err := s.Store.Keys(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	usage, err := s.Store.KeyUsage(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.APIKey, len(ks))
+	for i, k := range ks {
+		out[i] = withUsage(k.APIKey, usage[k.ID])
+	}
+	return out, nil
+}
+
+func withUsage(k model.APIKey, u store.KeyUsage) model.APIKey {
+	k.Requests24h = u.Requests24h
+	if u.LastUsed != nil {
+		ms := u.LastUsed.UnixMilli()
+		k.LastUsedAt = &ms
+	}
+	if k.Status == "revoked" {
+		k.Requests24h = 0
+	}
+	return k
+}
+
+func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	var in store.NewKey
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, badRequest("invalid JSON body")
+	}
+	in.Name, in.Project = strings.TrimSpace(in.Name), strings.TrimSpace(in.Project)
+	switch {
+	case in.Name == "" || in.Team == "" || in.Project == "":
+		return nil, badRequest("name, team and project are required")
+	case len(in.AllowedModels) == 0:
+		return nil, badRequest("at least one allowed model is required")
+	}
+	k, secret, err := s.Store.CreateKey(r.Context(), t, s.DevActor, in)
+	if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.Code == "23503" {
+		return nil, badRequest("unknown team or budget")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"key": k.APIKey, "secret": secret}, nil
+}
+
+func (s *Server) revokeKey(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	k, err := s.Store.RevokeKey(r.Context(), t, s.DevActor, r.PathValue("id"))
+	if err != nil {
+		return nil, err
+	}
+	return withUsage(k.APIKey, store.KeyUsage{}), nil
+}
+
+// rotateKey takes {"overlapHours": n}: how long both secrets authenticate
+// (1h to 7 days, default 48h, matching the console's rotate dialog).
+func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	var in struct {
+		OverlapHours int `json:"overlapHours"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			return nil, badRequest("invalid JSON body")
+		}
+	}
+	if in.OverlapHours == 0 {
+		in.OverlapHours = 48
+	}
+	if in.OverlapHours < 1 || in.OverlapHours > 168 {
+		return nil, badRequest("overlapHours must be between 1 and 168")
+	}
+	k, secret, err := s.Store.RotateKey(r.Context(), t, s.DevActor, r.PathValue("id"), time.Duration(in.OverlapHours)*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	usage, _ := s.Store.KeyUsage(r.Context(), t)
+	return map[string]any{"key": withUsage(k.APIKey, usage[k.ID]), "secret": secret}, nil
+}
+
+// budgets adds month-to-date spend and a straight-line month-end projection.
+func (s *Server) budgets(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	bs, err := s.Store.Budgets(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	mtd, err := s.Store.MonthToDate(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := s.Store.Keys(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	keyID := map[string]string{}
+	for _, k := range keys {
+		keyID[k.Name] = k.ID
+	}
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	elapsed := now.Sub(monthStart).Hours() / monthEnd.Sub(monthStart).Hours()
+	for i := range bs {
+		b := &bs[i]
+		switch b.ScopeType {
+		case "team":
+			b.CurrentUSD = mtd.ByTeam[b.Scope]
+		case "key":
+			b.CurrentUSD = mtd.ByKey[keyID[b.Scope]]
+		}
+		b.CurrentUSD = math.Round(b.CurrentUSD*100) / 100
+		if elapsed > 0 {
+			b.ProjectedUSD = math.Round(b.CurrentUSD / elapsed)
+		}
+	}
+	return bs, nil
+}
+
+func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	rs, err := s.Store.Rules(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.RuleCounts(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rs {
+		c := counts[rs[i].ID]
+		rs[i].Fired24h, rs[i].Baseline7d = c.Last24h, int(math.Round(float64(c.Last7d)/7))
+	}
+	return rs, nil
+}
+
+func (s *Server) receipts(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
+	return s.Store.RecentReceipts(r.Context(), t, intParam(r, "limit", 240, 1, 1000), before)
+}
+
+func (s *Server) receipt(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.Receipt(r.Context(), t, r.PathValue("id"), 0)
+}
+
+var rangeBuckets = map[string]struct {
+	bucket time.Duration
+	points int
+}{
+	"15m": {time.Minute * 5, 3},
+	"1h":  {5 * time.Minute, 12},
+	"6h":  {15 * time.Minute, 24},
+	"24h": {30 * time.Minute, 48},
+	"7d":  {6 * time.Hour, 28},
+	"30d": {24 * time.Hour, 30},
+}
+
+func (s *Server) trafficSeries(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	rb, ok := rangeBuckets[r.URL.Query().Get("range")]
+	if !ok {
+		rb = rangeBuckets["24h"]
+	}
+	return s.Store.TrafficSeries(r.Context(), t, rb.bucket, rb.points)
+}
+
+func (s *Server) spendSeries(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	teams, err := s.Store.Teams(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(teams))
+	for i, x := range teams {
+		ids[i] = x.ID
+	}
+	return s.Store.SpendSeries(r.Context(), t, intParam(r, "days", 30, 1, 90), ids)
+}
+
+// FinishRotations runs until ctx ends, retiring secrets whose overlap is over.
+func (s *Server) FinishRotations(ctx context.Context) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for {
+		if err := s.Store.FinishRotations(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("finish rotations: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}

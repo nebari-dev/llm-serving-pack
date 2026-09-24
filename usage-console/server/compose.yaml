@@ -1,0 +1,32 @@
+# Local databases for the control plane. Two instances on purpose (spec §4.6):
+# config/keys/audit in plain Postgres, receipts in Postgres + TimescaleDB.
+services:
+  configdb:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: stargate
+      POSTGRES_PASSWORD: stargate
+      POSTGRES_DB: stargate
+    ports: ["5433:5432"]
+    volumes: [configdb:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stargate"]
+      interval: 2s
+      retries: 30
+
+  receiptsdb:
+    image: timescale/timescaledb:latest-pg17
+    environment:
+      POSTGRES_USER: stargate
+      POSTGRES_PASSWORD: stargate
+      POSTGRES_DB: receipts
+    ports: ["5434:5432"]
+    volumes: [receiptsdb:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stargate"]
+      interval: 2s
+      retries: 30
+
+volumes:
+  configdb:
+  receiptsdb:
