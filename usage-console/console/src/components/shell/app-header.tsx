@@ -19,7 +19,7 @@ import { useTheme } from '@/hooks/theme-provider'
 import { isThemeMode } from '@/hooks/use-theme-preference'
 import { cn } from '@/lib/utils'
 import { type Env, timeRanges, useApp } from '@/state/app-state'
-import symbol from '@/assets/brand/Nebari-Symbol.svg'
+import { NebariLogo } from './nebari-logo'
 
 const headerAction =
   'hover:bg-header-action-hover hover:no-underline focus-visible:ring-offset-0 active:bg-header-action-hover data-[popup-open]:bg-header-action-hover data-[popup-open]:no-underline'
@@ -45,8 +45,9 @@ export function AppHeader() {
       <NavigationMenu className="h-14 justify-between border-border bg-header pl-4 text-header-foreground">
         <div className="flex min-w-0 items-center gap-3">
           <SidebarTrigger className="hover:bg-header-action-hover" />
-          <MenuBarBrand href="/" aria-label="Gateway — go to overview" className="gap-2 text-lg font-semibold">
-            <img src={symbol} alt="" className="h-7 w-auto" />
+          <MenuBarBrand href="/" aria-label="Nebari Gateway — go to overview" className="gap-3 text-lg font-semibold">
+            <NebariLogo height={32} />
+            <span className="h-6 w-px bg-border-strong" aria-hidden="true" />
             <span>Gateway</span>
           </MenuBarBrand>
 
