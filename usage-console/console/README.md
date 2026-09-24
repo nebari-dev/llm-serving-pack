@@ -40,7 +40,7 @@ App-level additions live beside the vendored files, not inside them:
   - `VerdictBadge`, `Money` / `TokenCount` / `Duration`
   - `ProvenanceBadge`, `SyncStateIndicator`
   - `DecisionTrace`, `DiffView`
-  - `StackedArea` / `StackedBars` / `Sparkline` (each with a table fallback)
+  - `StackedArea` / `StackedBars` / `Sparkline` on Recharts (each with a table fallback)
   - the receipt drawer
 - **`src/components/shell/`** holds the app shell: the nebari header recipe, sidebar, degradation banner, and ⌘K command palette.
 
@@ -63,6 +63,7 @@ Global elements: a production/staging accent, one shared time range, the ⌘K pa
 ## Deliberate departures and notes
 
 - **No all-caps labels.** Spec §7.3 says sentence case throughout. Nebari's `DropdownMenuGroupLabel` and `SidebarGroupLabel` default to uppercase, so they are overridden at the call site with `normal-case`.
-- **Magenta stays brand-only.** Per the spec's palette rule (§7.2), saturated colour is used only for verdict and sync state. Charts that aren't about verdicts use nebari's `--chart-*` series.
+- **Magenta stays brand-only.** Per the spec's palette rule (§7.2), saturated colour is used only for verdict and sync state. Charts that aren't about verdicts use nebari's `--chart-*` order.
+- **Chart palettes are validated, not eyeballed.** `--series-1…5` (nebari's `--chart-*` order, dark steps moved to 500s) and the verdict stack were checked for lightness band, colour-vision-deficiency separation and contrast in both themes. That check fixed the Overview stack order to allowed → redacted → truncated → rerouted → blocked: green next to teal, and yellow next to red, fail as neighbours. One known limit: nebari's teal ramp never reaches the 0.10 chroma floor, so the legend and table view carry identity too. Series colours are assigned per entity, never by rank.
 - **Motion** follows nebari `AGENTS.md`: everything is `motion-safe:` with duration tokens. The traffic table's only motion is a one-time row-arrival highlight. Under `prefers-reduced-motion` it becomes a static left-edge marker.
 - **The traffic table is not virtualised** in this mockup; it caps at 300 visible rows. The spec's `DataTable` / `StreamTable` would add virtualisation.

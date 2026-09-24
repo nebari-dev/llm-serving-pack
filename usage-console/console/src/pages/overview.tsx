@@ -13,11 +13,13 @@ import { rangeLabel, useApp } from '@/state/app-state'
 // §7.5.2 Overview — not a tile grid. A single vertical narrative:
 // status strip → traffic → three numbers → what changed → attention list.
 
+// Stack order is part of the palette: validate_palette.js checks adjacent pairs,
+// and green↔teal and yellow↔red fail as neighbors. This order passes both themes.
 const verdictSeries = [
   { key: 'allowed', label: 'Allowed', color: toneFill.allowed },
-  { key: 'rerouted', label: 'Rerouted', color: toneFill.rerouted },
   { key: 'redacted', label: 'Redacted', color: toneFill.redacted },
   { key: 'truncated', label: 'Truncated', color: toneFill.degraded },
+  { key: 'rerouted', label: 'Rerouted', color: toneFill.rerouted },
   { key: 'blocked', label: 'Blocked', color: toneFill.blocked },
 ]
 

@@ -36,6 +36,20 @@
   --v-degraded-border: var(--yellow-300);
   --v-degraded-bar: var(--yellow-400);
 
+  /*
+   * Categorical chart series — nebari's --chart-1..5 order, re-stepped where
+   * the dataviz validator required it (dark steps must sit in L 0.48–0.67).
+   * Checked with validate_palette.js against #ffffff / #1a1a1c. Known limit:
+   * nebari's teal ramp never reaches the 0.10 chroma floor (500 is 0.093),
+   * so series identity also rides on the legend, gaps, and table view.
+   */
+  --series-1: var(--primary-magenta-500);
+  --series-2: var(--accent-teal-500);
+  --series-3: var(--highlight-yellow-400);
+  --series-4: var(--blue-500);
+  --series-5: var(--green-500);
+  --series-other: var(--zinc-400);
+
   /* environment accent (§7.4) */
   --env-production: var(--primary-magenta-600);
   --env-staging: var(--zinc-500);
@@ -54,27 +68,34 @@
   --v-allowed-fg: var(--green-300);
   --v-allowed-bg: var(--green-950);
   --v-allowed-border: var(--green-800);
-  --v-allowed-bar: var(--green-400);
+  --v-allowed-bar: var(--green-500);
 
   --v-redacted-fg: var(--blue-300);
   --v-redacted-bg: var(--blue-950);
   --v-redacted-border: var(--blue-800);
-  --v-redacted-bar: var(--blue-400);
+  --v-redacted-bar: var(--blue-500);
 
   --v-rerouted-fg: var(--accent-teal-300);
   --v-rerouted-bg: var(--accent-teal-950);
   --v-rerouted-border: var(--accent-teal-800);
-  --v-rerouted-bar: var(--accent-teal-400);
+  --v-rerouted-bar: var(--accent-teal-500);
 
   --v-blocked-fg: var(--red-300);
   --v-blocked-bg: var(--red-950);
   --v-blocked-border: var(--red-800);
-  --v-blocked-bar: var(--red-400);
+  --v-blocked-bar: var(--red-500);
 
   --v-degraded-fg: var(--yellow-200);
   --v-degraded-bg: var(--yellow-950);
   --v-degraded-border: var(--yellow-800);
-  --v-degraded-bar: var(--yellow-300);
+  --v-degraded-bar: var(--yellow-500);
+
+  --series-1: var(--primary-magenta-500);
+  --series-2: var(--accent-teal-500);
+  --series-3: var(--highlight-yellow-500);
+  --series-4: var(--blue-500);
+  --series-5: var(--green-500);
+  --series-other: var(--zinc-500);
 
   --env-production: var(--primary-magenta-500);
   --env-staging: var(--zinc-400);
@@ -118,6 +139,12 @@
   --color-v-degraded-bg: var(--v-degraded-bg);
   --color-v-degraded-border: var(--v-degraded-border);
   --color-v-degraded-bar: var(--v-degraded-bar);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-other: var(--series-other);
   --color-env-production: var(--env-production);
   --color-env-staging: var(--env-staging);
   --color-header-action-hover: var(--header-action-hover);

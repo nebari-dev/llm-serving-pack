@@ -189,17 +189,23 @@ export function trend(dim: Dim, days: number) {
     }
     return { x: d.day, values }
   })
-  const ranked = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
+  // Color follows the entity, never its rank in the current window: rank once
+  // over the full 30-day history so changing the range never repaints a series.
+  const fullTotals = new Map<string, number>()
+  for (const d of spendSeries) {
+    for (const c of cells) fullTotals.set(c[dim], (fullTotals.get(c[dim]) ?? 0) + (d.byTeam[c.team] ?? 0) * c.share)
+  }
+  const ranked = [...fullTotals.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k).filter((k) => totals.has(k))
   const top = ranked.slice(0, 5)
   const rest = ranked.slice(5)
-  const palette = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)']
+  const palette = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
   const series = top.map((k, i) => ({
     key: k,
     label: dim === 'team' ? (teams.find((t) => t.id === k)?.name ?? k) : k,
     color: palette[i],
   }))
   if (rest.length) {
-    series.push({ key: '__other', label: `Other (${rest.length})`, color: 'var(--muted-foreground)' })
+    series.push({ key: '__other', label: `Other (${rest.length})`, color: 'var(--series-other)' })
     for (const r of rows) {
       r.values.__other = rest.reduce((a, k) => a + (r.values[k] ?? 0), 0)
     }

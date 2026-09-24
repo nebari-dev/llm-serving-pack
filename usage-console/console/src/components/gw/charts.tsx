@@ -1,14 +1,36 @@
-import { useId, useState } from 'react'
+import { useState } from 'react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ReferenceArea,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { cn } from '@/lib/utils'
 
-// §8 Sparkline / StackedArea / BarSeries. Plain SVG, themed on tokens, each
-// with a keyboard-reachable table equivalent (§7.7).
+// §8 Sparkline / StackedArea / BarSeries, drawn with Recharts and themed on
+// tokens. Mark specs follow the dataviz method: 2px lines, a light area wash,
+// ≤24px bars with a 4px rounded data-end and a 2px surface gap between stacked
+// segments, solid hairline grid, no animation ("live, but calm", §7.1). Every
+// chart keeps a keyboard-reachable table equivalent (§7.7).
 
 export interface Series {
   key: string
   label: string
   color: string
 }
+
+const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace"
+const tick = { fill: 'var(--muted-foreground)', fontSize: 11, fontFamily: MONO }
+const grid = { stroke: 'var(--border)', strokeWidth: 1 }
 
 function ChartTable({
   caption,
@@ -54,6 +76,7 @@ function ChartTable({
   )
 }
 
+/** Legend swatches mirror the mark: a rect for areas and bars. Text stays in text tokens. */
 export function Legend({ series, className }: { series: Series[]; className?: string }) {
   return (
     <ul className={cn('flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground-strong', className)}>
@@ -67,7 +90,82 @@ export function Legend({ series, className }: { series: Series[]; className?: st
   )
 }
 
-/** Stacked area over time. Hover shows a crosshair readout; "View as table" toggles the equivalent. */
+function ChartFrame({
+  series,
+  asTable,
+  setAsTable,
+  children,
+}: {
+  series: Series[]
+  asTable: boolean
+  setAsTable: (fn: (v: boolean) => boolean) => void
+  children: React.ReactNode
+}) {
+  return (
+    <figure className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <Legend series={series} />
+        <button
+          type="button"
+          className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          onClick={() => setAsTable((v) => !v)}
+        >
+          {asTable ? 'View as chart' : 'View as table'}
+        </button>
+      </div>
+      {children}
+    </figure>
+  )
+}
+
+/**
+ * One tooltip, every series at that x. Values lead (strong), series names
+ * follow (secondary), keyed by a short line in the series color.
+ */
+function SeriesTooltip({
+  active,
+  payload,
+  label,
+  series,
+  valueFormat,
+  labelFormat,
+  footer,
+}: {
+  active?: boolean
+  payload?: readonly { payload?: unknown }[]
+  label?: string | number
+  series: Series[]
+  valueFormat: (n: number) => string
+  labelFormat: (x: string | number) => string
+  footer?: string
+}) {
+  if (!active || !payload?.length) return null
+  const row = payload[0].payload as Record<string, number>
+  const total = series.reduce((a, s) => a + (row[s.key] ?? 0), 0)
+  return (
+    <div className="min-w-44 rounded-md border border-border bg-popover p-2 text-xs shadow-lg">
+      <div className="mb-1 font-mono text-muted-foreground">{labelFormat(label ?? '')}</div>
+      {[...series].reverse().map((s) => (
+        <div key={s.key} className="flex items-center justify-between gap-4 py-px">
+          <span className="inline-flex items-center gap-1.5 text-muted-foreground-strong">
+            <span className="h-0.5 w-3 rounded-full" style={{ background: s.color }} aria-hidden="true" />
+            {s.label}
+          </span>
+          <span className="num font-mono font-medium text-foreground">{valueFormat(row[s.key] ?? 0)}</span>
+        </div>
+      ))}
+      <div className="mt-1 flex justify-between border-t border-border pt-1">
+        <span className="text-muted-foreground-strong">Total</span>
+        <span className="num font-mono font-semibold text-foreground">{valueFormat(total)}</span>
+      </div>
+      {footer && <div className="mt-1 text-muted-foreground">{footer}</div>}
+    </div>
+  )
+}
+
+const compact = (n: number) => (Math.abs(n) >= 1000 ? `${+(n / 1000).toFixed(1)}k` : `${Math.round(n)}`)
+
+/** Stacked area over time with a crosshair tooltip. Series stack bottom-up in the given order. */
 export function StackedArea({
   data,
   series,
@@ -85,124 +183,71 @@ export function StackedArea({
   caption: string
   annotations?: { t: number; label: string }[]
 }) {
-  const [hover, setHover] = useState<number | null>(null)
   const [asTable, setAsTable] = useState(false)
-  const W = 1000
-  const H = height
-  const padB = 20
-  const totals = data.map((d) => series.reduce((a, s) => a + (d.values[s.key] ?? 0), 0))
-  const max = Math.max(...totals) * 1.08 || 1
-  const x = (i: number) => (i / Math.max(1, data.length - 1)) * W
-  const y = (v: number) => H - padB - (v / max) * (H - padB - 6)
-
-  const stacks: { s: Series; path: string }[] = []
-  const acc = data.map(() => 0)
-  for (const s of series) {
-    const lower = [...acc]
-    data.forEach((d, i) => (acc[i] += d.values[s.key] ?? 0))
-    const top = data.map((_, i) => `${x(i)},${y(acc[i])}`)
-    const bottom = data.map((_, i) => `${x(i)},${y(lower[i])}`).reverse()
-    stacks.push({ s, path: `M${top.join('L')}L${bottom.join('L')}Z` })
-  }
-
-  const t0 = data[0]?.t ?? 0
-  const t1 = data[data.length - 1]?.t ?? 1
-  const tx = (t: number) => ((t - t0) / (t1 - t0 || 1)) * W
-
+  const rows = data.map((d) => ({ t: d.t, ...d.values }))
   return (
-    <figure className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <Legend series={series} />
-        <button
-          type="button"
-          className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          onClick={() => setAsTable((v) => !v)}
-        >
-          {asTable ? 'View as chart' : 'View as table'}
-        </button>
-      </div>
+    <ChartFrame series={series} asTable={asTable} setAsTable={setAsTable}>
       {asTable ? (
-        <ChartTable
-          caption={caption}
-          series={series}
-          xLabel="Time"
-          format={valueFormat}
-          rows={data.map((d) => ({ x: xFormat(d.t), values: d.values }))}
-        />
+        <ChartTable caption={caption} series={series} xLabel="Time" format={valueFormat} rows={data.map((d) => ({ x: xFormat(d.t), values: d.values }))} />
       ) : (
-        <div className="relative">
-          <svg
-            viewBox={`0 0 ${W} ${H}`}
-            preserveAspectRatio="none"
-            className="block h-auto w-full"
-            style={{ height: H }}
-            role="img"
-            aria-label={caption}
-            onMouseLeave={() => setHover(null)}
-            onMouseMove={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              const i = Math.round(((e.clientX - rect.left) / rect.width) * (data.length - 1))
-              setHover(Math.max(0, Math.min(data.length - 1, i)))
-            }}
-          >
-            {[0.25, 0.5, 0.75].map((f) => (
-              <line key={f} x1={0} x2={W} y1={y(max * f)} y2={y(max * f)} stroke="var(--border)" strokeDasharray="2 4" vectorEffect="non-scaling-stroke" />
-            ))}
-            <line x1={0} x2={W} y1={H - padB} y2={H - padB} stroke="var(--border-strong)" vectorEffect="non-scaling-stroke" />
-            {stacks.map(({ s, path }) => (
-              <path key={s.key} d={path} fill={s.color} fillOpacity={0.9} stroke="var(--canvas)" strokeWidth={0.5} vectorEffect="non-scaling-stroke" />
-            ))}
-            {annotations.map((a) => (
-              <g key={a.t}>
-                <line x1={tx(a.t)} x2={tx(a.t)} y1={0} y2={H - padB} stroke="var(--foreground)" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
-              </g>
-            ))}
-            {hover !== null && (
-              <line x1={x(hover)} x2={x(hover)} y1={0} y2={H - padB} stroke="var(--foreground)" strokeOpacity={0.5} vectorEffect="non-scaling-stroke" />
-            )}
-          </svg>
-          {annotations.map((a) => (
-            <span
-              key={a.t}
-              className="pointer-events-none absolute top-0 -translate-x-1/2 rounded-sm border border-border bg-card px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap text-foreground"
-              style={{ left: `${(tx(a.t) / W) * 100}%` }}
-            >
-              {a.label}
-            </span>
-          ))}
-          <div className="flex justify-between pt-0.5 font-mono text-[11px] text-muted-foreground">
-            <span>{xFormat(t0)}</span>
-            <span>{xFormat(data[Math.floor(data.length / 2)]?.t ?? t0)}</span>
-            <span>{xFormat(t1)}</span>
-          </div>
-          {hover !== null && (
-            <div
-              className="pointer-events-none absolute top-6 z-10 min-w-40 rounded-md border border-border bg-popover p-2 text-xs shadow-lg"
-              style={{ left: `min(calc(${(x(hover) / W) * 100}% + 12px), calc(100% - 11rem))` }}
-            >
-              <div className="mb-1 font-mono text-muted-foreground">{xFormat(data[hover].t)}</div>
-              {[...series].reverse().map((s) => (
-                <div key={s.key} className="flex items-center justify-between gap-4">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="size-2 rounded-[2px]" style={{ background: s.color }} />
-                    {s.label}
-                  </span>
-                  <span className="num font-mono">{valueFormat(data[hover].values[s.key] ?? 0)}</span>
-                </div>
+        <div role="img" aria-label={caption} style={{ height }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={rows} margin={{ top: 22, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid vertical={false} {...grid} />
+              <XAxis
+                dataKey="t"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tickFormatter={xFormat}
+                tick={tick}
+                tickLine={false}
+                axisLine={{ stroke: 'var(--border-strong)' }}
+                minTickGap={48}
+              />
+              <YAxis tick={tick} tickLine={false} axisLine={false} width={40} tickFormatter={compact} />
+              <Tooltip
+                cursor={{ stroke: 'var(--foreground)', strokeOpacity: 0.5, strokeWidth: 1 }}
+                isAnimationActive={false}
+                content={(p) => <SeriesTooltip active={p.active} payload={p.payload} label={p.label} series={series} valueFormat={valueFormat} labelFormat={(x) => xFormat(Number(x))} />}
+              />
+              {series.map((s) => (
+                <Area
+                  key={s.key}
+                  dataKey={s.key}
+                  name={s.label}
+                  stackId="1"
+                  type="monotone"
+                  stroke={s.color}
+                  strokeWidth={2}
+                  fill={s.color}
+                  fillOpacity={0.16}
+                  activeDot={{ r: 4, stroke: 'var(--canvas)', strokeWidth: 2, fill: s.color }}
+                  isAnimationActive={false}
+                />
               ))}
-              <div className="mt-1 flex justify-between border-t border-border pt-1 font-medium">
-                <span>Total</span>
-                <span className="num font-mono">{valueFormat(totals[hover])}</span>
-              </div>
-            </div>
-          )}
+              {annotations.map((a) => (
+                <ReferenceLine
+                  key={a.t}
+                  x={a.t}
+                  stroke="var(--foreground)"
+                  strokeWidth={1}
+                  label={{ value: a.label, position: 'top', fill: 'var(--foreground)', fontSize: 11, fontFamily: MONO }}
+                />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
       )}
-    </figure>
+    </ChartFrame>
   )
 }
 
-/** Stacked bars by category, e.g. daily spend by team. */
+/**
+ * Stacked columns by category, e.g. daily spend by team. Each column caps at
+ * 24px; only the topmost non-zero segment gets the 4px rounded data-end, and
+ * segments are separated by a 2px surface gap rather than an outline.
+ */
 export function StackedBars({
   data,
   series,
@@ -220,85 +265,73 @@ export function StackedBars({
   onBarClick?: (x: string) => void
   highlightFrom?: number
 }) {
-  const [hover, setHover] = useState<number | null>(null)
   const [asTable, setAsTable] = useState(false)
-  const totals = data.map((d) => series.reduce((a, s) => a + (d.values[s.key] ?? 0), 0))
-  const max = Math.max(...totals) * 1.08 || 1
+  const rows = data.map((d) => ({ x: d.x, ...d.values }))
+  const topKey = (row: Record<string, unknown>) => [...series].reverse().find((s) => Number(row[s.key] ?? 0) > 0)?.key
+  const bottomKey = (row: Record<string, unknown>) => series.find((s) => Number(row[s.key] ?? 0) > 0)?.key
+
   return (
-    <figure className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <Legend series={series} />
-        <button
-          type="button"
-          className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-          onClick={() => setAsTable((v) => !v)}
-        >
-          {asTable ? 'View as chart' : 'View as table'}
-        </button>
-      </div>
+    <ChartFrame series={series} asTable={asTable} setAsTable={setAsTable}>
       {asTable ? (
         <ChartTable caption={caption} series={series} xLabel="Day" format={valueFormat} rows={data} />
       ) : (
-        <div className="relative">
-          <div className="flex items-end gap-[3px] border-b border-border-strong" style={{ height }} role="img" aria-label={caption}>
-            {data.map((d, i) => (
-              <button
-                type="button"
-                key={d.x}
-                className={cn(
-                  'group relative flex h-full flex-1 flex-col-reverse outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  highlightFrom !== undefined && i >= highlightFrom && 'bg-v-degraded-bg',
-                )}
-                onMouseEnter={() => setHover(i)}
-                onMouseLeave={() => setHover(null)}
-                onFocus={() => setHover(i)}
-                onBlur={() => setHover(null)}
-                onClick={() => onBarClick?.(d.x)}
-                aria-label={`${d.x}: ${valueFormat(totals[i])}`}
-              >
-                {series.map((s) => (
-                  <span
-                    key={s.key}
-                    className="block w-full group-hover:opacity-80"
-                    style={{ height: `${((d.values[s.key] ?? 0) / max) * 100}%`, background: s.color }}
-                  />
-                ))}
-              </button>
-            ))}
-          </div>
-          <div className="flex justify-between pt-0.5 font-mono text-[11px] text-muted-foreground">
-            <span>{data[0]?.x}</span>
-            <span>{data[Math.floor(data.length / 2)]?.x}</span>
-            <span>{data[data.length - 1]?.x}</span>
-          </div>
-          {hover !== null && (
-            <div
-              className="pointer-events-none absolute top-2 z-10 min-w-44 rounded-md border border-border bg-popover p-2 text-xs shadow-lg"
-              style={{ left: `min(calc(${((hover + 0.5) / data.length) * 100}% + 12px), calc(100% - 12rem))` }}
+        <div role="img" aria-label={caption} style={{ height }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={rows}
+              margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+              barCategoryGap="20%"
+              onClick={(state) => {
+                const x = state?.activeLabel
+                if (onBarClick && x != null) onBarClick(String(x))
+              }}
+              style={{ cursor: onBarClick ? 'pointer' : undefined }}
             >
-              <div className="mb-1 font-mono text-muted-foreground">{data[hover].x}</div>
-              {[...series].reverse().map((s) => (
-                <div key={s.key} className="flex items-center justify-between gap-4">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="size-2 rounded-[2px]" style={{ background: s.color }} />
-                    {s.label}
-                  </span>
-                  <span className="num font-mono">{valueFormat(data[hover].values[s.key] ?? 0)}</span>
-                </div>
+              <CartesianGrid vertical={false} {...grid} />
+              {highlightFrom !== undefined && data[highlightFrom] && (
+                <ReferenceArea x1={data[highlightFrom].x} x2={data[data.length - 1].x} fill="var(--v-degraded-bg)" fillOpacity={1} ifOverflow="extendDomain" />
+              )}
+              <XAxis dataKey="x" tick={tick} tickLine={false} axisLine={{ stroke: 'var(--border-strong)' }} minTickGap={32} />
+              <YAxis tick={tick} tickLine={false} axisLine={false} width={48} tickFormatter={(n: number) => `$${compact(n)}`} />
+              <Tooltip
+                cursor={{ fill: 'var(--muted)', opacity: 0.6 }}
+                isAnimationActive={false}
+                content={(p) => (
+                  <SeriesTooltip active={p.active} payload={p.payload} label={p.label} series={series} valueFormat={valueFormat} labelFormat={String} footer={onBarClick ? 'Click to open receipts' : undefined} />
+                )}
+              />
+              {series.map((s) => (
+                <Bar
+                  key={s.key}
+                  dataKey={s.key}
+                  name={s.label}
+                  stackId="1"
+                  fill={s.color}
+                  maxBarSize={24}
+                  isAnimationActive={false}
+                  shape={(props: { x?: number; y?: number; width?: number; height?: number; payload?: Record<string, unknown> }) => {
+                    const { x = 0, y = 0, width = 0, height: h = 0, payload = {} } = props
+                    if (h <= 0) return <g />
+                    // 2px surface gap under every segment except the one on the baseline.
+                    const gap = bottomKey(payload) === s.key ? 0 : 2
+                    const hh = Math.max(0, h - gap)
+                    const r = topKey(payload) === s.key ? Math.min(4, width / 2, hh) : 0
+                    const path = r
+                      ? `M${x},${y + hh}V${y + r}Q${x},${y} ${x + r},${y}H${x + width - r}Q${x + width},${y} ${x + width},${y + r}V${y + hh}Z`
+                      : `M${x},${y}H${x + width}V${y + hh}H${x}Z`
+                    return <path d={path} fill={s.color} />
+                  }}
+                />
               ))}
-              <div className="mt-1 flex justify-between border-t border-border pt-1 font-medium">
-                <span>Total</span>
-                <span className="num font-mono">{valueFormat(totals[hover])}</span>
-              </div>
-              {onBarClick && <div className="mt-1 text-muted-foreground">Click to open receipts</div>}
-            </div>
-          )}
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       )}
-    </figure>
+    </ChartFrame>
   )
 }
 
+/** Trend accent for tiles and rows: a 2px line in the de-emphasis hue with an end-dot. */
 export function Sparkline({
   values,
   color = 'var(--muted-foreground-strong)',
@@ -312,21 +345,27 @@ export function Sparkline({
   height?: number
   label: string
 }) {
-  const id = useId()
-  const max = Math.max(...values) || 1
-  const min = Math.min(...values)
-  const pts = values.map((v, i) => `${(i / (values.length - 1)) * width},${height - 2 - ((v - min) / (max - min || 1)) * (height - 4)}`)
+  const rows = values.map((v, i) => ({ i, v }))
+  const last = rows.length - 1
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label} className="shrink-0">
-      <defs>
-        <linearGradient id={id} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0" stopColor={color} stopOpacity={0.18} />
-          <stop offset="1" stopColor={color} stopOpacity={0} />
-        </linearGradient>
-      </defs>
-      <path d={`M0,${height}L${pts.join('L')}L${width},${height}Z`} fill={`url(#${id})`} />
-      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth={1.25} />
-    </svg>
+    <div role="img" aria-label={label} className="shrink-0" style={{ width, height }}>
+      <LineChart width={width} height={height} data={rows} margin={{ top: 4, right: 5, bottom: 4, left: 1 }}>
+        <YAxis hide domain={['dataMin', 'dataMax']} />
+        <Line
+          dataKey="v"
+          type="monotone"
+          stroke={color}
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          isAnimationActive={false}
+          dot={(p: { cx?: number; cy?: number; index?: number }) =>
+            p.index === last ? <circle key="end" cx={p.cx} cy={p.cy} r={3} fill={color} stroke="var(--canvas)" strokeWidth={1.5} /> : <g key={p.index} />
+          }
+          activeDot={false}
+        />
+      </LineChart>
+    </div>
   )
 }
 
@@ -338,10 +377,7 @@ export function Meter({ value, cap, projected, className }: { value: number; cap
   return (
     <div className={cn('relative h-2 w-full rounded-full bg-muted', className)} aria-hidden="true">
       {projected !== undefined && (
-        <div
-          className="absolute inset-y-0 left-0 rounded-full border border-dashed border-border-strong"
-          style={{ width: `${(projected / scale) * 100}%` }}
-        />
+        <div className="absolute inset-y-0 left-0 rounded-full border border-dashed border-border-strong" style={{ width: `${(projected / scale) * 100}%` }} />
       )}
       <div
         className={cn('absolute inset-y-0 left-0 rounded-full', over ? 'bg-v-blocked-bar' : warn ? 'bg-v-degraded-bar' : 'bg-foreground/60')}
