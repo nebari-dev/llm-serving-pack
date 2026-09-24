@@ -13,10 +13,16 @@ import { rangeLabel, useApp } from '@/state/app-state'
 // §7.5.2 Overview — not a tile grid. A single vertical narrative:
 // status strip → traffic → three numbers → what changed → attention list.
 
-// Stack order is part of the palette: validate_palette.js checks adjacent pairs,
-// and green↔teal and yellow↔red fail as neighbors. This order passes both themes.
+// Two panels on one time axis (small multiples, one y-scale each). Allowed is
+// ~85% of traffic, so stacking it with the rest flattens blocked and redacted
+// into hairlines; the spec wants those visible at this altitude (§7.5.2).
+// Volume is drawn quiet — "green is the absence of information" — and the
+// non-allowed verdicts get their own scale.
+const volumeSeries = [{ key: 'total', label: 'Requests', color: 'var(--muted-foreground-strong)' }]
+
+// Stack order is part of the palette: validate_palette.js checks adjacent
+// pairs, and yellow↔red fails as neighbors. This order passes in both themes.
 const verdictSeries = [
-  { key: 'allowed', label: 'Allowed', color: toneFill.allowed },
   { key: 'redacted', label: 'Redacted', color: toneFill.redacted },
   { key: 'truncated', label: 'Truncated', color: toneFill.degraded },
   { key: 'rerouted', label: 'Rerouted', color: toneFill.rerouted },
@@ -53,7 +59,7 @@ export function OverviewPage() {
       {/* 2. Traffic with verdict composition. */}
       <Section
         title="Traffic"
-        description="Requests per 30 minutes by verdict. Blocked and redacted stay visible at this altitude."
+        description="Requests per 30 minutes, and the ones Warden did not simply allow, on their own scale."
         actions={
           <Button variant="ghost" size="sm" render={<Link to="/traffic" />}>
             Open traffic <ArrowRight />
@@ -61,11 +67,24 @@ export function OverviewPage() {
         }
       >
         <StackedArea
-          caption="Requests per 30 minutes by verdict"
-          series={verdictSeries}
-          data={trafficSeries.map((p) => ({ t: p.t, values: { allowed: p.allowed, rerouted: p.rerouted, redacted: p.redacted, truncated: p.truncated, blocked: p.blocked } }))}
+          caption="All requests per 30 minutes"
+          series={volumeSeries}
+          syncId="overview-traffic"
+          height={140}
+          hideXAxis
+          data={trafficSeries.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked } }))}
           xFormat={(t) => clock(t).slice(0, 5)}
           annotations={[{ t: routeChange.ts, label: 'route default → sonnet-5' }]}
+        />
+        <h3 className="mt-5 mb-1 text-sm font-medium">Not allowed</h3>
+        <StackedArea
+          caption="Redacted, truncated, rerouted, and blocked requests per 30 minutes"
+          series={verdictSeries}
+          syncId="overview-traffic"
+          height={150}
+          data={trafficSeries.map((p) => ({ t: p.t, values: { redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
+          xFormat={(t) => clock(t).slice(0, 5)}
+          annotations={[{ t: routeChange.ts, label: '' }]}
         />
       </Section>
 

@@ -103,8 +103,9 @@ function ChartFrame({
 }) {
   return (
     <figure className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <Legend series={series} />
+      <div className="flex min-h-4 items-center justify-between gap-4">
+        {/* A single series needs no legend — the section title names it. */}
+        {series.length > 1 ? <Legend series={series} /> : <span />}
         <button
           type="button"
           className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
@@ -163,7 +164,29 @@ function SeriesTooltip({
   )
 }
 
-const compact = (n: number) => (Math.abs(n) >= 1000 ? `${+(n / 1000).toFixed(1)}k` : `${Math.round(n)}`)
+/** Clean y ticks (0 / 500 / 1,000 …) so the axis carries round values. */
+function niceTicks(max: number, target = 4) {
+  if (max <= 0) return [0]
+  const raw = max / target
+  const pow = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((v) => v >= raw) ?? 10 * pow
+  const top = Math.ceil(max / step) * step
+  return Array.from({ length: Math.round(top / step) + 1 }, (_, i) => +(i * step).toFixed(6))
+}
+
+/** Whole-hour x ticks across a time domain. */
+function hourTicks(t0: number, t1: number) {
+  const span = t1 - t0
+  const stepH = span > 36 * 3.6e6 ? 6 : span > 12 * 3.6e6 ? 3 : 1
+  const step = stepH * 3.6e6
+  const first = Math.ceil(t0 / 3.6e6) * 3.6e6
+  const aligned = first + ((stepH - (new Date(first).getHours() % stepH)) % stepH) * 3.6e6
+  const out: number[] = []
+  for (let t = aligned; t <= t1; t += step) out.push(t)
+  return out
+}
+
+const compact = (n: number) => Math.round(n).toLocaleString('en-US')
 
 /** Stacked area over time with a crosshair tooltip. Series stack bottom-up in the given order. */
 export function StackedArea({
@@ -174,6 +197,8 @@ export function StackedArea({
   valueFormat = (n) => n.toLocaleString('en-US'),
   caption,
   annotations = [],
+  syncId,
+  hideXAxis = false,
 }: {
   data: { t: number; values: Record<string, number> }[]
   series: Series[]
@@ -182,9 +207,15 @@ export function StackedArea({
   valueFormat?: (n: number) => string
   caption: string
   annotations?: { t: number; label: string }[]
+  /** Panels sharing a syncId move their crosshairs together (small multiples on one time axis). */
+  syncId?: string
+  hideXAxis?: boolean
 }) {
   const [asTable, setAsTable] = useState(false)
   const rows = data.map((d) => ({ t: d.t, ...d.values }))
+  const t0 = data[0]?.t ?? 0
+  const t1 = data[data.length - 1]?.t ?? 1
+  const yTicks = niceTicks(Math.max(...data.map((d) => series.reduce((a, s) => a + (d.values[s.key] ?? 0), 0))))
   return (
     <ChartFrame series={series} asTable={asTable} setAsTable={setAsTable}>
       {asTable ? (
@@ -192,20 +223,21 @@ export function StackedArea({
       ) : (
         <div role="img" aria-label={caption} style={{ height }}>
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={rows} margin={{ top: 22, right: 8, bottom: 0, left: 0 }}>
+            <AreaChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} syncId={syncId}>
               <CartesianGrid vertical={false} {...grid} />
               <XAxis
                 dataKey="t"
                 type="number"
                 scale="time"
-                domain={['dataMin', 'dataMax']}
+                domain={[t0, t1]}
+                ticks={hourTicks(t0, t1)}
                 tickFormatter={xFormat}
                 tick={tick}
                 tickLine={false}
                 axisLine={{ stroke: 'var(--border-strong)' }}
-                minTickGap={48}
+                hide={hideXAxis}
               />
-              <YAxis tick={tick} tickLine={false} axisLine={false} width={40} tickFormatter={compact} />
+              <YAxis tick={tick} tickLine={false} axisLine={false} width={48} ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tickFormatter={compact} />
               <Tooltip
                 cursor={{ stroke: 'var(--foreground)', strokeOpacity: 0.5, strokeWidth: 1 }}
                 isAnimationActive={false}
@@ -232,7 +264,21 @@ export function StackedArea({
                   x={a.t}
                   stroke="var(--foreground)"
                   strokeWidth={1}
-                  label={{ value: a.label, position: 'top', fill: 'var(--foreground)', fontSize: 11, fontFamily: MONO }}
+                  label={(p: { viewBox?: { x?: number; y?: number } }) => {
+                    const nearRight = (a.t - t0) / (t1 - t0 || 1) > 0.6
+                    return (
+                      <text
+                        x={(p.viewBox?.x ?? 0) + (nearRight ? -6 : 6)}
+                        y={(p.viewBox?.y ?? 0) + 11}
+                        textAnchor={nearRight ? 'end' : 'start'}
+                        fill="var(--foreground)"
+                        fontSize={11}
+                        fontFamily={MONO}
+                      >
+                        {a.label}
+                      </text>
+                    )
+                  }}
                 />
               ))}
             </AreaChart>
@@ -267,6 +313,7 @@ export function StackedBars({
 }) {
   const [asTable, setAsTable] = useState(false)
   const rows = data.map((d) => ({ x: d.x, ...d.values }))
+  const yTicks = niceTicks(Math.max(...data.map((d) => series.reduce((a, s) => a + (d.values[s.key] ?? 0), 0))))
   const topKey = (row: Record<string, unknown>) => [...series].reverse().find((s) => Number(row[s.key] ?? 0) > 0)?.key
   const bottomKey = (row: Record<string, unknown>) => series.find((s) => Number(row[s.key] ?? 0) > 0)?.key
 
@@ -292,7 +339,7 @@ export function StackedBars({
                 <ReferenceArea x1={data[highlightFrom].x} x2={data[data.length - 1].x} fill="var(--v-degraded-bg)" fillOpacity={1} ifOverflow="extendDomain" />
               )}
               <XAxis dataKey="x" tick={tick} tickLine={false} axisLine={{ stroke: 'var(--border-strong)' }} minTickGap={32} />
-              <YAxis tick={tick} tickLine={false} axisLine={false} width={48} tickFormatter={(n: number) => `$${compact(n)}`} />
+              <YAxis tick={tick} tickLine={false} axisLine={false} width={56} ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tickFormatter={(n: number) => `$${compact(n)}`} />
               <Tooltip
                 cursor={{ fill: 'var(--muted)', opacity: 0.6 }}
                 isAnimationActive={false}
