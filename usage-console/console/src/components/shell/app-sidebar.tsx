@@ -57,7 +57,7 @@ export function AppSidebar() {
   const isActive = (to: string) => (to === '/' ? pathname === '/' : pathname.startsWith(to))
 
   return (
-    <Sidebar className="h-full rounded-none border-r border-sidebar-border" aria-label="Primary">
+    <Sidebar className="relative h-full rounded-none border-r border-sidebar-border" aria-label="Primary">
       <SidebarContent>
         <div className="flex flex-col gap-4">
           {groups.map((g) => (

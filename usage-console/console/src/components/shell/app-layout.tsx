@@ -12,11 +12,11 @@ export function AppLayout() {
   const { density } = useApp()
   return (
     <SidebarProvider>
-      <div className="flex h-dvh flex-col bg-canvas text-foreground" data-density={density}>
+      <div className="relative flex h-dvh flex-col overflow-hidden bg-canvas text-foreground" data-density={density}>
         <AppHeader />
         <div className="flex min-h-0 flex-1">
           <AppSidebar />
-          <main className="flex min-w-0 flex-1 flex-col overflow-y-auto" id="main">
+          <main className="relative flex min-w-0 flex-1 flex-col overflow-y-auto" id="main">
             <DegradationBanner />
             <Outlet />
           </main>
