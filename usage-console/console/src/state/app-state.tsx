@@ -73,9 +73,20 @@ class ReceiptStream {
   // Live receipts from the control plane (§6 /stream/traffic). The same id
   // arrives twice for streamed requests: in flight, then settled. EventSource
   // reconnects on its own after a drop.
+  // Applied in batches, so a burst costs one render per flush (§10).
   private connect() {
     const es = new EventSource(`${API_BASE}/stream/traffic`)
-    es.addEventListener('receipt', (e) => this.upsert(JSON.parse((e as MessageEvent<string>).data) as Receipt))
+    let queue: Receipt[] = []
+    let timer: number | undefined
+    es.addEventListener('receipt', (e) => {
+      queue.push(JSON.parse((e as MessageEvent<string>).data) as Receipt)
+      timer ??= window.setTimeout(() => {
+        timer = undefined
+        const batch = queue
+        queue = []
+        this.upsertMany(batch)
+      }, 250)
+    })
   }
 
   /** Loads a receipt outside the live window (deep links) into byId. */
@@ -92,6 +103,14 @@ class ReceiptStream {
       })
       .catch(() => {})
       .finally(() => this.pending.delete(id))
+  }
+
+  /** Keeps a receipt fetched elsewhere (the Traffic list) for the drawer, without re-rendering. */
+  remember(r: Receipt) {
+    this.byId.delete(r.id)
+    this.byId.set(r.id, r)
+    // Oldest first in insertion order; a dropped one is fetched again by ensure().
+    if (this.byId.size > 20_000) this.byId.delete(this.byId.keys().next().value!)
   }
 
   private simulate() {
@@ -112,9 +131,22 @@ class ReceiptStream {
   }
 
   private upsert(r: Receipt) {
-    const known = this.byId.has(r.id)
-    this.byId.set(r.id, r)
-    this.rows = known ? this.rows.map((x) => (x.id === r.id ? r : x)) : [r, ...this.rows].slice(0, 600)
+    this.upsertMany([r])
+  }
+
+  private upsertMany(batch: Receipt[]) {
+    const settled = new Map<string, Receipt>()
+    const fresh: Receipt[] = []
+    for (const r of batch) {
+      if (this.byId.has(r.id) || settled.has(r.id)) settled.set(r.id, r)
+      else fresh.push(r)
+      this.byId.set(r.id, r)
+    }
+    // A receipt that arrived and settled in the same batch is new, in its settled form.
+    const newRows = fresh.map((r) => settled.get(r.id) ?? r).reverse()
+    for (const r of newRows) settled.delete(r.id)
+    const rows = settled.size ? this.rows.map((x) => settled.get(x.id) ?? x) : this.rows
+    this.rows = newRows.length ? [...newRows, ...rows].slice(0, 600) : rows
     this.emit()
   }
 }
@@ -154,6 +186,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const paramsRef = useRef(params)
   paramsRef.current = params
+
+  // A shared link carries its range (?range=24h). It wins over the saved one,
+  // then leaves the URL so the picker stays the one source of truth.
+  const urlRange = params.get('range')
+  useEffect(() => {
+    if (!urlRange) return
+    if (timeRanges.some((t) => t.value === urlRange)) setRange(urlRange as TimeRange)
+    const next = new URLSearchParams(paramsRef.current)
+    next.delete('range')
+    setParams(next, { replace: true })
+  }, [urlRange, setRange, setParams])
 
   // Receipt drawer is deep-linkable (§7.5.4): ?receipt=<id>
   const receiptId = params.get('receipt')
@@ -206,6 +249,9 @@ export function useApp() {
   if (!v) throw new Error('useApp must be used within AppStateProvider')
   return v
 }
+
+const rangeMinutes: Record<TimeRange, number> = { '15m': 15, '1h': 60, '6h': 360, '24h': 1440, '7d': 10_080, '30d': 43_200 }
+export const rangeMs = (r: TimeRange) => rangeMinutes[r] * 60_000
 
 export function rangeLabel(r: TimeRange) {
   return timeRanges.find((x) => x.value === r)?.label.replace('Last ', 'last ') ?? r

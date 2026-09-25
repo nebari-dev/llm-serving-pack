@@ -22,16 +22,25 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - The featured change, built from aggregates around the audit row, or
     hidden.
   - Request totals follow the range picker.
-- [ ] **Traffic.**
+- [x] **Traffic.**
   - Remove "Simulate burst".
   - The provider filter comes from backends.
   - Scrolling loads older receipts with `?before=`.
   - The list follows the range picker.
-- [ ] **Receipt drawer.**
+  - Filters run on the server, for the list and the stream. The matching
+    count comes from `receipts_5m` when the filters allow, and otherwise the
+    page says "N loaded".
+  - The stream reports receipts it dropped for a slow consumer.
+  - Shared links carry the range.
+  - Rows are virtualized and live updates batched: about 2,500 rows/min held
+    p95 frame time at 17 ms, p99 at 33 ms.
+- [x] **Receipt drawer.**
   - Show the pricing snapshot (`costBasis`) and `policyMode`.
   - Export downloads the real receipt JSON.
   - Revealing content, the false-positive report and signing aren't
     connected yet.
+  - Print works. Related rows come from the server: same session, and the
+    same key in the hour before.
 - [ ] **Spend.**
   - The breakdown by team, key, model and provider comes from
     `receipts_daily`.
@@ -78,5 +87,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, reconcile events.
 - [ ] Signed receipt export, and revealing content with an audit row.
+- [ ] Traffic sampling (§7.5.3): above a rate threshold the stream sends 1 in
+  N, with the rate in the header. Today the stream only counts and reports
+  what it dropped.
 - [ ] Model modalities and deprecation dates (new catalog columns).
 - [ ] Gateway overhead p50 (not in receipts today).

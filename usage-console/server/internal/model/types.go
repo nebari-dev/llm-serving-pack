@@ -170,7 +170,7 @@ type Receipt struct {
 	OutputTokens      int         `json:"outputTokens"`
 	ReasoningTokens   int         `json:"reasoningTokens"`
 	CostUSD           float64     `json:"costUsd"`
-	CostBasis         *Model      `json:"-"`
+	CostBasis         *Model      `json:"costBasis,omitempty"` // the price row this receipt was costed with (§5.1)
 	Verdict           string      `json:"verdict"`
 	InboundVerdict    string      `json:"inboundVerdict"`       // allowed | stripped | blocked | skipped (not inspected)
 	PolicyMode        string      `json:"policyMode,omitempty"` // enforced | passthrough | fail-open | fail-closed; "" when nothing evaluated policy

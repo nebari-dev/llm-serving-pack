@@ -1,5 +1,5 @@
-import { Columns3, Link2, Pause, Play, Plus, Rows3, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Columns3, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { EmptyState } from '@/components/gw/page'
@@ -16,16 +16,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
 import { backends, keys, models, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { type Density, rangeLabel, useApp, useReceipts } from '@/state/app-state'
+import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
+import { type Dim, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
 
-// §7.5.3 Traffic — a dense table over a live stream.
-
-type Dim = 'key' | 'team' | 'project' | 'model' | 'verdict' | 'provider' | 'backend' | 'reason'
+// §7.5.3 Traffic — a dense virtualized table over a live stream.
 
 const dims: { dim: Dim; label: string; values: { value: string; label: string }[] }[] = [
   { dim: 'key', label: 'Key', values: keys.map((k) => ({ value: k.name, label: k.name })) },
@@ -40,7 +38,7 @@ const dims: { dim: Dim; label: string; values: { value: string; label: string }[
   {
     dim: 'provider',
     label: 'Provider',
-    values: ['OpenAI', 'Anthropic', 'Bedrock', 'Self-hosted', 'Azure'].map((p) => ({ value: p, label: p })),
+    values: [...new Set(backends.map((b) => b.provider))].sort().map((p) => ({ value: p, label: p })),
   },
   { dim: 'backend', label: 'Backend', values: backends.map((b) => ({ value: b.name, label: b.name })) },
   {
@@ -50,20 +48,6 @@ const dims: { dim: Dim; label: string; values: { value: string; label: string }[
   },
 ]
 const primaryDims: Dim[] = ['key', 'team', 'model', 'verdict']
-
-function matches(r: Receipt, f: Record<Dim, string[]>, since: number | null, day: string | null) {
-  if (since && r.ts < since) return false
-  if (day && new Date(r.ts).toISOString().slice(5, 10) !== day) return false
-  if (f.project.length && !f.project.includes(r.project)) return false
-  if (f.key.length && !f.key.includes(r.keyName)) return false
-  if (f.team.length && !f.team.includes(r.team)) return false
-  if (f.model.length && !f.model.includes(r.resolvedModel) && !f.model.includes(r.requestedModel)) return false
-  if (f.verdict.length && !f.verdict.includes(r.verdict)) return false
-  if (f.provider.length && !f.provider.includes(r.provider)) return false
-  if (f.backend.length && !f.backend.includes(r.backend)) return false
-  if (f.reason.length && !f.reason.includes(r.routeReason)) return false
-  return true
-}
 
 // Column config (§7.5.3): user-configurable, persisted; time + key are pinned.
 type ColId = 'team' | 'model' | 'tokens' | 'cost' | 'ms' | 'backend' | 'status'
@@ -87,56 +71,86 @@ function loadCols(): ColId[] {
   }
 }
 
-const SAMPLE_THRESHOLD = 40 // rows/min in this mockup; real threshold is server-side
+const HOT_WINDOW_MS = 30 * 86_400_000
+const BUCKET_MS = 5 * 60_000
+const OVERSCAN = 12
+
+/** A short date and time for the window's edges, e.g. "Sep 24, 14:05". */
+const edge = (ts: number) => new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+
+/**
+ * The list's window: the shared range, narrowed by ?since= (Overview links)
+ * and ?day=MM-DD (Spend's bars, UTC days). It starts on a 5-minute bucket so
+ * the count from receipts_5m covers the same span as the list, and it's fixed
+ * while the page is open so the list doesn't reload under the reader.
+ */
+function useWindow(range: Parameters<typeof rangeMs>[0], sinceParam: number | null, day: string | null): TrafficWindow {
+  return useMemo(() => {
+    const now = Date.now()
+    let since = Math.floor((now - Math.min(rangeMs(range), HOT_WINDOW_MS)) / BUCKET_MS) * BUCKET_MS
+    let before: number | null = null
+    if (sinceParam) since = Math.max(since, sinceParam)
+    if (day && /^\d{2}-\d{2}$/.test(day)) {
+      const [m, d] = day.split('-').map(Number)
+      const y = new Date(now).getUTCFullYear()
+      let start = Date.UTC(y, m - 1, d)
+      if (start > now) start = Date.UTC(y - 1, m - 1, d)
+      since = Math.max(since, start)
+      before = start + 86_400_000
+    }
+    return { since, before }
+  }, [range, sinceParam, day])
+}
 
 export function TrafficPage() {
-  const all = useReceipts()
   const { range, openReceipt, density, setDensity } = useApp()
   const [params, setParams] = useSearchParams()
   const [live, setLive] = useState(true)
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
   const [frozenTop, setFrozenTop] = useState<number | null>(null)
-  const [simulateBurst, setSimulateBurst] = useState(false)
   const [cols, setCols] = useState<ColId[]>(loadCols)
   const mountedAt = useRef(Date.now())
   const [announce, setAnnounce] = useState('')
 
+  const filterKey = dims.map((d) => d.dim + '=' + params.getAll(d.dim).join(',')).join('&')
   const filters = useMemo(() => {
-    const f = {} as Record<Dim, string[]>
+    const f = {} as Filters
     for (const d of dims) f[d.dim] = params.getAll(d.dim)
     return f
-  }, [params])
+    // filterKey is the filters' identity; params also changes for ?receipt=.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey])
   const since = params.get('since') ? Number(params.get('since')) : null
   const day = params.get('day')
+  const window_ = useWindow(range, since, day)
+  const feed = useTrafficFeed(filters, window_)
+  const rows = feed.rows
 
   const frozen = !live || hovering || focusWithin
   // Freeze on interaction: remember the newest visible row and hold the view there.
   useEffect(() => {
-    if (frozen && frozenTop === null) setFrozenTop(all[0]?.ts ?? Date.now())
+    if (frozen && frozenTop === null) setFrozenTop(rows[0]?.ts ?? Date.now())
     if (!frozen && frozenTop !== null) setFrozenTop(null)
-  }, [frozen, frozenTop, all])
+  }, [frozen, frozenTop, rows])
 
-  const matching = useMemo(() => all.filter((r) => matches(r, filters, since, day)), [all, filters, since, day])
-  const sampling = simulateBurst && Object.values(filters).every((v) => v.length === 0)
-  const visible = useMemo(() => {
-    let rows = frozenTop !== null ? matching.filter((r) => r.ts <= frozenTop) : matching
-    if (sampling) rows = rows.filter((_, i) => i % 20 === 0)
-    return rows.slice(0, 300)
-  }, [matching, frozenTop, sampling])
-  const newCount = frozenTop !== null ? matching.filter((r) => r.ts > frozenTop).length : 0
+  const visible = useMemo(() => (frozenTop !== null ? rows.filter((r) => r.ts <= frozenTop) : rows), [rows, frozenTop])
+  const newCount = frozenTop !== null ? rows.length - visible.length : 0
 
   // Screen-reader announcements are throttled, and silent while paused (§7.7).
-  const lastCount = useRef(matching.length)
+  const lastTop = useRef(rows[0]?.id)
+  const rowsRef = useRef(rows)
+  rowsRef.current = rows
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (frozen) return
-      const delta = matching.length - lastCount.current
-      lastCount.current = matching.length
-      if (delta > 0) setAnnounce(`${delta} new requests`)
+      const cur = rowsRef.current
+      const at = cur.findIndex((r) => r.id === lastTop.current)
+      const delta = at === -1 ? cur.length : at
+      lastTop.current = cur[0]?.id
+      if (!frozen && delta > 0) setAnnounce(`${delta} new requests`)
     }, 15_000)
     return () => window.clearInterval(id)
-  }, [frozen, matching.length])
+  }, [frozen])
 
   const setFilter = (dim: Dim | 'since' | 'day', values: string[]) => {
     const next = new URLSearchParams(params)
@@ -159,12 +173,21 @@ export function TrafficPage() {
       /* storage unavailable */
     }
   }
+  const shareView = () => {
+    // The link carries the range too, so it opens on the same window (§7.4).
+    const url = new URL(window.location.href)
+    url.searchParams.delete('receipt')
+    url.searchParams.set('range', range)
+    void navigator.clipboard?.writeText(url.toString())
+    toast.add({ title: 'Link to this view copied', description: 'Filters and the time range are part of the link.', type: 'success' })
+  }
 
-  const perMin = Math.round((matching.filter((r) => r.ts > Date.now() - 60_000).length || 38) * (simulateBurst ? 22 : 1))
   const activeDims = dims.filter((d) => filters[d.dim].length > 0 || primaryDims.includes(d.dim))
   const extraDims = dims.filter((d) => !primaryDims.includes(d.dim) && filters[d.dim].length === 0)
   const shownCols = allCols.filter((c) => cols.includes(c.id))
+  const colIds = useMemo(() => shownCols.map((c) => c.id), [shownCols.map((c) => c.id).join()]) // eslint-disable-line react-hooks/exhaustive-deps
   const hasFilters = Object.values(filters).some((v) => v.length) || since !== null || day !== null
+  const hotEdge = Date.now() - HOT_WINDOW_MS
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -177,14 +200,7 @@ export function TrafficPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void navigator.clipboard?.writeText(window.location.href)
-                toast.add({ title: 'Link to this view copied', description: 'Filters are part of the URL.', type: 'success' })
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={shareView}>
               <Link2 /> Share this view
             </Button>
             <DensityPicker density={density} setDensity={setDensity} />
@@ -241,11 +257,13 @@ export function TrafficPage() {
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
                 <DropdownMenuContent className="w-48">
-                  {extraDims.map((d) => (
-                    <DropdownMenuItem key={d.dim} onClick={() => setFilter(d.dim, [d.values[0].value])}>
-                      {d.label}
-                    </DropdownMenuItem>
-                  ))}
+                  {extraDims
+                    .filter((d) => d.values.length > 0)
+                    .map((d) => (
+                      <DropdownMenuItem key={d.dim} onClick={() => setFilter(d.dim, [d.values[0].value])}>
+                        {d.label}
+                      </DropdownMenuItem>
+                    ))}
                 </DropdownMenuContent>
               </DropdownMenuPortal>
             </DropdownMenu>
@@ -271,21 +289,24 @@ export function TrafficPage() {
               Clear filters
             </Button>
           )}
-          <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="num font-mono">{matching.length.toLocaleString()} matching</span>
-            <label className="inline-flex items-center gap-2">
-              <Switch checked={simulateBurst} onCheckedChange={setSimulateBurst} aria-label="Simulate traffic burst" />
-              Simulate burst
-            </label>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {feed.count !== null ? (
+              <span className="num font-mono">{feed.count.toLocaleString()} matching</span>
+            ) : (
+              <span className="num font-mono" title="Project, model, provider and route reason filters can't be counted from the 5-minute aggregate, so this is what has loaded so far.">
+                {rows.length.toLocaleString()} loaded
+              </span>
+            )}
           </span>
         </div>
 
-        {sampling && (
-          <div role="status" className="flex items-center gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
-            <span className="font-medium">Sampling 1 in 20.</span>
-            <span className="text-foreground/80">
-              {perMin.toLocaleString()} requests/min exceeds the live threshold of {SAMPLE_THRESHOLD}/min. Add a filter to see everything matching.
-            </span>
+        {feed.dropped > 0 && (
+          <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
+            <span className="font-medium">Missed {feed.dropped.toLocaleString()} receipts while the stream was behind.</span>
+            <span className="text-foreground/80">They're stored, but not in this list. Reload it to see everything, or add a filter to slow the stream.</span>
+            <Button variant="outline" size="xs" className="ml-auto" onClick={feed.reload}>
+              <RotateCw /> Reload the list
+            </Button>
           </div>
         )}
       </div>
@@ -313,9 +334,9 @@ export function TrafficPage() {
           {announce}
         </div>
 
-        {visible.length === 0 ? (
+        {feed.loaded && visible.length === 0 ? (
           <EmptyState
-            title={hasFilters ? 'No requests match these filters in this window.' : 'No traffic yet. Point an app at the gateway →'}
+            title={hasFilters ? 'No requests match these filters in this window.' : `No traffic ${rangeLabel(range)}. Point an app at the gateway →`}
             action={
               hasFilters ? (
                 <Button variant="outline" size="sm" onClick={clearAll}>
@@ -329,46 +350,189 @@ export function TrafficPage() {
             }
           />
         ) : (
-          <div
-            className="h-full overflow-auto"
-            onMouseEnter={() => setHovering(true)}
-            onMouseLeave={() => setHovering(false)}
-            onFocus={() => setFocusWithin(true)}
-            onBlur={(e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node)) setFocusWithin(false)
-            }}
-          >
-            <table className="w-full border-separate border-spacing-0 text-sm" aria-label="Live traffic" aria-rowcount={matching.length}>
-              <thead className="sticky top-0 z-10 bg-header text-xs text-muted-foreground-strong">
-                <tr>
-                  <th className="sticky left-0 z-10 w-2 border-b border-border bg-header" aria-label="Verdict marker" />
-                  <th className="sticky left-2 z-10 border-b border-border bg-header px-(--cell-px) py-2 text-left font-medium">Time</th>
-                  <th className="sticky left-[6.5rem] z-10 border-b border-r border-border bg-header px-(--cell-px) py-2 text-left font-medium">Key</th>
-                  {shownCols.map((c) => (
-                    <th key={c.id} className={cn('border-b border-border px-(--cell-px) py-2 font-medium', c.align === 'right' ? 'text-right' : 'text-left')}>
-                      {c.label}
-                    </th>
-                  ))}
-                  <th className="border-b border-border px-(--cell-px) py-2 text-left font-medium">Verdict</th>
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((r) => (
-                  <TrafficRow key={r.id} r={r} cols={shownCols.map((c) => c.id)} isNew={r.ts > mountedAt.current} onOpen={() => openReceipt(r.id)} />
-                ))}
-              </tbody>
-            </table>
-            <p className="px-6 py-3 text-xs text-muted-foreground">
-              Showing the newest {visible.length} of {matching.length.toLocaleString()} matching. Older receipts load as you scroll; the hot window keeps 30 days.
-            </p>
-          </div>
+          <VirtualTable
+            rows={visible}
+            loaded={feed.loaded}
+            total={feed.count}
+            cols={shownCols}
+            colIds={colIds}
+            mountedAt={mountedAt.current}
+            onOpen={openReceipt}
+            onNearEnd={feed.loadOlder}
+            onHover={setHovering}
+            onFocusWithin={setFocusWithin}
+            footer={
+              feed.loadingOlder
+                ? 'Loading older receipts…'
+                : !feed.reachedEnd
+                  ? 'Older receipts load as you scroll.'
+                  : window_.since <= hotEdge + BUCKET_MS
+                    ? `That's everything back to the edge of the 30-day hot window (${edge(hotEdge)}). Older traffic keeps aggregates only.`
+                    : `That's everything since ${edge(window_.since)}. Widen the time range to see older requests.`
+            }
+          />
         )}
       </div>
     </div>
   )
 }
 
-function TrafficRow({ r, cols, isNew, onOpen }: { r: Receipt; cols: ColId[]; isNew: boolean; onOpen: () => void }) {
+/**
+ * The table, rendering only the rows in view (§10: 2,000 rows/min). Rows are
+ * one fixed height per density, so the window is arithmetic, and a spacer row
+ * above and below stands in for the rest.
+ */
+function VirtualTable({
+  rows,
+  loaded,
+  total,
+  cols,
+  colIds,
+  mountedAt,
+  onOpen,
+  onNearEnd,
+  onHover,
+  onFocusWithin,
+  footer,
+}: {
+  rows: Receipt[]
+  loaded: boolean
+  total: number | null
+  cols: typeof allCols
+  colIds: ColId[]
+  mountedAt: number
+  onOpen: (id: string) => void
+  onNearEnd: () => void
+  onHover: (h: boolean) => void
+  onFocusWithin: (f: boolean) => void
+  footer: string
+}) {
+  const scroller = useRef<HTMLDivElement>(null)
+  const [view, setView] = useState({ top: 0, height: 800 })
+  const [rowH, setRowH] = useState(28)
+  const focusNext = useRef<number | null>(null)
+
+  // Viewport size, and the row height from the density's --row-h.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setView({ top: el.scrollTop, height: el.clientHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  useLayoutEffect(() => {
+    const h = scroller.current?.querySelector<HTMLElement>('tbody tr[data-index]')?.offsetHeight
+    if (h && h !== rowH) setRowH(h)
+  })
+
+  // New rows on top don't push what the reader is looking at down: when
+  // scrolled, keep the same first row in view.
+  const firstId = useRef<string | undefined>(undefined)
+  useLayoutEffect(() => {
+    const el = scroller.current
+    const prev = firstId.current
+    firstId.current = rows[0]?.id
+    if (!el || !prev || el.scrollTop === 0 || rows[0]?.id === prev) return
+    const shift = rows.findIndex((r) => r.id === prev)
+    if (shift > 0) el.scrollTop += shift * rowH
+  }, [rows, rowH])
+
+  const start = Math.max(0, Math.floor(view.top / rowH) - OVERSCAN)
+  const end = Math.min(rows.length, Math.ceil((view.top + view.height) / rowH) + OVERSCAN)
+
+  useEffect(() => {
+    if (loaded && end >= rows.length - OVERSCAN) onNearEnd()
+  }, [loaded, end, rows.length, onNearEnd])
+
+  // Arrow keys move through every row, not just the rendered ones.
+  useLayoutEffect(() => {
+    const n = focusNext.current
+    if (n === null) return
+    const tr = scroller.current?.querySelector<HTMLElement>(`tr[data-index="${n}"]`)
+    if (tr) {
+      focusNext.current = null
+      tr.focus()
+    }
+  })
+  const move = (from: number, by: number) => {
+    const el = scroller.current
+    const n = from + by
+    if (!el || n < 0 || n >= rows.length) return
+    const head = el.querySelector('thead')?.clientHeight ?? 0
+    const y = n * rowH
+    if (y < el.scrollTop) el.scrollTop = y
+    else if (y + rowH > el.scrollTop + el.clientHeight - head) el.scrollTop = y + rowH - el.clientHeight + head
+    focusNext.current = n
+    setView({ top: el.scrollTop, height: el.clientHeight })
+  }
+
+  return (
+    <div
+      ref={scroller}
+      className="h-full overflow-auto"
+      onScroll={(e) => setView({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+      onFocus={() => onFocusWithin(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) onFocusWithin(false)
+      }}
+    >
+      <table className="w-full border-separate border-spacing-0 text-sm" aria-label="Live traffic" aria-rowcount={total !== null ? Math.max(total, rows.length) + 1 : -1} aria-busy={!loaded}>
+        <thead className="sticky top-0 z-10 bg-header text-xs text-muted-foreground-strong">
+          <tr aria-rowindex={1}>
+            <th className="sticky left-0 z-10 w-2 border-b border-border bg-header" aria-label="Verdict marker" />
+            <th className="sticky left-2 z-10 border-b border-border bg-header px-(--cell-px) py-2 text-left font-medium">Time</th>
+            <th className="sticky left-[6.5rem] z-10 border-b border-r border-border bg-header px-(--cell-px) py-2 text-left font-medium">Key</th>
+            {cols.map((c) => (
+              <th key={c.id} className={cn('border-b border-border px-(--cell-px) py-2 font-medium', c.align === 'right' ? 'text-right' : 'text-left')}>
+                {c.label}
+              </th>
+            ))}
+            <th className="border-b border-border px-(--cell-px) py-2 text-left font-medium">Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          {!loaded
+            ? // Skeleton rows at the final row height, so nothing shifts when data lands (§7.6).
+              Array.from({ length: 12 }, (_, i) => (
+                <tr key={i} data-index={i} aria-hidden="true">
+                  <td colSpan={cols.length + 4} className="h-(--row-h) border-b border-border px-(--cell-px)">
+                    <span className="block h-2.5 w-full max-w-3xl animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
+                  </td>
+                </tr>
+              ))
+            : (
+              <>
+                {start > 0 && <tr aria-hidden="true" style={{ height: start * rowH }} />}
+                {rows.slice(start, end).map((r, i) => (
+                  <TrafficRow key={r.id} r={r} index={start + i} cols={colIds} isNew={r.ts > mountedAt} onOpen={onOpen} onMove={move} />
+                ))}
+                {end < rows.length && <tr aria-hidden="true" style={{ height: (rows.length - end) * rowH }} />}
+              </>
+            )}
+        </tbody>
+      </table>
+      {loaded && <p className="px-6 py-3 text-xs text-muted-foreground">{footer}</p>}
+    </div>
+  )
+}
+
+const TrafficRow = memo(function TrafficRow({
+  r,
+  index,
+  cols,
+  isNew,
+  onOpen,
+  onMove,
+}: {
+  r: Receipt
+  index: number
+  cols: ColId[]
+  isNew: boolean
+  onOpen: (id: string) => void
+  onMove: (from: number, by: number) => void
+}) {
   const meta = verdictMeta[r.verdict]
   const cell = 'h-(--row-h) border-b border-border px-(--cell-px) whitespace-nowrap'
   const pinnedBg = 'bg-canvas group-hover:bg-muted group-focus-visible:bg-muted'
@@ -376,18 +540,19 @@ function TrafficRow({ r, cols, isNew, onOpen }: { r: Receipt; cols: ColId[]; isN
   return (
     <tr
       tabIndex={0}
-      onClick={onOpen}
+      data-index={index}
+      aria-rowindex={index + 2}
+      onClick={() => onOpen(r.id)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onOpen()
+          onOpen(r.id)
         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault()
-          const sib = e.key === 'ArrowDown' ? e.currentTarget.nextElementSibling : e.currentTarget.previousElementSibling
-          ;(sib as HTMLElement | null)?.focus()
+          onMove(index, e.key === 'ArrowDown' ? 1 : -1)
         }
       }}
-      aria-label={`${clock(r.ts)} ${r.keyName} ${r.resolvedModel} ${meta.label}`}
+      aria-label={`${clock(r.ts)} ${r.keyName} ${r.resolvedModel} ${r.inFlight ? 'streaming' : meta.label}`}
       className={cn('group cursor-pointer outline-none hover:bg-muted focus-visible:bg-muted', isNew && 'motion-safe:animate-row-arrive')}
     >
       {/* Verdict is the leftmost signal: a color bar at the row edge. */}
@@ -435,8 +600,10 @@ function TrafficRow({ r, cols, isNew, onOpen }: { r: Receipt; cols: ColId[]; isN
             return (
               <td key={c} className={cn(cell, 'text-right text-xs')}>
                 {r.inFlight ? (
-                  <span className="num font-mono text-muted-foreground">
-                    {(r.inputTokens / 1000).toFixed(1)}k<span title="Output tokens arrive at end of stream">↑</span>
+                  // Input may be known while streaming; output arrives at the end.
+                  <span className="text-muted-foreground" title="Output tokens arrive at the end of the stream">
+                    <TokenCount value={r.inputTokens} unknown={!r.inputTokens} />
+                    {r.inputTokens > 0 && <span aria-label=" input so far">↑</span>}
                   </span>
                 ) : (
                   <TokenCount value={r.inputTokens + r.outputTokens + r.reasoningTokens} unknown={blocked} />
@@ -453,7 +620,9 @@ function TrafficRow({ r, cols, isNew, onOpen }: { r: Receipt; cols: ColId[]; isN
             return (
               <td key={c} className={cn(cell, 'text-right text-xs')}>
                 {r.inFlight ? (
-                  <span className="num font-mono text-muted-foreground">ttft {r.ttftMs ?? '—'}</span>
+                  <span className="text-muted-foreground">
+                    ttft <Duration ms={r.ttftMs ?? 0} unknown={r.ttftMs == null} />
+                  </span>
                 ) : (
                   <Duration ms={r.durationMs} />
                 )}
@@ -481,7 +650,7 @@ function TrafficRow({ r, cols, isNew, onOpen }: { r: Receipt; cols: ColId[]; isN
       </td>
     </tr>
   )
-}
+})
 
 function FilterMenu({
   label,

@@ -82,6 +82,8 @@ export interface Receipt {
   outputTokens: number
   reasoningTokens: number
   costUsd: number
+  /** The price row this receipt was costed with (§5.1); absent on receipts written before it was recorded. */
+  costBasis?: Model
   verdict: Verdict
   inboundVerdict: InboundVerdict
   /** How Warden handled the request; absent when nothing evaluated policy. */
@@ -431,6 +433,7 @@ export function makeReceipt(ts: number, r: () => number = rand, opts: { inFlight
     outputTokens: blocked ? 0 : outputTokens,
     reasoningTokens,
     costUsd: c,
+    costBasis: { ...model },
     verdict,
     inboundVerdict: verdict === 'truncated' ? 'blocked' : blocked || status !== 200 ? 'skipped' : 'allowed',
     redactions,

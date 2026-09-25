@@ -124,11 +124,13 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 - `POST keys` returns `{key, secret}`; the secret is shown once and only its sha256 is stored.
 - `POST keys/{id}/revoke`
 - `POST keys/{id}/rotate` with `{overlapHours}`. Both secrets work until the overlap ends.
-- `GET receipts?limit&before`, `GET receipts/{id}`
+- `GET receipts?limit&before&since&range` plus repeatable filters `key` (id), `team`, `project`, `model` (requested or resolved), `verdict`, `provider`, `backend`, `reason` and `session`. Returns newest first; page with `before=<oldest ts>`. `range` starts the window on a 5-minute bucket.
+- `GET receipts/count` with the same filters gives `{count, since}` from `receipts_5m`. `count` is null, with a `reason`, when a filter isn't in the aggregate (project, model, provider, reason, session) or the window isn't on 5-minute boundaries.
+- `GET receipts/{id}`. Receipts include `costBasis`, the price row they were costed with, and `policyMode`.
 - `GET series/traffic?range=15m|1h|6h|24h|7d|30d` gives verdict counts per bucket, from `receipts_5m`.
 - `GET series/spend?days=30` gives daily spend by team, from `receipts_daily`.
 - `GET degradations` lists what the banner should show, worst first: Warden unreachable, its kill switch on, or its config cache stale (when `serve -warden` names Warden's admin URL, as `make dev-aigw` does), plus, from the last 15 minutes of receipts, requests Warden passed or refused because it couldn't decide, and backends failing at least 5% of 20+ requests.
-- `GET stream/traffic?key&team&model&verdict&backend` is SSE. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled.
+- `GET stream/traffic` is SSE, with the same filters as `receipts`. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled. A connection that falls behind misses receipts, and a `dropped` event with `{count}` says how many.
 
 Every mutation writes an `audit_log` row in the same transaction.
 

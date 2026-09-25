@@ -5,10 +5,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { changes, modelById, type Receipt } from '@/data/catalog'
+import { API_BASE, changes, dataMode, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
+import { useLive } from '@/state/live'
 import { DecisionTrace } from './decision-trace'
 import { Duration, Money, TokenCount } from './numbers'
 import { VerdictBadge } from './verdict'
@@ -43,6 +44,32 @@ const inbound: Record<Receipt['inboundVerdict'], string> = {
   skipped: 'not inspected',
 }
 
+// What policyMode means for this request, when it isn't the normal case.
+const modes: Record<NonNullable<Receipt['policyMode']>, { label: string; note?: string }> = {
+  enforced: { label: 'enforced' },
+  passthrough: { label: 'passthrough', note: "Warden's kill switch was on: rules were recorded but not enforced." },
+  'fail-open': { label: 'fail-open', note: "Policy couldn't be evaluated, and the rule's fail mode let the request through unpoliced." },
+  'fail-closed': { label: 'fail-closed', note: "Policy couldn't be evaluated, and the rule's fail mode refused the request." },
+}
+
+const api = dataMode === 'api'
+
+/** Downloads the receipt as JSON: in api mode, exactly what the control plane returns. */
+async function exportJson(r: Receipt) {
+  let body = JSON.stringify(r, null, 2)
+  if (api) {
+    const res = await fetch(`${API_BASE}/receipts/${encodeURIComponent(r.id)}`)
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+    body = JSON.stringify(await res.json(), null, 2)
+  }
+  const url = URL.createObjectURL(new Blob([body + '\n'], { type: 'application/json' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `receipt-${r.id}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function Sub({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
     <section className={cn('border-b border-border px-5 py-4 last:border-b-0', className)}>
@@ -70,7 +97,7 @@ export function ReceiptDrawer() {
   }, [receiptId, r])
   return (
     <Drawer open={!!receiptId} onOpenChange={(o) => !o && closeReceipt()} side="right">
-      <DrawerContent style={{ ['--drawer-content-width' as string]: 'min(46rem, 100vw)' }}>
+      <DrawerContent data-print-receipt style={{ ['--drawer-content-width' as string]: 'min(46rem, 100vw)' }}>
         {r ? <ReceiptBody r={r} /> : <NotFound id={receiptId} />}
       </DrawerContent>
     </Drawer>
@@ -94,11 +121,10 @@ function NotFound({ id }: { id: string | null }) {
 
 function ReceiptBody({ r }: { r: Receipt }) {
   const [revealed, setRevealed] = useState(false)
-  const model = modelById[r.resolvedModel]
+  const basis = r.costBasis
   const precedingChange = changes.find((c) => c.ts < r.ts)
-  const all = useReceipts()
-  const sameKey = all.filter((x) => x.keyId === r.keyId && x.id !== r.id).slice(0, 4)
-  const sameSession = r.sessionId ? all.filter((x) => x.sessionId === r.sessionId && x.id !== r.id).slice(0, 3) : []
+  const { sameKey, sameSession } = useRelated(r)
+  const mode = r.policyMode ? modes[r.policyMode] : undefined
 
   const copy = (text: string, what: string) => {
     void navigator.clipboard?.writeText(text)
@@ -106,13 +132,17 @@ function ReceiptBody({ r }: { r: Receipt }) {
   }
 
   const inputBilled = r.inputTokens - r.cachedInputTokens
+  // Priced from the snapshot stored with the receipt (§5.1), never today's prices.
   const lines = [
-    { label: 'Input', tok: inputBilled, rate: model.inPerM },
-    { label: 'Cached input', tok: r.cachedInputTokens, rate: model.cachedPerM },
-    { label: 'Output', tok: r.outputTokens, rate: model.outPerM },
-    { label: 'Reasoning', tok: r.reasoningTokens, rate: model.reasoningPerM },
+    { label: 'Input', tok: inputBilled, rate: basis?.inPerM },
+    { label: 'Cached input', tok: r.cachedInputTokens, rate: basis?.cachedPerM },
+    { label: 'Output', tok: r.outputTokens, rate: basis?.outPerM },
+    { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM },
   ]
   const blocked = r.verdict === 'blocked'
+  const lineTotal = lines.reduce((sum, l) => sum + (l.rate === undefined ? 0 : (l.tok * l.rate) / 1e6), 0)
+  // The recorded total is the number of record; say so if the lines disagree with it.
+  const mismatch = basis && !r.inFlight && !blocked && Math.abs(lineTotal - r.costUsd) > 1e-6
 
   return (
     <>
@@ -124,6 +154,11 @@ function ReceiptBody({ r }: { r: Receipt }) {
             {r.status}
           </span>
           {r.inFlight && <span className="text-xs text-muted-foreground">Streaming — usage arrives at end of stream</span>}
+          {mode?.note && (
+            <span className="inline-flex items-center gap-1 rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
+              Policy {mode.label}
+            </span>
+          )}
           {r.contentCaptured && (
             <span className="inline-flex items-center gap-1 rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
               <ShieldAlert className="size-3" /> Content capture on
@@ -222,14 +257,25 @@ function ReceiptBody({ r }: { r: Receipt }) {
               <span className="text-xs text-muted-foreground">Types and counts only — matched values are never stored.</span>
             </div>
           )}
-          <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            Inbound inspection: <span className="font-medium text-foreground">{inbound[r.inboundVerdict] ?? r.inboundVerdict}</span>
-            {r.redactions.length > 0 && (
-              <button type="button" className="ml-auto underline underline-offset-4 hover:text-foreground" onClick={() => toast.add({ title: 'Sent to the false-positive review queue', type: 'info' })}>
-                Mark a redaction as incorrect
-              </button>
-            )}
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              Policy mode: <span className="font-medium text-foreground">{mode?.label ?? 'not evaluated'}</span>
+            </span>
+            <span>
+              Inbound inspection: <span className="font-medium text-foreground">{inbound[r.inboundVerdict] ?? r.inboundVerdict}</span>
+            </span>
+            {r.redactions.length > 0 &&
+              (api ? (
+                <span className="ml-auto" data-print-hide>
+                  Reporting an incorrect redaction isn't connected yet: there's no false-positive review queue.
+                </span>
+              ) : (
+                <button type="button" data-print-hide className="ml-auto underline underline-offset-4 hover:text-foreground" onClick={() => toast.add({ title: 'Sent to the false-positive review queue', type: 'info' })}>
+                  Mark a redaction as incorrect
+                </button>
+              ))}
           </div>
+          {mode?.note && <p className="mt-2 text-xs text-v-degraded-fg">{mode.note}</p>}
         </Sub>
 
         {/* 4. Usage and cost */}
@@ -251,10 +297,10 @@ function ReceiptBody({ r }: { r: Receipt }) {
                     <TokenCount value={l.tok} exact unknown={r.inFlight && l.label !== 'Input' && l.label !== 'Cached input'} />
                   </td>
                   <td className="py-1.5 text-right">
-                    <Money value={l.rate} className="text-muted-foreground" />
+                    <Money value={l.rate ?? 0} unknown={l.rate === undefined} className="text-muted-foreground" />
                   </td>
                   <td className="py-1.5 text-right">
-                    <Money value={blocked ? 0 : (l.tok * l.rate) / 1e6} precision="micro" unknown={r.inFlight} />
+                    <Money value={blocked ? 0 : ((l.rate ?? 0) * l.tok) / 1e6} precision="micro" unknown={r.inFlight || l.rate === undefined} />
                   </td>
                 </tr>
               ))}
@@ -271,15 +317,37 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </tbody>
           </table>
           <p className="mt-2 text-xs text-muted-foreground">
-            Priced with the {model.display} price snapshot in effect at {clock(r.ts)} (model_pricing row effective 2026-09-01, {model.provider} list price).
-            {blocked && ' Blocked before the upstream call: nothing was billed.'}
+            {basis
+              ? `Priced with the ${basis.display} (${basis.provider}) rates recorded with this receipt at ${clock(r.ts)}, not today's prices.`
+              : blocked
+                ? 'Blocked before the upstream call: nothing was billed.'
+                : r.inFlight
+                  ? 'Priced when the stream ends and usage arrives.'
+                  : r.costUsd === 0
+                    ? "Nothing was priced: the request didn't complete upstream."
+                    : "No price snapshot was recorded with this receipt, so the rates behind its total can't be shown."}
+            {basis && blocked && ' Blocked before the upstream call: nothing was billed.'}
           </p>
+          {mismatch && (
+            <p className="mt-1 text-xs text-v-degraded-fg">
+              These lines add up to <Money value={lineTotal} precision="micro" />, but the receipt records <Money value={r.costUsd} precision="micro" />. The recorded total is the one used for spend and budgets.
+            </p>
+          )}
         </Sub>
 
         {/* 5. Content */}
         <Sub title="Content">
           {r.contentCaptured ? (
-            revealed ? (
+            api ? (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border-strong p-3">
+                <p className="text-sm text-muted-foreground-strong">
+                  Content was captured for backend <span className="font-mono">{r.backend}</span>. Revealing it isn't connected yet: a reveal has to write its own audit record first.
+                </p>
+                <Button variant="outline" size="sm" disabled data-print-hide>
+                  <Eye /> Reveal content
+                </Button>
+              </div>
+            ) : revealed ? (
               <div className="flex flex-col gap-2">
                 <p className="text-xs text-v-degraded-fg">Reveal recorded in the audit log as priya@acme.dev at {clock(Date.now())}.</p>
                 <pre className="max-h-48 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground-strong">
@@ -335,28 +403,68 @@ function ReceiptBody({ r }: { r: Receipt }) {
           {precedingChange && (
             <p className="mb-3 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground-strong">
               Most recent config change before this request: <span className="font-medium text-foreground">{precedingChange.action}</span>{' '}
-              <span className="font-mono">{precedingChange.target}</span> by {precedingChange.actor}, {ago(precedingChange.ts, r.ts)} earlier.
+              <span className="font-mono">{precedingChange.target}</span> by {precedingChange.actor}, {ago(precedingChange.ts, r.ts).replace(/ ago$/, '')} earlier.
             </p>
           )}
-          <RelatedList title={sameSession.length ? 'Same session' : 'Same key, last hour'} items={sameSession.length ? sameSession : sameKey} />
+          <RelatedList title={sameSession.length ? 'Same session' : 'Same key, the hour before'} items={sameSession.length ? sameSession : sameKey} />
         </Sub>
       </DrawerBody>
 
-      <DrawerFooter className="justify-between">
-        <Button variant="ghost" size="sm" onClick={() => copy(window.location.href, 'Link')}>
-          <Link2 /> Copy link
-        </Button>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => toast.add({ title: 'Print is disabled in this mockup', type: 'info' })}>
-            <Printer /> Print
+      <DrawerFooter className="flex-col items-stretch gap-2" data-print-hide>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => copy(window.location.href, 'Link')}>
+            <Link2 /> Copy link
           </Button>
-          <Button variant="outline" size="sm" onClick={() => toast.add({ title: 'Signed receipt exported', description: 'Export recorded in the audit log.', type: 'success' })}>
-            <Download /> Export signed JSON
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => window.print()}>
+              <Printer /> Print
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                exportJson(r).catch((e: Error) => toast.add({ title: "The receipt couldn't be exported", description: `${e.message}. Try again.`, type: 'error' }))
+              }
+            >
+              <Download /> Export JSON
+            </Button>
+            {api ? (
+              <Button variant="outline" size="sm" disabled aria-describedby="sign-reason">
+                <Download /> Export signed JSON
+              </Button>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => toast.add({ title: 'Signed receipt exported', description: 'Export recorded in the audit log.', type: 'success' })}>
+                <Download /> Export signed JSON
+              </Button>
+            )}
+          </div>
         </div>
+        {api && (
+          <p id="sign-reason" className="text-right text-xs text-muted-foreground">
+            Signed export isn't connected yet: the control plane has no receipt signing key. Export JSON is unsigned.
+          </p>
+        )}
       </DrawerFooter>
     </>
   )
+}
+
+const HOUR = 3_600_000
+
+/** Same session, and same key in the hour before (§7.5.4). In api mode, asked of the server, not the loaded rows. */
+function useRelated(r: Receipt) {
+  const all = useReceipts()
+  const keyQ = `/receipts?limit=5&key=${encodeURIComponent(r.keyId)}&since=${r.ts - HOUR}&before=${r.ts}`
+  const sessQ = r.sessionId ? `/receipts?limit=4&session=${encodeURIComponent(r.sessionId)}` : null
+  const liveKey = useLive<Receipt[]>(api ? keyQ : null, [], 60_000).data
+  const liveSess = useLive<Receipt[]>(api ? sessQ : null, [], 60_000).data
+  if (api) {
+    return { sameKey: liveKey.filter((x) => x.id !== r.id).slice(0, 4), sameSession: liveSess.filter((x) => x.id !== r.id).slice(0, 3) }
+  }
+  return {
+    sameKey: all.filter((x) => x.keyId === r.keyId && x.id !== r.id && x.ts < r.ts && x.ts >= r.ts - HOUR).slice(0, 4),
+    sameSession: r.sessionId ? all.filter((x) => x.sessionId === r.sessionId && x.id !== r.id).slice(0, 3) : [],
+  }
 }
 
 function RelatedList({ title, items }: { title: string; items: Receipt[] }) {

@@ -111,19 +111,25 @@ const selectReceipt = `SELECT id, ts, tenant_id, trace_id, coalesce(session_id, 
 	requested_model, resolved_model, backend, provider, region, route_reason, coalesce(fallback_from, ''),
 	input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd::float8,
 	verdict, inbound_verdict, redactions, rules, status, coalesce(error_code, ''), coalesce(error_detail, ''),
-	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, '') FROM receipts`
+	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis FROM receipts`
 
 func scanReceipt(row pgx.Row) (model.Receipt, error) {
 	var r model.Receipt
 	var ts time.Time
-	var red, rules, trace []byte
+	var red, rules, trace, basis []byte
 	err := row.Scan(&r.ID, &ts, &r.TenantID, &r.TraceID, &r.SessionID, &r.DurationMS, &r.TTFTMS, &r.KeyID, &r.KeyName, &r.Team, &r.Project, &r.Actor,
 		&r.RequestedModel, &r.ResolvedModel, &r.Backend, &r.Provider, &r.Region, &r.RouteReason, &r.FallbackFrom,
 		&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CostUSD,
 		&r.Verdict, &r.InboundVerdict, &red, &rules, &r.Status, &r.ErrorCode, &r.ErrorDetail,
-		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode)
+		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis)
 	if err != nil {
 		return r, err
+	}
+	if basis != nil {
+		r.CostBasis = new(model.Model)
+		if err := json.Unmarshal(basis, r.CostBasis); err != nil {
+			return r, err
+		}
 	}
 	r.TS = ts.UnixMilli()
 	for _, p := range []struct {
@@ -152,15 +158,91 @@ func (s *Store) Receipt(ctx context.Context, tenant, id string, tsMS int64) (mod
 	return r, err
 }
 
-// RecentReceipts returns the newest receipts, newest first, optionally only
-// those before a cursor (epoch ms) for paging.
-func (s *Store) RecentReceipts(ctx context.Context, tenant string, limit int, beforeMS int64) ([]model.Receipt, error) {
+// ReceiptQuery selects receipts for the Traffic list. Each filter matches any
+// of its values; an empty filter matches everything. Model matches the
+// requested or the resolved model, as the stream does.
+type ReceiptQuery struct {
+	Limit     int
+	Before    int64 // epoch ms, exclusive; 0 = now
+	Since     int64 // epoch ms, inclusive; 0 = the hot window (30 days)
+	Keys      []string
+	Teams     []string
+	Projects  []string
+	Models    []string
+	Verdicts  []string
+	Providers []string
+	Backends  []string
+	Reasons   []string
+	Sessions  []string
+}
+
+// Aggregable reports whether receipts_5m can count this query exactly: it
+// keeps team, key, resolved model, backend and verdict, and nothing else.
+// Model is left out because the list matches requested models too.
+func (q ReceiptQuery) Aggregable() bool {
+	return len(q.Projects)+len(q.Models)+len(q.Providers)+len(q.Reasons)+len(q.Sessions) == 0
+}
+
+// ListReceipts returns receipts matching q, newest first, for paging with Before.
+func (s *Store) ListReceipts(ctx context.Context, tenant string, q ReceiptQuery) ([]model.Receipt, error) {
 	before := time.Now().Add(time.Minute)
-	if beforeMS > 0 {
-		before = time.UnixMilli(beforeMS)
+	if q.Before > 0 {
+		before = time.UnixMilli(q.Before)
 	}
-	rows, _ := s.Receipts.Query(ctx, selectReceipt+` WHERE tenant_id = $1 AND ts < $2 AND ts > now() - interval '30 days' ORDER BY ts DESC LIMIT $3`, tenant, before, limit)
+	args := []any{tenant, before}
+	where := `tenant_id = $1 AND ts < $2 AND ts > now() - interval '30 days'`
+	if q.Since > 0 {
+		args = append(args, time.UnixMilli(q.Since))
+		where += fmt.Sprintf(` AND ts >= $%d`, len(args))
+	}
+	any := func(col string, vals []string) {
+		if len(vals) == 0 {
+			return
+		}
+		args = append(args, vals)
+		where += fmt.Sprintf(` AND %s = ANY($%d)`, col, len(args))
+	}
+	any("key_id", q.Keys)
+	any("team", q.Teams)
+	any("project", q.Projects)
+	any("verdict", q.Verdicts)
+	any("provider", q.Providers)
+	any("backend", q.Backends)
+	any("route_reason", q.Reasons)
+	any("session_id", q.Sessions)
+	if len(q.Models) > 0 {
+		args = append(args, q.Models)
+		where += fmt.Sprintf(` AND (resolved_model = ANY($%[1]d) OR requested_model = ANY($%[1]d))`, len(args))
+	}
+	args = append(args, q.Limit)
+	rows, _ := s.Receipts.Query(ctx, selectReceipt+` WHERE `+where+fmt.Sprintf(` ORDER BY ts DESC LIMIT $%d`, len(args)), args...)
 	return collect(rows, func(r pgx.Rows) (model.Receipt, error) { return scanReceipt(r) })
+}
+
+// CountReceipts counts settled receipts matching q in [since, before) from
+// receipts_5m (before 0 = now). Both must be on 5-minute boundaries for the
+// count to be exact; the caller checks that and q.Aggregable().
+func (s *Store) CountReceipts(ctx context.Context, tenant string, q ReceiptQuery) (int, error) {
+	args := []any{tenant, time.UnixMilli(q.Since)}
+	where := `tenant_id = $1 AND bucket >= $2`
+	if q.Before > 0 {
+		args = append(args, time.UnixMilli(q.Before))
+		where += fmt.Sprintf(` AND bucket < $%d`, len(args))
+	}
+	any := func(col string, vals []string) {
+		if len(vals) == 0 {
+			return
+		}
+		args = append(args, vals)
+		where += fmt.Sprintf(` AND %s = ANY($%d)`, col, len(args))
+	}
+	any("key_id", q.Keys)
+	any("team", q.Teams)
+	any("verdict", q.Verdicts)
+	any("backend", q.Backends)
+	var n int
+	err := s.Receipts.QueryRow(ctx, `SELECT coalesce(sum(requests), 0)::int FROM receipts_5m WHERE `+where, args...).Scan(&n)
+	return n, err
 }
 
 // TrafficSeries returns verdict counts per bucket, oldest first, with empty

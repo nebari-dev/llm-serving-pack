@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/detectors", s.detectors)
 	h("GET "+p+"/changes", s.changes)
 	h("GET "+p+"/receipts", s.receipts)
+	h("GET "+p+"/receipts/count", s.receiptCount)
 	h("GET "+p+"/receipts/{id}", s.receipt)
 	h("GET "+p+"/series/traffic", s.trafficSeries)
 	h("GET "+p+"/series/spend", s.spendSeries)
@@ -293,11 +294,6 @@ func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, e
 		rs[i].Fired24h, rs[i].Baseline7d = c.Last24h, int(math.Round(float64(c.Last7d)/7))
 	}
 	return rs, nil
-}
-
-func (s *Server) receipts(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	before, _ := strconv.ParseInt(r.URL.Query().Get("before"), 10, 64)
-	return s.Store.RecentReceipts(r.Context(), t, intParam(r, "limit", 240, 1, 1000), before)
 }
 
 func (s *Server) receipt(_ http.ResponseWriter, r *http.Request, t string) (any, error) {

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,49 +23,61 @@ import (
 // console without talking to the API.
 type Hub struct {
 	mu   sync.Mutex
-	subs map[chan model.Receipt]filter
+	subs map[*subscriber]struct{}
+}
+
+// subscriber is one SSE connection. A slow one misses receipts rather than
+// stalling everyone, and dropped counts them so the stream can say so (§7.5.3:
+// never silently drop).
+type subscriber struct {
+	ch      chan model.Receipt
+	f       filter
+	dropped atomic.Int64
 }
 
 type filter struct {
-	tenant                             string
-	key, team, model, verdict, backend string
+	tenant string
+	q      store.ReceiptQuery
 }
+
+func in(vals []string, v string) bool { return len(vals) == 0 || slices.Contains(vals, v) }
 
 func (f filter) match(r model.Receipt) bool {
+	q := f.q
 	return r.TenantID == f.tenant &&
-		(f.key == "" || r.KeyID == f.key) &&
-		(f.team == "" || r.Team == f.team) &&
-		(f.model == "" || r.ResolvedModel == f.model || r.RequestedModel == f.model) &&
-		(f.verdict == "" || r.Verdict == f.verdict) &&
-		(f.backend == "" || r.Backend == f.backend)
+		in(q.Keys, r.KeyID) && in(q.Teams, r.Team) && in(q.Projects, r.Project) &&
+		(len(q.Models) == 0 || slices.Contains(q.Models, r.ResolvedModel) || slices.Contains(q.Models, r.RequestedModel)) &&
+		in(q.Verdicts, r.Verdict) && in(q.Providers, r.Provider) && in(q.Backends, r.Backend) &&
+		in(q.Reasons, r.RouteReason) && in(q.Sessions, r.SessionID)
 }
 
-func NewHub() *Hub { return &Hub{subs: map[chan model.Receipt]filter{}} }
+func NewHub() *Hub { return &Hub{subs: map[*subscriber]struct{}{}} }
 
-func (h *Hub) subscribe(f filter) chan model.Receipt {
-	ch := make(chan model.Receipt, 256)
+func (h *Hub) subscribe(f filter) *subscriber {
+	sub := &subscriber{ch: make(chan model.Receipt, 256), f: f}
 	h.mu.Lock()
-	h.subs[ch] = f
+	h.subs[sub] = struct{}{}
 	h.mu.Unlock()
-	return ch
+	return sub
 }
 
-func (h *Hub) unsubscribe(ch chan model.Receipt) {
+func (h *Hub) unsubscribe(sub *subscriber) {
 	h.mu.Lock()
-	delete(h.subs, ch)
+	delete(h.subs, sub)
 	h.mu.Unlock()
 }
 
 func (h *Hub) publish(r model.Receipt) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for ch, f := range h.subs {
-		if !f.match(r) {
+	for sub := range h.subs {
+		if !sub.f.match(r) {
 			continue
 		}
 		select {
-		case ch <- r:
-		default: // slow consumer: drop rather than stall everyone
+		case sub.ch <- r:
+		default: // slow consumer: drop rather than stall everyone, and count it
+			sub.dropped.Add(1)
 		}
 	}
 }
@@ -109,15 +123,17 @@ func (h *Hub) listenOnce(ctx context.Context, st *store.Store, pool *pgxpool.Poo
 }
 
 // streamTraffic is GET /stream/traffic: one "receipt" event per insert or
-// settle, filtered server side by key, team, model, verdict and backend.
+// settle, with the same filters as GET /receipts (limit, before, since and
+// range are ignored). When receipts were dropped because this connection fell
+// behind, a "dropped" event with {"count": n} comes before the next receipt,
+// or with the next heartbeat.
 func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return nil, fmt.Errorf("streaming unsupported")
 	}
-	q := r.URL.Query()
-	ch := s.Hub.subscribe(filter{tenant: t, key: q.Get("key"), team: q.Get("team"), model: q.Get("model"), verdict: q.Get("verdict"), backend: q.Get("backend")})
-	defer s.Hub.unsubscribe(ch)
+	sub := s.Hub.subscribe(filter{tenant: t, q: receiptQuery(r)})
+	defer s.Hub.unsubscribe(sub)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -126,6 +142,11 @@ func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request, t string)
 	fmt.Fprint(w, "retry: 2000\n\n")
 	flusher.Flush()
 
+	reportDrops := func() {
+		if n := sub.dropped.Swap(0); n > 0 {
+			fmt.Fprintf(w, "event: dropped\ndata: {\"count\":%d}\n\n", n)
+		}
+	}
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -133,8 +154,10 @@ func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request, t string)
 		case <-r.Context().Done():
 			return nil, nil
 		case <-heartbeat.C:
+			reportDrops()
 			fmt.Fprint(w, ": ping\n\n")
-		case rc := <-ch:
+		case rc := <-sub.ch:
+			reportDrops()
 			b, _ := json.Marshal(rc)
 			fmt.Fprintf(w, "event: receipt\nid: %s\ndata: %s\n\n", rc.ID, b)
 		}
