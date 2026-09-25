@@ -117,3 +117,7 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 - [ ] Spend savings analysis (§7.5.5): requests a cheaper same-family model
   would have served. Needs output length per request, or an aggregate of it.
 - [ ] Spend close report as a PDF, with an audit row for each export.
+- [ ] Pricing sync: keep `model_pricing` current from the providers' published
+  prices, not the demo seed. A price change adds a new effective-dated row, so
+  receipts keep the rate they were costed with. Today every cost is tokens ×
+  seed prices from `internal/demo`.
