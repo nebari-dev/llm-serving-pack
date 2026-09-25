@@ -1,6 +1,7 @@
 // fake-openai serves OpenAI-compatible chat completions for every demo
 // backend at /{backend}/v1/chat/completions, sleeping through the simulated
-// latency and streaming chunks when asked.
+// latency and streaming chunks when asked. Like a real provider, it rejects a
+// Stargate API key: the gateway must never forward the caller's credentials.
 package main
 
 import (
@@ -10,6 +11,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/fakellm"
@@ -27,6 +29,13 @@ func main() {
 }
 
 func handle(w http.ResponseWriter, req *http.Request) {
+	for _, h := range []string{"Authorization", "X-Api-Key"} {
+		if strings.Contains(req.Header.Get(h), "ngw_") {
+			log.Printf("%s: caller's Stargate key reached the provider in %s", req.URL.Path, h)
+			http.Error(w, `{"error":{"message":"a Stargate API key reached the provider","code":401}}`, http.StatusUnauthorized)
+			return
+		}
+	}
 	var cr fakellm.ChatRequest
 	if err := json.NewDecoder(req.Body).Decode(&cr); err != nil {
 		http.Error(w, `{"error":{"message":"invalid json"}}`, http.StatusBadRequest)

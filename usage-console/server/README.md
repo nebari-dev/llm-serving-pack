@@ -17,14 +17,25 @@ There's also a second request path through the real gateway, Agent Router
 (formerly Envoy AI Gateway), run standalone with `aigw run`, no Kubernetes:
 
 ```
-trafficgen ──► Agent Router :1975 ──► fake-openai
+trafficgen ──► Agent Router :1975 ──────────────────────► fake-openai
+                  │  ▲  ext_authz: key + model check      (caller's key removed)
+                  │  └─► stargate-api :8082
                   │  routing · retries · failover (aigw/config.yaml)
                   ▼  access log over OTLP/gRPC
             receipt-ingest :4317 ──► receipts db ── NOTIFY ──► stargate-api ──► console
 ```
 
-Nothing checks keys or evaluates rules on this path yet (that's Warden), so its
-receipts say `unauthenticated` and every request that reached a backend is `allowed`.
+A SecurityPolicy sends every request to stargate-api's ext_authz service
+first. It checks the bearer key the way the dev gateway does, so rotation,
+revocation and expiry behave the same, and checks the model against the key's
+allowlist after aliasing. A bad key gets a 401 and a model the key can't use
+gets a 403. On success it adds `X-Stargate-Key-Id`, `-Team` and `-Project` and
+strips `Authorization`, so the provider never sees the caller's key. The access
+log records those headers and receipt-ingest fills in the receipt's identity. A
+403 is logged too, as a `blocked` receipt; a 401 has no key to attribute, so
+like the dev gateway it gets no receipt. Key changes made through the API take
+effect before the API responds. Nothing evaluates budgets or rules on this path
+yet (that's Warden), so every request that reached a backend is `allowed`.
 
 ## Run it
 
@@ -57,11 +68,11 @@ triggers the `eu-only` reroute.
 
 | | |
 |---|---|
-| `cmd/stargate-api serve` | REST + SSE on :8080. Migrates and seeds on start. Also `migrate`, and `backfill -days N -per-day N`. |
+| `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. Also `migrate`, and `backfill -days N -per-day N`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
-| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. |
+| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record into a receipt. |
-| `aigw/config.yaml` | Agent Router config: routes for every demo model, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
+| `aigw/config.yaml` | Agent Router config: the ext_authz key check, routes for every demo model, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
 | `cmd/trafficgen` | Poisson traffic at `-rps`, with the mockup's mix of keys, PII, secrets and EU requests. |
 
 DB URLs come from `STARGATE_CONFIG_DB` and `STARGATE_RECEIPTS_DB`. The

@@ -5,6 +5,7 @@ import (
 
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/store"
 )
 
 var snap = &gateway.Snapshot{
@@ -94,5 +95,47 @@ func TestReceiptClientDisconnect(t *testing.T) {
 	rc, _ := Receipt(snap, record(map[string]string{"response_code": "0", "response_flags": "DC"}))
 	if rc.ErrorCode != "client_disconnected" || rc.CostUSD != 0 {
 		t.Errorf("code=%s cost=%v", rc.ErrorCode, rc.CostUSD)
+	}
+}
+
+var keyed = func() *gateway.Snapshot {
+	s := *snap
+	k := &store.KeyRecord{APIKey: model.APIKey{ID: "k4", Name: "web-chat", Prefix: "ngw_live_9a0c", Team: "web", Project: "assistant", AllowedModels: []string{"gpt-5-mini"}}}
+	s.KeyBy = map[string]*store.KeyRecord{"h": k}
+	s.Aliases = map[string]string{"summarize-*": "gpt-5-mini"}
+	return &s
+}()
+
+func TestReceiptIdentityFromKeyCheck(t *testing.T) {
+	rc, err := Receipt(keyed, record(map[string]string{"stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "assistant"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.KeyID != "k4" || rc.KeyName != "web-chat" || rc.Team != "web" || rc.Project != "assistant" || rc.Verdict != "allowed" {
+		t.Errorf("identity: %s %s %s %s %s", rc.KeyID, rc.KeyName, rc.Team, rc.Project, rc.Verdict)
+	}
+	if rc.Trace[0].State != "ok" || rc.Trace[0].Input != "Bearer ngw_live_9a0c…" {
+		t.Errorf("identity step: %+v", rc.Trace[0])
+	}
+}
+
+func TestReceiptModelBlockedByKeyCheck(t *testing.T) {
+	// ext_authz answered before routing: no model header, no backend, no usage.
+	rc, err := Receipt(keyed, record(map[string]string{
+		"response_code": "403", "response_flags": "UAEX", "upstream_request_attempt_count": "0",
+		"gen_ai.request.model": "-", "gen_ai.response.model": "-", "gen_ai.provider.name": "-",
+		"stargate.key_id": "-", "stargate.denied_key_id": "k4", "stargate.denied_model": "gpt-5.5",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Verdict != "blocked" || rc.ErrorCode != "model_not_allowed" || rc.Status != 403 || rc.CostUSD != 0 {
+		t.Errorf("verdict=%s code=%s status=%d cost=%v", rc.Verdict, rc.ErrorCode, rc.Status, rc.CostUSD)
+	}
+	if rc.KeyName != "web-chat" || rc.Team != "web" || rc.Project != "assistant" || rc.RequestedModel != "gpt-5.5" {
+		t.Errorf("identity: %s %s %s model=%s", rc.KeyName, rc.Team, rc.Project, rc.RequestedModel)
+	}
+	if rc.ErrorDetail != "Key web-chat may not call gpt-5.5. Allowed: gpt-5-mini." {
+		t.Errorf("detail = %q", rc.ErrorDetail)
 	}
 }

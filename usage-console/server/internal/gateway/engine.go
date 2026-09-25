@@ -241,21 +241,60 @@ func promptText(msgs []fakellm.Message) string {
 
 func money(f float64) string { return fmt.Sprintf("$%.0f", f) }
 
+// Authenticate resolves an Authorization header value (with or without
+// "Bearer ") to its key. Unknown and revoked keys, a secret retired by
+// rotation, and expired keys are rejected with 401.
+func Authenticate(s *Snapshot, secret string, now time.Time) (*store.KeyRecord, *Reject) {
+	hash := demo.HashSecret(strings.TrimPrefix(secret, "Bearer "))
+	k, ok := s.KeyBy[hash]
+	if !ok || k.Status == "revoked" {
+		return nil, &Reject{Status: 401, Code: "invalid_api_key", Message: "unknown or revoked API key"}
+	}
+	if k.Status == "rotating" && k.RotateUntil != nil && now.After(*k.RotateUntil) && k.Hash == hash && k.NextHash != "" {
+		return nil, &Reject{Status: 401, Code: "invalid_api_key", Message: "this secret was retired by rotation"}
+	}
+	if k.ExpiresAt != nil && *k.ExpiresAt < now.UTC().Format("2006-01-02") {
+		return nil, &Reject{Status: 401, Code: "expired_api_key", Message: "API key expired " + *k.ExpiresAt}
+	}
+	return k, nil
+}
+
+// CheckModel rejects a requested model, after aliasing, that the key's
+// allowlist doesn't include.
+func (s *Snapshot) CheckModel(k *store.KeyRecord, requested string) *Reject {
+	return modelAllowed(k, s.Resolve(requested))
+}
+
+// Resolve maps a requested model through the aliases.
+func (s *Snapshot) Resolve(requested string) string {
+	m, _ := resolveAlias(s.Aliases, requested)
+	return m
+}
+
+// KeyByID finds a key by id, or nil.
+func (s *Snapshot) KeyByID(id string) *store.KeyRecord {
+	for _, k := range s.KeyBy {
+		if k.ID == id {
+			return k
+		}
+	}
+	return nil
+}
+
+// modelAllowed checks a resolved (post-alias) model against the key's allowlist.
+func modelAllowed(k *store.KeyRecord, resolved string) *Reject {
+	if slices.Contains(k.AllowedModels, resolved) {
+		return nil
+	}
+	return &Reject{Status: 403, Code: "model_not_allowed", Message: fmt.Sprintf("Key %s may not call %s. Allowed: %s.", k.Name, resolved, strings.Join(k.AllowedModels, ", "))}
+}
+
 // Admit runs everything before the upstream call.
 func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
 	d := &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req}
-	hash := demo.HashSecret(strings.TrimPrefix(in.Secret, "Bearer "))
-	k, ok := s.KeyBy[hash]
-	if !ok || k.Status == "revoked" {
-		d.Reject = &Reject{Status: 401, Code: "invalid_api_key", Message: "unknown or revoked API key"}
-		return d
-	}
-	if k.Status == "rotating" && k.RotateUntil != nil && in.Now.After(*k.RotateUntil) && k.Hash == hash && k.NextHash != "" {
-		d.Reject = &Reject{Status: 401, Code: "invalid_api_key", Message: "this secret was retired by rotation"}
-		return d
-	}
-	if k.ExpiresAt != nil && *k.ExpiresAt < in.Now.UTC().Format("2006-01-02") {
-		d.Reject = &Reject{Status: 401, Code: "expired_api_key", Message: "API key expired " + *k.ExpiresAt}
+	k, rej := Authenticate(s, in.Secret, in.Now)
+	if rej != nil {
+		d.Reject = rej
 		return d
 	}
 
@@ -304,8 +343,8 @@ func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
 	if aliased {
 		rc.RouteReason = "alias"
 	}
-	if !slices.Contains(k.AllowedModels, resolved) {
-		return d.block(403, "model_not_allowed", fmt.Sprintf("Key %s may not call %s. Allowed: %s.", k.Name, resolved, strings.Join(k.AllowedModels, ", ")))
+	if rej := modelAllowed(k, resolved); rej != nil {
+		return d.block(rej.Status, rej.Code, rej.Message)
 	}
 	if _, ok := s.Models[resolved]; !ok {
 		return d.block(404, "model_not_found", "unknown model "+resolved)

@@ -1,4 +1,5 @@
-// stargate-api is the control plane: REST + SSE for the console.
+// stargate-api is the control plane: REST + SSE for the console, and the
+// external authorization service Agent Router checks keys against.
 //
 //	stargate-api serve     migrate, seed the demo tenant if missing, serve
 //	stargate-api migrate   apply migrations only
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/api"
@@ -62,21 +64,61 @@ func main() {
 func serve(ctx context.Context, st *store.Store, args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", ":8080", "listen address")
+	authzAddr := fs.String("authz-addr", ":8082", "listen address for Agent Router's ext_authz checks")
+	refresh := fs.Duration("refresh", 5*time.Second, "how often ext_authz reloads keys from the db")
 	fs.Parse(args)
+
+	// Loads are serialized so a slow periodic one can't overwrite a newer one.
+	var snap gateway.Current
+	var mu sync.Mutex
+	reload := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		s, err := gateway.LoadSnapshot(ctx, st, demo.Tenant)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("load gateway config: %v", err)
+			}
+			return
+		}
+		snap.Store(s)
+	}
+	if reload(); snap.Load() == nil {
+		log.Fatal("no gateway config to check keys against")
+	}
+	go func() {
+		t := time.NewTicker(*refresh)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				reload()
+			}
+		}
+	}()
 
 	hub := api.NewHub()
 	go hub.Listen(ctx, st, st.Receipts)
-	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost"}
+	// Reloading before the key mutation responds means a revoked key is
+	// refused from the moment the console shows it revoked.
+	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", KeysChanged: reload}
 	go srv.FinishRotations(ctx)
 
-	hs := &http.Server{Addr: *addr, Handler: logRequests(srv.Handler())}
+	go listen(ctx, "ext_authz", *authzAddr, &gateway.ExtAuthz{Snap: &snap})
+	listen(ctx, "stargate-api", *addr, logRequests(srv.Handler()))
+}
+
+func listen(ctx context.Context, name, addr string, h http.Handler) {
+	hs := &http.Server{Addr: addr, Handler: h}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		hs.Shutdown(sctx)
 	}()
-	log.Printf("stargate-api listening on %s", *addr)
+	log.Printf("%s listening on %s", name, addr)
 	if err := hs.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}

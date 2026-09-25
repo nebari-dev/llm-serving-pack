@@ -48,7 +48,8 @@ test:
 	go test ./...
 
 # Same, with the real request path: Agent Router in front of the fake upstream,
-# its access log feeding receipt-ingest. No key checks or rules yet.
+# checking keys against stargate-api's ext_authz (:8082), its access log feeding
+# receipt-ingest. No rules yet.
 dev-aigw: migrate
 	@command -v $(AIGW) >/dev/null || { echo "aigw not found; install it or pass AIGW=/path/to/aigw"; exit 1; }
 	@trap 'kill 0' INT TERM; \

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/config"
@@ -40,7 +41,10 @@ func main() {
 	defer st.Close()
 
 	var cur gateway.Current
+	var mu sync.Mutex
 	load := func() error {
+		mu.Lock()
+		defer mu.Unlock()
 		s, err := gateway.LoadSnapshot(ctx, st, demo.Tenant)
 		if err == nil {
 			cur.Store(s)
@@ -70,7 +74,7 @@ func main() {
 		log.Fatal(err)
 	}
 	gs := grpc.NewServer()
-	collogs.RegisterLogsServiceServer(gs, &receiver{snap: &cur, store: st})
+	collogs.RegisterLogsServiceServer(gs, &receiver{snap: &cur, store: st, reload: load})
 	go func() {
 		<-ctx.Done()
 		gs.GracefulStop()
@@ -83,15 +87,44 @@ func main() {
 
 type receiver struct {
 	collogs.UnimplementedLogsServiceServer
-	snap  *gateway.Current
-	store *store.Store
+	snap   *gateway.Current
+	store  *store.Store
+	reload func() error
+
+	mu         sync.Mutex
+	lastReload time.Time
+}
+
+// snapshotFor returns a snapshot to build these keys' receipts from. A key
+// created since the last reload triggers an early one (at most once a
+// second), so its first receipts carry its name.
+func (r *receiver) snapshotFor(ids []string) *gateway.Snapshot {
+	snap := r.snap.Load()
+	for _, id := range ids {
+		if id == "" || snap.KeyByID(id) != nil {
+			continue
+		}
+		r.mu.Lock()
+		due := time.Since(r.lastReload) > time.Second
+		if due {
+			r.lastReload = time.Now()
+		}
+		r.mu.Unlock()
+		if due {
+			if err := r.reload(); err != nil {
+				log.Printf("reload config: %v", err)
+			}
+		}
+		return r.snap.Load()
+	}
+	return snap
 }
 
 // Export writes what it can and reports the rest as rejected, so one bad
 // record doesn't make Envoy retry the whole batch.
 func (r *receiver) Export(ctx context.Context, req *collogs.ExportLogsServiceRequest) (*collogs.ExportLogsServiceResponse, error) {
-	snap := r.snap.Load()
-	var rejected int64
+	var records []map[string]string
+	var keyIDs []string
 	for _, rl := range req.GetResourceLogs() {
 		for _, sl := range rl.GetScopeLogs() {
 			for _, lr := range sl.GetLogRecords() {
@@ -99,15 +132,21 @@ func (r *receiver) Export(ctx context.Context, req *collogs.ExportLogsServiceReq
 				for _, kv := range lr.GetAttributes() {
 					attrs[kv.GetKey()] = str(kv.GetValue())
 				}
-				rc, err := ingest.Receipt(snap, attrs)
-				if err == nil {
-					err = r.store.PutReceipt(ctx, rc)
-				}
-				if err != nil {
-					rejected++
-					log.Printf("drop access-log record: %v", err)
-				}
+				records = append(records, attrs)
+				keyIDs = append(keyIDs, ingest.KeyID(attrs))
 			}
+		}
+	}
+	snap := r.snapshotFor(keyIDs)
+	var rejected int64
+	for _, attrs := range records {
+		rc, err := ingest.Receipt(snap, attrs)
+		if err == nil {
+			err = r.store.PutReceipt(ctx, rc)
+		}
+		if err != nil {
+			rejected++
+			log.Printf("drop access-log record: %v", err)
 		}
 	}
 	resp := &collogs.ExportLogsServiceResponse{}

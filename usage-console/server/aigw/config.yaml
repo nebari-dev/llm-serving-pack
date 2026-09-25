@@ -49,8 +49,10 @@ spec:
   telemetry:
     accessLog:
       settings:
+        # LLM requests, plus those the key check blocked for their model
+        # (ext_authz runs before the model is extracted).
         - matches:
-            - "request.headers['x-ai-eg-model'] != ''"
+            - "request.headers['x-ai-eg-model'] != '' || response.headers['x-stargate-key-id'] != ''"
           sinks:
             - type: File
               file:
@@ -82,6 +84,11 @@ spec:
               upstream_cluster: "%UPSTREAM_CLUSTER%"
               upstream_request_attempt_count: "%UPSTREAM_REQUEST_ATTEMPT_COUNT%"
               x-request-id: "%REQ(X-REQUEST-ID)%"
+              stargate.key_id: "%REQ(X-STARGATE-KEY-ID)%"
+              stargate.team: "%REQ(X-STARGATE-TEAM)%"
+              stargate.project: "%REQ(X-STARGATE-PROJECT)%"
+              stargate.denied_key_id: "%RESP(X-STARGATE-KEY-ID)%"
+              stargate.denied_model: "%RESP(X-STARGATE-MODEL)%"
               traceparent: "%REQ(TRACEPARENT)%"
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -184,10 +191,12 @@ spec:
       maxEjectionPercent: 100
 ---
 # Envoy Gateway's default 32KiB buffer is too small for LLM bodies (spec §13).
+# The identity headers are the key check's to set, so drop any the caller sends
+# before a filter sees them.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: ClientTrafficPolicy
 metadata:
-  name: client-buffer-limit
+  name: client-traffic
   namespace: default
 spec:
   targetRefs:
@@ -196,6 +205,45 @@ spec:
       name: aigw-run
   connection:
     bufferLimit: 50Mi
+  headers:
+    earlyRequestHeaders:
+      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project]
+---
+# Key check: every request goes to stargate-api's ext_authz service (:8082)
+# with its body, since the model lives there. 401 for a bad key, 403 for a model
+# the key may not call; on 200 the identity headers are added and the caller's
+# Authorization is removed, so the provider never sees it.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: key-check
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  extAuth:
+    bodyToExtAuth:
+      maxRequestBytes: 52428800
+    http:
+      backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: stargate-authz
+          port: 8082
+      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project]
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: stargate-authz
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8082
 ---
 # One Backend + AIServiceBackend per fake provider. They share host:port and
 # differ by path prefix, matching fake-openai's /{backend}/v1/chat/completions.

@@ -3,9 +3,11 @@
 // attributes named in aigw/config.yaml; the control plane's config fills in
 // what the gateway doesn't know (provider, region, pricing).
 //
-// There is no Warden yet, so nothing in the path resolves an API key or
-// evaluates rules: receipts carry no key identity and every request that
-// reached a backend is "allowed".
+// Keys are checked by stargate-api's ext_authz service, which passes the key,
+// team and project on as headers the access log records. A request it blocks
+// for its model is logged with the identity from the 403 instead. There is no
+// Warden yet, so nothing evaluates rules: every request that reached a backend
+// is "allowed".
 package ingest
 
 import (
@@ -17,6 +19,7 @@ import (
 
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/store"
 )
 
 // Attribute names, as set in the EnvoyProxy access-log format.
@@ -37,6 +40,11 @@ const (
 	attrCached      = "gen_ai.usage.cached_input_tokens"
 	attrOutput      = "gen_ai.usage.output_tokens"
 	attrReasoning   = "gen_ai.usage.reasoning_tokens"
+	attrKeyID       = "stargate.key_id"
+	attrTeam        = "stargate.team"
+	attrProject     = "stargate.project"
+	attrDeniedKeyID = "stargate.denied_key_id"
+	attrDeniedModel = "stargate.denied_model"
 )
 
 // Receipt builds a settled receipt from one access-log record's attributes.
@@ -90,7 +98,23 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		}
 	}
 
-	identity := model.TraceStep{Step: "Identity resolved", Input: "—", Outcome: "no key check in the path yet", State: "skip"}
+	identity := model.TraceStep{Step: "Identity resolved", Input: "—", Outcome: "no key check in the path", State: "skip"}
+	keyID, denied := KeyID(a), get(attrKeyID) == ""
+	if keyID != "" {
+		rc.KeyID, rc.KeyName, rc.Team, rc.Project = keyID, keyID, get(attrTeam), get(attrProject)
+		k := s.KeyByID(keyID)
+		if k != nil {
+			rc.KeyName, identity.Input = k.Name, "Bearer "+k.Prefix+"…"
+			if denied {
+				// A 403 has no request headers to log; the key has the rest.
+				rc.Team, rc.Project = k.Team, k.Project
+			}
+		}
+		identity.Outcome, identity.State = rc.KeyName+" → "+rc.Team+" / "+rc.Project, "ok"
+		if denied {
+			return blocked(s, rc, k, get(attrDeniedModel), identity), nil
+		}
+	}
 	route := model.TraceStep{Step: "Route selected", Input: "requested " + rc.RequestedModel, Outcome: rc.ResolvedModel + " via " + rc.Backend, State: "ok"}
 	if attempts := num(attrAttempts); attempts > 1 {
 		route.Outcome += fmt.Sprintf(" after %d attempts", attempts)
@@ -129,6 +153,37 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	}
 	rc.Trace = []model.TraceStep{identity, route, up}
 	return rc, nil
+}
+
+// KeyID is the key the key check resolved for a record, admitted or blocked,
+// or "" when there was none.
+func KeyID(a map[string]string) string {
+	for _, k := range []string{attrKeyID, attrDeniedKeyID} {
+		if v := a[k]; v != "" && v != "-" {
+			return v
+		}
+	}
+	return ""
+}
+
+// blocked fills in a request ext_authz refused with 403: a model the key may
+// not call. It never reached a route or a backend.
+func blocked(s *gateway.Snapshot, rc *model.Receipt, k *store.KeyRecord, requested string, identity model.TraceStep) *model.Receipt {
+	rc.Verdict, rc.ErrorCode = "blocked", "model_not_allowed"
+	rc.RequestedModel, rc.ResolvedModel = requested, s.Resolve(requested)
+	rc.ErrorDetail = "model " + rc.ResolvedModel + " is not allowed for this key"
+	if k != nil {
+		if rej := s.CheckModel(k, requested); rej != nil {
+			rc.ErrorDetail = rej.Message
+		}
+	}
+	rc.Backend, rc.Provider, rc.Region, rc.ResponseHash = "—", "—", "—", "—"
+	skip := func(step string) model.TraceStep {
+		return model.TraceStep{Step: step, Input: "—", Outcome: "not reached", State: "skip"}
+	}
+	check := model.TraceStep{Step: "Model allowed", Input: "requested " + requested, Outcome: rc.ErrorDetail, State: "fail"}
+	rc.Trace = []model.TraceStep{identity, check, skip("Route selected"), skip("Upstream called")}
+	return rc
 }
 
 // traceID pulls the trace id out of a W3C traceparent: "00-<trace>-<span>-<flags>".

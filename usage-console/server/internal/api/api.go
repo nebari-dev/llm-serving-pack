@@ -26,6 +26,15 @@ type Server struct {
 	// every caller acts as DevActor.
 	Tenants  []string
 	DevActor string
+	// KeysChanged, if set, runs after a key is created, revoked or rotated and
+	// before the response, so the gateway's key check sees it at once.
+	KeysChanged func()
+}
+
+func (s *Server) keysChanged() {
+	if s.KeysChanged != nil {
+		s.KeysChanged()
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -183,6 +192,7 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
+	s.keysChanged()
 	return map[string]any{"key": k.APIKey, "secret": secret}, nil
 }
 
@@ -191,6 +201,7 @@ func (s *Server) revokeKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
+	s.keysChanged()
 	return withUsage(k.APIKey, store.KeyUsage{}), nil
 }
 
@@ -215,6 +226,7 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
+	s.keysChanged()
 	usage, _ := s.Store.KeyUsage(r.Context(), t)
 	return map[string]any{"key": withUsage(k.APIKey, usage[k.ID]), "secret": secret}, nil
 }
