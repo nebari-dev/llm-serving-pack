@@ -13,6 +13,19 @@ trafficgen ──► devgateway ──► fake-openai          (OpenAI-compatibl
             config db (Postgres) ◄───────────────┘   REST /api/v1/{tenant}/…  SSE /stream/traffic
 ```
 
+There's also a second request path through the real gateway, Agent Router
+(formerly Envoy AI Gateway), run standalone with `aigw run`, no Kubernetes:
+
+```
+trafficgen ──► Agent Router :1975 ──► fake-openai
+                  │  routing · retries · failover (aigw/config.yaml)
+                  ▼  access log over OTLP/gRPC
+            receipt-ingest :4317 ──► receipts db ── NOTIFY ──► stargate-api ──► console
+```
+
+Nothing checks keys or evaluates rules on this path yet (that's Warden), so its
+receipts say `unauthenticated` and every request that reached a backend is `allowed`.
+
 ## Run it
 
 ```sh
@@ -22,6 +35,11 @@ make backfill                   # optional: 7 days of synthetic history so chart
 make dev                        # fake upstream :8090, API :8080, gateway :8081, traffic ~0.8 rps
 cd ../console && npm run dev:api   # console on the API (npm run dev stays on mock data)
 ```
+
+To use Agent Router instead of the dev gateway, get the `aigw` binary for
+your platform from the [releases](https://github.com/theagentrouter/agent-router/releases)
+(v1.1.0 tested), then run `make dev-aigw`, or `make dev-aigw AIGW=/path/to/aigw`
+if it's not on your PATH. The first run downloads Envoy into `~/.local/share/aigw`.
 
 Everything uses the demo tenant. Seeded keys authenticate with
 `<prefix>_devsecret_not_for_production`, for example:
@@ -42,6 +60,8 @@ triggers the `eu-only` reroute.
 | `cmd/stargate-api serve` | REST + SSE on :8080. Migrates and seeds on start. Also `migrate`, and `backfill -days N -per-day N`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
 | `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. |
+| `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record into a receipt. |
+| `aigw/config.yaml` | Agent Router config: routes for every demo model, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
 | `cmd/trafficgen` | Poisson traffic at `-rps`, with the mockup's mix of keys, PII, secrets and EU requests. |
 
 DB URLs come from `STARGATE_CONFIG_DB` and `STARGATE_RECEIPTS_DB`. The

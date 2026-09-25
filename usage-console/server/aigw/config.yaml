@@ -4,8 +4,15 @@
 #
 #   aigw run aigw/config.yaml      # listens on :1975, admin/metrics on :1064
 #
-# gpt-5-mini       → openai-prod
-# claude-sonnet-5  → anthropic-prod, falling back to bedrock-eu on 5xx
+# The access log goes over OTLP to cmd/receipt-ingest (:4317), which writes a
+# receipt per request. Models route like the demo backends:
+#
+# gpt-5-mini, gpt-5.5       → openai-prod
+# summarize-*               → openai-prod as gpt-5-mini
+# claude-sonnet-5           → anthropic-prod, falling back to bedrock-eu on 5xx
+# claude-opus-4-1           → anthropic-prod, falling back to openai-prod's gpt-5.5
+# claude-haiku-4-5          → bedrock-eu
+# llama-3.3-70b             → vllm-internal
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -48,6 +55,13 @@ spec:
             - type: File
               file:
                 path: /dev/stdout
+            # Field names are what internal/ingest reads; keep them in sync.
+            - type: OpenTelemetry
+              openTelemetry:
+                host: localhost
+                port: 4317
+                resources:
+                  service.name: agent-router
           format:
             type: JSON
             json:
@@ -55,14 +69,20 @@ spec:
               gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
               gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
               gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.cached_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
               start_time: "%START_TIME%"
               request.path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
               response_code: "%RESPONSE_CODE%"
               duration: "%DURATION%"
+              response_duration: "%RESPONSE_DURATION%"
+              response_flags: "%RESPONSE_FLAGS%"
               upstream_cluster: "%UPSTREAM_CLUSTER%"
               upstream_request_attempt_count: "%UPSTREAM_REQUEST_ATTEMPT_COUNT%"
               x-request-id: "%REQ(X-REQUEST-ID)%"
+              traceparent: "%REQ(TRACEPARENT)%"
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
 kind: AIGatewayRoute
@@ -79,8 +99,19 @@ spec:
         - headers:
             - name: x-ai-eg-model
               value: gpt-5-mini
+        - headers:
+            - name: x-ai-eg-model
+              value: gpt-5.5
       backendRefs:
         - name: openai-prod
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: summarize-.*
+      backendRefs:
+        - name: openai-prod
+          modelNameOverride: gpt-5-mini
     - matches:
         - headers:
             - name: x-ai-eg-model
@@ -90,9 +121,33 @@ spec:
           priority: 0
         - name: bedrock-eu
           priority: 1
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: claude-opus-4-1
+      backendRefs:
+        - name: anthropic-prod
+          priority: 0
+        - name: openai-prod
+          priority: 1
+          modelNameOverride: gpt-5.5
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: claude-haiku-4-5
+      backendRefs:
+        - name: bedrock-eu
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: llama-3.3-70b
+      backendRefs:
+        - name: vllm-internal
   llmRequestCosts:
     - metadataKey: llm_input_token
       type: InputToken
+    - metadataKey: llm_cached_input_token
+      type: CachedInputToken
     - metadataKey: llm_output_token
       type: OutputToken
     - metadataKey: llm_reasoning_token
@@ -216,5 +271,30 @@ spec:
     prefix: /bedrock-eu/v1
   backendRef:
     name: bedrock-eu
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: vllm-internal
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8090
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: vllm-internal
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: /vllm-internal/v1
+  backendRef:
+    name: vllm-internal
     kind: Backend
     group: gateway.envoyproxy.io

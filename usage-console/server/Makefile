@@ -1,6 +1,9 @@
 # Local dev loop for the control plane. `make dev` starts everything; the
 # console then runs with `cd ../console && npm run dev:api`.
-.PHONY: db db-down migrate backfill api gateway upstream traffic dev test
+.PHONY: db db-down migrate backfill api gateway upstream traffic ingest aigw dev dev-aigw test
+
+# Agent Router CLI: https://github.com/theagentrouter/agent-router/releases
+AIGW ?= aigw
 
 db:
 	docker compose up -d --wait
@@ -26,6 +29,12 @@ upstream:
 traffic:
 	go run ./cmd/trafficgen
 
+ingest:
+	go run ./cmd/receipt-ingest
+
+aigw:
+	$(AIGW) run aigw/config.yaml
+
 # Runs api, gateway, fake upstream and traffic together; Ctrl-C stops all.
 dev: migrate
 	@trap 'kill 0' INT TERM; \
@@ -37,3 +46,15 @@ dev: migrate
 
 test:
 	go test ./...
+
+# Same, with the real request path: Agent Router in front of the fake upstream,
+# its access log feeding receipt-ingest. No key checks or rules yet.
+dev-aigw: migrate
+	@command -v $(AIGW) >/dev/null || { echo "aigw not found; install it or pass AIGW=/path/to/aigw"; exit 1; }
+	@trap 'kill 0' INT TERM; \
+	go run ./cmd/fake-openai & \
+	go run ./cmd/stargate-api serve & \
+	go run ./cmd/receipt-ingest & \
+	sleep 2; $(AIGW) run aigw/config.yaml & \
+	sleep 4; go run ./cmd/trafficgen -gateway http://localhost:1975 & \
+	wait
