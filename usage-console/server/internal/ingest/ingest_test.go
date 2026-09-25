@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jbouder/stargate/server/internal/gateway"
@@ -137,5 +138,45 @@ func TestReceiptModelBlockedByKeyCheck(t *testing.T) {
 	}
 	if rc.ErrorDetail != "Key web-chat may not call gpt-5.5. Allowed: gpt-5-mini." {
 		t.Errorf("detail = %q", rc.ErrorDetail)
+	}
+}
+
+func TestReceiptTakesWardensDecision(t *testing.T) {
+	p := `{"mode":"enforced","verdict":"rerouted","requestedModel":"claude-opus-4-1","routeReason":"policy",` +
+		`"rules":[{"ruleId":"r5","name":"cost-guard-opus","version":2,"matched":true,"action":"route to"}],"redactions":[],` +
+		`"requestHash":"sha256:ab","trace":[{"step":"Budget checked","state":"ok"},{"step":"Rules evaluated","state":"warn"}]}`
+	rc, err := Receipt(snap, record(map[string]string{"stargate.key_id": "k3", "stargate.team": "batch", "stargate.project": "p", "stargate.policy": p}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Verdict != "rerouted" || rc.RequestedModel != "claude-opus-4-1" || rc.ResolvedModel != "gpt-5-mini" || rc.RouteReason != "policy" || rc.RequestHash != "sha256:ab" {
+		t.Errorf("receipt = %+v", rc)
+	}
+	if len(rc.Rules) != 1 || rc.CostUSD == 0 {
+		t.Errorf("rules %v cost %v", rc.Rules, rc.CostUSD)
+	}
+	var steps []string
+	for _, s := range rc.Trace {
+		steps = append(steps, s.Step)
+	}
+	if got := strings.Join(steps, " › "); got != "Identity resolved › Budget checked › Rules evaluated › Route selected › Upstream called" {
+		t.Errorf("trace = %s", got)
+	}
+}
+
+func TestReceiptBlockedByWarden(t *testing.T) {
+	p := `{"mode":"enforced","verdict":"blocked","requestedModel":"gpt-5-mini","rules":[],"redactions":[],` +
+		`"trace":[{"step":"Budget checked","state":"fail"},{"step":"Rules evaluated","state":"skip"}],` +
+		`"blocked":{"status":429,"errorCode":"budget_exceeded","errorDetail":"over cap","resolvedModel":"gpt-5-mini","backend":"openai-prod","provider":"OpenAI","region":"us-east","inputTokens":42}}`
+	rc, err := Receipt(snap, record(map[string]string{"response_code": "429", "gen_ai.request.model": "-", "gen_ai.response.model": "-",
+		"gen_ai.provider.name": "-", "stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "p", "stargate.policy": p}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Verdict != "blocked" || rc.Status != 429 || rc.ErrorCode != "budget_exceeded" || rc.RequestedModel != "gpt-5-mini" || rc.InputTokens != 42 || rc.CostUSD != 0 {
+		t.Errorf("receipt = %+v", rc)
+	}
+	if len(rc.Trace) != 3 || rc.Trace[1].State != "fail" {
+		t.Errorf("trace = %+v", rc.Trace)
 	}
 }

@@ -19,9 +19,11 @@ There's also a second request path through the real gateway, Agent Router
 ```
 trafficgen ──► Agent Router :1975 ──────────────────────► fake-openai
                   │  ▲  ext_authz: key + model check      (caller's key removed)
-                  │  └─► stargate-api :8082
+                  │  ├─► stargate-api :8082
+                  │  │  ext_proc: budgets · rules · redact · reroute
+                  │  └─► warden :8083
                   │  routing · retries · failover (aigw/config.yaml)
-                  ▼  access log over OTLP/gRPC
+                  ▼  access log over OTLP/gRPC (+ Warden's decision)
             receipt-ingest :4317 ──► receipts db ── NOTIFY ──► stargate-api ──► console
 ```
 
@@ -34,8 +36,42 @@ strips `Authorization`, so the provider never sees the caller's key. The access
 log records those headers and receipt-ingest fills in the receipt's identity. A
 403 is logged too, as a `blocked` receipt; a 401 has no key to attribute, so
 like the dev gateway it gets no receipt. Key changes made through the API take
-effect before the API responds. Nothing evaluates budgets or rules on this path
-yet (that's Warden), so every request that reached a backend is `allowed`.
+effect before the API responds.
+
+Warden (`cmd/warden`) comes next, as an ext_proc filter. It gets the headers
+and the whole body and runs the dev gateway's engine on them, so both paths
+give the same verdict for the same request. A block-mode budget over its cap
+gets a 429, and a blocking rule gets a 403 with the rule's message. Throttle
+and warn budgets are admitted, with the trace saying so. A redaction rewrites
+the message contents before anything goes upstream. A reroute rewrites the
+model and sets an `X-Stargate-Backend` hint that the route matches on (Agent
+Router strips it before the provider). Monitor-mode rules are recorded as
+"would …". Warden's decision (verdict, rules, redactions, the budget and rule
+steps) goes back as dynamic metadata. The access log carries it as
+`stargate.policy`, and receipt-ingest lays it over the gateway's own fields, so
+each receipt still comes from one record.
+
+Warden has to run before Agent Router's own ext_proc. That processor reads the
+model to route on and keeps a copy of the body, which it replays on retries,
+model overrides and streamed requests. A redaction made after it would be
+undone. By default Agent Router puts its filter first, but it goes after a
+buffer filter that follows the other ext_procs, so `aigw/config.yaml` moves
+the buffer filter behind Warden. Check the order after upgrading Agent Router:
+`curl 'localhost:<envoy admin>/config_dump?resource=dynamic_listeners'` should
+list `ext_authz → ext_proc/warden → buffer → ext_proc/aigateway → router`.
+Warden also checks for itself: a request Agent Router has already processed
+fails closed, with the reason in the receipt.
+
+For request-path safety (§9.3), Warden reads a snapshot it reloads in the
+background and never waits on the database. Evaluation has a 50ms deadline
+(`-deadline`). A rule reached after the deadline applies its own fail mode. If
+the engine hasn't answered at all, or panicked, the request fails closed when
+any enforced rule does, and fails open otherwise. The kill switch is
+`curl -XPOST 'localhost:8084/passthrough?on=true'` (or start with
+`-passthrough`). It lets requests through unpoliced and marks each receipt that
+way. `GET :8084/metrics` exports the snapshot age. The response path (inbound
+detection, cutting streams, rehydration) isn't on this path yet, so nothing
+here is `truncated`.
 
 ## Run it
 
@@ -71,8 +107,9 @@ triggers the `eu-only` reroute.
 | `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. Also `migrate`, and `backfill -days N -per-day N`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
 | `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. |
-| `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record into a receipt. |
-| `aigw/config.yaml` | Agent Router config: the ext_authz key check, routes for every demo model, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
+| `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
+| `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`. |
+| `aigw/config.yaml` | Agent Router config: the ext_authz key check, Warden's ext_proc and the filter order it needs, routes for every demo model plus Warden's backend hints, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
 | `cmd/trafficgen` | Poisson traffic at `-rps`, with the mockup's mix of keys, PII, secrets and EU requests. |
 
 DB URLs come from `STARGATE_CONFIG_DB` and `STARGATE_RECEIPTS_DB`. The
@@ -98,7 +135,7 @@ Every mutation writes an `audit_log` row in the same transaction.
 
 - **Auth.** There's no OIDC yet; every caller is `dev@localhost`. There's also no ETag/If-Match and no `dryRun`.
 - **Mutations.** Only keys are writable. Backends, routes, rules and budgets are read-only over the API; the console still edits those in local state.
-- **Rule engine.** It understands the demo rules' condition and action forms, with regex detectors. Warden replaces it.
+- **Rule engine.** It understands the demo rules' condition and action forms, with regex detectors. Warden runs the same engine. Message content has to be a plain string: a body with content parts (images) can't be inspected, so it gets the fail mode.
 - **Routing.** Routes feed the fallback lists only. Key `allowedRegions` isn't enforced, and backend health is configured rather than probed.
 - **Queries.** Rule fire counts and backend p50 read raw receipts. Continuous aggregates can't unnest jsonb or compute percentiles incrementally.
 - **Response inspection.** It cuts a stream at an exfil URL, but a pattern split across chunks can leak its first part.

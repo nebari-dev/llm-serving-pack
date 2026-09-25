@@ -5,12 +5,16 @@
 //
 // Keys are checked by stargate-api's ext_authz service, which passes the key,
 // team and project on as headers the access log records. A request it blocks
-// for its model is logged with the identity from the 403 instead. There is no
-// Warden yet, so nothing evaluates rules: every request that reached a backend
-// is "allowed".
+// for its model is logged with the identity from the 403 instead. Warden
+// (cmd/warden) evaluates budgets and rules next and leaves its decision in
+// dynamic metadata, which the access log carries as stargate.policy: the
+// verdict, rules, redactions and the trace steps it ran. Without Warden in the
+// path, every request that reached a backend is "allowed".
 package ingest
 
 import (
+	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -45,6 +49,7 @@ const (
 	attrProject     = "stargate.project"
 	attrDeniedKeyID = "stargate.denied_key_id"
 	attrDeniedModel = "stargate.denied_model"
+	attrPolicy      = "stargate.policy"
 )
 
 // Receipt builds a settled receipt from one access-log record's attributes.
@@ -115,6 +120,19 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 			return blocked(s, rc, k, get(attrDeniedModel), identity), nil
 		}
 	}
+
+	var policy []model.TraceStep
+	if raw := get(attrPolicy); raw != "" {
+		var p gateway.Policy
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			return nil, fmt.Errorf("%s: %w", attrPolicy, err)
+		}
+		if b := withPolicy(rc, p); b {
+			rc.Trace = append([]model.TraceStep{identity}, p.Trace...)
+			return rc, nil
+		}
+		policy = p.Trace
+	}
 	route := model.TraceStep{Step: "Route selected", Input: "requested " + rc.RequestedModel, Outcome: rc.ResolvedModel + " via " + rc.Backend, State: "ok"}
 	if attempts := num(attrAttempts); attempts > 1 {
 		route.Outcome += fmt.Sprintf(" after %d attempts", attempts)
@@ -151,8 +169,27 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 				float64(rc.OutputTokens)*p.OutPerM + float64(rc.ReasoningTokens)*p.ReasoningPerM) / 1_000_000
 		}
 	}
-	rc.Trace = []model.TraceStep{identity, route, up}
+	rc.Trace = append(append([]model.TraceStep{identity}, policy...), route, up)
 	return rc, nil
+}
+
+// withPolicy lays Warden's decision over the access-log fields, and reports
+// whether Warden refused the request (then the receipt is complete).
+func withPolicy(rc *model.Receipt, p gateway.Policy) bool {
+	rc.Verdict, rc.Rules, rc.Redactions = p.Verdict, p.Rules, p.Redactions
+	// Agent Router logs the model after Warden's reroute; the caller asked for this one.
+	rc.RequestedModel = cmp.Or(p.RequestedModel, rc.RequestedModel)
+	rc.RouteReason = cmp.Or(p.RouteReason, rc.RouteReason)
+	rc.RequestHash = cmp.Or(p.RequestHash, rc.RequestHash)
+	rc.Actor, rc.SessionID = cmp.Or(p.Actor, rc.Actor), cmp.Or(rc.SessionID, p.SessionID)
+	b := p.Blocked
+	if b == nil {
+		return false
+	}
+	rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = "blocked", b.Status, b.ErrorCode, b.ErrorDetail
+	rc.ResolvedModel, rc.Backend, rc.Provider, rc.Region = b.ResolvedModel, b.Backend, b.Provider, b.Region
+	rc.InputTokens, rc.ResponseHash, rc.TTFTMS = b.InputTokens, "—", nil
+	return true
 }
 
 // KeyID is the key the key check resolved for a record, admitted or blocked,

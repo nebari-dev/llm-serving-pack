@@ -42,6 +42,9 @@ type Input struct {
 	Req       fakellm.ChatRequest
 	Body      []byte
 	Now       time.Time
+	// Deadline, when set, bounds rule evaluation (§9.3): a rule reached after
+	// it isn't evaluated, and its fail mode decides the request.
+	Deadline time.Time
 }
 
 // Reject is a response the gateway returns without calling upstream.
@@ -73,6 +76,8 @@ type Decision struct {
 	rulesStep   model.TraceStep
 	promptToks  int
 	captureCont bool
+	// pastDeadline: a rule wasn't evaluated in time and its fail mode decided.
+	pastDeadline bool
 }
 
 // Result is what one upstream attempt produced.
@@ -291,13 +296,17 @@ func modelAllowed(k *store.KeyRecord, resolved string) *Reject {
 
 // Admit runs everything before the upstream call.
 func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
-	d := &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req}
 	k, rej := Authenticate(s, in.Secret, in.Now)
 	if rej != nil {
-		d.Reject = rej
-		return d
+		return &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req, Reject: rej}
 	}
+	return AdmitKey(s, k, in, r)
+}
 
+// AdmitKey is Admit for a key something else already authenticated: Warden
+// runs after Agent Router's key check, which removes the secret.
+func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision {
+	d := &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req}
 	rc := &model.Receipt{
 		ID: hexStr(r, 8) + "-" + hexStr(r, 4), TenantID: s.Tenant, TraceID: hexStr(r, 32),
 		SessionID: in.SessionID, TS: in.Now.UnixMilli(), KeyID: k.ID, KeyName: k.Name, Team: k.Team, Project: k.Project,
@@ -363,6 +372,18 @@ func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
 			continue
 		}
 		t0 := time.Now()
+		if !in.Deadline.IsZero() && t0.After(in.Deadline) {
+			d.pastDeadline = true
+			ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Action: "not evaluated · deadline · fails open"}
+			if rule.Mode == "enforce" && rule.FailMode == "closed" {
+				ev.Action = "not evaluated · deadline · fails closed"
+				rc.Rules = append(rc.Rules, ev)
+				d.blockedBy = fmt.Sprintf("%s v%d not evaluated before the deadline · fails closed", rule.Name, rule.Version)
+				return d.block(503, "policy_deadline", fmt.Sprintf("Rule %s v%d couldn't be evaluated in time and fails closed. Retry the request.", rule.Name, rule.Version))
+			}
+			rc.Rules = append(rc.Rules, ev)
+			continue
+		}
 		ok, found := match(rule, ruleCtx{team: k.Team, project: k.Project, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs)})
 		ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Matched: ok, Action: "no match"}
 		if ok && len(rule.Then) > 0 {
@@ -457,6 +478,77 @@ func (d *Decision) block(status int, code, msg string) *Decision {
 	return d
 }
 
+// verdict is an admitted request's outbound verdict.
+func (d *Decision) verdict() string {
+	switch {
+	case len(d.Receipt.Redactions) > 0:
+		return "redacted"
+	case d.rerouted:
+		return "rerouted"
+	}
+	return "allowed"
+}
+
+// Rerouted reports whether a rule changed the model or backend.
+func (d *Decision) Rerouted() bool { return d.rerouted }
+
+// Policy is the part of a receipt the policy engine decides, for a gateway
+// that logs the rest itself: Warden sends it along with each request, and
+// receipt-ingest lays it over the access-log record (spec §4.6: Warden owns
+// verdicts, rules and redactions; the gateway owns timing, tokens, upstream).
+type Policy struct {
+	// Mode is how Warden handled the request: "enforced", "passthrough" (kill
+	// switch), or "fail-open"/"fail-closed" when it couldn't decide in time.
+	Mode           string            `json:"mode"`
+	Verdict        string            `json:"verdict"`
+	RequestedModel string            `json:"requestedModel,omitempty"`
+	RouteReason    string            `json:"routeReason,omitempty"`
+	Rules          []model.RuleEval  `json:"rules"`
+	Redactions     []model.Redaction `json:"redactions"`
+	RequestHash    string            `json:"requestHash,omitempty"`
+	Actor          string            `json:"actor,omitempty"`
+	SessionID      string            `json:"sessionId,omitempty"`
+	Trace          []model.TraceStep `json:"trace"` // the steps after identity
+	Blocked        *PolicyBlock      `json:"blocked,omitempty"`
+}
+
+// PolicyBlock is the rest of a receipt for a request the engine refused: it
+// never reached a backend, so the access log has nothing to add.
+type PolicyBlock struct {
+	Status        int    `json:"status"`
+	ErrorCode     string `json:"errorCode"`
+	ErrorDetail   string `json:"errorDetail"`
+	ResolvedModel string `json:"resolvedModel"`
+	Backend       string `json:"backend"`
+	Provider      string `json:"provider"`
+	Region        string `json:"region"`
+	InputTokens   int    `json:"inputTokens"`
+}
+
+// Policy summarizes the decision. For a refused request it finishes the
+// receipt; an admitted one's upstream outcome is someone else's to record.
+func (d *Decision) Policy(s *Snapshot, now time.Time) Policy {
+	rc := d.Receipt
+	mode := "enforced"
+	if d.pastDeadline {
+		mode = "fail-open"
+		if d.Reject != nil {
+			mode = "fail-closed"
+		}
+	}
+	p := Policy{Mode: mode, RequestedModel: d.requested, RouteReason: rc.RouteReason, Rules: rc.Rules,
+		Redactions: rc.Redactions, RequestHash: rc.RequestHash, Actor: rc.Actor, SessionID: rc.SessionID}
+	if d.Reject != nil {
+		f := d.Finish(s, nil, Result{}, nil, now)
+		p.Verdict, p.Trace = f.Verdict, f.Trace[1:]
+		p.Blocked = &PolicyBlock{Status: f.Status, ErrorCode: f.ErrorCode, ErrorDetail: f.ErrorDetail, ResolvedModel: f.ResolvedModel,
+			Backend: f.Backend, Provider: f.Provider, Region: f.Region, InputTokens: f.InputTokens}
+		return p
+	}
+	p.Verdict, p.Trace = d.verdict(), []model.TraceStep{d.budgetStep, d.rulesStep}
+	return p
+}
+
 // Retryable reports whether a failed attempt should move to the next candidate.
 func Retryable(status int) bool {
 	return status == 529 || status == 503 || status == 502 || status == 500
@@ -530,13 +622,9 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 	}
 	rc.ResponseHash = sha([]byte(res.Content))
 
-	switch {
-	case res.Truncated:
+	rc.Verdict = d.verdict()
+	if res.Truncated {
 		rc.Verdict, rc.InboundVerdict = "truncated", "blocked"
-	case len(rc.Redactions) > 0:
-		rc.Verdict = "redacted"
-	case d.rerouted:
-		rc.Verdict = "rerouted"
 	}
 	if b.CaptureContent {
 		rc.ContentCaptured = true

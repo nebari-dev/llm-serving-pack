@@ -12,7 +12,7 @@ import (
 
 func TestExtAuthz(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
-	s := demoSnapshot()
+	s := DemoSnapshot()
 	// k4 is mid-rotation: the old secret works until the overlap ends, the new one after.
 	k4 := s.KeyByID("k4")
 	past, future := now.Add(-time.Hour), now.Add(time.Hour)
@@ -73,7 +73,7 @@ func TestExtAuthz(t *testing.T) {
 
 func TestExtAuthzIdentityHeaders(t *testing.T) {
 	var cur Current
-	cur.Store(demoSnapshot())
+	cur.Store(DemoSnapshot())
 	a := &ExtAuthz{Snap: &cur}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"claude-opus-4-1"}`))
