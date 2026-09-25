@@ -29,6 +29,9 @@ type Server struct {
 	// KeysChanged, if set, runs after a key is created, revoked or rotated and
 	// before the response, so the gateway's key check sees it at once.
 	KeysChanged func()
+	// WardenURL is Warden's admin base URL (http://localhost:8084), for the
+	// degradation banner. Empty when Warden isn't in the request path.
+	WardenURL string
 }
 
 func (s *Server) keysChanged() {
@@ -80,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/series/traffic", s.trafficSeries)
 	h("GET "+p+"/series/spend", s.spendSeries)
 	h("GET "+p+"/stream/traffic", s.streamTraffic)
+	h("GET "+p+"/degradations", s.degradations)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }

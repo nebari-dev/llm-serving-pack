@@ -16,6 +16,33 @@ import { VerdictBadge } from './verdict'
 // §7.5.4 Request receipt. A drawer, deep-linkable (?receipt=id), printable,
 // exportable as signed JSON. Sections in the spec's order.
 
+// The alert above the trace names what stopped the request, from its error
+// code: a rule, a budget, the key's allowlist, Warden, routing or the provider.
+const failures: Record<string, { title: string; refused: boolean }> = {
+  policy_blocked: { title: 'This request was blocked by a rule.', refused: true },
+  budget_exceeded: { title: 'This request was blocked by a budget.', refused: true },
+  model_not_allowed: { title: "This key isn't allowed to call this model.", refused: true },
+  policy_unavailable: { title: "Policy couldn't be evaluated, so the request failed closed.", refused: true },
+  policy_deadline: { title: "A rule couldn't be evaluated in time, so the request failed closed.", refused: true },
+  model_not_found: { title: 'No model by that name.', refused: true },
+  no_route: { title: 'No route serves this model.', refused: true },
+  no_healthy_backend: { title: 'No healthy backend serves this model.', refused: true },
+  upstream_error: { title: 'The provider returned an error.', refused: false },
+  upstream_rate_limited: { title: 'The provider rate-limited this request.', refused: false },
+  client_disconnected: { title: 'The caller disconnected before the response finished.', refused: false },
+}
+
+function failure(r: Receipt) {
+  return failures[r.errorCode ?? ''] ?? { title: r.verdict === 'blocked' ? 'This request was blocked.' : 'This request failed.', refused: r.verdict === 'blocked' }
+}
+
+const inbound: Record<Receipt['inboundVerdict'], string> = {
+  allowed: 'clean',
+  stripped: 'stripped',
+  blocked: 'blocked',
+  skipped: 'not inspected',
+}
+
 function Sub({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
     <section className={cn('border-b border-border px-5 py-4 last:border-b-0', className)}>
@@ -142,9 +169,9 @@ function ReceiptBody({ r }: { r: Receipt }) {
       <DrawerBody className="p-0">
         {r.errorDetail && (
           <div className="px-5 pt-4">
-            <Alert variant="destructive">
+            <Alert variant={failure(r).refused ? 'destructive' : 'warning'}>
               <ShieldAlert />
-              <AlertTitle>This request was blocked by a rule.</AlertTitle>
+              <AlertTitle>{failure(r).title}</AlertTitle>
               <AlertDescription>{r.errorDetail}</AlertDescription>
             </Alert>
           </div>
@@ -196,7 +223,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </div>
           )}
           <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            Inbound inspection: <span className="font-medium text-foreground">{r.inboundVerdict === 'allowed' ? 'clean' : r.inboundVerdict}</span>
+            Inbound inspection: <span className="font-medium text-foreground">{inbound[r.inboundVerdict] ?? r.inboundVerdict}</span>
             {r.redactions.length > 0 && (
               <button type="button" className="ml-auto underline underline-offset-4 hover:text-foreground" onClick={() => toast.add({ title: 'Sent to the false-positive review queue', type: 'info' })}>
                 Mark a redaction as incorrect

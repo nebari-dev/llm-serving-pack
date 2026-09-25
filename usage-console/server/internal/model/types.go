@@ -172,7 +172,8 @@ type Receipt struct {
 	CostUSD           float64     `json:"costUsd"`
 	CostBasis         *Model      `json:"-"`
 	Verdict           string      `json:"verdict"`
-	InboundVerdict    string      `json:"inboundVerdict"`
+	InboundVerdict    string      `json:"inboundVerdict"`       // allowed | stripped | blocked | skipped (not inspected)
+	PolicyMode        string      `json:"policyMode,omitempty"` // enforced | passthrough | fail-open | fail-closed; "" when nothing evaluated policy
 	Redactions        []Redaction `json:"redactions"`
 	Rules             []RuleEval  `json:"rules"`
 	Status            int         `json:"status"`

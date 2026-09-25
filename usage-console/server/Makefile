@@ -57,7 +57,7 @@ dev-aigw: migrate
 	@command -v $(AIGW) >/dev/null || { echo "aigw not found; install it or pass AIGW=/path/to/aigw"; exit 1; }
 	@trap 'kill 0' INT TERM; \
 	go run ./cmd/fake-openai & \
-	go run ./cmd/stargate-api serve & \
+	go run ./cmd/stargate-api serve -warden http://localhost:8084 & \
 	go run ./cmd/receipt-ingest & \
 	go run ./cmd/warden & \
 	sleep 2; $(AIGW) run aigw/config.yaml & \

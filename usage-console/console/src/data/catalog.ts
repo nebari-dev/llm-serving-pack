@@ -7,7 +7,7 @@
 // or at import time after hydrate(), see the fetched values.
 import { ago } from '@/lib/format'
 import * as mock from './mock'
-import type { ApiKey, Backend, Budget, Change, Model, PolicyRule, Receipt, Route, SeriesPoint, SpendPoint, Team } from './mock'
+import type { ApiKey, Backend, Budget, Change, Degradation, Model, PolicyRule, Receipt, Route, SeriesPoint, SpendPoint, Team } from './mock'
 
 export type * from './mock'
 
@@ -30,6 +30,8 @@ export let seedReceipts: Receipt[] = mock.seedReceipts
 export let trafficSeries: SeriesPoint[] = mock.trafficSeries
 export let spendSeries: SpendPoint[] = mock.spendSeries
 export let changes: Change[] = mock.changes
+/** Mock-mode banner conditions; in api mode the banner polls /degradations. */
+export const seedDegradations: Degradation[] = dataMode === 'api' ? [] : mock.degradations
 export let now: () => number = mock.now
 
 export class ApiError extends Error {

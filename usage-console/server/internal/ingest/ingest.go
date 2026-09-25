@@ -80,7 +80,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		ID: reqID[:8] + "-" + reqID[8:12], TenantID: s.Tenant, TraceID: traceID(get(attrTraceparent), reqID),
 		SessionID: get(attrSession), TS: start.UnixMilli(), DurationMS: num(attrDuration),
 		KeyName: "unauthenticated", RequestedModel: get(attrReqModel), ResolvedModel: get(attrRespModel),
-		RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "allowed",
+		RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "skipped",
 		InputTokens: num(attrInput), CachedInputTokens: num(attrCached), OutputTokens: num(attrOutput), ReasoningTokens: num(attrReasoning),
 		Status: num(attrStatus), Redactions: []model.Redaction{}, Rules: []model.RuleEval{},
 	}
@@ -176,7 +176,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 // withPolicy lays Warden's decision over the access-log fields, and reports
 // whether Warden refused the request (then the receipt is complete).
 func withPolicy(rc *model.Receipt, p gateway.Policy) bool {
-	rc.Verdict, rc.Rules, rc.Redactions = p.Verdict, p.Rules, p.Redactions
+	rc.Verdict, rc.Rules, rc.Redactions, rc.PolicyMode = p.Verdict, p.Rules, p.Redactions, p.Mode
 	// Agent Router logs the model after Warden's reroute; the caller asked for this one.
 	rc.RequestedModel = cmp.Or(p.RequestedModel, rc.RequestedModel)
 	rc.RouteReason = cmp.Or(p.RouteReason, rc.RouteReason)

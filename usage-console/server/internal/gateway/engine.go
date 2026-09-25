@@ -310,7 +310,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	rc := &model.Receipt{
 		ID: hexStr(r, 8) + "-" + hexStr(r, 4), TenantID: s.Tenant, TraceID: hexStr(r, 32),
 		SessionID: in.SessionID, TS: in.Now.UnixMilli(), KeyID: k.ID, KeyName: k.Name, Team: k.Team, Project: k.Project,
-		Actor: in.Actor, RequestedModel: in.Req.Model, RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "allowed",
+		Actor: in.Actor, RequestedModel: in.Req.Model, RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "skipped", PolicyMode: "enforced",
 		Redactions: []model.Redaction{}, Rules: []model.RuleEval{}, RequestHash: sha(in.Body),
 	}
 	d.Receipt = rc
@@ -623,6 +623,9 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 	rc.ResponseHash = sha([]byte(res.Content))
 
 	rc.Verdict = d.verdict()
+	if res.Status == 200 {
+		rc.InboundVerdict = "allowed" // inspected, clean
+	}
 	if res.Truncated {
 		rc.Verdict, rc.InboundVerdict = "truncated", "blocked"
 	}

@@ -127,6 +127,7 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 - `GET receipts?limit&before`, `GET receipts/{id}`
 - `GET series/traffic?range=15m|1h|6h|24h|7d|30d` gives verdict counts per bucket, from `receipts_5m`.
 - `GET series/spend?days=30` gives daily spend by team, from `receipts_daily`.
+- `GET degradations` lists what the banner should show, worst first: Warden unreachable, its kill switch on, or its config cache stale (when `serve -warden` names Warden's admin URL, as `make dev-aigw` does), plus, from the last 15 minutes of receipts, requests Warden passed or refused because it couldn't decide, and backends failing at least 5% of 20+ requests.
 - `GET stream/traffic?key&team&model&verdict&backend` is SSE. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled.
 
 Every mutation writes an `audit_log` row in the same transaction.

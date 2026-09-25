@@ -2,7 +2,8 @@
 // fabricated and deterministic so screens render the same way on every load.
 
 export type Verdict = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'truncated'
-export type InboundVerdict = 'allowed' | 'stripped' | 'blocked'
+// skipped: the response wasn't inspected (never reached, or no inspector in the path)
+export type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
 export type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
 export type Provenance = 'console' | 'git' | 'adopted'
 export type SyncState = 'synced' | 'applying' | 'failed' | 'drift'
@@ -83,6 +84,8 @@ export interface Receipt {
   costUsd: number
   verdict: Verdict
   inboundVerdict: InboundVerdict
+  /** How Warden handled the request; absent when nothing evaluated policy. */
+  policyMode?: 'enforced' | 'passthrough' | 'fail-open' | 'fail-closed'
   redactions: { type: string; count: number }[]
   rules: RuleEval[]
   status: number
@@ -429,7 +432,7 @@ export function makeReceipt(ts: number, r: () => number = rand, opts: { inFlight
     reasoningTokens,
     costUsd: c,
     verdict,
-    inboundVerdict: verdict === 'truncated' ? 'blocked' : 'allowed',
+    inboundVerdict: verdict === 'truncated' ? 'blocked' : blocked || status !== 200 ? 'skipped' : 'allowed',
     redactions,
     rules: ruleEvals,
     status,
@@ -519,4 +522,36 @@ export const changes: Change[] = [
   { id: 'c4', ts: NOW - 9.4 * 3_600_000, actor: 'dana@acme.dev', action: 'Raised budget cap', target: 'agents $32,000 → $40,000', targetKind: 'Budget', effect: 'No throttled requests since', effectTone: 'good', source: 'console' },
   { id: 'c5', ts: NOW - 20 * 3_600_000, actor: 'priya@acme.dev', action: 'Rotated key', target: 'web-chat', targetKind: 'Key', effect: '61% of traffic on new secret', effectTone: 'neutral', source: 'console' },
   { id: 'c6', ts: NOW - 26 * 3_600_000, actor: 'marco@acme.dev', action: 'Published rule in monitor mode', target: 'card-numbers v1', targetKind: 'Policy', effect: 'Would have redacted 22 requests', effectTone: 'neutral', source: 'console' },
+]
+
+// Banner conditions (§7.4, §7.6). The control plane computes these from
+// Warden's health and recent receipts (GET /degradations); these are the
+// mock-mode fixtures.
+export interface Degradation {
+  kind: string
+  severity: number
+  title: string
+  detail: string
+  to: string
+  action: string
+  since?: number
+}
+
+export const degradations: Degradation[] = [
+  {
+    kind: 'policy_fail_open',
+    severity: 2,
+    title: 'Policy cost-guard-opus is running fail-open.',
+    detail: 'Warden cannot reach the control plane for anthropic-prod routing hints; requests pass without the cost guard. Cache age 4m 12s.',
+    to: '/guardrails',
+    action: 'Review policy',
+  },
+  {
+    kind: 'backend_errors',
+    severity: 1,
+    title: 'anthropic-prod is failing over to bedrock-eu.',
+    detail: '8% of Claude traffic since 13:51. Upstream is returning 529 overloaded.',
+    to: '/routing',
+    action: 'View backend',
+  },
 ]
