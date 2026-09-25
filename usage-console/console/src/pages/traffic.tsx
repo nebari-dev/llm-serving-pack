@@ -84,12 +84,13 @@ const edge = (ts: number) => new Date(ts).toLocaleString('en-US', { month: 'shor
  * the count from receipts_5m covers the same span as the list, and it's fixed
  * while the page is open so the list doesn't reload under the reader.
  */
-function useWindow(range: Parameters<typeof rangeMs>[0], sinceParam: number | null, day: string | null): TrafficWindow {
+function useWindow(range: Parameters<typeof rangeMs>[0], sinceParam: number | null, day: string | null, untilParam: number | null): TrafficWindow {
   return useMemo(() => {
     const now = Date.now()
     let since = Math.floor((now - Math.min(rangeMs(range), HOT_WINDOW_MS)) / BUCKET_MS) * BUCKET_MS
     let before: number | null = null
     if (sinceParam) since = Math.max(since, sinceParam)
+    if (untilParam) before = untilParam
     if (day && /^\d{2}-\d{2}$/.test(day)) {
       const [m, d] = day.split('-').map(Number)
       const y = new Date(now).getUTCFullYear()
@@ -99,7 +100,7 @@ function useWindow(range: Parameters<typeof rangeMs>[0], sinceParam: number | nu
       before = start + 86_400_000
     }
     return { since, before }
-  }, [range, sinceParam, day])
+  }, [range, sinceParam, day, untilParam])
 }
 
 export function TrafficPage() {
@@ -123,7 +124,8 @@ export function TrafficPage() {
   }, [filterKey])
   const since = params.get('since') ? Number(params.get('since')) : null
   const day = params.get('day')
-  const window_ = useWindow(range, since, day)
+  const until = params.get('until') ? Number(params.get('until')) : null
+  const window_ = useWindow(range, since, day, until)
   const feed = useTrafficFeed(filters, window_)
   const rows = feed.rows
 

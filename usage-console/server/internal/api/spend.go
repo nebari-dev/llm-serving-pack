@@ -1,0 +1,409 @@
+package api
+
+import (
+	"cmp"
+	"context"
+	"math"
+	"net/http"
+	"slices"
+	"time"
+
+	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/store"
+)
+
+// §7.5.5 Spend. Every number here comes from receipts_5m and receipts_daily
+// (§4.6); nothing reads raw receipts.
+
+// spendTrendBuckets is the trend chart's grain per range: from receipts_5m
+// under a day, daily above.
+var spendTrendBuckets = map[string]struct {
+	bucket time.Duration
+	points int
+}{
+	"15m": {5 * time.Minute, 3},
+	"1h":  {5 * time.Minute, 12},
+	"6h":  {15 * time.Minute, 24},
+	"24h": {time.Hour, 24},
+	"7d":  {24 * time.Hour, 7},
+	"30d": {24 * time.Hour, 30},
+}
+
+// projectionDays is how many trailing days the projection averages.
+const projectionDays = 7
+
+var spendDims = []string{"team", "project", "key", "model", "provider"}
+
+type SpendView struct {
+	Range string `json:"range"`
+	By    string `json:"by"`
+	// Totals and rows cover [from, to); the deltas compare with the same span
+	// before it, [prevFrom, from).
+	From     int64      `json:"from"`
+	To       int64      `json:"to"`
+	PrevFrom int64      `json:"prevFrom"`
+	Rows     []SpendRow `json:"rows"`
+	Trend    SpendTrend `json:"trend"`
+	Period   Projection `json:"period"`
+}
+
+// SpendRow is one group in the breakdown. ID is what Traffic filters on.
+type SpendRow struct {
+	ID           string  `json:"id"`
+	Label        string  `json:"label"`
+	Sub          string  `json:"sub,omitempty"`
+	SpendUSD     float64 `json:"spendUsd"`
+	PrevSpendUSD float64 `json:"prevSpendUsd"`
+	Requests     int     `json:"requests"`
+	Tokens       int     `json:"tokens"`
+	// NoDrill is set when Traffic has no filter for the group: requests
+	// without a key identity, or refused before routing.
+	NoDrill bool `json:"noDrill,omitempty"`
+}
+
+type SpendTrend struct {
+	BucketMS int64        `json:"bucketMs"`
+	Points   []TrendPoint `json:"points"`
+	// Order ranks every group by its last 30 days of spend, so a group keeps
+	// its color when the range changes.
+	Order  []string          `json:"order"`
+	Labels map[string]string `json:"labels"`
+}
+
+type TrendPoint struct {
+	T      int64              `json:"t"`
+	Values map[string]float64 `json:"values"`
+}
+
+// Projection is month-end spend and its basis: month to date plus the
+// trailing daily average for each day left. The month is the UTC calendar
+// month. TrailingDays is under projectionDays when there's less history.
+type Projection struct {
+	PeriodStart      int64   `json:"periodStart"`
+	PeriodEnd        int64   `json:"periodEnd"`
+	MonthToDateUSD   float64 `json:"monthToDateUsd"`
+	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
+	TrailingDays     float64 `json:"trailingDays"`
+	RemainingDays    float64 `json:"remainingDays"`
+	ProjectedUSD     float64 `json:"projectedUsd"`
+}
+
+// grouper names the group a cell belongs to under each dimension, using the
+// catalog for what the aggregates don't carry: a key's name and project, a
+// backend's provider.
+type grouper struct {
+	teams    map[string]model.Team
+	keys     map[string]model.APIKey
+	backends map[string]model.Backend
+	models   map[string]model.Model
+}
+
+func (s *Server) grouper(ctx context.Context, t string) (grouper, error) {
+	g := grouper{teams: map[string]model.Team{}, keys: map[string]model.APIKey{}, backends: map[string]model.Backend{}, models: map[string]model.Model{}}
+	teams, err := s.Store.Teams(ctx, t)
+	if err != nil {
+		return g, err
+	}
+	for _, x := range teams {
+		g.teams[x.ID] = x
+	}
+	keys, err := s.Store.Keys(ctx, t)
+	if err != nil {
+		return g, err
+	}
+	for _, x := range keys {
+		g.keys[x.ID] = x.APIKey
+	}
+	bs, err := s.Store.Backends(ctx, t)
+	if err != nil {
+		return g, err
+	}
+	for _, x := range bs {
+		g.backends[x.Name] = x
+	}
+	ms, err := s.Store.Models(ctx)
+	if err != nil {
+		return g, err
+	}
+	for _, x := range ms {
+		g.models[x.ID] = x
+	}
+	return g, nil
+}
+
+// notRouted groups requests refused before routing. The dev gateway records
+// their backend as "" and receipt-ingest as "—".
+const notRouted = "(not routed)"
+
+// unattributed groups receipts with no key identity.
+const unattributed = "(unattributed)"
+
+// key returns the group id for a cell. Keys group by name, since that's what
+// Traffic's key filter takes. A project comes from the key's current
+// project, so a key that moves takes its history with it.
+func (g grouper) key(c store.SpendCell, by string) string {
+	if c.KeyID == "" && by != "model" && by != "provider" {
+		return unattributed
+	}
+	switch by {
+	case "project":
+		if k, ok := g.keys[c.KeyID]; ok {
+			return k.Project
+		}
+		return "(unknown key)"
+	case "key":
+		if k, ok := g.keys[c.KeyID]; ok {
+			return k.Name
+		}
+		return c.KeyID
+	case "model":
+		return c.Model
+	case "provider":
+		if b, ok := g.backends[c.Backend]; ok {
+			return b.Provider
+		}
+		if c.Backend == "" || c.Backend == "—" {
+			return notRouted
+		}
+		return c.Backend
+	}
+	return c.Team
+}
+
+func (g grouper) label(id, by string) (label, sub string) {
+	if id == unattributed {
+		return "Unattributed", "no key identity on the receipt"
+	}
+	switch by {
+	case "team":
+		if t, ok := g.teams[id]; ok {
+			return t.Name, t.CostCenter
+		}
+	case "key":
+		for _, k := range g.keys {
+			if k.Name == id {
+				return id, k.Team + " / " + k.Project
+			}
+		}
+	case "model":
+		if m, ok := g.models[id]; ok {
+			return id, m.Provider
+		}
+	case "provider":
+		if id == notRouted {
+			return "Not routed", "refused before a backend was chosen"
+		}
+		for _, b := range g.backends {
+			if b.Provider == id {
+				return id, ""
+			}
+		}
+		return id, "backend no longer configured"
+	}
+	return id, ""
+}
+
+func round2(v float64) float64 { return math.Round(v*100) / 100 }
+
+func (s *Server) spend(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	ctx := r.Context()
+	name, span := rangeDuration(r)
+	by := r.URL.Query().Get("by")
+	if !slices.Contains(spendDims, by) {
+		by = "team"
+	}
+	g, err := s.grouper(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	from, prevFrom := now.Add(-span), now.Add(-2*span)
+	out := SpendView{Range: name, By: by, From: from.UnixMilli(), To: now.UnixMilli(), PrevFrom: prevFrom.UnixMilli(), Rows: []SpendRow{}}
+
+	cur, err := s.Store.SpendCells(ctx, t, from, now)
+	if err != nil {
+		return nil, err
+	}
+	prev, err := s.Store.SpendCells(ctx, t, prevFrom, from)
+	if err != nil {
+		return nil, err
+	}
+	rows := map[string]*SpendRow{}
+	row := func(id string) *SpendRow {
+		if rows[id] == nil {
+			rows[id] = &SpendRow{ID: id}
+		}
+		return rows[id]
+	}
+	for _, c := range cur {
+		x := row(g.key(c, by))
+		x.SpendUSD += c.USD
+		x.Requests += c.Requests
+		x.Tokens += c.Tokens
+	}
+	for _, c := range prev {
+		row(g.key(c, by)).PrevSpendUSD += c.USD
+	}
+	for id, x := range rows {
+		x.Label, x.Sub = g.label(id, by)
+		x.NoDrill = id == unattributed || id == notRouted || id == "(unknown key)"
+		x.SpendUSD, x.PrevSpendUSD = round2(x.SpendUSD), round2(x.PrevSpendUSD)
+		out.Rows = append(out.Rows, *x)
+	}
+	slices.SortFunc(out.Rows, func(a, b SpendRow) int { return cmp.Or(cmp.Compare(b.SpendUSD, a.SpendUSD), cmp.Compare(a.ID, b.ID)) })
+
+	if out.Trend, err = s.spendTrend(ctx, t, name, by, g, now); err != nil {
+		return nil, err
+	}
+	if out.Period, _, err = s.projection(ctx, t, now, nil); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Server) spendTrend(ctx context.Context, t, rangeName, by string, g grouper, now time.Time) (SpendTrend, error) {
+	tb := spendTrendBuckets[rangeName]
+	start := now.Truncate(tb.bucket).Add(-time.Duration(tb.points-1) * tb.bucket)
+	buckets, err := s.Store.SpendBuckets(ctx, t, start, now, tb.bucket)
+	if err != nil {
+		return SpendTrend{}, err
+	}
+	tr := SpendTrend{BucketMS: tb.bucket.Milliseconds(), Points: make([]TrendPoint, tb.points), Order: []string{}, Labels: map[string]string{}}
+	for i := range tr.Points {
+		tr.Points[i] = TrendPoint{T: start.Add(time.Duration(i) * tb.bucket).UnixMilli(), Values: map[string]float64{}}
+	}
+	for _, b := range buckets {
+		if i := int(b.Start.Sub(start) / tb.bucket); i >= 0 && i < tb.points {
+			tr.Points[i].Values[g.key(b.SpendCell, by)] += b.USD
+		}
+	}
+	month, err := s.Store.SpendCells(ctx, t, now.Add(-30*24*time.Hour), now)
+	if err != nil {
+		return tr, err
+	}
+	totals := map[string]float64{}
+	for _, c := range month {
+		totals[g.key(c, by)] += c.USD
+	}
+	for _, p := range tr.Points {
+		for id := range p.Values {
+			if _, ok := totals[id]; !ok {
+				totals[id] = 0
+			}
+		}
+	}
+	for id := range totals {
+		tr.Order = append(tr.Order, id)
+		tr.Labels[id], _ = g.label(id, by)
+	}
+	slices.SortFunc(tr.Order, func(a, b string) int { return cmp.Or(cmp.Compare(totals[b], totals[a]), cmp.Compare(a, b)) })
+	return tr, nil
+}
+
+// monthBounds is the UTC calendar month containing now.
+func monthBounds(now time.Time) (start, end time.Time) {
+	now = now.UTC()
+	start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return start, start.AddDate(0, 1, 0)
+}
+
+// project applies the basis to month-to-date spend.
+func project(mtd, trailingDaily, remainingDays float64) float64 {
+	return mtd + trailingDaily*remainingDays
+}
+
+// trailingWindow is the span the projection averages: the last
+// projectionDays, or less when receipts start more recently than that.
+func trailingWindow(now, firstDay time.Time) (from time.Time, days float64) {
+	from = now.Add(-projectionDays * 24 * time.Hour)
+	if !firstDay.IsZero() && firstDay.After(from) {
+		from = firstDay
+	}
+	return from, now.Sub(from).Hours() / 24
+}
+
+// projection returns the tenant-wide projection and, when scope is non-nil,
+// the same basis per scope id: month to date and trailing daily spend for
+// each id the scope function returns for a cell.
+func (s *Server) projection(ctx context.Context, t string, now time.Time, scope func(store.SpendCell) []string) (Projection, map[string][2]float64, error) {
+	start, end := monthBounds(now)
+	first, err := s.Store.FirstSpendDay(ctx, t)
+	if err != nil {
+		return Projection{}, nil, err
+	}
+	trailFrom, trailDays := trailingWindow(now, first)
+	mtd, err := s.Store.SpendCells(ctx, t, start, now)
+	if err != nil {
+		return Projection{}, nil, err
+	}
+	trail, err := s.Store.SpendCells(ctx, t, trailFrom, now)
+	if err != nil {
+		return Projection{}, nil, err
+	}
+	p := Projection{PeriodStart: start.UnixMilli(), PeriodEnd: end.UnixMilli(), TrailingDays: math.Round(trailDays*10) / 10, RemainingDays: end.Sub(now).Hours() / 24}
+	per := map[string][2]float64{}
+	for _, c := range mtd {
+		p.MonthToDateUSD += c.USD
+		if scope != nil {
+			for _, id := range scope(c) {
+				v := per[id]
+				v[0] += c.USD
+				per[id] = v
+			}
+		}
+	}
+	var trailing float64
+	for _, c := range trail {
+		trailing += c.USD
+		if scope != nil {
+			for _, id := range scope(c) {
+				v := per[id]
+				v[1] += c.USD
+				per[id] = v
+			}
+		}
+	}
+	if trailDays > 0 {
+		p.TrailingDailyUSD = trailing / trailDays
+		for id, v := range per {
+			per[id] = [2]float64{v[0], v[1] / trailDays}
+		}
+	}
+	p.ProjectedUSD = round2(project(p.MonthToDateUSD, p.TrailingDailyUSD, p.RemainingDays))
+	p.MonthToDateUSD, p.TrailingDailyUSD = round2(p.MonthToDateUSD), round2(p.TrailingDailyUSD)
+	return p, per, nil
+}
+
+// budgets adds month-to-date spend and a month-end projection on the same
+// basis as the Spend page's.
+func (s *Server) budgets(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	ctx := r.Context()
+	bs, err := s.Store.Budgets(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	g, err := s.grouper(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	// A budget's scope is a team id, a key name or a project name.
+	scope := func(c store.SpendCell) []string {
+		ids := []string{"team:" + c.Team}
+		if k, ok := g.keys[c.KeyID]; ok {
+			ids = append(ids, "key:"+k.Name, "project:"+k.Project)
+		}
+		return ids
+	}
+	now := time.Now().UTC()
+	p, per, err := s.projection(ctx, t, now, scope)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bs {
+		b := &bs[i]
+		v := per[b.ScopeType+":"+b.Scope]
+		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
+		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))
+	}
+	return bs, nil
+}

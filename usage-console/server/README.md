@@ -129,6 +129,8 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 - `GET receipts/{id}`. Receipts include `costBasis`, the price row they were costed with, and `policyMode`.
 - `GET series/traffic?range=15m|1h|6h|24h|7d|30d` gives verdict counts per bucket, from `receipts_5m`.
 - `GET series/spend?days=30` gives daily spend by team, from `receipts_daily`.
+- `GET spend?range=…&by=team|project|key|model|provider` returns the Spend page: breakdown rows for the range and the same span before it, a trend (5-minute to hourly buckets under a day, daily above), and the month-end projection with its basis. Whole UTC days come from `receipts_daily` and partial days from `receipts_5m`, so totals match `summary`'s. Provider comes from each receipt's backend, and project from the key's current project.
+- `GET budgets` adds `currentUsd` (month to date, UTC) and `projectedUsd` (plus `trailingDailyUsd`, its basis: month to date + trailing 7-day average × days left).
 - `GET degradations` lists what the banner should show, worst first: Warden unreachable, its kill switch on, or its config cache stale (when `serve -warden` names Warden's admin URL, as `make dev-aigw` does), plus, from the last 15 minutes of receipts, requests Warden passed or refused because it couldn't decide, and backends failing at least 5% of 20+ requests.
 - `GET stream/traffic` is SSE, with the same filters as `receipts`. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled. A connection that falls behind misses receipts, and a `dropped` event with `{count}` says how many.
 

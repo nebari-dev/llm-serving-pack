@@ -199,14 +199,16 @@ export interface Budget {
   currentUsd: number
   onExceed: 'warn' | 'throttle' | 'block'
   projectedUsd: number
+  /** The scope's daily average the projection uses. */
+  trailingDailyUsd: number
 }
 
 export const budgets: Budget[] = [
-  { id: 'b1', scope: 'support', scopeType: 'team', period: 'monthly', capUsd: 12_000, currentUsd: 13_480.22, onExceed: 'throttle', projectedUsd: 16_950 },
-  { id: 'b2', scope: 'agents', scopeType: 'team', period: 'monthly', capUsd: 40_000, currentUsd: 33_104.9, onExceed: 'block', projectedUsd: 42_600 },
-  { id: 'b3', scope: 'batch-summarize', scopeType: 'key', period: 'monthly', capUsd: 8_000, currentUsd: 3_412.07, onExceed: 'warn', projectedUsd: 4_420 },
-  { id: 'b4', scope: 'web', scopeType: 'team', period: 'monthly', capUsd: 15_000, currentUsd: 9_870.5, onExceed: 'block', projectedUsd: 12_760 },
-  { id: 'b5', scope: 'research', scopeType: 'team', period: 'monthly', capUsd: 20_000, currentUsd: 17_210.0, onExceed: 'warn', projectedUsd: 22_300 },
+  { id: 'b1', scope: 'support', scopeType: 'team', period: 'monthly', capUsd: 12_000, currentUsd: 13_480.22, onExceed: 'throttle', projectedUsd: 16_950, trailingDailyUsd: 0 },
+  { id: 'b2', scope: 'agents', scopeType: 'team', period: 'monthly', capUsd: 40_000, currentUsd: 33_104.9, onExceed: 'block', projectedUsd: 42_600, trailingDailyUsd: 0 },
+  { id: 'b3', scope: 'batch-summarize', scopeType: 'key', period: 'monthly', capUsd: 8_000, currentUsd: 3_412.07, onExceed: 'warn', projectedUsd: 4_420, trailingDailyUsd: 0 },
+  { id: 'b4', scope: 'web', scopeType: 'team', period: 'monthly', capUsd: 15_000, currentUsd: 9_870.5, onExceed: 'block', projectedUsd: 12_760, trailingDailyUsd: 0 },
+  { id: 'b5', scope: 'research', scopeType: 'team', period: 'monthly', capUsd: 20_000, currentUsd: 17_210.0, onExceed: 'warn', projectedUsd: 22_300, trailingDailyUsd: 0 },
 ]
 
 // ---- policies -----------------------------------------------------------
@@ -505,6 +507,138 @@ export const spendSeries: SpendPoint[] = Array.from({ length: 30 }, (_, i) => {
     },
   }
 })
+
+// Budget projections on the Spend page's basis: month to date plus the
+// trailing 7-day average for each day left. The key budget takes 42% of its
+// team's spend.
+{
+  const at = new Date(NOW)
+  const monthEnd = Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1)
+  const remaining = (monthEnd - NOW) / 86_400_000
+  const avg = (team: string) => spendSeries.slice(-7).reduce((a, d) => a + (d.byTeam[team] ?? 0), 0) / 7
+  for (const b of budgets) {
+    b.trailingDailyUsd = b.scopeType === 'key' ? avg('batch') * 0.42 : avg(b.scope)
+    b.projectedUsd = b.currentUsd + b.trailingDailyUsd * remaining
+  }
+}
+
+// GET /spend: the Spend page's totals, breakdown, trend and projection for a
+// range, grouped by one dimension. Mock mode derives it in pages/spend-data.
+export type SpendDim = 'team' | 'project' | 'key' | 'model' | 'provider'
+
+export interface SpendRow {
+  /** What Traffic filters on for this group. */
+  id: string
+  label: string
+  sub?: string
+  spendUsd: number
+  prevSpendUsd: number
+  requests: number
+  tokens: number
+  /** Only in mock mode: the aggregates carry no latency. */
+  p50Ms?: number
+  /** Traffic has no filter for this group (no key identity, or never routed). */
+  noDrill?: boolean
+}
+
+export interface SpendView {
+  range: string
+  by: SpendDim
+  from: number
+  to: number
+  prevFrom: number
+  rows: SpendRow[]
+  trend: {
+    bucketMs: number
+    points: { t: number; values: Record<string, number> }[]
+    /** Every group, ranked by its last 30 days, so colors don't follow the range. */
+    order: string[]
+    labels: Record<string, string>
+  }
+  period: {
+    periodStart: number
+    periodEnd: number
+    monthToDateUsd: number
+    trailingDailyUsd: number
+    trailingDays: number
+    remainingDays: number
+    projectedUsd: number
+  }
+}
+
+/** The mockup's surge callout: support started surging 6 days ago. */
+export const spendSurge = { team: 'Support', ratio: 2.9, since: spendSeries[spendSeries.length - 6].day, key: 'support-bot', model: 'claude-sonnet-5' }
+
+export interface SavingsOpportunity {
+  id: string
+  /** Headline: "$X/mo if {before}{subject}{after} moved to {target}". */
+  before?: string
+  subject: string
+  after?: string
+  target: string
+  monthly: number
+  basis: string
+  receipts: number
+  href: string
+  alias: string
+  diff: string
+}
+
+const perRequest = (model: string, inTok: number, outTok: number) => (inTok * modelById[model].inPerM + outTok * modelById[model].outPerM) / 1e6
+
+export const savings: SavingsOpportunity[] = (() => {
+  const perDay1 = 412
+  const d1 = perRequest('claude-opus-4-1', 12_000, 600) - perRequest('gpt-5-mini', 12_000, 600)
+  const perDay2 = 5_900
+  const d2 = perRequest('claude-sonnet-5', 1_400, 90) - perRequest('claude-haiku-4-5', 1_400, 90)
+  return [
+    {
+      id: 'o1',
+      subject: 'summarize-*',
+      target: 'gpt-5-mini',
+      monthly: d1 * perDay1 * 30,
+      basis: `${(perDay1 * 30).toLocaleString('en-US')} requests in 30 days from batch-summarize call claude-opus-4-1 directly with summarize-shaped prompts (~12k in, <800 out). Same prompts routed through the summarize-* alias already run on gpt-5-mini.`,
+      receipts: perDay1 * 30,
+      href: '/traffic?key=batch-summarize&model=claude-opus-4-1',
+      alias: 'summarize-*',
+      diff: `
+ apiVersion: gateway.nebari.dev/v1
+ kind: ModelAlias
+ metadata:
+   name: summarize
+ spec:
+   match: "summarize-*"
+-  target: claude-opus-4-1
++  target: gpt-5-mini
++  conditions:
++    - field: key.name
++      op: in
++      value: [batch-summarize]
+   fallback: [llama-3.3-70b]`,
+    },
+    {
+      id: 'o2',
+      before: 'short ',
+      subject: 'support-bot',
+      after: ' classification calls',
+      target: 'claude-haiku-4-5',
+      monthly: d2 * perDay2 * 30,
+      basis: `${(perDay2 * 30).toLocaleString('en-US')} requests in 30 days on claude-sonnet-5 with under 100 output tokens and a fixed system prompt. Same model family; quality not measured — run a shadow comparison before promoting.`,
+      receipts: perDay2 * 30,
+      href: '/traffic?key=support-bot&model=claude-sonnet-5',
+      alias: 'support-classify',
+      diff: `
+ apiVersion: gateway.nebari.dev/v1
+ kind: ModelAlias
+ metadata:
++  name: support-classify
++spec:
++  match: "support-classify"
++  target: claude-haiku-4-5
++  fallback: [claude-sonnet-5]`,
+    },
+  ]
+})()
 
 export interface Change {
   id: string

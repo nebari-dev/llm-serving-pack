@@ -41,12 +41,33 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     connected yet.
   - Print works. Related rows come from the server: same session, and the
     same key in the hour before.
-- [ ] **Spend.**
-  - The breakdown by team, key, model and provider comes from
-    `receipts_daily`.
-  - Ranges under a day come from `receipts_5m`.
-  - Use the server's projection.
-  - Surge and savings callouts: compute them or hide them.
+- [x] **Spend.** One `GET /spend?range&by` serves the summary, the
+  breakdown and the trend. Whole UTC days come from `receipts_daily` and
+  partial days from `receipts_5m`, so totals match Overview's.
+  - The breakdown by team, project, key, model and provider comes from the
+    aggregates. `receipts_daily` now groups by backend, so provider is exact.
+    Project comes from each key's current project. Requests with no key
+    identity show as "Unattributed", and requests refused before routing
+    show as "Not routed". Neither drills through, because Traffic has no
+    filter for them.
+  - p50 latency is hidden in api mode, since the aggregates don't carry it.
+  - The trend follows the range: 5- and 15-minute and hourly bars from
+    `receipts_5m`, daily from `receipts_daily`. Sub-day bars drill to
+    Traffic with `?since&until`.
+  - Projection: month to date plus the trailing 7-day average × days left in
+    the UTC month, basis stated. Budgets use the same basis.
+  - Budget enforcement words say only what the gateway does. Throttle isn't
+    enforced (requests are admitted and marked), and the invented "since" and
+    rate are gone.
+  - The surge callout is hidden (the spec has no surge rule), and so is
+    savings, which needs per-request output length and alias writes. Both
+    show as not connected.
+  - CSV export downloads the breakdown. PDF and "Add budget" are disabled,
+    with the reason given.
+- [ ] **Traffic streams.** Each api-mode Traffic tab holds two SSE
+  connections (the global receipt stream and Traffic's filtered one), so
+  three tabs use up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
+  and later requests hang. Share one stream per tab.
 - [ ] **Keys.**
   - Spend over 24h and an hourly sparkline per key.
   - Rotation status from `rotate_until` and the audit log. Traffic split
@@ -70,8 +91,9 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   picks up changes on its next snapshot.
 - [ ] Routes and backends: apply. There's no reconciler yet, so "apply"
   writes config and the sync state says so.
-- [ ] Budgets: create and edit.
-- [ ] Aliases.
+- [ ] Budgets: create and edit. Project-scoped budgets show spend on the
+  Spend page, but the gateway only checks team and key budgets.
+- [ ] Aliases, including saving the savings analysis's draft alias changes.
 - [ ] Detector thresholds.
 - [ ] Key rotation: extend the overlap, retire the old secret now.
 
@@ -92,3 +114,6 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   what it dropped.
 - [ ] Model modalities and deprecation dates (new catalog columns).
 - [ ] Gateway overhead p50 (not in receipts today).
+- [ ] Spend savings analysis (§7.5.5): requests a cheaper same-family model
+  would have served. Needs output length per request, or an aggregate of it.
+- [ ] Spend close report as a PDF, with an audit row for each export.

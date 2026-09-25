@@ -130,4 +130,41 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(rows.every((tr) => tr.getAttribute('aria-label')?.endsWith('Blocked'))).toBe(true)
     expect(document.body.textContent).toMatch(/\d[\d,]* matching/)
   })
+
+  it('serves Spend from the aggregates, matching Overview, with its basis', async () => {
+    type View = import('@/data/catalog').SpendView
+    const [day, overview] = await Promise.all([catalog.api<View>('/spend?range=24h&by=team'), catalog.api<{ current: { spendUsd: number } }>('/summary?range=24h')])
+    const sum = day.rows.reduce((a, r) => a + r.spendUsd, 0)
+    // Both read receipts_5m over the same rolling window, a moment apart.
+    expect(Math.abs(sum - overview.current.spendUsd)).toBeLessThan(Math.max(1, overview.current.spendUsd * 0.01))
+    expect(day.trend.bucketMs).toBe(3_600_000)
+    expect(day.trend.points).toHaveLength(24)
+    expect(day.period.trailingDays).toBeGreaterThan(0)
+    expect(day.period.projectedUsd).toBeCloseTo(day.period.monthToDateUsd + day.period.trailingDailyUsd * day.period.remainingDays, 0)
+
+    // Every dimension splits the same total; provider comes from each receipt's backend.
+    const week = await Promise.all((['team', 'project', 'key', 'model', 'provider'] as const).map((by) => catalog.api<View>(`/spend?range=7d&by=${by}`)))
+    const totals = week.map((v) => v.rows.reduce((a, r) => a + r.spendUsd, 0))
+    for (const t of totals) expect(Math.abs(t - totals[0])).toBeLessThan(Math.max(1, totals[0] * 0.01))
+    const providers = new Set(catalog.backends.map((b) => b.provider))
+    expect(week[4].rows.filter((r) => r.spendUsd > 0).every((r) => providers.has(r.id))).toBe(true)
+    expect(week[0].trend.bucketMs).toBe(86_400_000)
+    expect(week[0].trend.points).toHaveLength(7)
+
+    const budgets = await catalog.api<import('@/data/catalog').Budget[]>('/budgets')
+    for (const b of budgets) expect(b.projectedUsd).toBeCloseTo(b.currentUsd + b.trailingDailyUsd * day.period.remainingDays, 0)
+
+    window.history.pushState({}, '', '/spend')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('trailing 7-day average')
+    expect(text).toContain("Savings analysis isn't connected yet")
+    expect(text).toContain('creating and editing them isn’t connected yet')
+    expect(text).not.toContain('spend is up')
+    expect(text).not.toContain('requests/min')
+    expect(text).not.toContain('Warns owners')
+  })
 })

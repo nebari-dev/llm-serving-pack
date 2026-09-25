@@ -36,6 +36,9 @@ export const seedNotifications = dataMode === 'api' ? [] : mock.notifications
 export const seedDegradations: Degradation[] = dataMode === 'api' ? [] : mock.degradations
 export let now: () => number = mock.now
 export let session: Session = mock.session
+/** Mock-mode Spend callouts. Api mode has no surge rule or savings analysis yet. */
+export const seedSpendSurge = dataMode === 'api' ? null : mock.spendSurge
+export const seedSavings = dataMode === 'api' ? null : mock.savings
 /** Mock-mode fixtures for GET /summary and GET /changes/{id}/impact. */
 export const seedSummary: Summary = mock.summary
 export const seedChangeImpacts: Record<string, ChangeImpact> = dataMode === 'api' ? {} : mock.changeImpacts

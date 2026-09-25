@@ -75,6 +75,8 @@ type Budget struct {
 	CurrentUSD   float64 `json:"currentUsd"`
 	OnExceed     string  `json:"onExceed"`
 	ProjectedUSD float64 `json:"projectedUsd"`
+	// TrailingDailyUSD is the scope's daily average the projection uses.
+	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
 }
 
 type Cond struct {

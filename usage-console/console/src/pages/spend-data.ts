@@ -1,12 +1,13 @@
-// Derived spend views for the demo tenant. In the real product every number
-// here comes from the receipts continuous aggregates (§4.6); this file
-// distributes the seeded daily-by-team series across keys, projects and
-// models so the breakdown and the trend reconcile to the same totals.
+// Mock-mode spend views for the demo tenant. In api mode GET /spend serves
+// these from the receipts continuous aggregates (§4.6); here the seeded
+// daily-by-team series is split across keys, projects and models with
+// hand-tuned shares, so the breakdown and the trend reconcile to the same
+// totals.
 
-import { keys, modelById, spendSeries, teams } from '@/data/catalog'
+import { keys, modelById, now, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
 import type { TimeRange } from '@/state/app-state'
 
-export type Dim = 'team' | 'project' | 'key' | 'model' | 'provider'
+export type Dim = SpendDim
 
 export const dims: { value: Dim; label: string }[] = [
   { value: 'team', label: 'Team' },
@@ -176,64 +177,63 @@ export function breakdown(dim: Dim, range: TimeRange): BreakdownRow[] {
   }))
 }
 
-/** Daily trend stacked by any dimension; top 5 groups keep their own series, the rest fold into "Other". */
-export function trend(dim: Dim, days: number) {
-  const slice = spendSeries.slice(-days)
-  const totals = new Map<string, number>()
-  const rows = slice.map((d) => {
+/** Daily spend per group over the last `days` days, and every group ranked by its 30-day total. */
+function trend(dim: Dim, days: number): SpendView['trend'] {
+  const points = spendSeries.slice(-days).map((d) => {
     const values: Record<string, number> = {}
-    for (const c of cells) {
-      const v = (d.byTeam[c.team] ?? 0) * c.share
-      values[c[dim]] = (values[c[dim]] ?? 0) + v
-      totals.set(c[dim], (totals.get(c[dim]) ?? 0) + v)
-    }
-    return { x: d.day, values }
+    for (const c of cells) values[c[dim]] = (values[c[dim]] ?? 0) + (d.byTeam[c.team] ?? 0) * c.share
+    return { t: dayStart(d.day), values }
   })
-  // Color follows the entity, never its rank in the current window: rank once
-  // over the full 30-day history so changing the range never repaints a series.
-  const fullTotals = new Map<string, number>()
+  const totals = new Map<string, number>()
   for (const d of spendSeries) {
-    for (const c of cells) fullTotals.set(c[dim], (fullTotals.get(c[dim]) ?? 0) + (d.byTeam[c.team] ?? 0) * c.share)
+    for (const c of cells) totals.set(c[dim], (totals.get(c[dim]) ?? 0) + (d.byTeam[c.team] ?? 0) * c.share)
   }
-  const ranked = [...fullTotals.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k).filter((k) => totals.has(k))
-  const top = ranked.slice(0, 5)
-  const rest = ranked.slice(5)
-  const palette = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
-  const series = top.map((k, i) => ({
-    key: k,
-    label: dim === 'team' ? (teams.find((t) => t.id === k)?.name ?? k) : k,
-    color: palette[i],
-  }))
-  if (rest.length) {
-    series.push({ key: '__other', label: `Other (${rest.length})`, color: 'var(--series-other)' })
-    for (const r of rows) {
-      r.values.__other = rest.reduce((a, k) => a + (r.values[k] ?? 0), 0)
-    }
+  const order = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
+  const labels = Object.fromEntries(order.map((k) => [k, dim === 'team' ? (teams.find((t) => t.id === k)?.name ?? k) : k]))
+  return { bucketMs: 86_400_000, points, order, labels }
+}
+
+/** A series day (MM-DD, UTC) as its start in ms, in the year that puts it in the past. */
+function dayStart(day: string) {
+  const [m, d] = day.split('-').map(Number)
+  const y = new Date(now()).getUTCFullYear()
+  const t = Date.UTC(y, m - 1, d)
+  return t > now() ? Date.UTC(y - 1, m - 1, d) : t
+}
+
+/**
+ * GET /spend in mock mode, from the seeded daily series. The trend stays at
+ * daily grain, since the fixtures have no finer one: short ranges show the
+ * last 14 days.
+ */
+export function mockSpendView(range: TimeRange, dim: Dim): SpendView {
+  const t = now()
+  const span = windowDays[range] * 86_400_000
+  const at = new Date(t)
+  const periodStart = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), 1)
+  const periodEnd = Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1)
+  const monthToDateUsd = Object.values(teamSpendOver((t - periodStart) / 86_400_000)).reduce((a, b) => a + b, 0)
+  const trailingDailyUsd = spendSeries.slice(-7).reduce((a, d) => a + Object.values(d.byTeam).reduce((x, y) => x + y, 0), 0) / 7
+  const remainingDays = (periodEnd - t) / 86_400_000
+  return {
+    range,
+    by: dim,
+    from: t - span,
+    to: t,
+    prevFrom: t - 2 * span,
+    rows: breakdown(dim, range).map((r) => ({
+      id: r.id,
+      label: r.label,
+      sub: r.sub,
+      spendUsd: r.spend,
+      prevSpendUsd: r.prevSpend,
+      requests: r.requests,
+      tokens: r.tokens,
+      p50Ms: r.p50,
+    })),
+    trend: trend(dim, trendDays(range)),
+    period: { periodStart, periodEnd, monthToDateUsd, trailingDailyUsd, trailingDays: 7, remainingDays, projectedUsd: monthToDateUsd + trailingDailyUsd * remainingDays },
   }
-  // chart stacks bottom-up in series order: largest at the base reads steadier
-  return { rows, series }
-}
-
-// ---- period / budgets ----------------------------------------------------
-
-export function periodInfo(at = new Date()) {
-  const start = new Date(at.getFullYear(), at.getMonth(), 1)
-  const end = new Date(at.getFullYear(), at.getMonth() + 1, 1)
-  const elapsedDays = (at.getTime() - start.getTime()) / 86_400_000
-  const totalDays = (end.getTime() - start.getTime()) / 86_400_000
-  return { start, end, elapsedDays, totalDays, remainingDays: totalDays - elapsedDays }
-}
-
-export function trailingDailyAvg(team: string | null, days = 7) {
-  const slice = spendSeries.slice(-days)
-  const sum = slice.reduce((a, d) => a + (team ? (d.byTeam[team] ?? 0) : Object.values(d.byTeam).reduce((x, y) => x + y, 0)), 0)
-  return sum / days
-}
-
-/** Month-to-date spend across all teams, from the daily aggregate. */
-export function monthToDate() {
-  const totals = teamSpendOver(periodInfo().elapsedDays)
-  return Object.values(totals).reduce((a, b) => a + b, 0)
 }
 
 /** 24h spend for a key, from the same attribution cells as the breakdown. */

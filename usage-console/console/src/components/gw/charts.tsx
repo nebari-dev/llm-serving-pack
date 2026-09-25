@@ -302,6 +302,7 @@ export function StackedBars({
   caption,
   onBarClick,
   highlightFrom,
+  xLabel = 'Day',
 }: {
   data: { x: string; values: Record<string, number> }[]
   series: Series[]
@@ -310,6 +311,8 @@ export function StackedBars({
   caption: string
   onBarClick?: (x: string) => void
   highlightFrom?: number
+  /** Heading of the table equivalent's first column. */
+  xLabel?: string
 }) {
   const [asTable, setAsTable] = useState(false)
   const rows = data.map((d) => ({ x: d.x, ...d.values }))
@@ -320,7 +323,7 @@ export function StackedBars({
   return (
     <ChartFrame series={series} asTable={asTable} setAsTable={setAsTable}>
       {asTable ? (
-        <ChartTable caption={caption} series={series} xLabel="Day" format={valueFormat} rows={data} />
+        <ChartTable caption={caption} series={series} xLabel={xLabel} format={valueFormat} rows={data} />
       ) : (
         <div role="img" aria-label={caption} style={{ height }}>
           <ResponsiveContainer width="100%" height="100%">

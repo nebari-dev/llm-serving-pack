@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/receipts/{id}", s.receipt)
 	h("GET "+p+"/series/traffic", s.trafficSeries)
 	h("GET "+p+"/series/spend", s.spendSeries)
+	h("GET "+p+"/spend", s.spend)
 	h("GET "+p+"/stream/traffic", s.streamTraffic)
 	h("GET "+p+"/degradations", s.degradations)
 	h("GET "+p+"/session", s.session)
@@ -240,44 +241,6 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	s.keysChanged()
 	usage, _ := s.Store.KeyUsage(r.Context(), t)
 	return map[string]any{"key": withUsage(k.APIKey, usage[k.ID]), "secret": secret}, nil
-}
-
-// budgets adds month-to-date spend and a straight-line month-end projection.
-func (s *Server) budgets(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	bs, err := s.Store.Budgets(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	mtd, err := s.Store.MonthToDate(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	keys, err := s.Store.Keys(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	keyID := map[string]string{}
-	for _, k := range keys {
-		keyID[k.Name] = k.ID
-	}
-	now := time.Now().UTC()
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	monthEnd := monthStart.AddDate(0, 1, 0)
-	elapsed := now.Sub(monthStart).Hours() / monthEnd.Sub(monthStart).Hours()
-	for i := range bs {
-		b := &bs[i]
-		switch b.ScopeType {
-		case "team":
-			b.CurrentUSD = mtd.ByTeam[b.Scope]
-		case "key":
-			b.CurrentUSD = mtd.ByKey[keyID[b.Scope]]
-		}
-		b.CurrentUSD = math.Round(b.CurrentUSD*100) / 100
-		if elapsed > 0 {
-			b.ProjectedUSD = math.Round(b.CurrentUSD / elapsed)
-		}
-	}
-	return bs, nil
 }
 
 func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
