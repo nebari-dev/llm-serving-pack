@@ -1,0 +1,220 @@
+# Agent Router (Envoy AI Gateway) standalone config for `aigw run`, pointed at
+# cmd/fake-openai. Same CRDs as a Kubernetes install, so this file doubles as
+# the shape the control plane will eventually render.
+#
+#   aigw run aigw/config.yaml      # listens on :1975, admin/metrics on :1064
+#
+# gpt-5-mini       → openai-prod
+# claude-sonnet-5  → anthropic-prod, falling back to bedrock-eu on 5xx
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              start_time: "%START_TIME%"
+              request.path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              upstream_cluster: "%UPSTREAM_CLUSTER%"
+              upstream_request_attempt_count: "%UPSTREAM_REQUEST_ATTEMPT_COUNT%"
+              x-request-id: "%REQ(X-REQUEST-ID)%"
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: gpt-5-mini
+      backendRefs:
+        - name: openai-prod
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: claude-sonnet-5
+      backendRefs:
+        - name: anthropic-prod
+          priority: 0
+        - name: bedrock-eu
+          priority: 1
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_reasoning_token
+      type: ReasoningToken
+---
+# Retry 5xx (anthropic-prod returns 529 when "overloaded"). Retries stay on the
+# same priority until passive health checking ejects the backend; only then does
+# traffic fail over to the next priority. The HTTPRoute is generated from the
+# AIGatewayRoute and shares its name.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: provider-fallback
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: aigw-run
+  retry:
+    numRetries: 2
+    perRetry:
+      backOff:
+        baseInterval: 50ms
+        maxInterval: 1s
+    retryOn:
+      httpStatusCodes: [500, 502, 503, 529]
+      triggers: [connect-failure, retriable-status-codes]
+  healthCheck:
+    passive:
+      consecutive5XxErrors: 3
+      interval: 1s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+---
+# Envoy Gateway's default 32KiB buffer is too small for LLM bodies (spec §13).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    bufferLimit: 50Mi
+---
+# One Backend + AIServiceBackend per fake provider. They share host:port and
+# differ by path prefix, matching fake-openai's /{backend}/v1/chat/completions.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openai-prod
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8090
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openai-prod
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: /openai-prod/v1
+  backendRef:
+    name: openai-prod
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: anthropic-prod
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8090
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: anthropic-prod
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: /anthropic-prod/v1
+  backendRef:
+    name: anthropic-prod
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: bedrock-eu
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8090
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: bedrock-eu
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: /bedrock-eu/v1
+  backendRef:
+    name: bedrock-eu
+    kind: Backend
+    group: gateway.envoyproxy.io
