@@ -2,7 +2,7 @@
 // rules, redaction and reroutes, from the same engine as devgateway. It serves
 // Envoy's ext_proc gRPC API on :8083 and a small admin API on :8084:
 //
-//	GET  /healthz                  snapshot age and kill-switch state
+//	GET  /healthz                  snapshot age, kill-switch state, version
 //	GET  /metrics                  warden_snapshot_age_seconds, warden_passthrough
 //	POST /passthrough?on=true|false  the kill switch (§9.3), no restart needed
 //
@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/jbouder/stargate/server/internal/buildinfo"
 	"github.com/jbouder/stargate/server/internal/config"
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/gateway"
@@ -99,7 +100,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(map[string]any{"snapshotAgeSeconds": age(), "passthrough": w.Passthrough(), "deadlineMs": deadline.Milliseconds()})
+		json.NewEncoder(rw).Encode(map[string]any{"snapshotAgeSeconds": age(), "passthrough": w.Passthrough(), "deadlineMs": deadline.Milliseconds(), "version": buildinfo.Get()})
 	})
 	mux.HandleFunc("GET /metrics", func(rw http.ResponseWriter, _ *http.Request) {
 		pt := 0

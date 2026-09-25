@@ -32,6 +32,9 @@ type Server struct {
 	// WardenURL is Warden's admin base URL (http://localhost:8084), for the
 	// degradation banner. Empty when Warden isn't in the request path.
 	WardenURL string
+	// Environment names the deployment this control plane serves, shown in
+	// the console header ("production" gets the production accent).
+	Environment string
 }
 
 func (s *Server) keysChanged() {
@@ -84,6 +87,9 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/series/spend", s.spendSeries)
 	h("GET "+p+"/stream/traffic", s.streamTraffic)
 	h("GET "+p+"/degradations", s.degradations)
+	h("GET "+p+"/session", s.session)
+	h("GET "+p+"/summary", s.summary)
+	h("GET "+p+"/changes/{id}/impact", s.changeImpact)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }

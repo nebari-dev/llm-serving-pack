@@ -17,23 +17,40 @@ import { MenuBarActions, MenuBarBrand, NavigationMenu } from '@/components/ui/na
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { useTheme } from '@/hooks/theme-provider'
 import { isThemeMode } from '@/hooks/use-theme-preference'
+import { dataMode, type Session, seedNotifications, session } from '@/data/catalog'
+import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useDegradations } from '@/state/degradations'
 import { type Env, timeRanges, useApp } from '@/state/app-state'
 import { NebariLogo } from './nebari-logo'
 
 const headerAction =
   'hover:bg-header-action-hover hover:no-underline focus-visible:ring-offset-0 active:bg-header-action-hover data-[popup-open]:bg-header-action-hover data-[popup-open]:no-underline'
 
-const notifications = [
-  { id: 1, unread: true, title: 'Budget "support" is over its cap', body: '$13,480 of $12,000 · throttling new requests', when: '4m ago' },
-  { id: 2, unread: true, title: 'Drift on backend vllm-internal', body: 'replicas changed 4 → 2 by argocd', when: '3h ago' },
-  { id: 3, unread: false, title: 'Rule block-src fired 7× its baseline', body: '96 blocks in 24h, 82 from support', when: '5h ago' },
-]
+type Note = { id: string; unread: boolean; title: string; body: string; when: string }
+
+/** The bell: fixtures in mock mode; against the control plane, what's degraded right now. */
+function useNotifications(): Note[] {
+  const live = useDegradations()
+  if (dataMode !== 'api') return seedNotifications.map((n) => ({ ...n, id: String(n.id) }))
+  return live.map((d) => ({ id: d.kind + d.title, unread: true, title: d.title, body: d.detail, when: d.since ? ago(d.since) : 'now' }))
+}
+
+function initials(a: Session['actor']) {
+  const words = (a.name ?? a.email.split('@')[0]).split(/[\s._-]+/).filter(Boolean)
+  return words
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join('')
+}
 
 export function AppHeader() {
   const { env, setEnv, range, setRange, setPaletteOpen } = useApp()
   const { themeMode, setThemeMode } = useTheme()
+  const notifications = useNotifications()
   const unread = notifications.filter((n) => n.unread).length
+  const envLabel = dataMode === 'api' ? session.environment.charAt(0).toUpperCase() + session.environment.slice(1) : env === 'production' ? 'Production' : 'Staging'
+  const actor = session.actor
 
   return (
     <div className="relative">
@@ -51,13 +68,13 @@ export function AppHeader() {
             <span>Gateway</span>
           </MenuBarBrand>
 
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger
-              variant="ghost"
-              className={cn('ml-2 h-8 gap-2 border px-2.5', headerAction, env === 'production' ? 'border-env-production' : 'border-dashed border-env-staging')}
-              aria-label={`Environment: ${env}. Change environment`}
+          {dataMode === 'api' ? (
+            // One control plane serves one environment, so there's nothing to switch.
+            <span
+              className={cn('ml-2 inline-flex h-8 items-center gap-2 rounded-md border px-2.5', env === 'production' ? 'border-env-production' : 'border-dashed border-env-staging')}
+              aria-label={`Tenant ${session.tenant.name}, environment ${session.environment}`}
             >
-              <span className="text-sm font-medium text-muted-foreground-strong">acme</span>
+              <span className="text-sm font-medium text-muted-foreground-strong">{session.tenant.name}</span>
               <span className="text-muted-foreground">/</span>
               <span
                 className={cn(
@@ -65,14 +82,32 @@ export function AppHeader() {
                   env === 'production' ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
                 )}
               >
-                {env === 'production' ? 'Production' : 'Staging'}
+                {envLabel}
+              </span>
+            </span>
+          ) : (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger
+              variant="ghost"
+              className={cn('ml-2 h-8 gap-2 border px-2.5', headerAction, env === 'production' ? 'border-env-production' : 'border-dashed border-env-staging')}
+              aria-label={`Environment: ${env}. Change environment`}
+            >
+              <span className="text-sm font-medium text-muted-foreground-strong">{session.tenant.name}</span>
+              <span className="text-muted-foreground">/</span>
+              <span
+                className={cn(
+                  'rounded-sm px-1.5 text-xs leading-5 font-semibold',
+                  env === 'production' ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
+                )}
+              >
+                {envLabel}
               </span>
               <ChevronDown className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuPortal>
               <DropdownMenuContent className="w-64">
                 <DropdownMenuGroup>
-                  <DropdownMenuGroupLabel className="text-xs tracking-normal normal-case">Tenant acme · environment</DropdownMenuGroupLabel>
+                  <DropdownMenuGroupLabel className="text-xs tracking-normal normal-case">Tenant {session.tenant.name} · environment</DropdownMenuGroupLabel>
                   {(['production', 'staging'] as Env[]).map((e) => (
                     <DropdownMenuItem key={e} onClick={() => setEnv(e)} className="justify-between">
                       <span className="inline-flex items-center gap-2">
@@ -88,6 +123,7 @@ export function AppHeader() {
               </DropdownMenuContent>
             </DropdownMenuPortal>
           </DropdownMenu>
+          )}
         </div>
 
         <MenuBarActions className="gap-2">
@@ -136,6 +172,7 @@ export function AppHeader() {
             </DropdownMenuTrigger>
             <DropdownMenuPortal>
               <DropdownMenuContent align="end" className="max-h-(--available-height) w-[552px] overflow-y-auto p-0">
+                {notifications.length === 0 && <p className="px-4 py-3 text-sm text-muted-foreground">Nothing needs attention.</p>}
                 {notifications.map((n) => (
                   <DropdownMenuItem key={n.id} className="flex items-start gap-3 rounded-none border-b border-border px-4 py-3 last:border-b-0">
                     <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', n.unread ? 'bg-primary' : 'bg-transparent')} aria-hidden="true" />
@@ -157,16 +194,18 @@ export function AppHeader() {
               className={cn('h-auto px-2.5 py-1', headerAction)}
             >
               <Avatar>
-                <AvatarFallback className="bg-primary font-semibold text-primary-foreground">PS</AvatarFallback>
+                <AvatarFallback className="bg-primary font-semibold text-primary-foreground">{initials(actor)}</AvatarFallback>
               </Avatar>
-              <span className="hidden lg:inline">Priya Shah</span>
+              <span className="hidden lg:inline">{actor.name ?? actor.email}</span>
               <ChevronDown />
             </DropdownMenuTrigger>
             <DropdownMenuPortal>
               <DropdownMenuContent align="end" className="w-[248px] p-2">
                 <div className="border-b px-1.5 pb-2">
-                  <p className="text-sm font-medium text-foreground">Priya Shah</p>
-                  <p className="text-xs text-muted-foreground">priya@acme.dev · admin</p>
+                  <p className="text-sm font-medium text-foreground">{actor.name ?? actor.email}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {actor.authenticated ? [actor.email, actor.role].filter(Boolean).join(' · ') : 'Not signed in · sign-in (OIDC) isn’t connected yet'}
+                  </p>
                 </div>
                 <div className="py-2">
                   <MenuPrimitive.RadioGroup
@@ -203,7 +242,11 @@ export function AppHeader() {
                   </MenuPrimitive.RadioGroup>
                 </div>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem className="leading-5 text-sign-out-foreground data-[highlighted]:text-sign-out-foreground">
+                <DropdownMenuItem
+                  disabled={!actor.authenticated}
+                  title={actor.authenticated ? undefined : 'Nothing to sign out of: sign-in isn’t connected yet'}
+                  className="leading-5 text-sign-out-foreground data-[highlighted]:text-sign-out-foreground"
+                >
                   <LogOut className="size-4 shrink-0" aria-hidden="true" />
                   Sign out
                 </DropdownMenuItem>

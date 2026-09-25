@@ -23,6 +23,7 @@ import {
   SidebarMenuLabel,
   SidebarSeparator,
 } from '@/components/ui/sidebar'
+import { dataMode, session } from '@/data/catalog'
 
 // §7.4 information architecture, grouped by the job each screen serves:
 // watching the request stream, governing money and data, configuring the gateway.
@@ -51,6 +52,15 @@ const groups = [
     ],
   },
 ]
+
+// Mock mode names the mockup's versions; against the control plane, the builds
+// actually running (Warden only when the control plane knows where it is).
+function versions() {
+  if (dataMode !== 'api') return 'console v0.1 · warden 0.4.2'
+  const w = session.warden
+  const warden = !w ? '' : w.connected ? ` · warden ${w.version ?? '?'}` : ' · warden unreachable'
+  return `console ${__CONSOLE_VERSION__} · control plane ${session.versions.controlPlane}${warden}`
+}
 
 export function AppSidebar() {
   const { pathname } = useLocation()
@@ -97,8 +107,8 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter className="text-xs text-muted-foreground-strong group-data-[state=collapsed]/sidebar:hidden">
         <div className="flex flex-col gap-0.5 px-2 py-1">
-          <span>Demo tenant · synthetic traffic</span>
-          <span className="font-mono text-[11px]">console v0.1 · warden 0.4.2</span>
+          <span>{dataMode === 'api' ? `${session.tenant.name} · ${session.environment}` : 'Demo tenant · synthetic traffic'}</span>
+          <span className="font-mono text-[11px]">{versions()}</span>
         </div>
       </SidebarFooter>
     </Sidebar>

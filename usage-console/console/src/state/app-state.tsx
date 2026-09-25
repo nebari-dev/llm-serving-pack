@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { API_BASE, api, dataMode, type Receipt, seedReceipts } from '@/data/catalog'
+import { API_BASE, api, dataMode, type Receipt, seedReceipts, session } from '@/data/catalog'
 import { makeReceipt } from '@/data/mock'
 
 // Global console state (§7.4): one time range shared across surfaces, the
@@ -145,7 +145,10 @@ const Ctx = createContext<AppState | null>(null)
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [range, setRange] = usePersisted<TimeRange>('gw:range', '24h')
-  const [env, setEnv] = usePersisted<Env>('gw:env', 'production')
+  const [envChoice, setEnv] = usePersisted<Env>('gw:env', 'production')
+  // Against the control plane there's no choice: it serves one environment,
+  // and anything but production gets the staging treatment.
+  const env: Env = dataMode === 'api' ? (session.environment === 'production' ? 'production' : 'staging') : envChoice
   const [density, setDensity] = usePersisted<Density>('gw:density', 'dense')
   const [params, setParams] = useSearchParams()
   const [paletteOpen, setPaletteOpen] = useState(false)

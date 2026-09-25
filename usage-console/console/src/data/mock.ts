@@ -555,3 +555,107 @@ export const degradations: Degradation[] = [
     action: 'View backend',
   },
 ]
+
+// Where the console is and who's using it (GET /session in api mode).
+export interface Session {
+  tenant: { id: string; name: string }
+  environment: string
+  actor: { email: string; name?: string; role?: string; authenticated: boolean }
+  versions: { controlPlane: string }
+  /** null when the control plane doesn't know where Warden is. */
+  warden: { connected: boolean; version?: string; snapshotAgeSeconds?: number; passthrough: boolean } | null
+}
+
+export const session: Session = {
+  tenant: { id: 'acme', name: 'acme' },
+  environment: 'production',
+  actor: { email: 'priya@acme.dev', name: 'Priya Shah', role: 'admin', authenticated: true },
+  versions: { controlPlane: '0.1' },
+  warden: { connected: true, version: '0.4.2', snapshotAgeSeconds: 252, passthrough: false },
+}
+
+// Header notifications (mock mode). In api mode the bell lists degradations.
+export const notifications = [
+  { id: 1, unread: true, title: 'Budget "support" is over its cap', body: '$13,480 of $12,000 · throttling new requests', when: '4m ago' },
+  { id: 2, unread: true, title: 'Drift on backend vllm-internal', body: 'replicas changed 4 → 2 by argocd', when: '3h ago' },
+  { id: 3, unread: false, title: 'Rule block-src fired 7× its baseline', body: '96 blocks in 24h, 82 from support', when: '5h ago' },
+]
+
+// Overview numbers for a range against the span before it (GET /summary).
+export interface WindowTotals {
+  requests: number
+  blocked: number
+  redacted: number
+  spendUsd: number
+}
+
+export interface KeyAnomaly {
+  keyId: string
+  keyName: string
+  spendUsd: number
+  baselineUsd: number
+  ratio: number
+  topModel: string
+  topModelShare: number
+}
+
+export interface Summary {
+  range: string
+  from: number
+  to: number
+  current: WindowTotals
+  previous: WindowTotals
+  topTeamIncrease: { team: string; deltaUsd: number } | null
+  keyAnomalies: KeyAnomaly[]
+}
+
+const seriesTotals = trafficSeries.reduce(
+  (a, p) => ({
+    requests: a.requests + p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated,
+    blocked: a.blocked + p.blocked,
+    redacted: a.redacted + p.redacted,
+  }),
+  { requests: 0, blocked: 0, redacted: 0 },
+)
+
+export const summary: Summary = {
+  range: '24h',
+  from: NOW - 86_400_000,
+  to: NOW,
+  current: { ...seriesTotals, spendUsd: 3_184.62 },
+  previous: {
+    requests: Math.round(seriesTotals.requests / 1.062),
+    blocked: Math.round(seriesTotals.blocked / 1.235),
+    redacted: Math.round(seriesTotals.redacted / 1.235),
+    spendUsd: 3_184.62 / 1.418,
+  },
+  topTeamIncrease: { team: 'support', deltaUsd: 940 },
+  keyAnomalies: [{ keyId: 'k1', keyName: 'support-bot', spendUsd: 1_404, baselineUsd: 484, ratio: 2.9, topModel: 'claude-sonnet-5', topModelShare: 0.71 }],
+}
+
+// Traffic either side of a change (GET /changes/{id}/impact).
+export interface Impact {
+  requests: number
+  p50Ms: number
+  costPerRequestUsd: number
+  errorRate: number
+  blockedRedactedShare: number
+}
+
+export interface ChangeImpact {
+  changeId: string
+  ts: number
+  windowMinutes: number
+  before: Impact
+  after: Impact
+}
+
+export const changeImpacts: Record<string, ChangeImpact> = {
+  c1: {
+    changeId: 'c1',
+    ts: NOW - 42 * 60_000,
+    windowMinutes: 40,
+    before: { requests: 1_968, p50Ms: 1_320, costPerRequestUsd: 0.0341, errorRate: 0.006, blockedRedactedShare: 0.104 },
+    after: { requests: 1_944, p50Ms: 980, costPerRequestUsd: 0.0211, errorRate: 0.007, blockedRedactedShare: 0.106 },
+  },
+}

@@ -5,10 +5,12 @@ import { Delta, Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { backends, budgets, changes, rules, trafficSeries } from '@/data/catalog'
+import { backends, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
 import { ago, clock, int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { rangeLabel, useApp } from '@/state/app-state'
+import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
+import { useDegradations } from '@/state/degradations'
+import { useLive, useNow } from '@/state/live'
 
 // §7.5.2 Overview — not a tile grid. A single vertical narrative:
 // status strip → traffic → three numbers → what changed → attention list.
@@ -29,18 +31,45 @@ const verdictSeries = [
   { key: 'blocked', label: 'Blocked', color: toneFill.blocked },
 ]
 
+// Against the control plane every number follows the range picker; mock mode
+// has one 24-hour fixture.
+function useOverviewData(range: TimeRange) {
+  const series = useLive<SeriesPoint[]>(dataMode === 'api' ? `/series/traffic?range=${range}` : null, trafficSeries, 60_000).data
+  const summary = useLive<Summary>(dataMode === 'api' ? `/summary?range=${range}` : null, seedSummary, 30_000)
+  return { series, summary: summary.data, loaded: summary.loaded }
+}
+
+const pctChange = (now: number, before: number) => (before > 0 ? ((now - before) / before) * 100 : null)
+
+/** "per 30 minutes", from the series' own spacing. */
+function perBucket(series: SeriesPoint[]) {
+  const min = series.length > 1 ? Math.round((series[1].t - series[0].t) / 60_000) : 30
+  if (min % 1440 === 0) return min === 1440 ? 'per day' : `per ${min / 1440} days`
+  if (min % 60 === 0) return min === 60 ? 'per hour' : `per ${min / 60} hours`
+  return `per ${min} minutes`
+}
+
 export function OverviewPage() {
   const { range } = useApp()
   const navigate = useNavigate()
-  const totals = trafficSeries.reduce(
-    (a, p) => ({
-      req: a.req + p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated,
-      br: a.br + p.blocked + p.redacted,
-    }),
-    { req: 0, br: 0 },
-  )
-  const spend = 3_184.62
-  const routeChange = changes[0]
+  const { series, summary } = useOverviewData(range)
+  const multiDay = series.length > 1 && series[series.length - 1].t - series[0].t > 86_400_000
+  const xFormat = (t: number) => (multiDay ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : clock(t).slice(0, 5))
+  // Changes inside the charted window; the latest one is labeled.
+  const windowStart = series[0]?.t ?? 0
+  const inWindow = changes.filter((c) => c.ts >= windowStart)
+  const annotations = inWindow.map((c, i) => ({ t: c.ts, label: i === 0 ? c.target : '' }))
+  const { current, previous } = summary
+  const span = rangeLabel(range).replace('last ', '')
+  const since = `vs previous ${span}`
+  const hotRule = rules
+    .filter((r) => r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
+    .sort((a, b) => b.fired24h / b.baseline7d - a.fired24h / a.baseline7d)[0]
+  const delta = (now: number, before: number, goodWhen: 'up' | 'down') => {
+    const p = pctChange(now, before)
+    return p === null ? null : <Delta pct={p} goodWhen={goodWhen} />
+  }
+  const none = (before: number) => (before > 0 ? since : `nothing in the previous ${span}`)
 
   return (
     <div>
@@ -48,7 +77,7 @@ export function OverviewPage() {
         title="Overview"
         description={
           <>
-            acme / production, {rangeLabel(range)}. Every number here drills to the receipts that compose it.
+            {session.tenant.name} / {session.environment}, {rangeLabel(range)}. Every number here drills to the receipts that compose it.
           </>
         }
       />
@@ -59,7 +88,7 @@ export function OverviewPage() {
       {/* 2. Traffic with verdict composition. */}
       <Section
         title="Traffic"
-        description="Requests per 30 minutes, and the ones Warden did not simply allow, on their own scale."
+        description={`Requests ${perBucket(series)}, and the ones Warden did not simply allow, on their own scale.`}
         actions={
           <Button variant="ghost" size="sm" render={<Link to="/traffic" />}>
             Open traffic <ArrowRight />
@@ -67,51 +96,61 @@ export function OverviewPage() {
         }
       >
         <StackedArea
-          caption="All requests per 30 minutes"
+          caption={`All requests ${perBucket(series)}`}
           series={volumeSeries}
           syncId="overview-traffic"
           height={140}
           hideXAxis
-          data={trafficSeries.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked } }))}
-          xFormat={(t) => clock(t).slice(0, 5)}
-          annotations={[{ t: routeChange.ts, label: 'route default → sonnet-5' }]}
+          data={series.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked } }))}
+          xFormat={xFormat}
+          annotations={annotations}
         />
         <h3 className="mt-5 mb-1 text-sm font-medium">Not allowed</h3>
         <StackedArea
-          caption="Redacted, truncated, rerouted, and blocked requests per 30 minutes"
+          caption={`Redacted, truncated, rerouted, and blocked requests ${perBucket(series)}`}
           series={verdictSeries}
           syncId="overview-traffic"
           height={150}
-          data={trafficSeries.map((p) => ({ t: p.t, values: { redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
-          xFormat={(t) => clock(t).slice(0, 5)}
-          annotations={[{ t: routeChange.ts, label: '' }]}
+          data={series.map((p) => ({ t: p.t, values: { redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
+          xFormat={xFormat}
+          annotations={annotations.map((a) => ({ ...a, label: '' }))}
         />
       </Section>
 
       {/* 3. Three numbers with trend, each a link carrying the time range. */}
       <div className="grid grid-cols-1 border-b border-border sm:grid-cols-3">
-        <BigNumber to="/traffic" label="Requests" value={int(totals.req)} delta={<Delta pct={6.2} goodWhen="up" />} note="vs previous 24 hours" />
-        <BigNumber to="/spend" label="Spend" value={money(spend)} delta={<Delta pct={41.8} goodWhen="down" />} note="support is driving the increase" />
+        <BigNumber to="/traffic" label="Requests" value={int(current.requests)} delta={delta(current.requests, previous.requests, 'up')} note={none(previous.requests)} />
+        <BigNumber
+          to="/spend"
+          label="Spend"
+          value={money(current.spendUsd)}
+          delta={delta(current.spendUsd, previous.spendUsd, 'down')}
+          note={summary.topTeamIncrease && previous.spendUsd > 0 ? `${summary.topTeamIncrease.team} is driving the increase` : none(previous.spendUsd)}
+        />
         <BigNumber
           to="/traffic?verdict=blocked&verdict=redacted"
           label="Blocked + redacted"
-          value={int(totals.br)}
-          delta={<Delta pct={23.5} goodWhen="down" />}
-          note="block-src fired 7× its baseline"
+          value={int(current.blocked + current.redacted)}
+          delta={delta(current.blocked + current.redacted, previous.blocked + previous.redacted, 'down')}
+          note={
+            hotRule && range === '24h'
+              ? `${hotRule.name} fired ${Math.round(hotRule.fired24h / hotRule.baseline7d)}× its baseline`
+              : none(previous.blocked + previous.redacted)
+          }
         />
       </div>
 
       {/* 4. What changed — config changes joined to their traffic effect. */}
       <Section
         title="What changed"
-        description="Config changes in this window and what they did to traffic."
+        description="Config changes and what they did to traffic."
         actions={
           <Button variant="ghost" size="sm" render={<Link to="/activity" />}>
             Full activity <ArrowRight />
           </Button>
         }
       >
-        <FeaturedChange />
+        {changes[0] ? <FeaturedChange change={changes[0]} /> : <p className="text-sm text-muted-foreground">No config changes yet.</p>}
         <ol className="mt-4 divide-y divide-border border-y border-border">
           {changes.slice(1, 5).map((c) => (
             <li key={c.id} className="grid grid-cols-[5rem_1fr_auto] items-baseline gap-4 py-2.5 text-sm">
@@ -143,33 +182,53 @@ export function OverviewPage() {
       </Section>
 
       {/* 5. Attention list — each row has one action. */}
-      <Section title="Needs attention" description="Budgets over 80%, anomalous spend, rules above baseline, failovers.">
-        <AttentionList onGo={navigate} />
+      <Section title="Needs attention" description="Budgets over 80%, anomalous spend, rules above baseline, failing backends.">
+        <AttentionList onGo={navigate} summary={summary} />
       </Section>
     </div>
   )
 }
 
 function StatusStrip() {
-  const degradedBackends = backends.filter((b) => b.health !== 'healthy' || b.sync === 'failed')
+  const now = useNow()
+  const receipts = useReceipts()
+  const warden = useLive(dataMode === 'api' ? '/session' : null, session, 15_000).data.warden
+  // A backend is called out when it's configured down, or failing now.
+  const degradedBackends = backends.filter((b) => b.health === 'down' || b.sync === 'failed' || b.errorRate >= 5)
   const failOpen = rules.filter((r) => r.failMode === 'open' && r.mode !== 'draft')
+  const last = receipts.reduce((m, r) => Math.max(m, r.ts), 0)
+  const quiet = !last || now - last > 5 * 60_000
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border bg-header px-6 py-2.5 text-sm" aria-label="System status">
       <span className="inline-flex items-center gap-2">
-        <span className="size-2 rounded-full bg-v-allowed-bar" aria-hidden="true" />
-        Gateway <span className="text-muted-foreground">nominal · p50 overhead 2.1ms</span>
+        <span className={cn('size-2 rounded-full', quiet ? 'bg-v-degraded-bar' : 'bg-v-allowed-bar')} aria-hidden="true" />
+        Gateway{' '}
+        <span className="text-muted-foreground">
+          {dataMode === 'api' ? (last ? `last receipt ${ago(Math.min(last, now), now)}` : 'no receipts yet') : 'nominal · p50 overhead 2.1ms'}
+        </span>
       </span>
       <span className="inline-flex flex-wrap items-center gap-2">
         Providers
         {degradedBackends.map((b) => (
           <StateChip key={b.name} tone={b.health === 'down' ? 'blocked' : 'degraded'}>
-            <span className="font-mono">{b.name}</span> {b.health === 'down' ? 'down, not routed' : `${b.errorRate}% errors, failing over`}
+            <span className="font-mono">{b.name}</span> {b.health === 'down' ? 'down, not routed' : `${b.errorRate}% errors, last hour`}
           </StateChip>
         ))}
         <span className="text-muted-foreground">{backends.length - degradedBackends.length} others nominal</span>
       </span>
       <span className="inline-flex items-center gap-2">
-        Warden cache <StateChip tone="degraded">4m 12s old</StateChip>
+        Warden
+        {!warden ? (
+          <span className="text-muted-foreground">not in this request path</span>
+        ) : !warden.connected ? (
+          <StateChip tone="blocked">unreachable</StateChip>
+        ) : warden.passthrough ? (
+          <StateChip tone="blocked">kill switch on</StateChip>
+        ) : (warden.snapshotAgeSeconds ?? 0) > 60 ? (
+          <StateChip tone="degraded">cache {age(warden.snapshotAgeSeconds ?? 0)} old</StateChip>
+        ) : (
+          <span className="text-muted-foreground">cache {age(warden.snapshotAgeSeconds ?? 0)} old</span>
+        )}
       </span>
       <span className="inline-flex items-center gap-2">
         Fail modes
@@ -184,6 +243,14 @@ function StatusStrip() {
   )
 }
 
+/** Seconds as "4m 12s". */
+function age(sec: number) {
+  const s = Math.round(sec)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+}
+
 function BigNumber({ to, label, value, delta, note }: { to: string; label: string; value: string; delta: React.ReactNode; note: string }) {
   return (
     <Link to={to} className="group flex flex-col gap-1 border-border px-6 py-4 outline-none hover:bg-muted/60 focus-visible:bg-muted sm:border-r sm:last:border-r-0">
@@ -196,15 +263,32 @@ function BigNumber({ to, label, value, delta, note }: { to: string; label: strin
   )
 }
 
+// Too few requests either side and percentages mean nothing.
+const MIN_COMPARE = 20
+
 /** The differentiating component: one change, its before/after window, the delta in words. */
-function FeaturedChange() {
-  const c = changes[0]
-  const metrics = [
-    { label: 'p50 latency', before: 1_320, after: 980, fmt: (n: number) => `${int(n)}ms`, goodWhen: 'down' as const },
-    { label: 'Cost / request', before: 0.0341, after: 0.0211, fmt: (n: number) => `$${n.toFixed(4)}`, goodWhen: 'down' as const },
-    { label: 'Error rate', before: 0.6, after: 0.7, fmt: (n: number) => `${n.toFixed(1)}%`, goodWhen: 'down' as const },
-    { label: 'Blocked + redacted', before: 10.4, after: 10.6, fmt: (n: number) => `${n.toFixed(1)}%`, goodWhen: 'down' as const },
-  ]
+function FeaturedChange({ change: c }: { change: Change }) {
+  const { data: impact, loaded } = useLive<ChangeImpact | null>(dataMode === 'api' ? `/changes/${c.id}/impact` : null, seedChangeImpacts[c.id] ?? null, 60_000)
+  const metrics = impact
+    ? [
+        { label: 'p50 latency', before: impact.before.p50Ms, after: impact.after.p50Ms, fmt: (n: number) => `${int(Math.round(n))}ms`, goodWhen: 'down' as const },
+        { label: 'Cost / request', before: impact.before.costPerRequestUsd, after: impact.after.costPerRequestUsd, fmt: (n: number) => `$${n.toFixed(4)}`, goodWhen: 'down' as const },
+        { label: 'Error rate', before: impact.before.errorRate * 100, after: impact.after.errorRate * 100, fmt: (n: number) => `${n.toFixed(1)}%`, goodWhen: 'down' as const },
+        {
+          label: 'Blocked + redacted',
+          before: impact.before.blockedRedactedShare * 100,
+          after: impact.after.blockedRedactedShare * 100,
+          fmt: (n: number) => `${n.toFixed(1)}%`,
+          goodWhen: 'down' as const,
+        },
+      ]
+    : []
+  const comparable = !!impact && impact.before.requests >= MIN_COMPARE && impact.after.requests >= MIN_COMPARE
+  const movers = metrics.filter((m) => m.before > 0 && Math.abs((m.after - m.before) / m.before) >= 0.05)
+  // Every metric here is better when it goes down.
+  const allBetter = movers.every((m) => m.after < m.before)
+  const moved = movers.map((m) => `${m.label.toLowerCase()} ${m.after < m.before ? '−' : '+'}${Math.abs(Math.round(((m.after - m.before) / m.before) * 100))}%`)
+  const w = impact?.windowMinutes ?? 40
   return (
     <article className="grid gap-5 rounded-md border border-border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
       <div className="flex flex-col gap-2">
@@ -213,62 +297,78 @@ function FeaturedChange() {
           <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span> · {ago(c.ts)} · {c.actor}
         </div>
         <p className="text-base leading-6">
-          Route <span className="font-mono font-medium">default</span> switched to <span className="font-mono font-medium">claude-sonnet-5</span> at{' '}
-          <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span>.
+          {c.action} <span className="font-mono font-medium">{c.target}</span> at <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span>.
         </p>
-        <p className={cn('text-base leading-6 font-medium', toneText.allowed)}>p50 latency −340ms, cost/request −38%.</p>
+        {comparable && (
+          <p className={cn('text-base leading-6 font-medium', !moved.length ? 'text-muted-foreground-strong' : allBetter ? toneText.allowed : 'text-foreground')}>
+            {moved.length ? `${moved.join(', ')}.` : 'Nothing moved by 5% or more.'}
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
-          Compared over 40 minutes either side of the change, 3,912 requests on route default. Error rate and policy verdicts did not move meaningfully.
+          {!loaded
+            ? 'Comparing traffic either side of the change…'
+            : !impact
+              ? 'No traffic comparison for this change.'
+              : comparable
+                ? `Compared over ${w} minutes either side of the change, ${int(impact.before.requests + impact.after.requests)} requests across the tenant.`
+                : `Too little traffic to compare yet: ${int(impact.before.requests)} requests in the ${w} minutes before, ${int(impact.after.requests)} after.`}
         </p>
         <div className="mt-auto flex flex-wrap gap-2 pt-2">
-          <Button variant="outline" size="sm" render={<Link to={`/traffic?since=${Math.round(c.ts)}&model=claude-sonnet-5`} />}>
+          <Button variant="outline" size="sm" render={<Link to={`/traffic?since=${Math.round(c.ts)}`} />}>
             Receipts after the change
           </Button>
-          <Button variant="ghost" size="sm" render={<Link to="/routing" />}>
-            View route diff
-          </Button>
+          {c.targetKind === 'Route' && (
+            <Button variant="ghost" size="sm" render={<Link to="/routing" />}>
+              View route
+            </Button>
+          )}
         </div>
       </div>
-      <table className="w-full self-start text-sm">
-        <caption className="sr-only">Before and after the route change</caption>
-        <thead>
-          <tr className="border-b border-border text-xs text-muted-foreground">
-            <th className="py-1 text-left font-medium">Metric</th>
-            <th className="py-1 text-right font-medium">40m before</th>
-            <th className="py-1 text-right font-medium">40m after</th>
-            <th className="w-36 py-1 pl-4 text-left font-medium">Change</th>
-          </tr>
-        </thead>
-        <tbody>
-          {metrics.map((m) => {
-            const pct = ((m.after - m.before) / m.before) * 100
-            const max = Math.max(m.before, m.after)
-            return (
-              <tr key={m.label} className="border-b border-border last:border-0">
-                <td className="py-2">{m.label}</td>
-                <td className="num py-2 text-right font-mono text-muted-foreground">{m.fmt(m.before)}</td>
-                <td className="num py-2 text-right font-mono">{m.fmt(m.after)}</td>
-                <td className="py-2 pl-4">
-                  <div className="flex items-center gap-2">
-                    <div className="flex w-16 flex-col gap-0.5" aria-hidden="true">
-                      <span className="h-1 rounded-full bg-border-strong" style={{ width: `${(m.before / max) * 100}%` }} />
-                      <span className="h-1 rounded-full bg-foreground" style={{ width: `${(m.after / max) * 100}%` }} />
+      {comparable && (
+        <table className="w-full self-start text-sm">
+          <caption className="sr-only">Before and after the change</caption>
+          <thead>
+            <tr className="border-b border-border text-xs text-muted-foreground">
+              <th className="py-1 text-left font-medium">Metric</th>
+              <th className="py-1 text-right font-medium">{w}m before</th>
+              <th className="py-1 text-right font-medium">{w}m after</th>
+              <th className="w-36 py-1 pl-4 text-left font-medium">Change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {metrics.map((m) => {
+              const pct = m.before > 0 ? ((m.after - m.before) / m.before) * 100 : 0
+              const max = Math.max(m.before, m.after) || 1
+              return (
+                <tr key={m.label} className="border-b border-border last:border-0">
+                  <td className="py-2">{m.label}</td>
+                  <td className="num py-2 text-right font-mono text-muted-foreground">{m.fmt(m.before)}</td>
+                  <td className="num py-2 text-right font-mono">{m.fmt(m.after)}</td>
+                  <td className="py-2 pl-4">
+                    <div className="flex items-center gap-2">
+                      <div className="flex w-16 flex-col gap-0.5" aria-hidden="true">
+                        <span className="h-1 rounded-full bg-border-strong" style={{ width: `${(m.before / max) * 100}%` }} />
+                        <span className="h-1 rounded-full bg-foreground" style={{ width: `${(m.after / max) * 100}%` }} />
+                      </div>
+                      {Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">no change</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
                     </div>
-                    {Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">no change</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
-                  </div>
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
     </article>
   )
 }
 
-function AttentionList({ onGo }: { onGo: (to: string) => void }) {
+type Attention = { id: string; tone: 'blocked' | 'degraded'; what: React.ReactNode; detail: string; action: string; to: string }
+
+function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary: Summary }) {
+  const degradations = useDegradations()
   const over = budgets.filter((b) => b.currentUsd / b.capUsd >= 0.8).sort((a, b) => b.currentUsd / b.capUsd - a.currentUsd / a.capUsd)
-  const items: { id: string; tone: 'blocked' | 'degraded'; what: React.ReactNode; detail: string; action: string; to: string }[] = [
+  const items: Attention[] = [
     ...over.map((b) => {
       const pct = Math.round((b.currentUsd / b.capUsd) * 100)
       const exceeded = pct >= 100
@@ -287,43 +387,37 @@ function AttentionList({ onGo }: { onGo: (to: string) => void }) {
         to: '/spend',
       }
     }),
-    {
-      id: 'anom',
-      tone: 'degraded',
+    ...summary.keyAnomalies.map((a) => ({
+      id: `anom-${a.keyId}`,
+      tone: 'degraded' as const,
       what: (
         <>
-          Key <span className="font-mono">support-bot</span> spend 2.9× its 7-day baseline
+          Key <span className="font-mono">{a.keyName}</span> spend {a.ratio.toFixed(1)}× its 7-day baseline
         </>
       ),
-      detail: 'Started 6 days ago. 71% of the increase is claude-sonnet-5 with long histories.',
+      detail: `${money(a.spendUsd)} in the last 24 hours against a ${money(a.baselineUsd)} daily average. ${Math.round(a.topModelShare * 100)}% of it on ${a.topModel}.`,
       action: 'Open key',
-      to: '/keys?key=k1',
-    },
-    {
-      id: 'rule',
-      tone: 'degraded',
-      what: (
-        <>
-          Rule <span className="font-mono">block-src</span> fired 96 times, baseline 14
-        </>
-      ),
-      detail: 'Since v12 was published 5h ago. 82 of the blocks are from support.',
-      action: 'Replay rule',
-      to: '/guardrails?rule=r3',
-    },
-    {
-      id: 'fo',
-      tone: 'degraded',
-      what: (
-        <>
-          <span className="font-mono">anthropic-prod</span> failing over to <span className="font-mono">bedrock-eu</span>
-        </>
-      ),
-      detail: '8% of Claude requests since 13:51. Upstream 529 overloaded.',
-      action: 'View fallback',
-      to: '/traffic?reason=fallback',
-    },
+      to: `/keys?key=${a.keyId}`,
+    })),
+    ...rules
+      .filter((r) => r.mode !== 'draft' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
+      .map((r) => ({
+        id: `rule-${r.id}`,
+        tone: 'degraded' as const,
+        what: (
+          <>
+            Rule <span className="font-mono">{r.name}</span> fired {int(r.fired24h)} times, baseline {int(r.baseline7d)}
+          </>
+        ),
+        detail: `In the last 24 hours, against a daily average of ${int(r.baseline7d)} over the week before.`,
+        action: 'Open rule',
+        to: `/guardrails?rule=${r.id}`,
+      })),
+    ...degradations
+      .filter((d) => d.kind === 'backend_errors')
+      .map((d) => ({ id: d.kind + d.title, tone: 'degraded' as const, what: <>{d.title}</>, detail: d.detail, action: d.action, to: d.to })),
   ]
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">Nothing needs attention.</p>
   return (
     <ul className="divide-y divide-border border-y border-border">
       {items.map((i) => (

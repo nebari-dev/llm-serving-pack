@@ -66,6 +66,7 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	addr := fs.String("addr", ":8080", "listen address")
 	authzAddr := fs.String("authz-addr", ":8082", "listen address for Agent Router's ext_authz checks")
 	refresh := fs.Duration("refresh", 5*time.Second, "how often ext_authz reloads keys from the db")
+	environment := fs.String("environment", "development", "the deployment this control plane serves, shown in the console header")
 	warden := fs.String("warden", "", "Warden's admin URL (e.g. http://localhost:8084), for the console's degradation banner; empty when Warden isn't in the path")
 	fs.Parse(args)
 
@@ -104,7 +105,7 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	go hub.Listen(ctx, st, st.Receipts)
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
-	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", KeysChanged: reload, WardenURL: *warden}
+	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", KeysChanged: reload, WardenURL: *warden, Environment: *environment}
 	go srv.FinishRotations(ctx)
 
 	go listen(ctx, "ext_authz", *authzAddr, &gateway.ExtAuthz{Snap: &snap})

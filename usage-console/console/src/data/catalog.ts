@@ -7,7 +7,7 @@
 // or at import time after hydrate(), see the fetched values.
 import { ago } from '@/lib/format'
 import * as mock from './mock'
-import type { ApiKey, Backend, Budget, Change, Degradation, Model, PolicyRule, Receipt, Route, SeriesPoint, SpendPoint, Team } from './mock'
+import type { ApiKey, Backend, Budget, Change, Degradation, Model, PolicyRule, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
 
 export type * from './mock'
 
@@ -30,9 +30,15 @@ export let seedReceipts: Receipt[] = mock.seedReceipts
 export let trafficSeries: SeriesPoint[] = mock.trafficSeries
 export let spendSeries: SpendPoint[] = mock.spendSeries
 export let changes: Change[] = mock.changes
+/** Mock-mode bell items; in api mode the bell lists degradations. */
+export const seedNotifications = dataMode === 'api' ? [] : mock.notifications
 /** Mock-mode banner conditions; in api mode the banner polls /degradations. */
 export const seedDegradations: Degradation[] = dataMode === 'api' ? [] : mock.degradations
 export let now: () => number = mock.now
+export let session: Session = mock.session
+/** Mock-mode fixtures for GET /summary and GET /changes/{id}/impact. */
+export const seedSummary: Summary = mock.summary
+export const seedChangeImpacts: Record<string, ChangeImpact> = dataMode === 'api' ? {} : mock.changeImpacts
 
 export class ApiError extends Error {
   readonly status: number
@@ -65,7 +71,7 @@ const index = <T,>(xs: T[], id: (x: T) => string) => Object.fromEntries(xs.map((
 /** Loads the catalog from the control plane. A no-op in mock mode. */
 export async function hydrate() {
   if (dataMode !== 'api') return
-  const [t, m, b, r, k, bu, ru, d, rc, ts, ss, ch] = await Promise.all([
+  const [t, m, b, r, k, bu, ru, d, rc, ts, ss, ch, se] = await Promise.all([
     api<Team[]>('/teams'),
     api<Model[]>('/models'),
     api<Backend[]>('/backends'),
@@ -78,6 +84,7 @@ export async function hydrate() {
     api<SeriesPoint[]>('/series/traffic?range=24h'),
     api<SpendPoint[]>('/series/spend?days=30'),
     api<Change[]>('/changes'),
+    api<Session>('/session'),
   ])
   teams = t
   models = m
@@ -93,6 +100,7 @@ export async function hydrate() {
   trafficSeries = ts
   spendSeries = ss
   changes = ch
+  session = se
   const loadedAt = Date.now()
   now = () => loadedAt
 }

@@ -5,6 +5,10 @@
 # Agent Router CLI: https://github.com/theagentrouter/agent-router/releases
 AIGW ?= aigw
 
+# Names the build in the console's version footer (go run doesn't stamp VCS info).
+VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo dev)
+export GOFLAGS := -ldflags=-X=github.com/jbouder/stargate/server/internal/buildinfo.Version=$(VERSION)
+
 db:
 	docker compose up -d --wait
 

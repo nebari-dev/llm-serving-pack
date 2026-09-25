@@ -34,6 +34,7 @@ const (
 type wardenHealth struct {
 	SnapshotAgeSeconds float64 `json:"snapshotAgeSeconds"`
 	Passthrough        bool    `json:"passthrough"`
+	Version            string  `json:"version"`
 }
 
 func (s *Server) fetchWarden(ctx context.Context) (*wardenHealth, error) {

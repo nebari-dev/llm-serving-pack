@@ -255,3 +255,13 @@ func (s *Store) RotateKey(ctx context.Context, tenant, actor, id string, overlap
 	}
 	return k, secret, tx.Commit(ctx)
 }
+
+// TenantName is the tenant's display name.
+func (s *Store) TenantName(ctx context.Context, tenant string) (string, error) {
+	var name string
+	err := s.Config.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1`, tenant).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return name, err
+}
