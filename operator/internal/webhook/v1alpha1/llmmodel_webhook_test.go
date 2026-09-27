@@ -24,7 +24,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 )
@@ -79,6 +81,48 @@ var _ = Describe("LLMModel Webhook", func() {
 	var (
 		bgCtx = context.Background()
 	)
+
+	Context("KV cache offload admission", func() {
+		It("rejects offload without baseline host memory", func() {
+			ns := newManagedNamespace("test-offload-missing-memory")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+			model := newBaseLLMModel("missing-memory", ns.Name)
+			model.Spec.Serving.KVCacheOffload = &llmv1alpha1.KVCacheOffloadSpec{CPUMemoryGiB: 4}
+			Expect(k8sClient.Create(bgCtx, model)).To(MatchError(ContainSubstring("positive baseline")))
+		})
+
+		It("persists the field and rejects conflicting updates without changing the stored model", func() {
+			ns := newManagedNamespace("test-offload-update")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+			model := newBaseLLMModel("offload-update", ns.Name)
+			model.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("8Gi")}
+			model.Spec.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("12Gi")}
+			model.Spec.Serving.KVCacheOffload = &llmv1alpha1.KVCacheOffloadSpec{CPUMemoryGiB: 4}
+			Expect(k8sClient.Create(bgCtx, model)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, model) })
+			stored := &llmv1alpha1.LLMModel{}
+			Expect(k8sClient.Get(bgCtx, client.ObjectKeyFromObject(model), stored)).To(Succeed())
+			Expect(stored.Spec.Serving.KVCacheOffload).NotTo(BeNil())
+			Expect(stored.Spec.Serving.KVCacheOffload.CPUMemoryGiB).To(Equal(int32(4)))
+			stored.Spec.Advanced.VLLM.ExtraArgs = []string{"--kv-offloading-size=8"}
+			Expect(k8sClient.Update(bgCtx, stored)).To(MatchError(ContainSubstring("conflicts")))
+			Expect(k8sClient.Get(bgCtx, client.ObjectKeyFromObject(model), stored)).To(Succeed())
+			Expect(stored.Spec.Advanced.VLLM.ExtraArgs).To(BeEmpty())
+			stored.Spec.Serving.KVCacheOffload = nil
+			Expect(k8sClient.Update(bgCtx, stored)).To(Succeed())
+		})
+
+		It("rejects a zero cache budget at schema admission", func() {
+			ns := newManagedNamespace("test-offload-zero-budget")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+			model := newBaseLLMModel("zero-budget", ns.Name)
+			model.Spec.Serving.KVCacheOffload = &llmv1alpha1.KVCacheOffloadSpec{}
+			Expect(k8sClient.Create(bgCtx, model)).To(MatchError(ContainSubstring("cpuMemoryGiB")))
+		})
+	})
 
 	Context("ValidateCreate", func() {
 		It("should accept a valid LLMModel in a managed namespace", func() {

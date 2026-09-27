@@ -139,6 +139,11 @@ type ServingSpec struct {
 	// vllmArgs are additional arguments passed to vLLM
 	// +optional
 	VLLMArgs []string `json:"vllmArgs,omitempty"`
+	// kvCacheOffload enables native vLLM CPU KV-cache offload. Omit to disable.
+	// Explicit resources.requests.memory and resources.limits.memory describe
+	// the baseline process budget; the operator adds the cache allocation to both.
+	// +optional
+	KVCacheOffload *KVCacheOffloadSpec `json:"kvCacheOffload,omitempty"`
 	// updateStrategy controls how spec changes roll out to serving pods.
 	// Recreate (the default) tears down the old pod before starting the
 	// replacement: model pods hold exclusive resources (the node's GPUs and
@@ -153,6 +158,16 @@ type ServingSpec struct {
 	// monitoring configures Prometheus monitoring
 	// +optional
 	Monitoring MonitoringSpec `json:"monitoring,omitempty"`
+}
+
+// KVCacheOffloadSpec configures process-local CPU KV-cache storage.
+type KVCacheOffloadSpec struct {
+	// cpuMemoryGiB is the CPU cache budget per data-parallel engine, summed
+	// across that engine's tensor-parallel ranks. The operator reserves
+	// cpuMemoryGiB * dataParallelism GiB in addition to baseline pod memory.
+	// The serving image must support native --kv-offloading-size/backend.
+	// +kubebuilder:validation:Minimum=1
+	CPUMemoryGiB int32 `json:"cpuMemoryGiB"`
 }
 
 // UpdateStrategy is the rollout strategy for the model serving Deployment.

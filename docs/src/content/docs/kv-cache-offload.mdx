@@ -1,0 +1,141 @@
+---
+title: CPU KV-cache offload
+---
+import Code from '../../components/ExampleCode.astro';
+import offloadExample from '../../../../examples/models/cpu-kv-cache-offload.yaml?raw';
+
+CPU key/value (KV) cache offload gives each serving engine a process-local CPU
+buffer for reusable KV blocks. It is opt-in and uses vLLM's native backend.
+The operator renders the flags and accounts for memory; it does not select
+a cache size or promise a performance improvement.
+
+## Compatibility and validation status
+
+The pack's default `ghcr.io/llm-d/llm-d-cuda:v0.7.0` build configuration references
+vLLM commit `693c2d11ece54ace6bfaa670998f58707339e82f`, based on v0.19.1.
+That source exposes `--kv-offloading-size` and `--kv-offloading-backend native`.
+The size is in GiB, summed across an engine's tensor-parallel ranks.
+
+Source references:
+
+- [llm-d v0.7.0 build versions](https://github.com/llm-d/llm-d/blob/v0.7.0/docker/common-versions)
+- [Pinned vLLM cache configuration](https://github.com/neuralmagic/vllm/blob/693c2d11ece54ace6bfaa670998f58707339e82f/vllm/config/cache.py)
+- [vLLM v0.19.1 native connector selection](https://github.com/vllm-project/vllm/blob/v0.19.1/vllm/config/vllm.py)
+
+This establishes source compatibility, not GPU validation. No model/hardware
+combination is certified by this example. Check the actual image digest and
+runtime version, and run the worksheet below before enabling offload for users.
+Custom images and commands must implement the same flags and memory semantics.
+Admission cannot inspect an image or prove that a model's cache layout is supported.
+Hybrid-attention and state-space models require their own compatibility run.
+
+This field configures KV-cache offload, not model-weight offload (`--cpu-offload-gb`).
+It does not provide a distributed cache, persistent storage, or managed LMCache.
+
+## Configuration
+
+Set `spec.serving.kvCacheOffload.cpuMemoryGiB` to a positive integer and provide
+positive baseline `spec.resources.requests.memory` and
+`spec.resources.limits.memory`. The baseline limit must be at least the request.
+CPU offload requires an NVIDIA GPU in the current pack.
+
+<Code code={offloadExample} lang="yaml" title="examples/models/cpu-kv-cache-offload.yaml" />
+
+The example is a starting point for a small-model experiment, not a recommended
+customer configuration. Pin a model revision and serving image digest when
+recording a benchmark. Confirm node allocatable memory before applying it.
+
+The operator renders:
+
+```text
+--kv-offloading-size 16 --kv-offloading-backend native
+```
+
+Memory is computed per serving pod:
+
+```text
+additional cache memory = cpuMemoryGiB × dataParallelism GiB
+pod request = baseline request + additional cache memory
+pod limit   = baseline limit   + additional cache memory
+```
+
+| CPU cache per engine | Data parallelism | Tensor parallelism | Baseline request / limit | Rendered request / limit |
+|---|---|---|---|---|
+| 16 GiB | 1 | 1 | 8 GiB / 12 GiB | 24 GiB / 28 GiB |
+| 16 GiB | 1 | 2 | 8 GiB / 12 GiB | 24 GiB / 28 GiB |
+| 16 GiB | 2 | 1 | 8 GiB / 12 GiB | 40 GiB / 44 GiB |
+
+Each Deployment replica receives these resources independently. The operator
+does not multiply a single pod's memory by the replica count or mutate the
+baseline values in the `LLMModel`. Include engine overhead, cache bookkeeping,
+shared memory, and model-loading requirements in the baseline. Node services
+need additional memory outside the pod budget.
+
+While this field is present, admission rejects raw `--kv-offloading-size`,
+`--kv-offloading-backend`, `--kv-transfer-config` (including dotted JSON forms),
+`--config`, and data-parallel flags/aliases in either `serving.vllmArgs` or
+`advanced.vllm.extraArgs`. Hidden overrides could invalidate the memory budget.
+Use `serving.dataParallelism` for local data-parallel engines.
+
+Consumers managing connectors, external data parallelism, or YAML engine
+configuration directly can omit the typed field and continue using the raw
+arguments. They then own all memory accounting.
+
+## Validation worksheet
+
+Use the same pinned model, runtime, GPU allocation, request fixtures, and arrival
+patterns for each paired run. Define workload-specific latency, error, and
+task-correctness targets before selecting a configuration.
+
+1. Record the deployment commit, model revision, image digest, effective flags,
+   driver/runtime versions, GPU type and memory, node allocatable CPU/memory,
+   baseline pod budget, cache size, and parallelism.
+2. Run the baseline with the typed field absent. Record the actual GPU KV-cache
+   allocation and prefix-cache settings. Keep these fixed in the offload run.
+3. Enable offload. Verify startup, rendered memory and flags, and connector
+   activity in the runtime's metrics/logs. Do not treat improved latency alone
+   as proof that offload or reload occurred.
+4. Replay a fixture with known token lengths: prefix A, enough intervening
+   unrelated contexts to pressure the GPU cache, then prefix A again. Record
+   the intervening volume and CPU cache capacity so the expected retention is
+   testable. Also replay an unrelated-prefix control workload.
+5. Repeat both workloads at increasing concurrency and arrival rates, including
+   sustained load and bursts. Separate cold-cache and warm-cache runs. Alternate
+   baseline/candidate ordering and record run duration, warm-up, seeds, and
+   repetitions to detect noise and ordering effects.
+6. Compare time to first token, inter-token latency, completion time, successful
+   throughput, queue growth, errors, cache reuse, offload/reload activity,
+   preemption, and peak GPU/host memory. Break results down by workload class.
+   Record metric names and unsupported metrics for the tested runtime.
+7. Verify streaming, cancellation, tool calls where supported, and representative
+   task correctness. Restart the process and confirm the expected cold-cache
+   behavior. Exercise the documented disable procedure.
+8. Select a configuration only if it meets the profile's targets within a stable
+   operating envelope. Record a no-benefit or incompatible result as such.
+   Increasing host memory may require a different node size; include that tradeoff.
+
+Copy this table for each hardware/model/workload profile and attach raw benchmark
+results and the exact manifests:
+
+| Run / configuration commit | Offload budget | Workload / cache state | Concurrency / arrival rate | TTFT p50 / p95 / p99 | Inter-token p95 | Completion p95 | Successful output tokens/s | Queue trend / errors | Peak host / GPU memory | Offload / reload evidence | Correctness / decision |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Baseline | Disabled | Record fixture and seed | Record offered and achieved load | Measure | Measure | Measure | Measure | Measure | Measure | Not applicable | Record |
+| Candidate | Record GiB and DP | Same fixture and seed | Same offered load | Measure | Measure | Measure | Measure | Measure | Measure | Record metric/log evidence | Record |
+
+Run this method again when hardware, model, quantization, runtime, context budget,
+or workload changes. Results on one profile do not establish an ideal setting
+for another profile. A deployment's concurrency-profiling workbook can incorporate
+this paired experiment as one candidate configuration.
+
+## Disable and rollback
+
+Remove `serving.kvCacheOffload` from the source manifest and apply it through the
+deployment's normal GitOps workflow. The operator removes the generated offload
+flags and restores baseline memory requests and limits. Changing or removing the
+field changes the pod template and rolls the serving Deployment using its
+configured update strategy.
+
+CPU cache contents are lost when the serving process or pod restarts. Offload
+does not preserve cache contents across scale-to-zero or guarantee that a context
+fits within GPU memory during active inference. Retain the previous manifest and
+image digest so the complete configuration can be restored.

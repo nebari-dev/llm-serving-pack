@@ -38,6 +38,7 @@ export default defineConfig({
             { label: 'Local Development', slug: 'local-development' },
             { label: 'UI Development', slug: 'ui-development' },
             { label: 'Shared Storage', slug: 'shared-storage' },
+            { label: 'CPU KV-cache Offload', slug: 'kv-cache-offload' },
             { label: 'Troubleshooting', slug: 'troubleshooting' },
           ],
         },
