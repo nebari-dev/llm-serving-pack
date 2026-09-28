@@ -101,12 +101,21 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     so dips in and out read as one. Plus a budget's month
     spend crossing 80% and 100% of today's cap, pinned to its 5-minute
     bucket. Policy-mode windows aren't included (not in the aggregates).
-- [ ] **Settings.**
-  - The kill switch goes through a control-plane endpoint that calls
-    Warden and writes an audit row.
-  - Retention reflects the real policy.
+- [x] **Settings.**
+  - The kill switch goes through `POST /warden/passthrough`, which writes
+    the audit row and calls Warden in one transaction: no row unless Warden
+    took the change, and asking for the current state is a no-op. Warden
+    holds the flag in memory, so a restart turns it back off; the page says
+    so.
+  - Retention reflects the real policy: `GET /retention` reads Timescale's
+    jobs. Migration 004 adds the §4.6 30-day drop on raw receipts; the
+    aggregates have no drop policy, so the cold tier reads "Never dropped"
+    (the mockup's "7 years" isn't a policy anywhere).
   - The capture route comes from routes.
-  - Warden snapshot age.
+  - Warden snapshot age, from `/session`.
+  - Providers, members, and the OTel/Argo CD/Keycloak integrations say
+    they aren't connected yet. The kill-switch dialog's 24h blocked and
+    redacted counts come from `/summary`.
 - [ ] **Models.**
   - Aliases from `model_aliases`, with 24h request counts.
   - Price history from `model_pricing`.

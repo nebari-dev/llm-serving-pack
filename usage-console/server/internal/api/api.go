@@ -60,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, 409, errBody("conflict", err.Error()))
 			case errors.As(err, new(badRequest)):
 				writeJSON(w, 400, errBody("bad_request", err.Error()))
+			case errors.As(err, new(unavailable)):
+				writeJSON(w, 503, errBody("unavailable", err.Error()))
 			case err != nil:
 				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 				writeJSON(w, 500, errBody("internal", "internal error"))
@@ -93,6 +95,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/summary", s.summary)
 	h("GET "+p+"/changes/{id}/impact", s.changeImpact)
 	h("GET "+p+"/activity", s.activity)
+	h("GET "+p+"/retention", s.retention)
+	h("POST "+p+"/warden/passthrough", s.setPassthrough)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }
@@ -100,6 +104,11 @@ func (s *Server) Handler() http.Handler {
 type badRequest string
 
 func (b badRequest) Error() string { return string(b) }
+
+// unavailable is a dependency this request needs (Warden) being unreachable.
+type unavailable string
+
+func (u unavailable) Error() string { return string(u) }
 
 func errBody(code, msg string) map[string]any {
 	return map[string]any{"error": map[string]any{"code": code, "message": msg}}

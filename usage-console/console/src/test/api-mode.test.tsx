@@ -297,4 +297,76 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     // The mockup's invented readouts and traffic events are gone.
     for (const s of ['p50 latency, route default', 'traffic on new secret', 'anthropic-prod failover began', 'throttle policy engaged', ...seeded]) expect(text).not.toContain(s)
   })
+
+  it('reports the real retention policy and capture routes on Settings', async () => {
+    type R = import('@/data/catalog').RetentionView
+    const r = await catalog.api<R>('/retention')
+    // §4.6: raw receipts are dropped after 30 days and compressed after 7;
+    // the daily aggregates have no drop policy.
+    expect(r.hotDays).toBe(30)
+    expect(r.compressAfterDays).toBe(7)
+    expect(r.aggregates.map((c) => c.name)).toContain('receipts_daily')
+    for (const c of r.aggregates) expect(c.dropAfterDays).toBeNull()
+    expect(r.oldestReceiptAt).toBeLessThan(Date.now())
+
+    const capturing = catalog.routes.filter((x) => x.captureContent).map((x) => x.name)
+    window.history.pushState({}, '', '/settings')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('30 days')
+    expect(text).toContain('Never dropped')
+    for (const name of capturing) expect(text).toContain(name)
+    expect(text).toContain(`On for ${capturing.length} route`)
+    // Warden's snapshot comes from /session, not the mockup's pods.
+    expect(text).toMatch(/Warden config snapshot.*cache age \d/)
+    // What has no backend yet says so instead of showing the mockup.
+    expect(text).toContain('Not connected yet')
+    for (const s of ['Snapshot v1842', 'on 2 of 6 pods', 'sk-proj-…Q7f', 'priya@acme.dev', 'otel-collector.nebari-gateway', 'platform-gitops', '7 years', '1,412', '4,806']) expect(text).not.toContain(s)
+  })
+
+  it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
+    type S = import('@/data/catalog').Session
+    type C = import('@/data/catalog').Change
+    const passthrough = async () => (await catalog.api<S>('/session')).warden?.passthrough
+    const post = (on: boolean) => catalog.api<{ passthrough: boolean }>('/warden/passthrough', { method: 'POST', body: JSON.stringify({ on }) })
+    expect(await passthrough()).toBe(false)
+    try {
+      window.history.pushState({}, '', '/settings')
+      render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 500))
+      })
+      fireEvent.click(screen.getByRole('switch', { name: 'Warden pass-through' }))
+      const phrase = `pass-through ${catalog.session.environment}`
+      fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: phrase } })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Turn on pass-through/ }))
+        await new Promise((ok) => setTimeout(ok, 500))
+      })
+      expect(await passthrough()).toBe(true)
+      expect(document.body.textContent).toContain('Warden is in pass-through.')
+
+      const [on] = await catalog.api<C[]>('/changes')
+      expect(on.action).toBe('Turned on Warden pass-through')
+      expect(on.actor).toBe(catalog.session.actor.email)
+      expect(Date.now() - on.ts).toBeLessThan(60_000)
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Resume policing' }))
+        await new Promise((ok) => setTimeout(ok, 500))
+      })
+      expect(await passthrough()).toBe(false)
+      const [off] = await catalog.api<C[]>('/changes')
+      expect(off.action).toBe('Turned off Warden pass-through')
+
+      // Asking for the state Warden is already in changes nothing and writes no row.
+      expect((await post(false)).passthrough).toBe(false)
+      expect((await catalog.api<C[]>('/changes'))[0].id).toBe(off.id)
+    } finally {
+      if (await passthrough()) await post(false)
+    }
+  })
 })

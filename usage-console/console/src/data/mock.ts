@@ -892,3 +892,43 @@ export const activityEvents: TrafficEvent[] = [
   { id: 't3', ts: NOW - 3 * 3_600_000, kind: 'blocks_baseline', title: 'Blocks back under baseline', detail: 'block-src hits dropped to 14/h after support changed its prompt template', tone: 'allowed', to: '/traffic?verdict=blocked' },
   { id: 't4', ts: NOW - 14 * 3_600_000, kind: 'budget_cap', title: 'Budget "support" crossed its cap', detail: '$12,000 reached; throttle policy engaged', tone: 'degraded', to: '/spend' },
 ]
+
+// Settings (§7.4). Provider credentials, members and integrations have no
+// control-plane backend yet; api mode says so instead of showing these.
+export const providerKeys = [
+  { backend: 'openai-prod', provider: 'OpenAI', auth: 'API key', prefix: 'sk-proj-…Q7f', lastTested: '2026-09-02', rotateBy: '2026-12-01', oidc: false },
+  { backend: 'anthropic-prod', provider: 'Anthropic', auth: 'API key', prefix: 'sk-ant-…m2Xa', lastTested: '2026-06-11', rotateBy: '2026-09-11', oidc: false },
+  { backend: 'bedrock-eu', provider: 'Bedrock', auth: 'Cloud OIDC (short-lived)', prefix: 'role/gw-bedrock-eu', lastTested: 'on every request', rotateBy: null, oidc: true },
+  { backend: 'azure-openai-eu', provider: 'Azure', auth: 'Workload identity', prefix: 'mi-gw-azure-eu', lastTested: 'failing', rotateBy: null, oidc: true },
+  { backend: 'vllm-internal', provider: 'Self-hosted', auth: 'mTLS (cert-manager)', prefix: 'CN=gw-vllm', lastTested: '2026-09-20', rotateBy: '2026-11-20', oidc: true },
+]
+
+export const members = [
+  { name: 'Priya Shah', email: 'priya@acme.dev', role: 'admin', last: 'now' },
+  { name: 'Dana Okafor', email: 'dana@acme.dev', role: 'finance', last: '2h ago' },
+  { name: 'Marco Rossi', email: 'marco@acme.dev', role: 'security', last: '5h ago' },
+  { name: 'Lee Tran', email: 'lee@acme.dev', role: 'owner', last: '3d ago' },
+  { name: 'Sam Patel', email: 'sam@acme.dev', role: 'editor', last: '1d ago' },
+  { name: 'ci-gitops', email: 'service account', role: 'viewer', last: '12m ago' },
+]
+
+export const integrations = [
+  { name: 'OTel collector', detail: 'otel-collector.nebari-gateway:4317 · 412 receipts/s · lag 0.8s', ok: true },
+  { name: 'Argo CD', detail: 'Watching github.com/acme/platform-gitops · 2 backends, 1 route, 1 alias declarative', ok: true },
+  { name: 'Keycloak OIDC', detail: 'realm acme · client nebari-gateway-console · groups → roles mapped', ok: true },
+]
+
+/** GET /retention: the receipts database's retention jobs. */
+export interface RetentionView {
+  hotDays: number | null
+  compressAfterDays: number | null
+  aggregates: { name: string; dropAfterDays: number | null }[]
+  oldestReceiptAt: number | null
+}
+
+export const retention: RetentionView = {
+  hotDays: 30,
+  compressAfterDays: 7,
+  aggregates: [{ name: 'receipts_daily', dropAfterDays: 7 * 365 }],
+  oldestReceiptAt: now() - 30 * 86_400_000,
+}
