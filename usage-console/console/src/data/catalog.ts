@@ -66,7 +66,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** The control plane sends lastUsedAt (epoch ms); screens show "12s ago". */
-type WireKey = Omit<ApiKey, 'lastUsed'> & { lastUsedAt: number | null }
+export type WireKey = Omit<ApiKey, 'lastUsed'> & { lastUsedAt: number | null }
 export const fromWire = (k: WireKey): ApiKey => ({ ...k, lastUsed: k.lastUsedAt ? ago(k.lastUsedAt) : 'never' })
 
 const index = <T,>(xs: T[], id: (x: T) => string) => Object.fromEntries(xs.map((x) => [id(x), x]))
@@ -139,6 +139,7 @@ export async function createKey(input: NewKeyInput): Promise<{ key: ApiKey; secr
     prefix: secret.slice(0, 13),
     lastUsed: 'never',
     requests24h: 0,
+    hourly24h: Array(24).fill(0),
     status: 'active',
   }
   return { key, secret }
@@ -146,7 +147,7 @@ export async function createKey(input: NewKeyInput): Promise<{ key: ApiKey; secr
 
 export async function revokeKey(k: ApiKey): Promise<ApiKey> {
   if (dataMode === 'api') return fromWire(await api<WireKey>(`/keys/${k.id}/revoke`, { method: 'POST' }))
-  return { ...k, status: 'revoked', requests24h: 0 }
+  return { ...k, status: 'revoked', requests24h: 0, hourly24h: Array(24).fill(0), rotation: undefined }
 }
 
 export async function rotateKey(k: ApiKey, overlapHours: number): Promise<{ key: ApiKey; secret: string }> {
@@ -154,5 +155,7 @@ export async function rotateKey(k: ApiKey, overlapHours: number): Promise<{ key:
     const res = await api<{ key: WireKey; secret: string }>(`/keys/${k.id}/rotate`, { method: 'POST', body: JSON.stringify({ overlapHours }) })
     return { key: fromWire(res.key), secret: res.secret }
   }
-  return { key: { ...k, status: 'rotating' }, secret: mockSecret() }
+  const at = Date.now()
+  const rotation = { startedAt: at, startedBy: session.actor.email, endsAt: at + overlapHours * 3_600_000, split: { newShare: 0, oldActors: [] } }
+  return { key: { ...k, status: 'rotating', rotation }, secret: mockSecret() }
 }

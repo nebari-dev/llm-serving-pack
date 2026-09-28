@@ -121,6 +121,7 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 `console/src/data/mock.ts`.
 
 - `GET teams | models | backends | routes | keys | budgets | rules | detectors | changes`
+- `GET keys` adds each key's `spend24hUsd` and `hourly24h` (24 rolling hourly request bins from `receipts_5m` that sum to `requests24h`), and for a rotating key `rotation`: `endsAt` from `rotate_until`, `startedAt`/`startedBy` from its latest "Rotated key" audit row, each null when not recorded.
 - `POST keys` returns `{key, secret}`; the secret is shown once and only its sha256 is stored.
 - `POST keys/{id}/revoke`
 - `POST keys/{id}/rotate` with `{overlapHours}`. Both secrets work until the overlap ends.

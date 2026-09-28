@@ -68,10 +68,19 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   connections (the global receipt stream and Traffic's filtered one), so
   three tabs use up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
   and later requests hang. Share one stream per tab.
-- [ ] **Keys.**
-  - Spend over 24h and an hourly sparkline per key.
-  - Rotation status from `rotate_until` and the audit log. Traffic split
-    per secret needs receipts to record which secret was used.
+- [x] **Keys.** `GET /keys` carries each key's 24h spend and hourly
+  requests, and the list re-reads it every 30 s.
+  - Spend over 24h and an hourly sparkline per key, both from `receipts_5m`
+    over the same rolling 24h as the request count. The sparkline's bins
+    sum to that count, and spend matches Spend's key breakdown.
+  - Rotation status: the window's end comes from `rotate_until`, and its
+    start and who started it come from the key's latest "Rotated key" audit
+    row. Each is marked as not recorded when missing. The chip shows time
+    left, not a share. The traffic split per secret isn't shown, because
+    receipts don't record which secret was used. "Extend overlap" and
+    "Retire old secret now" are disabled until the key-rotation writes land.
+  - Budget wording matches Spend's (throttle isn't enforced). The invented
+    "rotation reminders every 90 days" is gone.
 - [ ] **Activity.**
   - Before/after impact per change, from aggregates around its timestamp.
   - Traffic events from degradations and budgets.
@@ -96,6 +105,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 - [ ] Aliases, including saving the savings analysis's draft alias changes.
 - [ ] Detector thresholds.
 - [ ] Key rotation: extend the overlap, retire the old secret now.
+- [ ] Receipts record which secret (old or new) authenticated a request, so
+  rotation can show traffic moving between them (§7.5.8).
 
 ## 3. New systems
 

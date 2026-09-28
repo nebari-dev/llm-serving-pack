@@ -222,6 +222,36 @@ func (s *Store) RevokeKey(ctx context.Context, tenant, actor, id string) (KeyRec
 	return k, tx.Commit(ctx)
 }
 
+// AuditMark is when an audit action happened, and who did it.
+type AuditMark struct {
+	TS    time.Time
+	Actor string
+}
+
+// RotationStarts is each key's latest "Rotated key" audit row, by key id.
+func (s *Store) RotationStarts(ctx context.Context, tenant string) (map[string]AuditMark, error) {
+	rows, _ := s.Config.Query(ctx, `
+		SELECT DISTINCT ON (target_id) target_id, ts, actor FROM audit_log
+		WHERE tenant_id = $1 AND target_kind = 'Key' AND action = 'Rotated key' AND target_id IS NOT NULL
+		ORDER BY target_id, ts DESC`, tenant)
+	type mark struct {
+		id string
+		AuditMark
+	}
+	ms, err := collect(rows, func(r pgx.Rows) (mark, error) {
+		var m mark
+		return m, r.Scan(&m.id, &m.TS, &m.Actor)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]AuditMark, len(ms))
+	for _, m := range ms {
+		out[m.id] = m.AuditMark
+	}
+	return out, nil
+}
+
 // FinishRotations promotes the new secret on keys whose overlap window has
 // ended, which retires the old one.
 func (s *Store) FinishRotations(ctx context.Context) error {

@@ -1,7 +1,7 @@
 // Live check against a running control plane: hydrate from the API, then
 // render every route and open a receipt. Opt-in, since it needs `make dev`:
 //   VITE_STARGATE_API=http://localhost:8080 VITE_DATA=api npx vitest run src/test/api-mode.test.tsx
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const base = import.meta.env.VITE_STARGATE_API as string | undefined
@@ -166,5 +166,71 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(text).not.toContain('spend is up')
     expect(text).not.toContain('requests/min')
     expect(text).not.toContain('Warns owners')
+  })
+
+  it('reports each key’s 24h spend and hourly requests from receipts_5m', async () => {
+    type K = import('@/data/catalog').WireKey
+    const [keys, byKey] = await Promise.all([catalog.api<K[]>('/keys'), catalog.api<import('@/data/catalog').SpendView>('/spend?range=24h&by=key')])
+    const live = keys.filter((k) => k.status !== 'revoked')
+    expect(live.some((k) => k.requests24h > 0)).toBe(true)
+    for (const k of keys) {
+      expect(k.hourly24h).toHaveLength(24)
+      // The bins split the same rolling 24h the count covers.
+      expect(k.hourly24h!.reduce((a, n) => a + n, 0)).toBe(k.requests24h)
+      if (k.status === 'revoked') continue
+      // Matches Spend's key breakdown over the same window, a moment apart.
+      const row = byKey.rows.find((r) => r.id === k.name)?.spendUsd ?? 0
+      expect(Math.abs(k.spend24hUsd! - row)).toBeLessThan(Math.max(0.05, row * 0.02))
+    }
+
+    window.history.pushState({}, '', '/keys')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    expect(document.body.textContent).not.toContain('Rotating · 61%')
+  })
+
+  it('shows a rotation from rotate_until and the audit log, and what is not recorded', async () => {
+    type K = import('@/data/catalog').WireKey
+    const { key } = await catalog.api<{ key: K }>('/keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: `api-mode-test-${Date.now().toString(36)}`, team: catalog.teams[0].id, project: 'api-mode-test', allowedModels: [catalog.models[0].id], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }),
+    })
+    try {
+      const before = Date.now()
+      await catalog.api(`/keys/${key.id}/rotate`, { method: 'POST', body: JSON.stringify({ overlapHours: 1 }) })
+      const rotated = (await catalog.api<K[]>('/keys')).find((k) => k.id === key.id)!
+      expect(rotated.status).toBe('rotating')
+      expect(rotated.rotation?.startedBy).toBe(catalog.session.actor.email)
+      expect(Math.abs(rotated.rotation!.startedAt! - before)).toBeLessThan(60_000)
+      expect(Math.abs(rotated.rotation!.endsAt! - (before + 3_600_000))).toBeLessThan(60_000)
+      expect(catalog.keys.find((k) => k.status === 'active')?.rotation).toBeUndefined()
+
+      // The key was made after hydrate(); the page picks it up from /keys.
+      window.history.pushState({}, '', `/keys?key=${key.id}`)
+      render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 500))
+      })
+      let text = document.body.textContent ?? ''
+      expect(text).toContain(rotated.name)
+      expect(text).toMatch(/Rotating · (58|59)m left/)
+      expect(text).toContain('isn’t recorded yet')
+      expect(text).not.toContain('of traffic on the new secret')
+      expect(text).not.toContain('web-assistant-7c9')
+      expect(text).not.toContain('rotation reminders')
+
+      fireEvent.click(screen.getByRole('button', { name: /View rotation/ }))
+      await act(async () => {})
+      text = document.body.textContent ?? ''
+      expect(text).toContain(`Started by ${catalog.session.actor.email}`)
+      expect(text).not.toContain('priya@acme.dev')
+      expect(screen.getByRole('button', { name: 'Extend overlap 24h' })).toHaveProperty('disabled', true)
+      expect(screen.getByRole('button', { name: 'Retire old secret now' })).toHaveProperty('disabled', true)
+      expect(text).toContain('aren’t connected yet')
+    } finally {
+      await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
+    }
   })
 })

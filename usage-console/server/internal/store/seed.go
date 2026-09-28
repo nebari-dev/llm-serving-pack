@@ -68,10 +68,18 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 	for _, d := range demo.Detectors {
 		b.Queue(`INSERT INTO detectors VALUES ($1,$2,$3,$4,$5,$6,$7)`, d.ID, t, d.Name, d.Kind, d.Threshold, d.Hits24h, d.FP)
 	}
+	keyIDs := map[string]string{}
+	for _, k := range demo.Keys {
+		keyIDs[k.Name] = k.ID
+	}
 	for _, c := range demo.Changes(now) {
-		b.Queue(`INSERT INTO audit_log (tenant_id, ts, actor, action, target, target_kind, effect, effect_tone, source)
-		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			t, time.UnixMilli(c.TS), c.Actor, c.Action, c.Target, c.TargetKind, c.Effect, c.EffectTone, c.Source)
+		var targetID *string
+		if id, ok := keyIDs[c.Target]; ok && c.TargetKind == "Key" {
+			targetID = &id
+		}
+		b.Queue(`INSERT INTO audit_log (tenant_id, ts, actor, action, target, target_kind, target_id, effect, effect_tone, source)
+		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+			t, time.UnixMilli(c.TS), c.Actor, c.Action, c.Target, c.TargetKind, targetID, c.Effect, c.EffectTone, c.Source)
 	}
 	if err := tx.SendBatch(ctx, b).Close(); err != nil {
 		return false, err

@@ -1,5 +1,5 @@
 import { ArrowLeft, Ban, Ellipsis, Plus, RefreshCw, TriangleAlert } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Meter, Sparkline } from '@/components/gw/charts'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
@@ -8,11 +8,12 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, budgets, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgets, dataMode, fromWire, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
 import { clock, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
-import { CreateKeyDialog, RevokeKeyDialog, RotateKeyDialog, RotationStatus } from './keys-dialogs'
+import { useLive, useNow } from '@/state/live'
+import { CreateKeyDialog, RevokeKeyDialog, RotateKeyDialog, RotationStatus, timeLeft } from './keys-dialogs'
 import { fmtDate, keySpend24h } from './spend-data'
 
 // §7.5.8 Keys. List → key detail (?key=<id>), each key a miniature dashboard.
@@ -26,14 +27,20 @@ function expiryInfo(k: ApiKey) {
   return { label: date, tone: null, note: `in ${days} days` }
 }
 
+const spend24h = (k: ApiKey) => (k.status === 'revoked' ? 0 : (k.spend24hUsd ?? keySpend24h(k.id)))
+
 function StatusCell({ k }: { k: ApiKey }) {
+  const now = useNow(60_000)
   if (k.status === 'revoked') return <StateChip tone="blocked" icon={<Ban className="size-3" aria-hidden="true" />}>Revoked</StateChip>
-  if (k.status === 'rotating')
+  if (k.status === 'rotating') {
+    const r = k.rotation
+    const detail = r?.split ? ` · ${Math.round(r.split.newShare * 100)}%` : r?.endsAt ? ` · ${timeLeft(r.endsAt, now)} left` : ''
     return (
       <StateChip tone="neutral" className="border-dashed" icon={<RefreshCw className="size-3" aria-hidden="true" />}>
-        Rotating · 61%
+        Rotating{detail}
       </StateChip>
     )
+  }
   return <span className="text-xs text-muted-foreground">Active</span>
 }
 
@@ -43,6 +50,11 @@ export function KeysPage() {
   const [creating, setCreating] = useState(false)
   const [revoking, setRevoking] = useState<ApiKey | null>(null)
   const [rotating, setRotating] = useState<ApiKey | null>(null)
+  // Api mode re-reads /keys, which also picks up this page's own writes.
+  const { data: live } = useLive<WireKey[] | null>(dataMode === 'api' ? '/keys' : null, null)
+  useEffect(() => {
+    if (live) setList(live.map(fromWire))
+  }, [live])
 
   const selectedId = params.get('key')
   const selected = list.find((k) => k.id === selectedId)
@@ -185,7 +197,7 @@ export function KeysPage() {
                   <TableCell className="py-1.5 text-sm whitespace-nowrap">{k.lastUsed}</TableCell>
                   <TableCell className="num py-1.5 text-right font-mono">{int(k.requests24h)}</TableCell>
                   <TableCell className="py-1.5 text-right">
-                    <Money value={revoked ? 0 : keySpend24h(k.id)} />
+                    <Money value={spend24h(k)} />
                   </TableCell>
                   <TableCell className="py-1.5">
                     <StatusCell k={k} />
@@ -222,27 +234,29 @@ export function KeysPage() {
 
 // ---- detail --------------------------------------------------------------
 
-function hourlySeries(k: ApiKey) {
-  // Deterministic-per-key hourly request counts for the last 24h.
-  const seed = [...k.id].reduce((a, c) => a + c.charCodeAt(0), 0)
-  const base = k.requests24h / 24
-  return Array.from({ length: 24 }, (_, i) => {
-    const hour = (new Date().getHours() - 23 + i + 24) % 24
-    const diurnal = 0.5 + 0.5 * Math.sin(((hour - 7) / 24) * Math.PI * 2)
-    const jitter = 0.85 + ((seed * (i + 3)) % 30) / 100
-    return Math.round(base * (0.4 + diurnal) * jitter)
-  })
+/**
+ * What the key's budget does at its cap. Api mode says only what the gateway
+ * does, as on Spend: block returns 429, throttle and warn admit and mark.
+ */
+function budgetWords(b: (typeof budgets)[number]) {
+  const over = b.currentUsd > b.capUsd
+  const cap = `$${int(b.capUsd)}`
+  if (dataMode === 'api') {
+    if (over) return b.onExceed === 'block' ? 'Over cap · blocking new requests' : 'Over cap · requests admitted and marked'
+    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap} (not enforced yet)` : `Marks requests over ${cap}`
+  }
+  if (over) return `Over cap · ${b.onExceed === 'throttle' ? 'throttling' : b.onExceed === 'block' ? 'blocking' : 'warning'} new requests`
+  return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Warns at ${cap}`
 }
 
 function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () => void; onRevoke: () => void; onRotate: () => void }) {
   const { openReceipt } = useApp()
   const all = useReceipts()
   const receipts = useMemo(() => all.filter((r) => r.keyId === k.id), [all, k.id])
-  const hourly = useMemo(() => hourlySeries(k), [k])
   const budget = budgets.find((b) => b.id === k.budgetId)
   const e = expiryInfo(k)
   const revoked = k.status === 'revoked'
-  const spend = revoked ? 0 : keySpend24h(k.id)
+  const spend = spend24h(k)
 
   const topModels = useMemo(() => {
     const m = new Map<string, { model: string; n: number; tokens: number; cost: number; ms: number[] }>()
@@ -298,7 +312,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
             <dt className="text-xs text-muted-foreground">Requests, last 24h</dt>
             <dd className="flex items-center gap-3">
               <span className="num font-mono text-xl font-semibold">{int(k.requests24h)}</span>
-              {!revoked && <Sparkline values={hourly} label={`Hourly requests for ${k.name}, last 24 hours`} />}
+              {!revoked && <Sparkline values={k.hourly24h} label={`Hourly requests for ${k.name}, last 24 hours`} />}
             </dd>
           </div>
           <div className="md:px-4">
@@ -314,7 +328,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
           <div className="md:px-4">
             <dt className="text-xs text-muted-foreground">Expires</dt>
             <dd className={cn('text-xl font-semibold', e.tone === 'degraded' && 'text-v-degraded-fg')}>{e.label}</dd>
-            <dd className="text-xs text-muted-foreground">{e.note === 'No expiry' ? 'Set to never expire — rotation reminders every 90 days' : e.note}</dd>
+            <dd className="text-xs text-muted-foreground">{e.note !== 'No expiry' ? e.note : dataMode === 'api' ? 'Set to never expire' : 'Set to never expire — rotation reminders every 90 days'}</dd>
           </div>
           <div className="md:pl-4">
             <dt className="text-xs text-muted-foreground">Budget</dt>
@@ -326,13 +340,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
                 </span>
                 <Meter value={budget.currentUsd} cap={budget.capUsd} projected={budget.projectedUsd} />
                 <Link to="/spend#budgets" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-                  {budget.currentUsd > budget.capUsd
-                    ? `Over cap · ${budget.onExceed === 'throttle' ? 'throttling' : budget.onExceed === 'block' ? 'blocking' : 'warning'} new requests`
-                    : budget.onExceed === 'block'
-                      ? `Blocks new requests at $${int(budget.capUsd)}`
-                      : budget.onExceed === 'throttle'
-                        ? `Throttles at $${int(budget.capUsd)}`
-                        : `Warns at $${int(budget.capUsd)}`}
+                  {budgetWords(budget)}
                 </Link>
               </dd>
             ) : (

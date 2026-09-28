@@ -26,7 +26,24 @@ export interface ApiKey {
   expiresAt: string | null
   lastUsed: string
   requests24h: number
+  /** Requests per hour over the same rolling 24h, oldest first. */
+  hourly24h: number[]
+  /** Api mode only; mock mode derives it from the spend fixtures. */
+  spend24hUsd?: number
   status: 'active' | 'revoked' | 'rotating'
+  rotation?: KeyRotation
+}
+
+/** A rotating key's overlap window. Null where it wasn't recorded. */
+export interface KeyRotation {
+  startedAt: number | null
+  startedBy: string | null
+  endsAt: number | null
+  /**
+   * Traffic on each secret. Receipts don't record which secret a request
+   * used yet, so only mock mode has it.
+   */
+  split?: { newShare: number; oldActors: string[] }
 }
 
 export interface Model {
@@ -178,15 +195,31 @@ export const routes: Route[] = [
   { name: 'research-frontier', match: 'key.team = research', targets: [{ model: 'claude-opus-4-1', backend: 'anthropic-prod', weight: 100 }], fallback: ['openai-prod'], provenance: 'console', sync: 'applying' },
 ]
 
-export const keys: ApiKey[] = [
+type SeedKey = Omit<ApiKey, 'hourly24h'>
+
+const seedKeys: SeedKey[] = [
   { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], budgetId: 'b1', expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
   { id: 'k2', name: 'agents-prod', prefix: 'ngw_live_c19e', team: 'agents', project: 'orchestrator', allowedModels: ['claude-sonnet-5', 'claude-opus-4-1', 'gpt-5.5'], allowedRegions: ['us-east'], budgetId: 'b2', expiresAt: '2026-12-31', lastUsed: '3s ago', requests24h: 9_812, status: 'active' },
   { id: 'k3', name: 'batch-summarize', prefix: 'ngw_live_02bd', team: 'batch', project: 'nightly-digest', allowedModels: ['gpt-5-mini', 'claude-opus-4-1', 'llama-3.3-70b'], allowedRegions: ['us-east', 'eu-private'], budgetId: 'b3', expiresAt: '2026-11-15', lastUsed: '41s ago', requests24h: 4_406, status: 'active' },
-  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], budgetId: 'b4', expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'rotating' },
+  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], budgetId: 'b4', expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'rotating', rotation: { startedAt: Date.now() - 20 * 3_600_000, startedBy: 'priya@acme.dev', endsAt: Date.now() + 28 * 3_600_000, split: { newShare: 0.61, oldActors: ['web-assistant-7c9', 'web-assistant-2f1'] } } },
   { id: 'k5', name: 'research', prefix: 'ngw_live_e55f', team: 'research', project: 'evals', allowedModels: ['claude-opus-4-1', 'gpt-5.5', 'claude-sonnet-5'], allowedRegions: ['us-east'], expiresAt: null, lastUsed: '6m ago', requests24h: 1_204, status: 'active' },
   { id: 'k6', name: 'secops-triage', prefix: 'ngw_live_41d2', team: 'security', project: 'soc', allowedModels: ['llama-3.3-70b', 'claude-haiku-4-5'], allowedRegions: ['eu-private', 'eu-central'], expiresAt: '2026-10-02', lastUsed: '2h ago', requests24h: 88, status: 'active' },
   { id: 'k7', name: 'legacy-intranet', prefix: 'ngw_live_77aa', team: 'web', project: 'intranet', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2026-08-30', lastUsed: '26d ago', requests24h: 0, status: 'revoked' },
 ]
+
+/** Deterministic-per-key hourly request counts for the last 24h. */
+function hourly(k: SeedKey) {
+  const seed = [...k.id].reduce((a, c) => a + c.charCodeAt(0), 0)
+  const base = k.requests24h / 24
+  return Array.from({ length: 24 }, (_, i) => {
+    const hour = (new Date().getHours() - 23 + i + 24) % 24
+    const diurnal = 0.5 + 0.5 * Math.sin(((hour - 7) / 24) * Math.PI * 2)
+    const jitter = 0.85 + ((seed * (i + 3)) % 30) / 100
+    return Math.round(base * (0.4 + diurnal) * jitter)
+  })
+}
+
+export const keys: ApiKey[] = seedKeys.map((k) => ({ ...k, hourly24h: hourly(k) }))
 
 export const keyById = Object.fromEntries(keys.map((k) => [k.id, k]))
 

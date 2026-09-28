@@ -63,7 +63,19 @@ type APIKey struct {
 	ExpiresAt      *string  `json:"expiresAt"`
 	LastUsedAt     *int64   `json:"lastUsedAt"` // epoch ms; the console formats it
 	Requests24h    int      `json:"requests24h"`
-	Status         string   `json:"status"`
+	Spend24hUSD    float64  `json:"spend24hUsd"`
+	// Hourly24h is requests per hour over the same rolling 24h, oldest first.
+	Hourly24h []int        `json:"hourly24h"`
+	Status    string       `json:"status"`
+	Rotation  *KeyRotation `json:"rotation,omitempty"`
+}
+
+// KeyRotation is a rotating key's overlap window. Each field is null when
+// it wasn't recorded. Which secret each request used isn't recorded yet.
+type KeyRotation struct {
+	StartedAt *int64  `json:"startedAt"` // epoch ms, from the audit log
+	StartedBy *string `json:"startedBy"`
+	EndsAt    *int64  `json:"endsAt"` // epoch ms, from rotate_until
 }
 
 type Budget struct {

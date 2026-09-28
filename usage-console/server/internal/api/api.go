@@ -166,23 +166,46 @@ func (s *Server) keys(_ http.ResponseWriter, r *http.Request, t string) (any, er
 	if err != nil {
 		return nil, err
 	}
+	starts, err := s.Store.RotationStarts(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]model.APIKey, len(ks))
 	for i, k := range ks {
 		out[i] = withUsage(k.APIKey, usage[k.ID])
+		out[i].Rotation = rotationOf(k, starts)
 	}
 	return out, nil
 }
 
 func withUsage(k model.APIKey, u store.KeyUsage) model.APIKey {
-	k.Requests24h = u.Requests24h
 	if u.LastUsed != nil {
 		ms := u.LastUsed.UnixMilli()
 		k.LastUsedAt = &ms
 	}
 	if k.Status == "revoked" {
-		k.Requests24h = 0
+		u = store.KeyUsage{}
 	}
+	k.Requests24h, k.Spend24hUSD, k.Hourly24h = u.Requests24h, u.Spend24hUSD, u.Hourly[:]
 	return k
+}
+
+// rotationOf is a rotating key's window: its end from rotate_until, and its
+// start from the key's latest "Rotated key" audit row.
+func rotationOf(k store.KeyRecord, starts map[string]store.AuditMark) *model.KeyRotation {
+	if k.Status != "rotating" {
+		return nil
+	}
+	var r model.KeyRotation
+	if k.RotateUntil != nil {
+		ms := k.RotateUntil.UnixMilli()
+		r.EndsAt = &ms
+	}
+	if m, ok := starts[k.ID]; ok {
+		ms, actor := m.TS.UnixMilli(), m.Actor
+		r.StartedAt, r.StartedBy = &ms, &actor
+	}
+	return &r
 }
 
 func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
@@ -240,7 +263,10 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	}
 	s.keysChanged()
 	usage, _ := s.Store.KeyUsage(r.Context(), t)
-	return map[string]any{"key": withUsage(k.APIKey, usage[k.ID]), "secret": secret}, nil
+	starts, _ := s.Store.RotationStarts(r.Context(), t)
+	out := withUsage(k.APIKey, usage[k.ID])
+	out.Rotation = rotationOf(k, starts)
+	return map[string]any{"key": out, "secret": secret}, nil
 }
 
 func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {

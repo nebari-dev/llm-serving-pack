@@ -327,31 +327,50 @@ func (s *Store) SpendSeries(ctx context.Context, tenant string, days int, teams 
 	return out, nil
 }
 
+// KeyUsage is a key's traffic over the rolling 24h: totals, and requests in
+// 24 hourly bins (oldest first) that sum to Requests24h.
 type KeyUsage struct {
 	Requests24h int
+	Spend24hUSD float64
+	Hourly      [24]int
 	LastUsed    *time.Time
+}
+
+// keyHour is the hourly bin, counted from the window start, that a
+// receipts_5m bucket falls in. The bucket holding now joins the last bin.
+func keyHour(from, bucket time.Time) int {
+	return min(max(int(bucket.Sub(from)/time.Hour), 0), 23)
+}
+
+func (u *KeyUsage) add(from, bucket time.Time, requests int, costUSD float64) {
+	u.Requests24h += requests
+	u.Spend24hUSD += costUSD
+	u.Hourly[keyHour(from, bucket)] += requests
 }
 
 func (s *Store) KeyUsage(ctx context.Context, tenant string) (map[string]KeyUsage, error) {
 	out := map[string]KeyUsage{}
+	from := time.Now().Add(-24 * time.Hour)
 	rows, _ := s.Receipts.Query(ctx, `
-		SELECT key_id, sum(requests)::int FROM receipts_5m
-		WHERE tenant_id = $1 AND bucket > now() - interval '24 hours' GROUP BY 1`, tenant)
-	counts, err := collect(rows, func(r pgx.Rows) (struct {
-		id string
-		n  int
-	}, error) {
-		var x struct {
-			id string
-			n  int
-		}
-		return x, r.Scan(&x.id, &x.n)
+		SELECT key_id, bucket, sum(requests)::int, coalesce(sum(cost_usd), 0)::float8 FROM receipts_5m
+		WHERE tenant_id = $1 AND bucket > $2 GROUP BY 1, 2`, tenant, from)
+	type cell struct {
+		id     string
+		bucket time.Time
+		n      int
+		cost   float64
+	}
+	cells, err := collect(rows, func(r pgx.Rows) (cell, error) {
+		var c cell
+		return c, r.Scan(&c.id, &c.bucket, &c.n, &c.cost)
 	})
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range counts {
-		out[c.id] = KeyUsage{Requests24h: c.n}
+	for _, c := range cells {
+		u := out[c.id]
+		u.add(from, c.bucket, c.n, c.cost)
+		out[c.id] = u
 	}
 	rows, _ = s.Receipts.Query(ctx, `
 		SELECT key_id, max(ts) FROM receipts

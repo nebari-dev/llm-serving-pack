@@ -9,8 +9,9 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, budgets, createKey, models, rotateKey, teams } from '@/data/catalog'
-import { int } from '@/lib/format'
+import { type ApiKey, budgets, createKey, dataMode, models, rotateKey, teams } from '@/data/catalog'
+import { ago, int } from '@/lib/format'
+import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
 
 // §7.5.8 key lifecycle dialogs: create (expiry required, "never" is an explicit
@@ -291,7 +292,7 @@ export function RevokeKeyDialog({ apiKey, onOpenChange, onRevoke }: { apiKey: Ap
               if (typed !== k.name) return
               try {
                 await onRevoke(k)
-                toast.add({ title: 'Key revoked', description: `${k.name} now returns 401 invalid_key. Recorded in the audit log.`, type: 'success' })
+                toast.add({ title: 'Key revoked', description: `${k.name} now returns 401 invalid_api_key. Recorded in the audit log.`, type: 'success' })
                 setTyped('')
               } catch (err) {
                 toast.add({ title: 'Could not revoke key', description: err instanceof Error ? err.message : String(err), type: 'error' })
@@ -336,36 +337,78 @@ export function RevokeKeyDialog({ apiKey, onOpenChange, onRevoke }: { apiKey: Ap
 }
 
 /** Live rotation status: overlap window and traffic migrating from old secret to new. */
-export function RotationStatus({ apiKey, migratedPct = 61, className }: { apiKey: ApiKey; migratedPct?: number; className?: string }) {
-  const ends = new Date(Date.now() + 28 * 3_600_000)
+/** "28h" or "45m" until `ms`, rounded down so a deadline is never overstated. */
+export function timeLeft(ms: number, now = Date.now()) {
+  const m = Math.max(0, Math.floor((ms - now) / 60_000))
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`
+}
+
+const windowLength = (ms: number) => (ms >= 7 * 86_400_000 - 60_000 ? '7-day' : `${Math.round(ms / 3_600_000)}h`)
+
+export function RotationStatus({ apiKey, className }: { apiKey: ApiKey; className?: string }) {
+  const now = useNow(60_000)
+  const r = apiKey.rotation
+  const ends = r?.endsAt ? new Date(r.endsAt) : null
+  const split = r?.split
+  const pct = split ? Math.round(split.newShare * 100) : 0
   return (
     <div className={cn('flex flex-col gap-2', className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-        <span>
-          <span className="num font-mono font-semibold">{migratedPct}%</span> of traffic on the new secret
-        </span>
+        {split && (
+          <span>
+            <span className="num font-mono font-semibold">{pct}%</span> of traffic on the new secret
+          </span>
+        )}
         <span className="text-xs text-muted-foreground">
-          Overlap window ends {ends.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })},{' '}
-          {ends.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} (48h window, 28h left)
+          {ends ? (
+            <>
+              Overlap window ends {ends.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })},{' '}
+              {ends.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} (
+              {r?.startedAt ? `${windowLength(ends.getTime() - r.startedAt)} window, ` : ''}
+              {timeLeft(ends.getTime(), now)} left)
+            </>
+          ) : (
+            'The overlap window’s end isn’t recorded for this key.'
+          )}
         </span>
       </div>
-      <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-        <span className="h-full bg-foreground/70" style={{ width: `${migratedPct}%` }} />
-      </div>
-      <dl className="grid grid-cols-2 gap-x-4 font-mono text-xs">
-        <div className="flex justify-between">
-          <dt className="text-muted-foreground">new {apiKey.prefix.replace(/.{4}$/, 'b81e')}…</dt>
-          <dd className="num">{int(Math.round((apiKey.requests24h * migratedPct) / 100))} req / 24h</dd>
-        </div>
-        <div className="flex justify-between">
-          <dt className="text-muted-foreground">old {apiKey.prefix}…</dt>
-          <dd className="num">{int(Math.round((apiKey.requests24h * (100 - migratedPct)) / 100))} req / 24h</dd>
-        </div>
-      </dl>
-      <p className="text-xs text-muted-foreground">
-        Both secrets work until the window closes. Old-secret traffic comes from <span className="font-mono">web-assistant-7c9</span> and{' '}
-        <span className="font-mono">web-assistant-2f1</span> (by actor).
-      </p>
+      {split ? (
+        <>
+          <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+            <span className="h-full bg-foreground/70" style={{ width: `${pct}%` }} />
+          </div>
+          <dl className="grid grid-cols-2 gap-x-4 font-mono text-xs">
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">new {apiKey.prefix.replace(/.{4}$/, 'b81e')}…</dt>
+              <dd className="num">{int(Math.round(apiKey.requests24h * split.newShare))} req / 24h</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">old {apiKey.prefix}…</dt>
+              <dd className="num">{int(Math.round(apiKey.requests24h * (1 - split.newShare)))} req / 24h</dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            Both secrets work until the window closes.
+            {split.oldActors.length > 0 && (
+              <>
+                {' '}
+                Old-secret traffic comes from{' '}
+                {split.oldActors.map((a, i) => (
+                  <span key={a}>
+                    {i > 0 && (i === split.oldActors.length - 1 ? ' and ' : ', ')}
+                    <span className="font-mono">{a}</span>
+                  </span>
+                ))}{' '}
+                (by actor).
+              </>
+            )}
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Both secrets work until the window closes. Which secret each request used isn’t recorded yet, so the traffic split between them isn’t shown.
+        </p>
+      )}
     </div>
   )
 }
@@ -395,7 +438,11 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
             secret={secret}
             context={`New secret for ${k.name}. The old secret keeps working for ${overlap === '168' ? '7 days' : `${overlap}h`}.`}
             onDone={() => {
-              toast.add({ title: 'Rotation started', description: `Watch traffic move to the new secret on ${k.name}.`, type: 'success' })
+              toast.add({
+                title: 'Rotation started',
+                description: dataMode === 'api' ? `Both secrets work on ${k.name} until the overlap window closes.` : `Watch traffic move to the new secret on ${k.name}.`,
+                type: 'success',
+              })
               close()
             }}
           />
@@ -405,15 +452,22 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               <DialogTitle>
                 Rotation in progress · <span className="font-mono">{k.name}</span>
               </DialogTitle>
-              <DialogDescription>Started by priya@acme.dev 20 hours ago. The old secret stops working when the overlap window closes.</DialogDescription>
+              <DialogDescription>
+                {k.rotation?.startedAt && k.rotation.startedBy
+                  ? `Started by ${k.rotation.startedBy} ${ago(k.rotation.startedAt)}.`
+                  : 'The audit log has no record of when this rotation started.'}{' '}
+                The old secret stops working when the overlap window closes.
+              </DialogDescription>
             </DialogHeader>
             <RotationStatus apiKey={k} />
+            {dataMode === 'api' && <p className="text-xs text-muted-foreground">Extending the overlap and retiring the old secret early aren’t connected yet.</p>}
             <DialogFooter>
               <Button variant="outline" onClick={close}>
                 Close
               </Button>
               <Button
                 variant="outline"
+                disabled={dataMode === 'api'}
                 onClick={() => {
                   toast.add({ title: 'Overlap extended by 24h', type: 'success' })
                   close()
@@ -423,6 +477,7 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               </Button>
               <Button
                 variant="destructive"
+                disabled={dataMode === 'api'}
                 onClick={() => {
                   toast.add({ title: 'Old secret retired', description: '39% of traffic will get 401 until those apps pick up the new secret.', type: 'warning' })
                   close()
@@ -439,7 +494,8 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
                 Rotate <span className="font-mono">{k.name}</span>
               </DialogTitle>
               <DialogDescription>
-                Issues a new secret. Both secrets work during the overlap window, so apps can switch without downtime. You'll see traffic migrate on the key's page.
+                Issues a new secret. Both secrets work during the overlap window, so apps can switch without downtime.
+                {dataMode !== 'api' && " You'll see traffic migrate on the key's page."}
               </DialogDescription>
             </DialogHeader>
             <fieldset className="flex flex-col gap-2">
