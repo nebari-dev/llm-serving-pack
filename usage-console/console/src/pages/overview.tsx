@@ -5,8 +5,8 @@ import { Delta, Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { backends, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
-import { ago, clock, int, money } from '@/lib/format'
+import { type ActivityView, backends, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
+import { age, ago, clock, int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
 import { useDegradations } from '@/state/degradations'
@@ -53,6 +53,14 @@ export function OverviewPage() {
   const { range } = useApp()
   const navigate = useNavigate()
   const { series, summary } = useOverviewData(range)
+  // Api mode's effects are the ones Activity computes from the aggregates,
+  // not the audit row's stored text; a change older than its week has none.
+  const activity = useLive<ActivityView | null>(dataMode === 'api' ? '/activity?range=7d' : null, null, 60_000).data
+  const effectOf = (c: Change): Pick<Change, 'effect' | 'effectTone'> => {
+    if (dataMode !== 'api') return c
+    const a = activity?.changes.find((x) => x.id === c.id)
+    return { effect: a?.effect, effectTone: a?.effectTone }
+  }
   const multiDay = series.length > 1 && series[series.length - 1].t - series[0].t > 86_400_000
   const xFormat = (t: number) => (multiDay ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : clock(t).slice(0, 5))
   // Changes inside the charted window; the latest one is labeled.
@@ -152,7 +160,7 @@ export function OverviewPage() {
       >
         {changes[0] ? <FeaturedChange change={changes[0]} /> : <p className="text-sm text-muted-foreground">No config changes yet.</p>}
         <ol className="mt-4 divide-y divide-border border-y border-border">
-          {changes.slice(1, 5).map((c) => (
+          {changes.slice(1, 5).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
             <li key={c.id} className="grid grid-cols-[5rem_1fr_auto] items-baseline gap-4 py-2.5 text-sm">
               <span className="num font-mono text-xs text-muted-foreground">{clock(c.ts).slice(0, 5)}</span>
               <div className="min-w-0">
@@ -241,14 +249,6 @@ function StatusStrip() {
       </span>
     </div>
   )
-}
-
-/** Seconds as "4m 12s". */
-function age(sec: number) {
-  const s = Math.round(sec)
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
 }
 
 function BigNumber({ to, label, value, delta, note }: { to: string; label: string; value: string; delta: React.ReactNode; note: string }) {

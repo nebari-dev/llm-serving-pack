@@ -27,8 +27,16 @@ const (
 	staleSnapshot     = time.Minute
 	// A backend is flagged once enough of its recent requests failed.
 	backendMinRequests = 20
+	backendMinFailed   = 3
 	backendFailShare   = 0.05
 )
+
+// backendFailing is the banner's rule, and Activity's: 5% of at least 20
+// requests in the window, and at least 3 of them, so one stray 5xx on thin
+// traffic doesn't flag a backend.
+func backendFailing(total, failed int) bool {
+	return total >= backendMinRequests && failed >= backendMinFailed && float64(failed) >= backendFailShare*float64(total)
+}
 
 // wardenHealth is Warden's GET /healthz.
 type wardenHealth struct {
@@ -111,7 +119,7 @@ func (s *Server) degradations(_ http.ResponseWriter, r *http.Request, t string) 
 		return nil, err
 	}
 	for _, b := range backends {
-		if b.Total < backendMinRequests || float64(b.Failed) < backendFailShare*float64(b.Total) {
+		if !backendFailing(b.Total, b.Failed) {
 			continue
 		}
 		out = append(out, Degradation{Kind: "backend_errors", Severity: 1, To: "/routing", Action: "View backend",

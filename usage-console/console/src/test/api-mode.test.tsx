@@ -234,6 +234,25 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   })
 
+  it('shows each Overview change row with the effect Activity computes', async () => {
+    type V = import('@/data/catalog').ActivityView
+    const v = await catalog.api<V>('/activity?range=7d')
+    const seeded = new Set(catalog.changes.map((c) => c.effect).filter(Boolean))
+    window.history.pushState({}, '', '/')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const text = document.body.textContent ?? ''
+    const rows = catalog.changes.slice(1, 5)
+    expect(rows.length).toBeGreaterThan(0)
+    for (const c of rows) {
+      const computed = v.changes.find((x) => x.id === c.id)
+      if (computed) expect(text).toContain(computed.effect)
+    }
+    for (const s of seeded) expect(text).not.toContain(s)
+  })
+
   it('joins each change to the aggregates around it, with traffic events, on Activity', async () => {
     type V = import('@/data/catalog').ActivityView
     const v = await catalog.api<V>('/activity?range=7d')

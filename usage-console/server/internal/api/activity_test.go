@@ -126,6 +126,32 @@ func TestBackendEventsFollowTheBannerThreshold(t *testing.T) {
 	}
 }
 
+func TestBackendEventsMergeAFlappingEpisode(t *testing.T) {
+	ok := store.ActivityBucket{Requests: 10}
+	bad := store.ActivityBucket{Requests: 10, Errors: 3}
+	// Failing from bucket 2, under for one bucket at 5, failing again 6–8,
+	// then under from 9 on.
+	seq := []store.ActivityBucket{ok, ok, bad, ok, ok, ok, bad, ok, ok, ok, ok, ok, ok}
+
+	evs := backendEvents(buckets(t0, "vllm-internal", seq...), t0)
+	if len(evs) != 2 {
+		t.Fatalf("one dip under the threshold split the episode: %+v", evs)
+	}
+	if evs[0].Kind != "backend_failing" || evs[0].TS != t0.Add(10*time.Minute).UnixMilli() {
+		t.Fatalf("start %+v", evs[0])
+	}
+	// Recovery needs a full window under the threshold, and is pinned to
+	// where that stretch began.
+	if evs[1].Kind != "backend_recovered" || evs[1].TS != t0.Add(45*time.Minute).UnixMilli() {
+		t.Fatalf("end %+v", evs[1])
+	}
+
+	// Under the threshold, but not for a full window yet: still failing.
+	if evs := backendEvents(buckets(t0, "vllm-internal", seq[:11]...), t0); len(evs) != 1 || evs[0].Kind != "backend_failing" {
+		t.Fatalf("recovery reported before it held: %+v", evs)
+	}
+}
+
 func TestSpendCrossings(t *testing.T) {
 	pts := []spendPoint{{t0, 50}, {t0.Add(time.Hour), 30}, {t0.Add(2 * time.Hour), 20}, {t0.Add(3 * time.Hour), 5}}
 	// $10 already spent this period; cap $100.
@@ -146,3 +172,22 @@ func TestSpendCrossings(t *testing.T) {
 }
 
 func near(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
+
+func TestOneStrayFailureIsNotAFailingBackend(t *testing.T) {
+	// The banner and the events share one rule: 5% of at least 20 requests,
+	// and at least 3 of them.
+	for _, c := range []struct {
+		total, failed int
+		want          bool
+	}{{20, 1, false}, {40, 2, false}, {20, 3, true}, {60, 3, true}, {19, 19, false}, {100, 4, false}} {
+		if got := backendFailing(c.total, c.failed); got != c.want {
+			t.Errorf("backendFailing(%d, %d) = %v", c.total, c.failed, got)
+		}
+	}
+
+	ok := store.ActivityBucket{Requests: 7}
+	blip := store.ActivityBucket{Requests: 7, Errors: 1}
+	if evs := backendEvents(buckets(t0, "anthropic-prod", ok, ok, blip, ok, ok, ok), t0); len(evs) != 0 {
+		t.Fatalf("a single 5xx in 21 requests raised an event: %+v", evs)
+	}
+}

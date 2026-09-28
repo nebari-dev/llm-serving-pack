@@ -20,7 +20,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - Attention items (rule over baseline, failing backend, key anomaly).
   - Warden cache age.
   - The featured change, built from aggregates around the audit row, or
-    hidden.
+    hidden. The rows under it take Activity's computed effect; a change
+    older than a week shows none.
   - Request totals follow the range picker.
 - [x] **Traffic.**
   - Remove "Simulate burst".
@@ -95,7 +96,9 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     little traffic". A metric that was 0 before isn't counted. The Effect
     filter uses the same tones.
   - Traffic events: a backend crossing the banner's failing threshold (5% of
-    at least 20 requests over 15 minutes) either way, and a budget's month
+    at least 20 requests over 15 minutes, and at least 3 failures) either
+    way. An episode ends only after a full 15 minutes under the threshold,
+    so dips in and out read as one. Plus a budget's month
     spend crossing 80% and 100% of today's cap, pinned to its 5-minute
     bucket. Policy-mode windows aren't included (not in the aggregates).
 - [ ] **Settings.**

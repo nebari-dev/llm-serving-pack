@@ -24,6 +24,14 @@ export function clock(ts: number) {
   return new Date(ts).toLocaleTimeString('en-GB', { hour12: false })
 }
 
+/** Seconds as "4m 12s". */
+export function age(sec: number) {
+  const s = Math.round(sec)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+}
+
 export function ago(ts: number, now = Date.now()) {
   const s = Math.round((now - ts) / 1000)
   if (s < 60) return `${s}s ago`

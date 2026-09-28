@@ -192,8 +192,11 @@ func effectOf(before, after Agg) (tone, text string, comparable bool) {
 }
 
 // backendEvents walks each backend's buckets and reports when it crossed
-// the banner's failing threshold, either way. Transitions before since only
-// set the starting state.
+// the banner's failing threshold (backendFailing), either way. A failing episode only ends
+// once the backend has stayed under the threshold for a full window, so thin
+// traffic dipping in and out reads as one episode; the recovery is pinned to
+// where that stretch began. Transitions before since only set the starting
+// state.
 func backendEvents(bs []store.ActivityBucket, since time.Time) []TrafficEvent {
 	type cell struct{ requests, errors int }
 	per := map[string]map[int64]cell{}
@@ -216,40 +219,55 @@ func backendEvents(bs []store.ActivityBucket, since time.Time) []TrafficEvent {
 			last = b.Start
 		}
 	}
+	mins := int(degradationWindow.Minutes())
 	var out []TrafficEvent
+	emit := func(e TrafficEvent, name string, at time.Time) {
+		if at.Before(since) {
+			return
+		}
+		e.TS = at.UnixMilli()
+		e.ID = fmt.Sprintf("%s:%s:%d", e.Kind, name, e.TS)
+		out = append(out, e)
+	}
 	for name, cells := range per {
 		failing := false
+		var recovery *TrafficEvent // under the threshold since recoveredAt, not yet for a full window
+		var recoveredAt time.Time
 		for at := first; !at.After(last); at = at.Add(bucket5m) {
 			var total, failed int
 			for i := range backendWindowBuckets {
 				c := cells[at.Add(-time.Duration(i)*bucket5m).UnixMilli()]
 				total, failed = total+c.requests, failed+c.errors
 			}
-			bad := total >= backendMinRequests && float64(failed) >= backendFailShare*float64(total)
-			if bad == failing {
-				continue
-			}
-			failing = bad
-			if at.Before(since) {
-				continue
-			}
-			ts := at.UnixMilli()
-			e := TrafficEvent{TS: ts, To: fmt.Sprintf("/traffic?backend=%s&since=%d", url.QueryEscape(name), ts)}
-			mins := int(degradationWindow.Minutes())
-			if failing {
-				e.Kind, e.Tone, e.Title = "backend_failing", "degraded", name+" started failing requests"
-				e.Detail = fmt.Sprintf("%d%% of its %d requests over %d minutes failed with a 5xx or 429.", 100*failed/total, total, mins)
-				e.To = fmt.Sprintf("/traffic?backend=%s&since=%d", url.QueryEscape(name), at.Add(-degradationWindow+bucket5m).UnixMilli())
-			} else {
-				e.Kind, e.Tone, e.Title = "backend_recovered", "allowed", name+" is back under the failure threshold"
-				if total < backendMinRequests {
-					e.Detail = fmt.Sprintf("Only %d requests over %d minutes, too few to call it failing.", total, mins)
-				} else {
-					e.Detail = fmt.Sprintf("%d of its %d requests over %d minutes failed, under %d%%.", failed, total, mins, int(backendFailShare*100))
+			bad := backendFailing(total, failed)
+			switch {
+			case bad && !failing:
+				failing = true
+				emit(TrafficEvent{
+					Kind: "backend_failing", Tone: "degraded", Title: name + " started failing requests",
+					Detail: fmt.Sprintf("%d%% of its %d requests over %d minutes failed with a 5xx or 429.", 100*failed/total, total, mins),
+					To:     fmt.Sprintf("/traffic?backend=%s&since=%d", url.QueryEscape(name), at.Add(-degradationWindow+bucket5m).UnixMilli()),
+				}, name, at)
+			case bad:
+				recovery = nil
+			case failing && recovery == nil:
+				recovery, recoveredAt = &TrafficEvent{
+					Kind: "backend_recovered", Tone: "allowed", Title: name + " is back under the failure threshold",
+					To: fmt.Sprintf("/traffic?backend=%s&since=%d", url.QueryEscape(name), at.UnixMilli()),
+				}, at
+				switch {
+				case total < backendMinRequests:
+					recovery.Detail = fmt.Sprintf("Only %d requests over %d minutes, too few to call it failing.", total, mins)
+				case failed < backendMinFailed:
+					recovery.Detail = fmt.Sprintf("%d of its %d requests over %d minutes failed, fewer than %d.", failed, total, mins, backendMinFailed)
+				default:
+					recovery.Detail = fmt.Sprintf("%d of its %d requests over %d minutes failed, under %d%%.", failed, total, mins, int(backendFailShare*100))
 				}
 			}
-			e.ID = fmt.Sprintf("%s:%s:%d", e.Kind, name, ts)
-			out = append(out, e)
+			if recovery != nil && at.Sub(recoveredAt) >= degradationWindow-bucket5m {
+				emit(*recovery, name, recoveredAt)
+				failing, recovery = false, nil
+			}
 		}
 	}
 	return out
