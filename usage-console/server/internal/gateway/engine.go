@@ -282,6 +282,57 @@ func modelAllowed(k *store.KeyRecord, resolved string) *Reject {
 	return &Reject{Status: 403, Code: "model_not_allowed", Message: fmt.Sprintf("Key %s may not call %s. Allowed: %s.", k.Name, resolved, strings.Join(k.AllowedModels, ", "))}
 }
 
+// governingBudget picks the budget that decides a request for k. Every budget
+// whose scope covers the key applies, whether or not the key's budget_id
+// names it: its team, its project, the key itself. The strictest over-cap one
+// wins (block, then throttle, then warn); with none over cap it's the one
+// nearest its cap, so the trace shows the tightest headroom.
+func (s *Snapshot) governingBudget(k *store.KeyRecord) (model.Budget, float64, bool) {
+	severity := map[string]int{"warn": 1, "throttle": 2, "block": 3}
+	var best model.Budget
+	var bestSpent float64
+	bestRank, bestRatio, found := -1, 0.0, false
+	for _, b := range s.Budgets {
+		var spent float64
+		switch {
+		case b.ScopeType == "team" && b.Scope == k.Team:
+			spent = s.Spend.ByTeam[b.Scope]
+		case b.ScopeType == "project" && b.Scope == k.Project:
+			spent = s.projectSpend(b.Scope)
+		case b.ScopeType == "key" && b.Scope == k.Name:
+			spent = s.Spend.ByKey[k.ID]
+		default:
+			continue
+		}
+		rank, ratio := 0, 0.0
+		if spent >= b.CapUSD {
+			rank = severity[b.OnExceed]
+		}
+		if b.CapUSD > 0 {
+			ratio = spent / b.CapUSD
+		}
+		if !found || rank > bestRank || rank == bestRank && (ratio > bestRatio || ratio == bestRatio && b.ID < best.ID) {
+			best, bestSpent, bestRank, bestRatio, found = b, spent, rank, ratio, true
+		}
+	}
+	return best, bestSpent, found
+}
+
+// projectSpend is month-to-date spend over every key in the project, revoked
+// ones included, on the same basis as GET /budgets. KeyBy holds a rotating
+// key under both secrets, so each key counts once.
+func (s *Snapshot) projectSpend(project string) float64 {
+	seen := map[string]bool{}
+	var usd float64
+	for _, k := range s.KeyBy {
+		if k.Project == project && !seen[k.ID] {
+			seen[k.ID] = true
+			usd += s.Spend.ByKey[k.ID]
+		}
+	}
+	return usd
+}
+
 // Admit runs everything before the upstream call.
 func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
 	k, rej := Authenticate(s, in.Secret, in.Now)
@@ -308,25 +359,16 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	}
 
 	// Budget (§5.2): spend is month to date from the aggregates.
-	d.budgetStep = model.TraceStep{Step: "Budget checked", Input: "no budget attached", Outcome: "skipped", MS: 0.1, State: "skip"}
-	if b, ok := s.Budgets[k.BudgetID]; ok {
-		spent := s.Spend.ByTeam[b.Scope]
-		if b.ScopeType == "key" {
-			spent = 0
-			for _, kk := range s.KeyBy {
-				if kk.Name == b.Scope {
-					spent = s.Spend.ByKey[kk.ID]
-					break
-				}
-			}
-		}
-		d.budgetStep.Input = fmt.Sprintf("budget %s · %s of %s", b.Scope, money(spent), money(b.CapUSD))
+	d.budgetStep = model.TraceStep{Step: "Budget checked", Input: "no budget applies", Outcome: "skipped", MS: 0.1, State: "skip"}
+	if b, spent, ok := s.governingBudget(k); ok {
+		d.budgetStep.Input = fmt.Sprintf("%s budget %s · %s of %s", b.ScopeType, b.Scope, money(spent), money(b.CapUSD))
 		d.budgetStep.Outcome, d.budgetStep.State = "within cap", "ok"
 		if spent >= b.CapUSD {
 			switch b.OnExceed {
 			case "block":
 				d.budgetStep.Outcome, d.budgetStep.State = "over cap · blocked", "fail"
-				return d.block(429, "budget_exceeded", fmt.Sprintf("Budget %s is over its %s monthly cap. Ask a finance admin to raise it.", b.Scope, money(b.CapUSD)))
+				return d.block(429, "budget_exceeded", fmt.Sprintf("%s budget %s is over its %s monthly cap. Ask a finance admin to raise it.",
+					strings.ToUpper(b.ScopeType[:1])+b.ScopeType[1:], b.Scope, money(b.CapUSD)))
 			case "throttle":
 				d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttle active, admitted", "warn"
 			default:

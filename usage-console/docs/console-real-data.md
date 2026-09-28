@@ -134,8 +134,9 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   picks up changes on its next snapshot.
 - [ ] Routes and backends: apply. There's no reconciler yet, so "apply"
   writes config and the sync state says so.
-- [ ] Budgets: create and edit. Project-scoped budgets show spend on the
-  Spend page, but the gateway only checks team and key budgets.
+- [ ] Budgets: create and edit. The gateway enforces every budget whose
+  scope covers a key (its team, project or the key itself), not only the
+  key's budget_id; the strictest over-cap one decides.
 - [ ] Aliases, including saving the savings analysis's draft alias changes.
 - [ ] Detector thresholds.
 - [ ] Key rotation: extend the overlap, retire the old secret now.

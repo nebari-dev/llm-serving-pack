@@ -10,6 +10,7 @@ import (
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/fakellm"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/store"
 	"github.com/jbouder/stargate/server/internal/traffic"
 )
 
@@ -168,6 +169,74 @@ func TestBudgetBlock(t *testing.T) {
 	rc = run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
 	if rc.Verdict != "allowed" || rc.Trace[1].State != "warn" {
 		t.Fatalf("throttle: got %s, budget step %+v", rc.Verdict, rc.Trace[1])
+	}
+}
+
+// withProjectBudget adds a project budget no key points at: budgets apply by
+// scope, not by the key's budget_id.
+func withProjectBudget(s *Snapshot, project, onExceed string, cap float64) {
+	s.Budgets["bp"] = model.Budget{ID: "bp", Scope: project, ScopeType: "project", Period: "monthly", CapUSD: cap, OnExceed: onExceed}
+}
+
+func TestProjectBudgetBlocks(t *testing.T) {
+	s := DemoSnapshot()
+	withProjectBudget(s, "helpdesk", "block", 500)
+	// Project spend is every key in it, revoked ones included, as /budgets counts it.
+	other := &store.KeyRecord{APIKey: model.APIKey{ID: "k8", Name: "helpdesk-old", Team: "support", Project: "helpdesk", Status: "revoked"}, Hash: "h-k8"}
+	s.KeyBy[other.Hash] = other
+	s.Spend.ByKey["k1"], s.Spend.ByKey["k8"] = 300, 300
+	rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.Verdict != "blocked" || rc.Status != 429 || rc.ErrorCode != "budget_exceeded" {
+		t.Fatalf("got %s %s %d", rc.Verdict, rc.ErrorCode, rc.Status)
+	}
+	if want := "Project budget helpdesk is over its $500 monthly cap. Ask a finance admin to raise it."; rc.ErrorDetail != want {
+		t.Errorf("detail %q", rc.ErrorDetail)
+	}
+	b := rc.Trace[1]
+	if b.Input != "project budget helpdesk · $600 of $500" || b.Outcome != "over cap · blocked" || b.State != "fail" {
+		t.Errorf("budget step %+v", b)
+	}
+	if rc.Trace[2].Outcome != "not reached" {
+		t.Errorf("rules step %+v", rc.Trace[2])
+	}
+}
+
+func TestProjectSpendCountsRotatingKeyOnce(t *testing.T) {
+	s := DemoSnapshot()
+	withProjectBudget(s, "assistant", "block", 1_000)
+	for _, k := range s.KeyBy {
+		if k.ID == "k4" {
+			k.NextHash = "h-k4-next"
+			s.KeyBy[k.NextHash] = k
+			break
+		}
+	}
+	s.Spend.ByKey["k4"] = 600
+	rc := run(t, s, Input{Secret: secret("k4"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.Verdict != "allowed" {
+		t.Fatalf("got %s %s: %+v", rc.Verdict, rc.ErrorCode, rc.Trace[1])
+	}
+}
+
+func TestTeamBudgetCoversKeyWithoutBudget(t *testing.T) {
+	s := DemoSnapshot()
+	s.Spend.ByTeam["research"] = 25_000 // b5 warns at $20,000; k5 has no budget_id
+	rc := run(t, s, Input{Secret: secret("k5"), Req: chat("claude-sonnet-5", "hi")}, &fixedUp{})
+	if rc.Verdict != "allowed" || rc.Trace[1].State != "warn" || rc.Trace[1].Input != "team budget research · $25000 of $20000" {
+		t.Fatalf("got %s, budget step %+v", rc.Verdict, rc.Trace[1])
+	}
+}
+
+func TestStrictestOverCapBudgetWins(t *testing.T) {
+	for i := 0; i < 20; i++ { // budgets are a map; the verdict mustn't depend on its order
+		s := DemoSnapshot()
+		s.Spend.ByTeam["support"] = 13_000 // b1: throttle
+		withProjectBudget(s, "helpdesk", "block", 500)
+		s.Spend.ByKey["k1"] = 13_000
+		rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+		if rc.Verdict != "blocked" || !strings.HasPrefix(rc.ErrorDetail, "Project budget helpdesk") {
+			t.Fatalf("got %s %q", rc.Verdict, rc.ErrorDetail)
+		}
 	}
 }
 

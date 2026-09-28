@@ -12,6 +12,7 @@ import (
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/fakellm"
 	"github.com/jbouder/stargate/server/internal/gateway"
+	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/store"
 	"github.com/jbouder/stargate/server/internal/traffic"
 )
@@ -132,6 +133,20 @@ func TestBudgetBlockAnswers429(t *testing.T) {
 		t.Fatalf("status = %d", c)
 	}
 	if p := policyOf(t, r); p.Blocked.ErrorCode != "budget_exceeded" {
+		t.Errorf("policy = %+v", p)
+	}
+}
+
+func TestProjectBudgetAnswers429(t *testing.T) {
+	snap := gateway.DemoSnapshot()
+	snap.Budgets["bp"] = model.Budget{ID: "bp", Scope: "helpdesk", ScopeType: "project", Period: "monthly", CapUSD: 500, OnExceed: "block"}
+	snap.Spend.ByKey["k1"] = 600
+	r := newServer(snap).decide(headers(snap, "k1"), body("gpt-5-mini", "hello"))
+	if c := r.GetImmediateResponse().GetStatus().GetCode(); c != 429 {
+		t.Fatalf("status = %d", c)
+	}
+	p := policyOf(t, r)
+	if p.Blocked == nil || p.Blocked.ErrorCode != "budget_exceeded" || p.Trace[0].Input != "project budget helpdesk · $600 of $500" {
 		t.Errorf("policy = %+v", p)
 	}
 }

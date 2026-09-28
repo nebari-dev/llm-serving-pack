@@ -119,6 +119,20 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(text).not.toContain('Simulate burst')
   })
 
+  it('checks the budgets covering a key by scope, not only the one it names', async () => {
+    // research has no budget_id; its team's budget still governs it.
+    const key = catalog.keys.find((k) => k.name === 'research')!
+    expect(key.budgetId).toBeFalsy()
+    const [r] = await catalog.api<{ id: string; trace: { step: string; input: string }[] }[]>(`/receipts?limit=1&key=${key.id}&range=1h`)
+    expect(r.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(/^team budget research · \$\d+ of \$20000$/)
+    window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    expect(document.body.textContent).toContain('team budget research · $')
+  })
+
   it('lists server-filtered traffic, with a provider filter from the backends', async () => {
     window.history.pushState({}, '', '/traffic?verdict=blocked')
     render(<App />)
