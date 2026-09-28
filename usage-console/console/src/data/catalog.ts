@@ -42,6 +42,9 @@ export const seedSavings = dataMode === 'api' ? null : mock.savings
 /** Mock-mode fixtures for GET /summary and GET /changes/{id}/impact. */
 export const seedSummary: Summary = mock.summary
 export const seedChangeImpacts: Record<string, ChangeImpact> = dataMode === 'api' ? {} : mock.changeImpacts
+/** Mock-mode Activity readouts and traffic events; api mode reads GET /activity. */
+export const seedActivityReadouts: typeof mock.activityReadouts = dataMode === 'api' ? {} : mock.activityReadouts
+export const seedActivityEvents: mock.TrafficEvent[] = dataMode === 'api' ? [] : mock.activityEvents
 
 export class ApiError extends Error {
   readonly status: number

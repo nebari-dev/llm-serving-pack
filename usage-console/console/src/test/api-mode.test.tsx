@@ -233,4 +233,49 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
     }
   })
+
+  it('joins each change to the aggregates around it, with traffic events, on Activity', async () => {
+    type V = import('@/data/catalog').ActivityView
+    const v = await catalog.api<V>('/activity?range=7d')
+    expect(v.until - v.since).toBe(7 * 86_400_000)
+    expect(v.changes.length).toBeGreaterThan(0)
+    const seeded = new Set(catalog.changes.map((c) => c.effect).filter(Boolean))
+    const sum = (xs: number[]) => xs.reduce((a, n) => a + n, 0)
+    for (const c of v.changes) {
+      const im = c.impact
+      expect(c.ts).toBeGreaterThanOrEqual(v.since)
+      expect(im.bins).toHaveLength((2 * im.windowMinutes) / 5)
+      expect(im.split).toBe(im.windowMinutes / 5)
+      // The sparkline splits the same windows the before/after numbers cover.
+      expect(sum(im.bins.slice(0, im.split))).toBe(im.before.requests)
+      expect(sum(im.bins.slice(im.split))).toBe(im.after.requests)
+      expect(['good', 'bad', 'neutral']).toContain(c.effectTone)
+      // The effect is computed, never the audit row's stored text.
+      expect(seeded.has(c.effect)).toBe(false)
+      if (!im.comparable) expect(c.effect).toContain('Too little traffic')
+    }
+    // The before window is a plain receipts_5m count, the same one Traffic uses.
+    const c = v.changes.find((x) => x.impact.before.requests > 0)!
+    const n = await catalog.api<{ count: number | null }>(`/receipts/count?since=${c.impact.pivot - c.impact.windowMinutes * 60_000}&before=${c.impact.pivot}`)
+    expect(n.count).toBe(c.impact.before.requests)
+
+    const kinds = new Set(['backend_failing', 'backend_recovered', 'budget_80', 'budget_cap'])
+    for (const e of v.events) {
+      expect(kinds.has(e.kind)).toBe(true)
+      expect(e.ts).toBeGreaterThanOrEqual(v.since)
+      expect(e.ts).toBeLessThanOrEqual(v.until)
+    }
+
+    window.history.pushState({}, '', '/activity?range=7d')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const text = document.body.textContent ?? ''
+    expect(text).toContain(v.changes[0].target)
+    expect(text).toContain('across the tenant, from the 5-minute aggregates')
+    for (const e of v.events) expect(text).toContain(e.title)
+    // The mockup's invented readouts and traffic events are gone.
+    for (const s of ['p50 latency, route default', 'traffic on new secret', 'anthropic-prod failover began', 'throttle policy engaged', ...seeded]) expect(text).not.toContain(s)
+  })
 })

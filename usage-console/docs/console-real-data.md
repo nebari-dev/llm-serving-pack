@@ -81,9 +81,23 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     "Retire old secret now" are disabled until the key-rotation writes land.
   - Budget wording matches Spend's (throttle isn't enforced). The invented
     "rotation reminders every 90 days" is gone.
-- [ ] **Activity.**
-  - Before/after impact per change, from aggregates around its timestamp.
-  - Traffic events from degradations and budgets.
+- [x] **Activity.** One `GET /activity?range` serves the changes in the
+  range and the traffic events, all from `receipts_5m`.
+  - Before/after per change, across the tenant: up to an hour of complete
+    5-minute buckets either side (the change's own bucket counts as after,
+    and the bucket still filling is left out). It carries requests,
+    cost per served request, 5xx/429 rate and blocked + redacted share, and
+    the sparkline bins sum to the same counts. There's no p50, since the
+    aggregates don't carry it.
+  - The effect is computed, not the audit row's stored text: Regressed if any
+    metric rose 5% or more, Improved if something fell that much and nothing
+    rose, otherwise Informational. Under 20 requests either side says "too
+    little traffic". A metric that was 0 before isn't counted. The Effect
+    filter uses the same tones.
+  - Traffic events: a backend crossing the banner's failing threshold (5% of
+    at least 20 requests over 15 minutes) either way, and a budget's month
+    spend crossing 80% and 100% of today's cap, pinned to its 5-minute
+    bucket. Policy-mode windows aren't included (not in the aggregates).
 - [ ] **Settings.**
   - The kill switch goes through a control-plane endpoint that calls
     Warden and writes an audit row.

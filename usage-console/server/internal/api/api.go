@@ -92,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/session", s.session)
 	h("GET "+p+"/summary", s.summary)
 	h("GET "+p+"/changes/{id}/impact", s.changeImpact)
+	h("GET "+p+"/activity", s.activity)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }

@@ -7,10 +7,23 @@ import { ProvenanceBadge } from '@/components/gw/provenance'
 import { StateChip, type Tone } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { type Change, changes, now, trafficSeries } from '@/data/catalog'
-import { ago, clock } from '@/lib/format'
+import {
+  type ActivityChange,
+  type ActivityMetric,
+  type ActivityView,
+  type Change,
+  changes as catalogChanges,
+  dataMode,
+  now,
+  seedActivityEvents,
+  seedActivityReadouts,
+  type TrafficEvent,
+  trafficSeries,
+} from '@/data/catalog'
+import { ago, clock, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
+import { useLive, useNow } from '@/state/live'
 
 // §7.5.9 Activity: config changes and traffic on one timeline. Audit records
 // and receipts share an actor identity space and a clock, so each change is
@@ -25,44 +38,16 @@ const rangeMs: Record<TimeRange, number> = {
   '30d': 30 * 86_400_000,
 }
 
-type Metric = 'total' | 'blocked' | 'rerouted'
-
-// Per-change before/after readouts. Numbers come from the receipt aggregates
-// for the 2h before and after the change (synthetic in the demo tenant).
-const impact: Record<string, { metric: string; before: string; after: string; series: Metric; resource: string }> = {
-  c1: { metric: 'p50 latency, route default', before: '1,240ms', after: '900ms', series: 'total', resource: '/routing' },
-  c2: { metric: 'p95 latency, eu-private', before: '1,180ms', after: '1,790ms', series: 'rerouted', resource: '/routing' },
-  c3: { metric: 'blocked share of requests', before: '1.2%', after: '8.9%', series: 'blocked', resource: '/guardrails?rule=r3' },
-  c4: { metric: 'throttled requests, agents', before: '312/h', after: '0/h', series: 'total', resource: '/spend' },
-  c5: { metric: 'traffic on new secret', before: '0%', after: '61%', series: 'total', resource: '/keys?key=k4' },
-  c6: { metric: 'would-redact (monitor)', before: '—', after: '22 / 24h', series: 'total', resource: '/guardrails?rule=r4' },
-}
-
 const effectTone: Record<NonNullable<Change['effectTone']>, { tone: Tone; label: string }> = {
   good: { tone: 'allowed', label: 'Improved' },
   bad: { tone: 'degraded', label: 'Regressed' },
   neutral: { tone: 'neutral', label: 'Informational' },
 }
 
-interface TrafficEvent {
-  id: string
-  ts: number
-  title: string
-  detail: string
-  tone: Tone
-  to: string
-}
-
 const NOW = now()
-const trafficEvents: TrafficEvent[] = [
-  { id: 't1', ts: NOW - 70 * 60_000, title: 'anthropic-prod failover began', detail: '8% of Claude traffic moved to bedrock-eu after 529 overloaded responses', tone: 'degraded', to: '/traffic?backend=bedrock-eu&reason=fallback' },
-  { id: 't2', ts: NOW - 4.5 * 3_600_000, title: `Blocks spiked to 9% at ${clock(NOW - 4.5 * 3_600_000).slice(0, 5)}`, detail: '82 of 96 blocks from support-bot, all on block-src', tone: 'blocked', to: '/traffic?verdict=blocked' },
-  { id: 't3', ts: NOW - 3 * 3_600_000, title: 'Blocks back under baseline', detail: 'block-src hits dropped to 14/h after support changed its prompt template', tone: 'allowed', to: '/traffic?verdict=blocked' },
-  { id: 't4', ts: NOW - 14 * 3_600_000, title: 'Budget "support" crossed its cap', detail: '$12,000 reached; throttle policy engaged', tone: 'degraded', to: '/spend' },
-]
 
 /** Slice trafficSeries around a timestamp: 4 points before, 4 after. */
-function around(ts: number, metric: Metric) {
+function around(ts: number, metric: ActivityMetric) {
   let i = trafficSeries.findIndex((p) => p.t >= ts)
   if (i < 0) i = trafficSeries.length - 1
   const lo = Math.max(0, i - 4)
@@ -71,6 +56,57 @@ function around(ts: number, metric: Metric) {
   const val = (p: (typeof trafficSeries)[number]) =>
     metric === 'total' ? p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated : p[metric]
   return { values: pts.map(val), split: i - lo, ok: pts.length > 2 }
+}
+
+/** What a change row shows under its effect: metric lines and a sparkline. */
+interface Readout {
+  lines: { metric: string; before: string; after: string }[]
+  spark?: { values: number[]; split: number; label: string; caption: string }
+  resource?: string
+}
+
+// Where "Open …" goes for each audit target kind, in api mode.
+const kindResource: Record<string, string> = {
+  Route: '/routing',
+  Backend: '/routing?tab=backends',
+  Policy: '/guardrails',
+  Budget: '/spend',
+  Key: '/keys',
+}
+
+const pct = (n: number) => `${(n * 100).toFixed(1)}%`
+
+function readoutOf(c: Change | ActivityChange): Readout | null {
+  if ('impact' in c) {
+    const im = c.impact
+    if (im.windowMinutes === 0) return { lines: [], resource: kindResource[c.targetKind] }
+    const { before: b, after: a } = im
+    return {
+      lines: [
+        { metric: 'requests', before: int(b.requests), after: int(a.requests) },
+        { metric: 'cost/request', before: `$${b.costPerRequestUsd.toFixed(4)}`, after: `$${a.costPerRequestUsd.toFixed(4)}` },
+        { metric: 'error rate', before: pct(b.errorRate), after: pct(a.errorRate) },
+        { metric: 'blocked + redacted', before: pct(b.blockedRedactedShare), after: pct(a.blockedRedactedShare) },
+      ],
+      spark: {
+        values: im.bins,
+        split: im.split,
+        label: 'requests around this change',
+        caption: `requests, ${im.windowMinutes}m either side, across the tenant, from the 5-minute aggregates`,
+      },
+      resource: kindResource[c.targetKind],
+    }
+  }
+  const imp = seedActivityReadouts[c.id]
+  if (!imp) return null
+  const s = around(c.ts, imp.series)
+  return {
+    lines: [{ metric: imp.metric, before: imp.before, after: imp.after }],
+    spark: s.ok
+      ? { values: s.values, split: s.split, label: `${imp.series} requests around this change`, caption: `${imp.series === 'total' ? 'requests' : `${imp.series} requests`}, 2h either side` }
+      : undefined,
+    resource: imp.resource,
+  }
 }
 
 function Pick({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: { value: string; label: string }[] }) {
@@ -91,7 +127,7 @@ function Pick({ label, value, onChange, options }: { label: string; value: strin
   )
 }
 
-type Item = { kind: 'change'; ts: number; c: Change } | { kind: 'traffic'; ts: number; e: TrafficEvent }
+type Item = { kind: 'change'; ts: number; c: Change | ActivityChange } | { kind: 'traffic'; ts: number; e: TrafficEvent }
 
 export function ActivityPage() {
   const { range, setRange } = useApp()
@@ -99,10 +135,15 @@ export function ActivityPage() {
   const [kind, setKind] = useState('all')
   const [effect, setEffect] = useState('all')
   const [showTraffic, setShowTraffic] = useState(true)
+  const { data: view, loaded } = useLive<ActivityView | null>(dataMode === 'api' ? `/activity?range=${range}` : null, null, 60_000)
+  const liveNow = useNow(30_000)
+  const clockNow = dataMode === 'api' ? liveNow : NOW
 
-  const since = NOW - rangeMs[range]
-  const actors = useMemo(() => [...new Set(changes.map((c) => c.actor))], [])
-  const kinds = useMemo(() => [...new Set(changes.map((c) => c.targetKind))], [])
+  const since = view?.since ?? NOW - rangeMs[range]
+  const changes: (Change | ActivityChange)[] = dataMode === 'api' ? (view?.changes ?? []) : catalogChanges
+  const trafficEvents = dataMode === 'api' ? (view?.events ?? []) : seedActivityEvents
+  const actors = useMemo(() => [...new Set(changes.map((c) => c.actor))], [changes])
+  const kinds = useMemo(() => [...new Set(changes.map((c) => c.targetKind))], [changes])
 
   const items = useMemo<Item[]>(() => {
     const cs: Item[] = changes
@@ -114,9 +155,10 @@ export function ActivityPage() {
     const filtering = actor !== 'all' || kind !== 'all' || effect !== 'all'
     const ts: Item[] = showTraffic && !filtering ? trafficEvents.filter((e) => e.ts >= since).map((e) => ({ kind: 'traffic', ts: e.ts, e })) : []
     return [...cs, ...ts].sort((a, b) => b.ts - a.ts)
-  }, [since, actor, kind, effect, showTraffic])
+  }, [changes, trafficEvents, since, actor, kind, effect, showTraffic])
 
-  const hiddenByRange = changes.filter((c) => c.ts < since).length
+  // Api mode's view holds only the range; the hydrated list knows what's older.
+  const hiddenByRange = catalogChanges.filter((c) => c.ts < since).length
   const filtering = actor !== 'all' || kind !== 'all' || effect !== 'all'
 
   return (
@@ -148,7 +190,9 @@ export function ActivityPage() {
         </div>
       </PageHeader>
 
-      {items.length === 0 ? (
+      {!loaded ? (
+        <p className="px-6 py-16 text-center text-sm text-muted-foreground">Loading activity…</p>
+      ) : items.length === 0 ? (
         <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
           <p className="text-sm text-muted-foreground-strong">No config changes match in the {rangeLabel(range)}.</p>
           <Button variant="outline" size="sm" onClick={() => setRange('7d')}>
@@ -158,7 +202,7 @@ export function ActivityPage() {
       ) : (
         <ol className="relative px-6 py-5" aria-label="Activity timeline">
           <span className="absolute top-5 bottom-5 left-[10.4375rem] w-px bg-border" aria-hidden="true" />
-          {items.map((it) => (it.kind === 'change' ? <ChangeRow key={it.c.id} c={it.c} /> : <TrafficRow key={it.e.id} e={it.e} />))}
+          {items.map((it) => (it.kind === 'change' ? <ChangeRow key={it.c.id} c={it.c} now={clockNow} /> : <TrafficRow key={it.e.id} e={it.e} now={clockNow} />))}
         </ol>
       )}
 
@@ -174,22 +218,21 @@ export function ActivityPage() {
   )
 }
 
-function When({ ts }: { ts: number }) {
+function When({ ts, now }: { ts: number; now: number }) {
   return (
     <div className="w-[7.5rem] shrink-0 pt-0.5 text-right">
       <div className="num font-mono text-xs">{clock(ts).slice(0, 5)}</div>
-      <div className="text-xs text-muted-foreground">{ago(ts, NOW)}</div>
+      <div className="text-xs text-muted-foreground">{ago(ts, now)}</div>
     </div>
   )
 }
 
-function ChangeRow({ c }: { c: Change }) {
-  const imp = impact[c.id]
-  const s = imp ? around(c.ts, imp.series) : null
+function ChangeRow({ c, now }: { c: Change | ActivityChange; now: number }) {
+  const r = readoutOf(c)
   const tone = c.effectTone ? effectTone[c.effectTone] : null
   return (
     <li className="relative flex gap-3 pb-6">
-      <When ts={c.ts} />
+      <When ts={c.ts} now={now} />
       <span className="z-[1] mt-1 size-[1.375rem] shrink-0 rounded-full border-2 border-foreground bg-canvas" aria-hidden="true" />
       <div className="min-w-0 flex-1 border-b border-border pb-5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -207,51 +250,51 @@ function ChangeRow({ c }: { c: Change }) {
                 {tone && <StateChip tone={tone.tone}>{tone.label}</StateChip>}
                 <span>{c.effect}</span>
               </span>
-              {imp && (
-                <span className="flex items-center gap-2 text-xs text-muted-foreground-strong">
-                  <span>{imp.metric}</span>
-                  <span className="num font-mono">{imp.before}</span>
+              {r?.lines.map((l) => (
+                <span key={l.metric} className="flex items-center gap-2 text-xs text-muted-foreground-strong">
+                  <span>{l.metric}</span>
+                  <span className="num font-mono">{l.before}</span>
                   <ArrowRight className="size-3" aria-label="to" />
-                  <span className="num font-mono font-medium text-foreground">{imp.after}</span>
+                  <span className="num font-mono font-medium text-foreground">{l.after}</span>
                 </span>
-              )}
+              ))}
             </div>
-            {s?.ok && (
+            {r?.spark && (
               <div className="flex flex-col items-start gap-0.5">
                 <div className="relative">
-                  <Sparkline values={s.values} width={132} height={28} label={`${imp!.series} requests around this change`} />
+                  <Sparkline values={r.spark.values} width={132} height={28} label={r.spark.label} />
                   <span
                     className="absolute inset-y-0 w-px bg-foreground"
-                    style={{ left: `${(s.split / Math.max(1, s.values.length - 1)) * 100}%` }}
+                    style={{ left: `${(r.spark.split / Math.max(1, r.spark.values.length - 1)) * 100}%` }}
                     aria-hidden="true"
                   />
                 </div>
-                <span className="text-[11px] text-muted-foreground">{imp!.series === 'total' ? 'requests' : `${imp!.series} requests`}, 2h either side</span>
+                <span className="text-[11px] text-muted-foreground">{r.spark.caption}</span>
               </div>
             )}
           </div>
         )}
 
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-          {imp && (
-            <Link to={imp.resource} className="font-medium underline-offset-4 hover:underline">
+          {r?.resource && (
+            <Link to={r.resource} className="font-medium underline-offset-4 hover:underline">
               Open {c.targetKind.toLowerCase()}
             </Link>
           )}
           <Link to={`/traffic?since=${c.ts}`} className="font-medium underline-offset-4 hover:underline">
             Receipts after this change →
           </Link>
-          <span className="text-muted-foreground">Audit record {c.id}-{String(c.ts).slice(-6)}</span>
+          <span className="text-muted-foreground">Audit record {dataMode === 'api' ? c.id : `${c.id}-${String(c.ts).slice(-6)}`}</span>
         </div>
       </div>
     </li>
   )
 }
 
-function TrafficRow({ e }: { e: TrafficEvent }) {
+function TrafficRow({ e, now }: { e: TrafficEvent; now: number }) {
   return (
     <li className="relative flex gap-3 pb-6">
-      <When ts={e.ts} />
+      <When ts={e.ts} now={now} />
       <span className="z-[1] mt-1 flex size-[1.375rem] shrink-0 items-center justify-center rounded-full bg-canvas" aria-hidden="true">
         <Radio className="size-3.5 text-muted-foreground" />
       </span>
@@ -262,7 +305,7 @@ function TrafficRow({ e }: { e: TrafficEvent }) {
         </div>
         <p className="mt-0.5 text-sm text-muted-foreground-strong">{e.detail}</p>
         <Link to={e.to} className="mt-2 inline-block text-xs font-medium underline-offset-4 hover:underline">
-          View receipts →
+          {e.to.startsWith('/spend') ? 'Open spend →' : 'View receipts →'}
         </Link>
       </div>
     </li>

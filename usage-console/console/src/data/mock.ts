@@ -829,3 +829,66 @@ export const changeImpacts: Record<string, ChangeImpact> = {
     after: { requests: 1_944, p50Ms: 980, costPerRequestUsd: 0.0211, errorRate: 0.007, blockedRedactedShare: 0.106 },
   },
 }
+
+// ---- Activity (§7.5.9) ------------------------------------------------------
+// GET /activity joins each change to receipts_5m either side of it and lists
+// traffic events. Mock mode keeps the mockup's hand-written readouts.
+
+export interface ActivityAgg {
+  requests: number
+  costPerRequestUsd: number
+  errorRate: number
+  blockedRedactedShare: number
+}
+
+export interface ActivityImpact {
+  windowMinutes: number
+  /** Start of the change's 5-minute bucket, which counts as after. */
+  pivot: number
+  before: ActivityAgg
+  after: ActivityAgg
+  /** Requests per 5-minute bucket; the first `split` are before. */
+  bins: number[]
+  split: number
+  comparable: boolean
+}
+
+export type ActivityChange = Change & { impact: ActivityImpact }
+
+export interface TrafficEvent {
+  id: string
+  ts: number
+  kind: string
+  title: string
+  detail: string
+  tone: 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'degraded' | 'neutral'
+  to: string
+}
+
+export interface ActivityView {
+  since: number
+  until: number
+  changes: ActivityChange[]
+  events: TrafficEvent[]
+}
+
+export type ActivityMetric = 'total' | 'blocked' | 'rerouted'
+
+/** Mock-mode per-change readouts, keyed by change id. */
+export const activityReadouts: Record<string, { metric: string; before: string; after: string; series: ActivityMetric; resource: string }> = {
+  c1: { metric: 'p50 latency, route default', before: '1,240ms', after: '900ms', series: 'total', resource: '/routing' },
+  c2: { metric: 'p95 latency, eu-private', before: '1,180ms', after: '1,790ms', series: 'rerouted', resource: '/routing' },
+  c3: { metric: 'blocked share of requests', before: '1.2%', after: '8.9%', series: 'blocked', resource: '/guardrails?rule=r3' },
+  c4: { metric: 'throttled requests, agents', before: '312/h', after: '0/h', series: 'total', resource: '/spend' },
+  c5: { metric: 'traffic on new secret', before: '0%', after: '61%', series: 'total', resource: '/keys?key=k4' },
+  c6: { metric: 'would-redact (monitor)', before: '—', after: '22 / 24h', series: 'total', resource: '/guardrails?rule=r4' },
+}
+
+const hhmm = (ts: number) => new Date(ts).toTimeString().slice(0, 5)
+
+export const activityEvents: TrafficEvent[] = [
+  { id: 't1', ts: NOW - 70 * 60_000, kind: 'backend_failing', title: 'anthropic-prod failover began', detail: '8% of Claude traffic moved to bedrock-eu after 529 overloaded responses', tone: 'degraded', to: '/traffic?backend=bedrock-eu&reason=fallback' },
+  { id: 't2', ts: NOW - 4.5 * 3_600_000, kind: 'blocks_spike', title: `Blocks spiked to 9% at ${hhmm(NOW - 4.5 * 3_600_000)}`, detail: '82 of 96 blocks from support-bot, all on block-src', tone: 'blocked', to: '/traffic?verdict=blocked' },
+  { id: 't3', ts: NOW - 3 * 3_600_000, kind: 'blocks_baseline', title: 'Blocks back under baseline', detail: 'block-src hits dropped to 14/h after support changed its prompt template', tone: 'allowed', to: '/traffic?verdict=blocked' },
+  { id: 't4', ts: NOW - 14 * 3_600_000, kind: 'budget_cap', title: 'Budget "support" crossed its cap', detail: '$12,000 reached; throttle policy engaged', tone: 'degraded', to: '/spend' },
+]
