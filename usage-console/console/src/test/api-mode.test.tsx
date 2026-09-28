@@ -327,6 +327,56 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     for (const s of ['Snapshot v1842', 'on 2 of 6 pods', 'sk-proj-…Q7f', 'priya@acme.dev', 'otel-collector.nebari-gateway', 'platform-gitops', '7 years', '1,412', '4,806']) expect(text).not.toContain(s)
   })
 
+  it('shows real aliases, their 24h traffic and price history on Models', async () => {
+    type A = import('@/data/catalog').AliasView
+    type P = import('@/data/catalog').PricingView
+    const [aliases, pricing] = await Promise.all([catalog.api<A[]>('/aliases'), catalog.api<P>('/pricing')])
+    // Seeded: one alias, summarize-* → gpt-5-mini, which the traffic generator uses.
+    const summarize = aliases.find((a) => a.alias === 'summarize-*')
+    expect(summarize?.target).toBe('gpt-5-mini')
+    expect(summarize!.requests24h).toBeGreaterThan(0)
+    for (const a of aliases) expect(catalog.modelById[a.target]).toBeDefined()
+    // Every catalog model has a price row in force; the seed has no changes yet.
+    for (const m of catalog.models) expect(pricing.effectiveFrom[m.id]).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(Array.isArray(pricing.changes)).toBe(true)
+
+    const page = async (tab: string, check?: () => void) => {
+      window.history.pushState({}, '', `/models?tab=${tab}`)
+      const r = render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 300))
+      })
+      const text = document.body.textContent ?? ''
+      check?.()
+      r.unmount()
+      return text
+    }
+
+    // Alias writes are a later slice: the button is there, disabled, with the reason.
+    const aliasText = await page('aliases', () => {
+      const add = screen.getByRole('button', { name: /New alias/ })
+      expect(add).toHaveProperty('disabled', true)
+      expect(add.getAttribute('title')).toMatch(/connected yet/i)
+    })
+    expect(aliasText).toContain('summarize-*')
+    expect(aliasText).toContain(summarize!.requests24h.toLocaleString('en-US'))
+    expect(aliasText).toContain('Not recorded')
+    for (const s of ['31,204', '4,120', 'input tokens < 64k', 'key.team in', 'priya@acme.dev', 'platform-gitops']) expect(aliasText).not.toContain(s)
+
+    const priceText = await page('pricing', () => {
+      expect(screen.getByRole('button', { name: /Export CSV/ })).toHaveProperty('disabled', true)
+    })
+    expect(priceText).toContain(pricing.effectiveFrom['gpt-5-mini'])
+    if (pricing.changes.length === 0) expect(priceText).toContain('No price changes since')
+    expect(priceText).toContain('Pricing sync not connected yet')
+    for (const s of ['catalog sync', 'list price', '2026-08-14', '2026-06-02', 'Changed by']) expect(priceText).not.toContain(s)
+
+    const catalogText = await page('catalog')
+    for (const m of catalog.models) expect(catalogText).toContain(m.id)
+    expect(catalogText).toContain('Not connected yet')
+    expect(catalogText).not.toContain('Deprecated 2026-12-31')
+  })
+
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session
     type C = import('@/data/catalog').Change

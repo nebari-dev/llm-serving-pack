@@ -21,6 +21,29 @@ type Model struct {
 	ReasoningPerM float64 `json:"reasoningPerM"`
 }
 
+// Alias is a model_aliases row with the requests that matched it over the
+// rolling 24h.
+type Alias struct {
+	Alias       string `json:"alias"`
+	Target      string `json:"target"`
+	Requests24h int    `json:"requests24h"`
+}
+
+// Pricing is when each model's current price took effect, and every rate
+// change between consecutive model_pricing rows, newest first.
+type Pricing struct {
+	EffectiveFrom map[string]string `json:"effectiveFrom"`
+	Changes       []PriceChange     `json:"changes"`
+}
+
+type PriceChange struct {
+	Model     string  `json:"model"`
+	Field     string  `json:"field"`
+	From      float64 `json:"from"`
+	To        float64 `json:"to"`
+	Effective string  `json:"effective"`
+}
+
 type Backend struct {
 	Name           string   `json:"name"`
 	Provider       string   `json:"provider"`

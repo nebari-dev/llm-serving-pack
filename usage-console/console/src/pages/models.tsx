@@ -7,53 +7,16 @@ import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { backends, modelById, models, type Provenance } from '@/data/catalog'
+import { backends, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, type AliasView, type PricingView } from '@/data/catalog'
 import { cn } from '@/lib/utils'
+import { useLive } from '@/state/live'
 
 // §7.4 Models → Catalog · Aliases · Pricing. §5.2 model_catalog,
 // model_pricing, model_aliases. §13: reasoning tokens are a separate cost type.
 
 type Tab = 'catalog' | 'aliases' | 'pricing'
 
-const modalities: Record<string, string[]> = {
-  'gpt-5-mini': ['text', 'image'],
-  'gpt-5.5': ['text', 'image', 'audio'],
-  'claude-sonnet-5': ['text', 'image'],
-  'claude-opus-4-1': ['text', 'image'],
-  'claude-haiku-4-5': ['text', 'image'],
-  'llama-3.3-70b': ['text'],
-}
-
-const deprecated: Record<string, string> = { 'claude-opus-4-1': '2026-12-31' }
-
-const aliases: {
-  alias: string
-  target: string
-  conditions?: string
-  provenance: Provenance
-  requests24h: number
-  note?: string
-}[] = [
-  { alias: 'default', target: 'claude-sonnet-5', provenance: 'console', requests24h: 31_204, note: 'Switched from gpt-5.5 at 14:02 by priya@acme.dev' },
-  { alias: 'summarize-*', target: 'gpt-5-mini', conditions: 'input tokens < 64k', provenance: 'console', requests24h: 4_120 },
-  { alias: 'summarize-*', target: 'llama-3.3-70b', conditions: 'header x-data-region = eu', provenance: 'git', requests24h: 612 },
-  { alias: 'reasoning', target: 'gpt-5.5', conditions: 'key.team in [research, agents]', provenance: 'console', requests24h: 2_880 },
-  { alias: 'fast', target: 'claude-haiku-4-5', provenance: 'console', requests24h: 9_411 },
-]
-
-const priceHistory = [
-  { model: 'claude-sonnet-5', field: 'Output', from: 18.0, to: 15.0, effective: '2026-09-01', by: 'catalog sync (Anthropic list price)' },
-  { model: 'gpt-5-mini', field: 'Cached input', from: 0.05, to: 0.025, effective: '2026-08-14', by: 'catalog sync (OpenAI list price)' },
-]
-
-const effectiveFrom: Record<string, string> = {
-  'gpt-5-mini': '2026-08-14',
-  'gpt-5.5': '2026-06-02',
-  'claude-sonnet-5': '2026-09-01',
-  'claude-opus-4-1': '2025-08-05',
-  'claude-haiku-4-5': '2025-10-15',
-  'llama-3.3-70b': '2026-01-01',
-}
+const live = dataMode === 'api'
 
 function ctx(n: number) {
   return n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`
@@ -75,7 +38,7 @@ export function ModelsPage() {
         description="What clients can ask for, what it resolves to, and what it costs."
         actions={
           tab === 'aliases' ? (
-            <Button>
+            <Button disabled={live} title={live ? "Alias writes aren't connected yet: the control plane can't create aliases." : undefined}>
               <Plus /> New alias
             </Button>
           ) : undefined
@@ -135,11 +98,11 @@ function CatalogTab() {
               <td className={cn(td, 'num text-right font-mono')}>{ctx(m.context)}</td>
               <td className={td}>
                 <span className="flex gap-1">
-                  {modalities[m.id].map((x) => (
+                  {seedModalities?.[m.id]?.map((x) => (
                     <span key={x} className="rounded-sm border border-border px-1.5 text-xs leading-5 text-muted-foreground-strong">
                       {x}
                     </span>
-                  ))}
+                  )) ?? <span className="text-xs text-muted-foreground">—</span>}
                 </span>
               </td>
               <td className={cn(td, 'font-mono text-xs')}>
@@ -149,8 +112,10 @@ function CatalogTab() {
                   .join(', ')}
               </td>
               <td className={cn(td, 'pr-6')}>
-                {deprecated[m.id] ? (
-                  <StateChip tone="degraded">Deprecated {deprecated[m.id]}</StateChip>
+                {!seedDeprecations ? (
+                  <span className="text-xs text-muted-foreground">—</span>
+                ) : seedDeprecations[m.id] ? (
+                  <StateChip tone="degraded">Deprecated {seedDeprecations[m.id]}</StateChip>
                 ) : (
                   <span className="text-xs text-muted-foreground">Available</span>
                 )}
@@ -159,11 +124,15 @@ function CatalogTab() {
           ))}
         </tbody>
       </table>
+      {!seedModalities && (
+        <p className="px-6 py-3 text-xs text-muted-foreground">Not connected yet: the catalog doesn’t store modalities or deprecation dates.</p>
+      )}
     </div>
   )
 }
 
 function AliasesTab() {
+  const { data: aliases, loaded } = useLive<AliasView[]>(live ? '/aliases' : null, seedAliases, 60_000)
   return (
     <>
       <div className="overflow-x-auto">
@@ -184,7 +153,7 @@ function AliasesTab() {
           </thead>
           <tbody>
             {aliases.map((a) => {
-              const m = modelById[a.target]
+              const m = modelById[a.target] as (typeof models)[number] | undefined
               return (
                 <tr key={a.alias + a.target} className="border-b border-border hover:bg-muted/50">
                   <td className={cn(td, 'pl-6 font-mono font-medium')}>{a.alias}</td>
@@ -197,31 +166,52 @@ function AliasesTab() {
                   </td>
                   <td className={cn(td, 'font-mono text-xs')}>{a.conditions ?? <span className="font-sans text-muted-foreground">always</span>}</td>
                   <td className={td}>
-                    <ProvenanceBadge provenance={a.provenance} source="github.com/acme/platform-gitops/blob/main/gateway/aliases.yaml" />
+                    {a.provenance ? (
+                      <ProvenanceBadge provenance={a.provenance} source="github.com/acme/platform-gitops/blob/main/gateway/aliases.yaml" />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not recorded</span>
+                    )}
                   </td>
                   <td className={cn(td, 'num text-right font-mono')}>{a.requests24h.toLocaleString('en-US')}</td>
                   <td className={cn(td, 'pr-6 text-right')}>
-                    <Money value={(m.inPerM * 3 + m.outPerM) / 4} />
+                    {m ? <Money value={(m.inPerM * 3 + m.outPerM) / 4} /> : <span className="text-xs text-muted-foreground">Not in catalog</span>}
                   </td>
                 </tr>
               )
             })}
+            {loaded && aliases.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-6 py-6 text-center text-sm text-muted-foreground">
+                  No aliases yet.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
       <Section>
-        <p className="text-sm text-muted-foreground">
-          Conditions evaluate top to bottom; the first match wins. Savings suggestions from Spend open here as a <em>draft</em> alias change — nothing is applied until you review the diff.{' '}
-          <Link to="/spend" className="text-foreground underline underline-offset-4">
-            See savings analysis
-          </Link>
-        </p>
+        {live ? (
+          <p className="text-sm text-muted-foreground">
+            An exact alias wins over a <code className="font-mono">*</code> pattern. Requests count what the client asked for, including ones a policy or fallback later sent elsewhere.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Conditions evaluate top to bottom; the first match wins. Savings suggestions from Spend open here as a <em>draft</em> alias change — nothing is applied until you review the diff.{' '}
+            <Link to="/spend" className="text-foreground underline underline-offset-4">
+              See savings analysis
+            </Link>
+          </p>
+        )}
       </Section>
     </>
   )
 }
 
 function PricingTab() {
+  const { data: pricing, loaded } = useLive<PricingView | null>(live ? '/pricing' : null, seedPricing, 300_000)
+  const changes = pricing?.changes ?? []
+  const showBy = changes.some((p) => p.by)
+  const since = Object.values(pricing?.effectiveFrom ?? {}).sort()[0]
   return (
     <>
       <div className="overflow-x-auto">
@@ -254,18 +244,25 @@ function PricingTab() {
                 <td className={cn(td, 'text-right')}>
                   <Money value={m.reasoningPerM} precision="micro" />
                 </td>
-                <td className={cn(td, 'num font-mono text-xs')}>{effectiveFrom[m.id]}</td>
-                <td className={cn(td, 'pr-6 text-xs text-muted-foreground')}>{m.provider === 'Self-hosted' ? 'Internal chargeback rate' : `${m.provider} list price`}</td>
+                <td className={cn(td, 'num font-mono text-xs')}>{pricing?.effectiveFrom[m.id] ?? '—'}</td>
+                <td className={cn(td, 'pr-6 text-xs text-muted-foreground')}>{pricing?.source?.[m.id] ?? 'Seed price'}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        {live && <p className="px-6 py-3 text-xs text-muted-foreground">Pricing sync not connected yet: every rate is the control plane’s seed price.</p>}
       </div>
       <Section
         title="Price changes"
         description="Every receipt snapshots the price row in effect when it was written. A March receipt reconciles to March prices, not today's."
         actions={
-          <Button variant="outline" size="sm" onClick={() => toast.add({ title: 'Exported model-pricing.csv', type: 'success' })}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={live}
+            title={live ? "CSV export isn't connected yet." : undefined}
+            onClick={() => toast.add({ title: 'Exported model-pricing.csv', type: 'success' })}
+          >
             <Download /> Export CSV
           </Button>
         }
@@ -278,12 +275,12 @@ function PricingTab() {
               <th className="py-1.5 pr-3 font-medium">Rate</th>
               <th className="py-1.5 pr-3 text-right font-medium">Was</th>
               <th className="py-1.5 pr-3 text-right font-medium">Now</th>
-              <th className="py-1.5 font-medium">Changed by</th>
+              {showBy && <th className="py-1.5 font-medium">Changed by</th>}
             </tr>
           </thead>
           <tbody>
-            {priceHistory.map((p) => (
-              <tr key={p.model + p.field} className="border-b border-border last:border-0">
+            {changes.map((p) => (
+              <tr key={p.model + p.field + p.effective} className="border-b border-border last:border-0">
                 <td className="num py-2 pr-3 font-mono text-xs">{p.effective}</td>
                 <td className="py-2 pr-3 font-mono text-xs">{p.model}</td>
                 <td className="py-2 pr-3 text-xs">{p.field} / 1M</td>
@@ -293,9 +290,16 @@ function PricingTab() {
                 <td className="py-2 pr-3 text-right">
                   <Money value={p.to} precision="micro" />
                 </td>
-                <td className="py-2 text-xs text-muted-foreground">{p.by}</td>
+                {showBy && <td className="py-2 text-xs text-muted-foreground">{p.by}</td>}
               </tr>
             ))}
+            {loaded && changes.length === 0 && (
+              <tr>
+                <td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">
+                  No price changes since {since ?? 'pricing began'}.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
         <p className="mt-3 text-xs text-muted-foreground">Reasoning tokens are priced and budgeted separately from output tokens, so reasoning models don’t under-report.</p>

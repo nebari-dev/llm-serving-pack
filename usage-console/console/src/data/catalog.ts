@@ -50,6 +50,11 @@ export const seedMembers = dataMode === 'api' ? [] : mock.members
 export const seedIntegrations = dataMode === 'api' ? [] : mock.integrations
 export const seedRetention: mock.RetentionView | null = dataMode === 'api' ? null : mock.retention
 export const seedActivityEvents: mock.TrafficEvent[] = dataMode === 'api' ? [] : mock.activityEvents
+/** Models fixtures. Api mode reads GET /aliases and GET /pricing; the catalog has no modalities or deprecation dates yet. */
+export const seedAliases: mock.AliasView[] = dataMode === 'api' ? [] : mock.aliases
+export const seedPricing: mock.PricingView | null = dataMode === 'api' ? null : mock.pricing
+export const seedModalities: Record<string, string[]> | null = dataMode === 'api' ? null : mock.modelModalities
+export const seedDeprecations: Record<string, string> | null = dataMode === 'api' ? null : mock.modelDeprecations
 
 export class ApiError extends Error {
   readonly status: number

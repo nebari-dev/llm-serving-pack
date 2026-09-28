@@ -73,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	const p = "/api/v1/{tenant}"
 	h("GET "+p+"/teams", s.teams)
 	h("GET "+p+"/models", s.models)
+	h("GET "+p+"/aliases", s.aliases)
+	h("GET "+p+"/pricing", s.pricing)
 	h("GET "+p+"/backends", s.backends)
 	h("GET "+p+"/routes", s.routes)
 	h("GET "+p+"/keys", s.keys)

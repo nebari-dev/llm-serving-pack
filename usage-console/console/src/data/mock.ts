@@ -156,6 +156,76 @@ export const models: Model[] = [
 
 export const modelById = Object.fromEntries(models.map((m) => [m.id, m]))
 
+/** Not in the catalog schema yet (§3 New systems: modalities and deprecation dates). */
+export const modelModalities: Record<string, string[]> = {
+  'gpt-5-mini': ['text', 'image'],
+  'gpt-5.5': ['text', 'image', 'audio'],
+  'claude-sonnet-5': ['text', 'image'],
+  'claude-opus-4-1': ['text', 'image'],
+  'claude-haiku-4-5': ['text', 'image'],
+  'llama-3.3-70b': ['text'],
+}
+
+export const modelDeprecations: Record<string, string> = { 'claude-opus-4-1': '2026-12-31' }
+
+/**
+ * GET /aliases: a model_aliases row and the requests that resolved through it
+ * over the rolling 24h. The control plane has no conditions, provenance or
+ * notes yet; only the mockup sets them.
+ */
+export interface AliasView {
+  alias: string
+  target: string
+  requests24h: number
+  conditions?: string
+  provenance?: Provenance
+  note?: string
+}
+
+export const aliases: AliasView[] = [
+  { alias: 'default', target: 'claude-sonnet-5', provenance: 'console', requests24h: 31_204, note: 'Switched from gpt-5.5 at 14:02 by priya@acme.dev' },
+  { alias: 'summarize-*', target: 'gpt-5-mini', conditions: 'input tokens < 64k', provenance: 'console', requests24h: 4_120 },
+  { alias: 'summarize-*', target: 'llama-3.3-70b', conditions: 'header x-data-region = eu', provenance: 'git', requests24h: 612 },
+  { alias: 'reasoning', target: 'gpt-5.5', conditions: 'key.team in [research, agents]', provenance: 'console', requests24h: 2_880 },
+  { alias: 'fast', target: 'claude-haiku-4-5', provenance: 'console', requests24h: 9_411 },
+]
+
+/** A rate that differs from the model's previous model_pricing row. */
+export interface PriceChange {
+  model: string
+  field: string
+  from: number
+  to: number
+  /** YYYY-MM-DD */
+  effective: string
+  /** Who or what made the change; the control plane doesn't record it yet. */
+  by?: string
+}
+
+/** GET /pricing: when each current price took effect, and changes newest first. */
+export interface PricingView {
+  effectiveFrom: Record<string, string>
+  changes: PriceChange[]
+  /** Mock only: where each price comes from. There's no pricing sync yet. */
+  source?: Record<string, string>
+}
+
+export const pricing: PricingView = {
+  effectiveFrom: {
+    'gpt-5-mini': '2026-08-14',
+    'gpt-5.5': '2026-06-02',
+    'claude-sonnet-5': '2026-09-01',
+    'claude-opus-4-1': '2025-08-05',
+    'claude-haiku-4-5': '2025-10-15',
+    'llama-3.3-70b': '2026-01-01',
+  },
+  changes: [
+    { model: 'claude-sonnet-5', field: 'Output', from: 18.0, to: 15.0, effective: '2026-09-01', by: 'catalog sync (Anthropic list price)' },
+    { model: 'gpt-5-mini', field: 'Cached input', from: 0.05, to: 0.025, effective: '2026-08-14', by: 'catalog sync (OpenAI list price)' },
+  ],
+  source: Object.fromEntries(models.map((m) => [m.id, m.provider === 'Self-hosted' ? 'Internal chargeback rate' : `${m.provider} list price`])),
+}
+
 export interface Backend {
   name: string
   provider: string

@@ -116,9 +116,17 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - Providers, members, and the OTel/Argo CD/Keycloak integrations say
     they aren't connected yet. The kill-switch dialog's 24h blocked and
     redacted counts come from `/summary`.
-- [ ] **Models.**
-  - Aliases from `model_aliases`, with 24h request counts.
-  - Price history from `model_pricing`.
+- [x] **Models.**
+  - Aliases from `model_aliases`, with 24h request counts (GET /aliases).
+    Counts come from raw receipts by `requested_model`, matched with the
+    gateway's own alias rule, so requests a policy or fallback later
+    rerouted still count. Conditions and owner aren't in the schema: "always"
+    and "Not recorded". New alias stays disabled until alias writes.
+  - Price history from `model_pricing` (GET /pricing): each model's current
+    effective date, and one change per rate that differs between
+    consecutive rows. The seed has none yet. Sources show "Seed price" until
+    the pricing sync; CSV export is disabled.
+  - Catalog modalities and deprecation dates show as not connected (§3).
 
 ## 2. Writes
 

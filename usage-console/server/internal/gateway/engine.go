@@ -107,18 +107,6 @@ func sha(s []byte) string {
 
 func round2(f float64) float64 { return math.Round(f*100) / 100 }
 
-func resolveAlias(aliases map[string]string, m string) (string, bool) {
-	if t, ok := aliases[m]; ok {
-		return t, true
-	}
-	for a, t := range aliases {
-		if strings.HasSuffix(a, "*") && strings.HasPrefix(m, strings.TrimSuffix(a, "*")) {
-			return t, true
-		}
-	}
-	return m, false
-}
-
 // primary is the first healthy backend serving the model.
 func (s *Snapshot) primary(m string) (model.Backend, bool) {
 	for _, b := range s.Backends {
@@ -272,7 +260,7 @@ func (s *Snapshot) CheckModel(k *store.KeyRecord, requested string) *Reject {
 
 // Resolve maps a requested model through the aliases.
 func (s *Snapshot) Resolve(requested string) string {
-	m, _ := resolveAlias(s.Aliases, requested)
+	m, _ := store.ResolveAlias(s.Aliases, requested)
 	return m
 }
 
@@ -347,7 +335,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 		}
 	}
 
-	resolved, aliased := resolveAlias(s.Aliases, in.Req.Model)
+	resolved, aliased := store.ResolveAlias(s.Aliases, in.Req.Model)
 	d.aliased = aliased
 	if aliased {
 		rc.RouteReason = "alias"
@@ -567,7 +555,7 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 	if d.Reject != nil {
 		rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = "blocked", d.Reject.Status, d.Reject.Code, d.Reject.Message
 		rc.ResolvedModel = d.Req.Model
-		if r, ok := resolveAlias(s.Aliases, d.Req.Model); ok {
+		if r, ok := store.ResolveAlias(s.Aliases, d.Req.Model); ok {
 			rc.ResolvedModel = r
 		}
 		if b, ok := s.primary(rc.ResolvedModel); ok {
