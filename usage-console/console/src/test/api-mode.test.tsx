@@ -426,6 +426,68 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(await status(send('DELETE', path))).toBe(404)
   })
 
+  // §11's exit test: a cap set through the API stops real requests at the
+  // gateway, and the blocked ones carry the reason.
+  it('writes budgets with dry runs and audit rows, and the gateway enforces the new cap', async () => {
+    type B = import('@/data/catalog').Budget & { version: string }
+    type C = import('@/data/catalog').Change
+    type R = { verdict: string; errorCode?: string; trace: { step: string; input: string }[] }
+    const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+    const name = `api-mode-budget-${Date.now().toString(36)}`
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    let id = ''
+    try {
+      const draft = { scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block' }
+      const dry = await send<{ dryRun: boolean; budget: B; covers: string[]; overCap: boolean }>('POST', '/budgets?dryRun=true', draft)
+      expect(dry).toMatchObject({ dryRun: true, covers: [name], overCap: false, budget: { scope: name, currentUsd: 0 } })
+      expect((await catalog.api<B[]>('/budgets')).some((b) => b.scope === name)).toBe(false)
+
+      const made = await send<B>('POST', '/budgets', draft)
+      id = made.id
+      expect(made).toMatchObject({ scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block', period: 'monthly' })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `key ${name} · $0.01 monthly, block`, targetKind: 'Budget' })
+      expect(await status(send('POST', '/budgets', draft))).toBe(409) // one budget per scope
+      for (const bad of [{ ...draft, period: 'weekly' }, { ...draft, capUsd: 0 }, { ...draft, scopeType: 'team', scope: 'nobody' }, { ...draft, onExceed: 'explode' }])
+        expect(await status(send('POST', '/budgets', { ...bad, scope: bad.scope + (bad.scopeType === 'key' ? '-x' : '') }))).toBe(400)
+
+      // Spend past a cent: long prompts on gpt-5.5, until Warden (reloading every
+      // 5s from the aggregates) refuses one.
+      const prompt = 'Summarize the following incident log. '.repeat(500)
+      // The fake upstream also answers some requests 429; only Warden's carry budget_exceeded.
+      let refused = ''
+      for (let i = 0; i < 40 && !refused; i++) {
+        const res = await fetch(`${gateway}/v1/chat/completions`, {
+          method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
+        })
+        const code = res.status === 429 ? ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code : undefined
+        if (code === 'budget_exceeded') refused = code
+        else await new Promise((ok) => setTimeout(ok, 1000))
+      }
+      expect(refused).toBe('budget_exceeded')
+      let blocked: R | undefined
+      for (let i = 0; i < 20 && !blocked; i++) {
+        blocked = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=blocked`))[0]
+        if (!blocked) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(blocked?.errorCode).toBe('budget_exceeded')
+      expect(blocked!.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(new RegExp(`^key budget ${name} · \\$0\\.\\d\\d of \\$0\\.01$`))
+
+      const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.version)
+      expect(raised.capUsd).toBe(1000)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Raised budget cap', target: `${name} $0.01 → $1,000` })
+      expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 5 }, made.version))).toBe(409)
+      expect(await status(send('PATCH', `/budgets/${id}`, { onExceed: 'explode' }))).toBe(400)
+    } finally {
+      if (id) await send('DELETE', `/budgets/${id}`).catch(() => {})
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+    expect((await catalog.api<B[]>('/budgets')).some((b) => b.id === id)).toBe(false)
+    expect((await catalog.api<C[]>('/changes')).find((c) => c.targetKind === 'Budget')).toMatchObject({ action: 'Deleted budget', target: `key ${name} · $1,000 monthly` })
+  }, 120_000)
+
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session
     type C = import('@/data/catalog').Change

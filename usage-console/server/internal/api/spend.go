@@ -377,11 +377,16 @@ func (s *Server) projection(ctx context.Context, t string, now time.Time, scope 
 // budgets adds month-to-date spend and a month-end projection on the same
 // basis as the Spend page's.
 func (s *Server) budgets(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	ctx := r.Context()
-	bs, err := s.Store.Budgets(ctx, t)
+	bs, err := s.Store.Budgets(r.Context(), t)
 	if err != nil {
 		return nil, err
 	}
+	return s.budgetViews(r.Context(), t, bs)
+}
+
+// budgetViews fills in spend, projection and version for budgets that may
+// not be stored yet (a dry run's).
+func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) ([]model.Budget, error) {
 	g, err := s.grouper(ctx, t)
 	if err != nil {
 		return nil, err
@@ -404,6 +409,7 @@ func (s *Server) budgets(_ http.ResponseWriter, r *http.Request, t string) (any,
 		v := per[b.ScopeType+":"+b.Scope]
 		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
 		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))
+		b.Version = store.BudgetVersion(*b)
 	}
 	return bs, nil
 }

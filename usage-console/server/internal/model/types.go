@@ -113,6 +113,7 @@ type Budget struct {
 	ProjectedUSD float64 `json:"projectedUsd"`
 	// TrailingDailyUSD is the scope's daily average the projection uses.
 	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
+	Version          string  `json:"version,omitempty"` // ETag for If-Match
 }
 
 type Cond struct {

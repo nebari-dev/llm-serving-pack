@@ -232,7 +232,13 @@ func promptText(msgs []fakellm.Message) string {
 	return b.String()
 }
 
-func money(f float64) string { return fmt.Sprintf("$%.0f", f) }
+// money is whole dollars, with cents under $100 so a small cap doesn't read $0.
+func money(f float64) string {
+	if f < 100 {
+		return fmt.Sprintf("$%.2f", f)
+	}
+	return fmt.Sprintf("$%.0f", f)
+}
 
 // Authenticate resolves an Authorization header value (with or without
 // "Bearer ") to its key. Unknown and revoked keys, a secret retired by
@@ -293,16 +299,17 @@ func (s *Snapshot) governingBudget(k *store.KeyRecord) (model.Budget, float64, b
 	var bestSpent float64
 	bestRank, bestRatio, found := -1, 0.0, false
 	for _, b := range s.Budgets {
-		var spent float64
-		switch {
-		case b.ScopeType == "team" && b.Scope == k.Team:
-			spent = s.Spend.ByTeam[b.Scope]
-		case b.ScopeType == "project" && b.Scope == k.Project:
-			spent = s.projectSpend(b.Scope)
-		case b.ScopeType == "key" && b.Scope == k.Name:
-			spent = s.Spend.ByKey[k.ID]
-		default:
+		if !store.BudgetCovers(b, k.APIKey) {
 			continue
+		}
+		var spent float64
+		switch b.ScopeType {
+		case "team":
+			spent = s.Spend.ByTeam[b.Scope]
+		case "project":
+			spent = s.projectSpend(b.Scope)
+		case "key":
+			spent = s.Spend.ByKey[k.ID]
 		}
 		rank, ratio := 0, 0.0
 		if spent >= b.CapUSD {
