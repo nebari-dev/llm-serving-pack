@@ -27,7 +27,7 @@ type Alias struct {
 	Alias       string `json:"alias"`
 	Target      string `json:"target"`
 	Requests24h int    `json:"requests24h"`
-	Version     string `json:"version"` // ETag for If-Match
+	ETag        string `json:"etag"` // for If-Match
 }
 
 // Pricing is when each model's current price took effect, and every rate
@@ -119,7 +119,7 @@ type Budget struct {
 	ProjectedUSD float64 `json:"projectedUsd"`
 	// TrailingDailyUSD is the scope's daily average the projection uses.
 	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
-	Version          string  `json:"version,omitempty"` // ETag for If-Match
+	ETag             string  `json:"etag,omitempty"` // for If-Match
 }
 
 type Cond struct {

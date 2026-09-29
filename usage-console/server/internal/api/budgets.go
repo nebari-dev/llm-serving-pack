@@ -79,8 +79,8 @@ func (s *Server) updateBudget(w http.ResponseWriter, r *http.Request, t string) 
 		return nil, err
 	}
 	if dryRun(r) {
-		if m := r.Header.Get("If-Match"); m != "" && m != store.BudgetVersion(bs[i]) {
-			bs[i].Version = store.BudgetVersion(bs[i])
+		if m := r.Header.Get("If-Match"); m != "" && m != store.BudgetETag(bs[i]) {
+			bs[i].ETag = store.BudgetETag(bs[i])
 			return nil, &store.StaleError{Current: bs[i]}
 		}
 		return s.budgetDryRun(r.Context(), t, next)
@@ -120,7 +120,7 @@ func (s *Server) budgetView(w http.ResponseWriter, ctx context.Context, t string
 	if err != nil {
 		return b, err
 	}
-	w.Header().Set("ETag", vs[0].Version)
+	w.Header().Set("ETag", vs[0].ETag)
 	return vs[0], nil
 }
 
@@ -134,7 +134,7 @@ func (s *Server) budgetDryRun(ctx context.Context, t string, b model.Budget) (Bu
 		return BudgetDryRun{}, err
 	}
 	out := BudgetDryRun{DryRun: true, Budget: vs[0], Covers: []string{}, OverCap: vs[0].CurrentUSD >= b.CapUSD}
-	out.Budget.Version = ""
+	out.Budget.ETag = ""
 	for _, k := range keys {
 		if k.Status != "revoked" && store.BudgetCovers(b, k.APIKey) {
 			out.Covers = append(out.Covers, k.Name)

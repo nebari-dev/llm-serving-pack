@@ -14,10 +14,10 @@ func TestAliasViewsCountRequestsByWhatTheClientAskedFor(t *testing.T) {
 	requested := map[string]int{"summarize-digest": 887, "summarize-notes": 32, "summarize-eu": 5, "gpt-5.5": 1602}
 	got := aliasViews(aliases, requested)
 	for i := range got {
-		if got[i].Version != store.ETag(store.AliasRow{Alias: got[i].Alias, Target: got[i].Target}) {
-			t.Errorf("%s: version %s isn't its row's ETag", got[i].Alias, got[i].Version)
+		if got[i].ETag != store.ETag(store.AliasRow{Alias: got[i].Alias, Target: got[i].Target}) {
+			t.Errorf("%s: etag %s isn't its row's ETag", got[i].Alias, got[i].ETag)
 		}
-		got[i].Version = ""
+		got[i].ETag = ""
 	}
 	want := []model.Alias{
 		{Alias: "fast", Target: "claude-haiku-4-5", Requests24h: 0},

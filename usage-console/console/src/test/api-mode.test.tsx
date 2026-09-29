@@ -398,23 +398,23 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     catalog.api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: ifMatch ? { 'If-Match': ifMatch } : {} })
 
   it('writes aliases with audit rows, validation and If-Match', async () => {
-    type A = import('@/data/catalog').AliasView & { version: string }
+    type A = import('@/data/catalog').AliasView & { etag: string }
     type C = import('@/data/catalog').Change
     const name = `api-mode-test-${Date.now().toString(36)}`
     const path = `/aliases/${encodeURIComponent(name)}`
     try {
       const made = await send<A>('PUT', path, { target: 'gpt-5-mini' })
       expect(made).toMatchObject({ alias: name, target: 'gpt-5-mini' })
-      expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.version).toBe(made.version)
+      expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.etag).toBe(made.etag)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
         action: 'Created alias', target: `${name} → gpt-5-mini`, targetKind: 'Alias', actor: catalog.session.actor.email,
       })
 
-      const moved = await send<A>('PUT', path, { target: 'claude-haiku-4-5' }, made.version)
-      expect(moved.version).not.toBe(made.version)
+      const moved = await send<A>('PUT', path, { target: 'claude-haiku-4-5' }, made.etag)
+      expect(moved.etag).not.toBe(made.etag)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed alias target', target: `${name} gpt-5-mini → claude-haiku-4-5` })
       // Written against the version before that one: stale.
-      expect(await status(send('PUT', path, { target: 'gpt-5.5' }, made.version))).toBe(409)
+      expect(await status(send('PUT', path, { target: 'gpt-5.5' }, made.etag))).toBe(409)
       expect(await status(send('PUT', path, { target: 'no-such-model' }))).toBe(400)
       // A pattern that would capture catalog models is refused.
       expect(await status(send('PUT', `/aliases/${encodeURIComponent('gpt-*')}`, { target: 'gpt-5-mini' }))).toBe(400)
@@ -429,7 +429,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   // §11's exit test: a cap set through the API stops real requests at the
   // gateway, and the blocked ones carry the reason.
   it('writes budgets with dry runs and audit rows, and the gateway enforces the new cap', async () => {
-    type B = import('@/data/catalog').Budget & { version: string }
+    type B = import('@/data/catalog').Budget & { etag: string }
     type C = import('@/data/catalog').Change
     type R = { verdict: string; errorCode?: string; trace: { step: string; input: string }[] }
     const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
@@ -475,10 +475,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(blocked?.errorCode).toBe('budget_exceeded')
       expect(blocked!.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(new RegExp(`^key budget ${name} · \\$0\\.\\d\\d of \\$0\\.01$`))
 
-      const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.version)
+      const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.etag)
       expect(raised.capUsd).toBe(1000)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Raised budget cap', target: `${name} $0.01 → $1,000` })
-      expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 5 }, made.version))).toBe(409)
+      expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 5 }, made.etag))).toBe(409)
       expect(await status(send('PATCH', `/budgets/${id}`, { onExceed: 'explode' }))).toBe(400)
     } finally {
       if (id) await send('DELETE', `/budgets/${id}`).catch(() => {})
@@ -534,6 +534,95 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 60_000)
+
+  it('drafts, publishes, enforces, rolls back and deletes a rule, with versions and audit rows', async () => {
+    type V = { id: string; name: string; mode: string; version: number; failMode: string; etag: string; draft: { description: string } | null }
+    type C = import('@/data/catalog').Change
+    const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+    const keyName = `api-mode-rule-${Date.now().toString(36)}`
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name: keyName, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    const call = async () => {
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5-mini', max_tokens: 20, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      const body = (await res.json().catch(() => null)) as { error?: { code?: string; message?: string } } | null
+      return { status: res.status, code: body?.error?.code, message: body?.error?.message }
+    }
+    const latest = async () => (await catalog.api<C[]>('/changes'))[0]
+    const name = keyName // one rule per test key, so the rule only ever matches this test's traffic
+    const rule = { name, description: 'api-mode test', failMode: 'closed', when: [{ field: 'key', op: 'is', value: [keyName] }], then: [{ action: 'block' }] }
+    let id = ''
+    try {
+      for (const bad of [
+        { ...rule, name: 'Not A Slug' },
+        { ...rule, when: [{ field: 'prompt', op: 'contains entity', value: ['passport'] }] },
+        { ...rule, then: [{ action: 'redact' }] },
+        { ...rule, then: [{ action: 'route to', detail: 'mars' }] },
+      ]) expect(await status(send('POST', '/rules', bad))).toBe(400)
+
+      const made = await send<V>('POST', '/rules', rule)
+      id = made.id
+      expect(made).toMatchObject({ mode: 'draft', version: 0, draft: { description: 'api-mode test' } })
+      expect(await latest()).toMatchObject({ action: 'Created rule', target: name, targetKind: 'Policy' })
+      expect(await status(send('POST', '/rules', rule))).toBe(409) // names are unique
+
+      const dry = await send<{ dryRun: boolean; changes: { field: string; from: unknown; to: unknown }[]; replay: null; note: string }>('POST', `/rules/${id}/publish?dryRun=true`)
+      expect(dry.changes).toEqual(expect.arrayContaining([{ field: 'mode', from: 'draft', to: 'monitor' }, { field: 'version', from: 0, to: 1 }]))
+      expect(dry.replay).toBeNull()
+      expect(dry.note).toMatch(/Replay .* isn't connected yet/)
+      expect((await catalog.api<V[]>('/rules')).find((r) => r.id === id)).toMatchObject({ mode: 'draft', version: 0 })
+
+      // First publish: monitor mode by default. Traffic isn't blocked.
+      const v1 = await send<V>('POST', `/rules/${id}/publish`, undefined, made.etag)
+      expect(v1).toMatchObject({ mode: 'monitor', version: 1, draft: null })
+      expect(await latest()).toMatchObject({ action: 'Published rule in monitor mode', target: `${name} v1` })
+      await new Promise((ok) => setTimeout(ok, 6000)) // Warden reloads every 5s
+      expect((await call()).code).not.toBe('policy_blocked')
+
+      const v2 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'enforce' }, v1.etag)
+      expect(v2).toMatchObject({ mode: 'enforce', version: 2 })
+      expect(await latest()).toMatchObject({ action: 'Published rule', target: `${name} v2` })
+      let refused: Awaited<ReturnType<typeof call>> | undefined
+      for (let i = 0; i < 20 && refused?.code !== 'policy_blocked'; i++) {
+        refused = await call()
+        if (refused.code !== 'policy_blocked') await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(refused).toMatchObject({ status: 403, code: 'policy_blocked', message: `Rule ${name} v2 blocks this request.` })
+
+      // A draft edit doesn't touch the live version; a stale write is refused.
+      const drafted = await send<V>('PUT', `/rules/${id}/draft`, { ...rule, description: 'edited' }, v2.etag)
+      expect(drafted).toMatchObject({ mode: 'enforce', version: 2, draft: { description: 'edited' } })
+      expect(await latest()).toMatchObject({ action: 'Edited rule draft', target: name })
+      expect(await status(send('PUT', `/rules/${id}/draft`, rule, v2.etag))).toBe(409)
+
+      const v3 = await send<V>('POST', `/rules/${id}/rollback`, { version: 1 }, drafted.etag)
+      expect(v3).toMatchObject({ mode: 'monitor', version: 3, draft: { description: 'edited' } })
+      expect(await latest()).toMatchObject({ action: 'Rolled back rule', target: `${name} v2 → v1 (as v3)` })
+      const versions = await catalog.api<{ version: number; mode: string; publishedBy: string }[]>(`/rules/${id}/versions`)
+      expect(versions.map((v) => [v.version, v.mode])).toEqual([[3, 'monitor'], [2, 'enforce'], [1, 'monitor']])
+      expect(versions[0].publishedBy).toBe(catalog.session.actor.email)
+
+      expect(await status(send('DELETE', `/rules/${id}`))).toBe(409) // still live: disable first
+      await send('DELETE', `/rules/${id}/draft`)
+      expect(await latest()).toMatchObject({ action: 'Discarded rule draft', target: name })
+      await send('POST', `/rules/${id}/publish`, { mode: 'disabled' })
+      expect(await latest()).toMatchObject({ action: 'Disabled rule', target: `${name} v4` })
+      await send('DELETE', `/rules/${id}`)
+      expect(await latest()).toMatchObject({ action: 'Deleted rule', target: name })
+      expect((await catalog.api<V[]>('/rules')).some((r) => r.id === id)).toBe(false)
+      expect((await catalog.api<unknown[]>(`/rules/${id}/versions`)).length).toBe(4) // history outlives the rule
+      id = ''
+    } finally {
+      if (id) {
+        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }).catch(() => {})
+        await send('DELETE', `/rules/${id}`).catch(() => {})
+      }
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 90_000)
 
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session

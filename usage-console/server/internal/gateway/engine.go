@@ -407,7 +407,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	msgs := slices.Clone(in.Req.Messages)
 	var outcomes []string
 	for _, rule := range s.Rules {
-		if rule.Mode == "draft" {
+		if rule.Mode == "draft" || rule.Mode == "disabled" {
 			continue
 		}
 		t0 := time.Now()
@@ -433,11 +433,16 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 			} else {
 				switch act.Action {
 				case "block":
-					ent := firstKey(found)
-					d.blockedBy = fmt.Sprintf("blocked by %s v%d on entity %q", rule.Name, rule.Version, ent)
 					ev.MS = round2(float64(time.Since(t0).Microseconds())/1000 + 0.1)
 					rc.Rules = append(rc.Rules, ev)
 					d.rulesMS += ev.MS
+					ent := firstKey(found)
+					if ent == "" {
+						// Matched on who or where, not on content.
+						d.blockedBy = fmt.Sprintf("blocked by %s v%d", rule.Name, rule.Version)
+						return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s v%d blocks this request.", rule.Name, rule.Version))
+					}
+					d.blockedBy = fmt.Sprintf("blocked by %s v%d on entity %q", rule.Name, rule.Version, ent)
 					return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s v%d matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", rule.Name, rule.Version, ent))
 				case "redact":
 					for ent, n := range found {

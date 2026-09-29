@@ -66,6 +66,8 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, 404, errBody("not_found", "not found"))
 			case errors.Is(err, store.ErrConflict):
 				writeJSON(w, 409, errBody("conflict", err.Error()))
+			case errors.As(err, new(conflict)):
+				writeJSON(w, 409, errBody("conflict", err.Error()))
 			case errors.As(err, new(badRequest)):
 				writeJSON(w, 400, errBody("bad_request", err.Error()))
 			case errors.As(err, new(unavailable)):
@@ -98,6 +100,13 @@ func (s *Server) Handler() http.Handler {
 	h("PATCH "+p+"/budgets/{id}", s.updateBudget)
 	h("DELETE "+p+"/budgets/{id}", s.deleteBudget)
 	h("GET "+p+"/rules", s.rules)
+	h("POST "+p+"/rules", s.createRule)
+	h("PUT "+p+"/rules/{id}/draft", s.saveRuleDraft)
+	h("DELETE "+p+"/rules/{id}/draft", s.discardRuleDraft)
+	h("POST "+p+"/rules/{id}/publish", s.publishRule)
+	h("POST "+p+"/rules/{id}/rollback", s.rollbackRule)
+	h("GET "+p+"/rules/{id}/versions", s.ruleVersions)
+	h("DELETE "+p+"/rules/{id}", s.deleteRule)
 	h("GET "+p+"/detectors", s.detectors)
 	h("GET "+p+"/changes", s.changes)
 	h("GET "+p+"/receipts", s.receipts)
@@ -117,6 +126,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }
+
+// conflict is a write the resource's current state doesn't allow (409).
+type conflict string
+
+func (c conflict) Error() string { return string(c) }
 
 type badRequest string
 
@@ -376,11 +390,17 @@ func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, e
 	if err != nil {
 		return nil, err
 	}
+	drafts, err := s.Store.RuleDrafts(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.RuleView, len(rs))
 	for i := range rs {
 		c := counts[rs[i].ID]
 		rs[i].Fired24h, rs[i].Baseline7d = c.Last24h, int(math.Round(float64(c.Last7d)/7))
+		out[i] = store.NewRuleView(rs[i], drafts[rs[i].ID])
 	}
-	return rs, nil
+	return out, nil
 }
 
 func (s *Server) receipt(_ http.ResponseWriter, r *http.Request, t string) (any, error) {

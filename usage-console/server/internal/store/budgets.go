@@ -74,8 +74,8 @@ func ValidateBudget(b model.Budget, scopes BudgetScopes) error {
 	return nil
 }
 
-// BudgetVersion is a budget's ETag: the fields a write can change.
-func BudgetVersion(b model.Budget) string {
+// BudgetETag is a budget's version for If-Match: the fields a write can change.
+func BudgetETag(b model.Budget) string {
 	return ETag([]any{b.ID, b.ScopeType, b.Scope, b.Period, b.CapUSD, b.OnExceed})
 }
 
@@ -166,7 +166,7 @@ func (s *Store) UpdateBudget(ctx context.Context, tenant, actor, id, ifMatch str
 	if err != nil {
 		return was, err
 	}
-	if ifMatch != "" && ifMatch != BudgetVersion(was) {
+	if ifMatch != "" && ifMatch != BudgetETag(was) {
 		return was, &StaleError{Current: withVersion(was)}
 	}
 	now := was
@@ -196,7 +196,7 @@ func (s *Store) DeleteBudget(ctx context.Context, tenant, actor, id, ifMatch str
 	if err != nil {
 		return err
 	}
-	if ifMatch != "" && ifMatch != BudgetVersion(was) {
+	if ifMatch != "" && ifMatch != BudgetETag(was) {
 		return &StaleError{Current: withVersion(was)}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE api_keys SET budget_id = NULL WHERE tenant_id = $1 AND budget_id = $2`, tenant, id); err != nil {
@@ -213,7 +213,7 @@ func (s *Store) DeleteBudget(ctx context.Context, tenant, actor, id, ifMatch str
 }
 
 func withVersion(b model.Budget) model.Budget {
-	b.Version = BudgetVersion(b)
+	b.ETag = BudgetETag(b)
 	return b
 }
 

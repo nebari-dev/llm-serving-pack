@@ -409,7 +409,7 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 		v := per[b.ScopeType+":"+b.Scope]
 		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
 		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))
-		b.Version = store.BudgetVersion(*b)
+		b.ETag = store.BudgetETag(*b)
 	}
 	return bs, nil
 }

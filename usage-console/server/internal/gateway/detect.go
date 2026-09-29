@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 )
 
@@ -78,3 +79,13 @@ func redact(entity, text string) string {
 // exfil flags markdown images or links that smuggle data out in a query
 // string: the response-inspection check that truncates a stream.
 var exfil = regexp.MustCompile(`!\[[^\]]*\]\(https?://[^)\s]*\?[^)\s]*\)`)
+
+// Entities is the entity types rules can name in "contains entity".
+func Entities() []string {
+	out := make([]string, 0, len(detectors))
+	for e := range detectors {
+		out = append(out, e)
+	}
+	slices.Sort(out)
+	return out
+}

@@ -68,7 +68,7 @@ func (s *Server) aliasView(w http.ResponseWriter, r *http.Request, t, alias stri
 	}
 	for _, a := range all.([]model.Alias) {
 		if a.Alias == alias {
-			w.Header().Set("ETag", a.Version)
+			w.Header().Set("ETag", a.ETag)
 			return a, nil
 		}
 	}
@@ -94,7 +94,7 @@ func aliasViews(aliases map[string]string, requested map[string]int) []model.Ali
 	}
 	out := make([]model.Alias, 0, len(aliases))
 	for a, target := range aliases {
-		out = append(out, model.Alias{Alias: a, Target: target, Requests24h: byAlias[a], Version: store.ETag(store.AliasRow{Alias: a, Target: target})})
+		out = append(out, model.Alias{Alias: a, Target: target, Requests24h: byAlias[a], ETag: store.ETag(store.AliasRow{Alias: a, Target: target})})
 	}
 	slices.SortFunc(out, func(x, y model.Alias) int { return cmp.Compare(x.Alias, y.Alias) })
 	return out
