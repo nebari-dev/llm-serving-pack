@@ -391,6 +391,41 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(catalogText).not.toContain('Deprecated 2026-12-31')
   })
 
+  // Backend writes the console doesn't call yet: each one validates, writes its
+  // audit row, and refuses a stale If-Match with 409.
+  const status = (p: Promise<unknown>) => p.then(() => 200, (e: { status?: number }) => e.status ?? 0)
+  const send = <T,>(method: string, path: string, body?: unknown, ifMatch?: string) =>
+    catalog.api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: ifMatch ? { 'If-Match': ifMatch } : {} })
+
+  it('writes aliases with audit rows, validation and If-Match', async () => {
+    type A = import('@/data/catalog').AliasView & { version: string }
+    type C = import('@/data/catalog').Change
+    const name = `api-mode-test-${Date.now().toString(36)}`
+    const path = `/aliases/${encodeURIComponent(name)}`
+    try {
+      const made = await send<A>('PUT', path, { target: 'gpt-5-mini' })
+      expect(made).toMatchObject({ alias: name, target: 'gpt-5-mini' })
+      expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.version).toBe(made.version)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
+        action: 'Created alias', target: `${name} → gpt-5-mini`, targetKind: 'Alias', actor: catalog.session.actor.email,
+      })
+
+      const moved = await send<A>('PUT', path, { target: 'claude-haiku-4-5' }, made.version)
+      expect(moved.version).not.toBe(made.version)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed alias target', target: `${name} gpt-5-mini → claude-haiku-4-5` })
+      // Written against the version before that one: stale.
+      expect(await status(send('PUT', path, { target: 'gpt-5.5' }, made.version))).toBe(409)
+      expect(await status(send('PUT', path, { target: 'no-such-model' }))).toBe(400)
+      // A pattern that would capture catalog models is refused.
+      expect(await status(send('PUT', `/aliases/${encodeURIComponent('gpt-*')}`, { target: 'gpt-5-mini' }))).toBe(400)
+    } finally {
+      await send('DELETE', path).catch(() => {})
+    }
+    expect((await catalog.api<A[]>('/aliases')).some((a) => a.alias === name)).toBe(false)
+    expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted alias', target: name })
+    expect(await status(send('DELETE', path))).toBe(404)
+  })
+
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session
     type C = import('@/data/catalog').Change

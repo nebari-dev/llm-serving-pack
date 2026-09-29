@@ -27,6 +27,7 @@ type Alias struct {
 	Alias       string `json:"alias"`
 	Target      string `json:"target"`
 	Requests24h int    `json:"requests24h"`
+	Version     string `json:"version"` // ETag for If-Match
 }
 
 // Pricing is when each model's current price took effect, and every rate

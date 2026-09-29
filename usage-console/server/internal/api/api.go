@@ -26,9 +26,10 @@ type Server struct {
 	// every caller acts as DevActor.
 	Tenants  []string
 	DevActor string
-	// KeysChanged, if set, runs after a key is created, revoked or rotated and
-	// before the response, so the gateway's key check sees it at once.
-	KeysChanged func()
+	// ConfigChanged, if set, runs after a write to anything the gateway
+	// enforces (keys, aliases, budgets, rules) and before the response, so
+	// the key check sees it at once. Warden catches up on its next reload.
+	ConfigChanged func()
 	// WardenURL is Warden's admin base URL (http://localhost:8084), for the
 	// degradation banner. Empty when Warden isn't in the request path.
 	WardenURL string
@@ -37,9 +38,9 @@ type Server struct {
 	Environment string
 }
 
-func (s *Server) keysChanged() {
-	if s.KeysChanged != nil {
-		s.KeysChanged()
+func (s *Server) configChanged() {
+	if s.ConfigChanged != nil {
+		s.ConfigChanged()
 	}
 }
 
@@ -53,7 +54,13 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			v, err := fn(w, r, tenant)
+			var stale *store.StaleError
 			switch {
+			case errors.As(err, &stale):
+				// §6: a stale write is a 409 carrying what's there now, for a merge.
+				body := errBody("conflict", err.Error())
+				body["current"] = stale.Current
+				writeJSON(w, 409, body)
 			case errors.Is(err, store.ErrNotFound):
 				writeJSON(w, 404, errBody("not_found", "not found"))
 			case errors.Is(err, store.ErrConflict):
@@ -74,6 +81,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/teams", s.teams)
 	h("GET "+p+"/models", s.models)
 	h("GET "+p+"/aliases", s.aliases)
+	h("PUT "+p+"/aliases/{alias}", s.putAlias)
+	h("DELETE "+p+"/aliases/{alias}", s.deleteAlias)
 	h("GET "+p+"/pricing", s.pricing)
 	h("GET "+p+"/backends", s.backends)
 	h("GET "+p+"/routes", s.routes)
@@ -239,7 +248,7 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
-	s.keysChanged()
+	s.configChanged()
 	return map[string]any{"key": k.APIKey, "secret": secret}, nil
 }
 
@@ -248,7 +257,7 @@ func (s *Server) revokeKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
-	s.keysChanged()
+	s.configChanged()
 	return withUsage(k.APIKey, store.KeyUsage{}), nil
 }
 
@@ -273,7 +282,7 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err != nil {
 		return nil, err
 	}
-	s.keysChanged()
+	s.configChanged()
 	usage, _ := s.Store.KeyUsage(r.Context(), t)
 	starts, _ := s.Store.RotationStarts(r.Context(), t)
 	out := withUsage(k.APIKey, usage[k.ID])

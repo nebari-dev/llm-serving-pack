@@ -105,7 +105,7 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	go hub.Listen(ctx, st, st.Receipts)
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
-	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", KeysChanged: reload, WardenURL: *warden, Environment: *environment}
+	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", ConfigChanged: reload, WardenURL: *warden, Environment: *environment}
 	go srv.FinishRotations(ctx)
 
 	go listen(ctx, "ext_authz", *authzAddr, &gateway.ExtAuthz{Snap: &snap})

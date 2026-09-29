@@ -34,7 +34,7 @@ func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapsho
 	for _, m := range models {
 		s.Models[m.ID] = m
 	}
-	if s.Aliases, err = st.Aliases(ctx); err != nil {
+	if s.Aliases, err = st.Aliases(ctx, tenant); err != nil {
 		return nil, err
 	}
 	if s.Backends, err = st.Backends(ctx, tenant); err != nil {

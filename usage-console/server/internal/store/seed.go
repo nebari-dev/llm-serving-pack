@@ -37,7 +37,7 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		b.Queue(`INSERT INTO model_pricing VALUES ($1,$2,$3,$4,$5,'2026-01-01',NULL)`, m.ID, m.InPerM, m.OutPerM, m.CachedPerM, m.ReasoningPerM)
 	}
 	for alias, target := range demo.Aliases {
-		b.Queue(`INSERT INTO model_aliases VALUES ($1,$2)`, alias, target)
+		b.Queue(`INSERT INTO model_aliases (tenant_id, alias, target) VALUES ($1,$2,$3)`, t, alias, target)
 	}
 	for i, x := range demo.Backends {
 		b.Queue(`INSERT INTO backends VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13)`,

@@ -41,8 +41,8 @@ func (s *Store) Models(ctx context.Context) ([]model.Model, error) {
 	})
 }
 
-func (s *Store) Aliases(ctx context.Context) (map[string]string, error) {
-	rows, _ := s.Config.Query(ctx, `SELECT alias, target FROM model_aliases`)
+func (s *Store) Aliases(ctx context.Context, tenant string) (map[string]string, error) {
+	rows, _ := s.Config.Query(ctx, `SELECT alias, target FROM model_aliases WHERE tenant_id = $1`, tenant)
 	pairs, err := collect(rows, func(r pgx.Rows) ([2]string, error) {
 		var p [2]string
 		return p, r.Scan(&p[0], &p[1])
