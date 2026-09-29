@@ -47,6 +47,8 @@ const (
 	attrKeyID       = "stargate.key_id"
 	attrTeam        = "stargate.team"
 	attrProject     = "stargate.project"
+	attrSecretID    = "stargate.secret_id"
+	attrDeniedSecID = "stargate.denied_secret_id"
 	attrDeniedKeyID = "stargate.denied_key_id"
 	attrDeniedModel = "stargate.denied_model"
 	attrPolicy      = "stargate.policy"
@@ -107,6 +109,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	keyID, denied := KeyID(a), get(attrKeyID) == ""
 	if keyID != "" {
 		rc.KeyID, rc.KeyName, rc.Team, rc.Project = keyID, keyID, get(attrTeam), get(attrProject)
+		rc.SecretID = cmp.Or(get(attrSecretID), get(attrDeniedSecID))
 		k := s.KeyByID(keyID)
 		if k != nil {
 			rc.KeyName, identity.Input = k.Name, "Bearer "+k.Prefix+"…"

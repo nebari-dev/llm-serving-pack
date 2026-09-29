@@ -346,7 +346,9 @@ func Admit(s *Snapshot, in Input, r *rand.Rand) *Decision {
 	if rej != nil {
 		return &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req, Reject: rej}
 	}
-	return AdmitKey(s, k, in, r)
+	d := AdmitKey(s, k, in, r)
+	d.Receipt.SecretID = SecretID(demo.HashSecret(strings.TrimPrefix(in.Secret, "Bearer ")))
+	return d
 }
 
 // AdmitKey is Admit for a key something else already authenticated: Warden

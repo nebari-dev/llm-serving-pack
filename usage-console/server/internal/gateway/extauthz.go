@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/jbouder/stargate/server/internal/demo"
 )
 
 // Identity headers ExtAuthz puts on an admitted request. The access log
@@ -14,6 +17,8 @@ const (
 	HeaderKeyID   = "X-Stargate-Key-Id"
 	HeaderTeam    = "X-Stargate-Team"
 	HeaderProject = "X-Stargate-Project"
+	// HeaderSecretID names which of the key's secrets was used (SecretID).
+	HeaderSecretID = "X-Stargate-Secret-Id"
 	// HeaderModel is on a 403 only: the model the key may not call.
 	HeaderModel = "X-Stargate-Model"
 )
@@ -25,7 +30,7 @@ const (
 // the caller as is.
 //
 // It checks the key the same way Admit does, and the model against the key's
-// allowlist after aliasing. Budgets and rules stay with devgateway until Warden.
+// allowlist after aliasing. Budgets and rules are Warden's (cmd/warden).
 type ExtAuthz struct {
 	Snap *Current
 	Now  func() time.Time
@@ -45,6 +50,7 @@ func (a *ExtAuthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(HeaderKeyID, k.ID)
 	w.Header().Set(HeaderTeam, k.Team)
 	w.Header().Set(HeaderProject, k.Project)
+	w.Header().Set(HeaderSecretID, SecretID(demo.HashSecret(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))))
 	m := requestModel(r)
 	if rej := snap.CheckModel(k, m); m != "" && rej != nil {
 		// A 403 goes to the caller, whose own key it is, with the identity
@@ -67,3 +73,8 @@ func requestModel(r *http.Request) string {
 	json.NewDecoder(io.LimitReader(r.Body, 64<<20)).Decode(&body)
 	return body.Model
 }
+
+// SecretID identifies one of a key's secrets on its receipts without
+// revealing it: the first 12 hex of the secret's hash. It doesn't change
+// when a rotation promotes the new secret.
+func SecretID(hash string) string { return hash[:min(12, len(hash))] }

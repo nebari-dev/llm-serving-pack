@@ -94,3 +94,32 @@ func TestExtAuthzIdentityHeaders(t *testing.T) {
 		t.Errorf("200 headers: %d %v", w.Code, h)
 	}
 }
+
+// Which secret authenticated a request goes on as a header, so receipts can
+// show a rotation's traffic moving from the old secret to the new one.
+func TestExtAuthzNamesTheSecretUsed(t *testing.T) {
+	snap := DemoSnapshot()
+	newSecret := "ngw_live_rotatedsecretforthetestonly0000000"
+	for _, k := range snap.KeyBy {
+		if k.ID == "k4" {
+			k.NextHash = demo.HashSecret(newSecret)
+			snap.KeyBy[k.NextHash] = k
+			break
+		}
+	}
+	var cur Current
+	cur.Store(snap)
+	a := &ExtAuthz{Snap: &cur}
+	for _, c := range []struct{ auth, want string }{
+		{secret("k4"), SecretID(demo.HashSecret(strings.TrimPrefix(secret("k4"), "Bearer ")))},
+		{"Bearer " + newSecret, SecretID(demo.HashSecret(newSecret))},
+	} {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5-mini"}`))
+		req.Header.Set("Authorization", c.auth)
+		w := httptest.NewRecorder()
+		a.ServeHTTP(w, req)
+		if got := w.Header().Get(HeaderSecretID); w.Code != 200 || got != c.want || len(got) != 12 {
+			t.Errorf("%d secret id %q, want %q", w.Code, got, c.want)
+		}
+	}
+}

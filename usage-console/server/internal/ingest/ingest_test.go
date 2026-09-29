@@ -180,3 +180,14 @@ func TestReceiptBlockedByWarden(t *testing.T) {
 		t.Errorf("trace = %+v", rc.Trace)
 	}
 }
+
+func TestReceiptRecordsWhichSecret(t *testing.T) {
+	rc, err := Receipt(keyed, record(map[string]string{"stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "assistant", "stargate.secret_id": "3f9a0c11b2de"}))
+	if err != nil || rc.SecretID != "3f9a0c11b2de" {
+		t.Fatalf("secret id %q, err %v", rc.SecretID, err)
+	}
+	rc, _ = Receipt(keyed, record(map[string]string{"stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "assistant", "stargate.secret_id": "-"}))
+	if rc.SecretID != "" {
+		t.Fatalf("unset secret id recorded as %q", rc.SecretID)
+	}
+}

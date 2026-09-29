@@ -295,3 +295,94 @@ func (s *Store) TenantName(ctx context.Context, tenant string) (string, error) {
 	}
 	return name, err
 }
+
+// RotationSecrets counts each rotating key's requests since its rotation
+// started, by the secret that authenticated them ("" when not recorded).
+// Raw receipts: the aggregates don't keep the secret, and the windows are
+// at most a week.
+func (s *Store) RotationSecrets(ctx context.Context, tenant string, since map[string]time.Time) (map[string]map[string]int, error) {
+	out := map[string]map[string]int{}
+	for id, from := range since {
+		rows, _ := s.Receipts.Query(ctx, `
+			SELECT coalesce(secret_id, ''), count(*)::int FROM receipts
+			WHERE tenant_id = $1 AND key_id = $2 AND ts >= $3 AND NOT in_flight GROUP BY 1`, tenant, id, from)
+		type row struct {
+			secret string
+			n      int
+		}
+		got, err := collect(rows, func(r pgx.Rows) (row, error) {
+			var x row
+			return x, r.Scan(&x.secret, &x.n)
+		})
+		if err != nil {
+			return nil, err
+		}
+		out[id] = map[string]int{}
+		for _, x := range got {
+			out[id][x.secret] = x.n
+		}
+	}
+	return out, nil
+}
+
+// MaxOverlap is the longest a rotation's overlap may run from now.
+const MaxOverlap = 7 * 24 * time.Hour
+
+// ErrOverlapTooLong is an extension past MaxOverlap from now.
+var ErrOverlapTooLong = errors.New("the overlap can't end more than 7 days from now")
+
+// ExtendRotation pushes a rotating key's overlap end back by d.
+func (s *Store) ExtendRotation(ctx context.Context, tenant, actor, id string, d time.Duration) (KeyRecord, error) {
+	tx, err := s.Config.Begin(ctx)
+	if err != nil {
+		return KeyRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	var until *time.Time
+	err = tx.QueryRow(ctx, `SELECT rotate_until FROM api_keys WHERE tenant_id = $1 AND id = $2 AND status = 'rotating' AND next_hash IS NOT NULL FOR UPDATE`, tenant, id).Scan(&until)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return KeyRecord{}, ErrConflict
+	}
+	if err != nil {
+		return KeyRecord{}, err
+	}
+	end := time.Now().Add(d)
+	if until != nil && until.After(time.Now()) {
+		end = until.Add(d)
+	}
+	if time.Until(end) > MaxOverlap {
+		return KeyRecord{}, ErrOverlapTooLong
+	}
+	k, err := scanKey(tx.QueryRow(ctx, `UPDATE api_keys SET rotate_until = $3 WHERE tenant_id = $1 AND id = $2 RETURNING `+keyCols, tenant, id, end))
+	if err != nil {
+		return KeyRecord{}, err
+	}
+	target := k.Name + " · until " + end.UTC().Format("2006-01-02 15:04") + " UTC"
+	if err := audit(ctx, tx, tenant, actor, "Extended rotation overlap", target, "Key", k.ID, map[string]any{"rotateUntil": until}, map[string]any{"rotateUntil": end}); err != nil {
+		return KeyRecord{}, err
+	}
+	return k, tx.Commit(ctx)
+}
+
+// FinishRotation retires a rotating key's old secret now, as FinishRotations
+// does when the overlap ends.
+func (s *Store) FinishRotation(ctx context.Context, tenant, actor, id string) (KeyRecord, error) {
+	tx, err := s.Config.Begin(ctx)
+	if err != nil {
+		return KeyRecord{}, err
+	}
+	defer tx.Rollback(ctx)
+	k, err := scanKey(tx.QueryRow(ctx, `
+		UPDATE api_keys SET hash = next_hash, next_hash = NULL, rotate_until = NULL, status = 'active'
+		WHERE tenant_id = $1 AND id = $2 AND status = 'rotating' AND next_hash IS NOT NULL RETURNING `+keyCols, tenant, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return KeyRecord{}, ErrConflict
+	}
+	if err != nil {
+		return KeyRecord{}, err
+	}
+	if err := audit(ctx, tx, tenant, actor, "Retired old secret", k.Name, "Key", k.ID, nil, nil); err != nil {
+		return KeyRecord{}, err
+	}
+	return k, tx.Commit(ctx)
+}

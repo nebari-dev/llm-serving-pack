@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/store"
 )
@@ -90,6 +91,8 @@ func (s *Server) Handler() http.Handler {
 	h("POST "+p+"/keys", s.createKey)
 	h("POST "+p+"/keys/{id}/revoke", s.revokeKey)
 	h("POST "+p+"/keys/{id}/rotate", s.rotateKey)
+	h("POST "+p+"/keys/{id}/rotation/extend", s.extendRotation)
+	h("POST "+p+"/keys/{id}/rotation/finish", s.finishRotation)
 	h("GET "+p+"/budgets", s.budgets)
 	h("POST "+p+"/budgets", s.createBudget)
 	h("PATCH "+p+"/budgets/{id}", s.updateBudget)
@@ -194,12 +197,27 @@ func (s *Server) keys(_ http.ResponseWriter, r *http.Request, t string) (any, er
 	if err != nil {
 		return nil, err
 	}
+	bySecret, err := s.Store.RotationSecrets(r.Context(), t, rotatingSince(ks, starts))
+	if err != nil {
+		return nil, err
+	}
 	out := make([]model.APIKey, len(ks))
 	for i, k := range ks {
 		out[i] = withUsage(k.APIKey, usage[k.ID])
-		out[i].Rotation = rotationOf(k, starts)
+		out[i].Rotation = rotationOf(k, starts, bySecret)
 	}
 	return out, nil
+}
+
+// rotatingSince is when each rotating key's overlap started, where recorded.
+func rotatingSince(ks []store.KeyRecord, starts map[string]store.AuditMark) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, k := range ks {
+		if m, ok := starts[k.ID]; ok && k.Status == "rotating" {
+			out[k.ID] = m.TS
+		}
+	}
+	return out
 }
 
 func withUsage(k model.APIKey, u store.KeyUsage) model.APIKey {
@@ -214,9 +232,10 @@ func withUsage(k model.APIKey, u store.KeyUsage) model.APIKey {
 	return k
 }
 
-// rotationOf is a rotating key's window: its end from rotate_until, and its
-// start from the key's latest "Rotated key" audit row.
-func rotationOf(k store.KeyRecord, starts map[string]store.AuditMark) *model.KeyRotation {
+// rotationOf is a rotating key's window: its end from rotate_until, its
+// start from the key's latest "Rotated key" audit row, and the requests since
+// then by secret (bySecret: key id → secret id → requests).
+func rotationOf(k store.KeyRecord, starts map[string]store.AuditMark, bySecret map[string]map[string]int) *model.KeyRotation {
 	if k.Status != "rotating" {
 		return nil
 	}
@@ -228,6 +247,9 @@ func rotationOf(k store.KeyRecord, starts map[string]store.AuditMark) *model.Key
 	if m, ok := starts[k.ID]; ok {
 		ms, actor := m.TS.UnixMilli(), m.Actor
 		r.StartedAt, r.StartedBy = &ms, &actor
+		counts := bySecret[k.ID]
+		old, next := counts[gateway.SecretID(k.Hash)], counts[gateway.SecretID(k.NextHash)]
+		r.OldSecretRequests, r.NewSecretRequests, r.UnrecordedRequests = &old, &next, counts[""]
 	}
 	return &r
 }
@@ -286,11 +308,63 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 		return nil, err
 	}
 	s.configChanged()
-	usage, _ := s.Store.KeyUsage(r.Context(), t)
-	starts, _ := s.Store.RotationStarts(r.Context(), t)
-	out := withUsage(k.APIKey, usage[k.ID])
-	out.Rotation = rotationOf(k, starts)
+	out, err := s.keyView(r.Context(), t, k)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{"key": out, "secret": secret}, nil
+}
+
+// extendRotation takes {"hours": n}: how much longer both secrets work. The
+// overlap can't end more than 7 days from now.
+func (s *Server) extendRotation(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	var in struct {
+		Hours int `json:"hours"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, badRequest("invalid JSON body")
+	}
+	if in.Hours < 1 || in.Hours > 168 {
+		return nil, badRequest("hours must be between 1 and 168")
+	}
+	k, err := s.Store.ExtendRotation(r.Context(), t, s.DevActor, r.PathValue("id"), time.Duration(in.Hours)*time.Hour)
+	if errors.Is(err, store.ErrOverlapTooLong) {
+		return nil, badRequest(err.Error())
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.configChanged()
+	return s.keyView(r.Context(), t, k)
+}
+
+// finishRotation retires the old secret now, instead of at the overlap's end.
+func (s *Server) finishRotation(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	k, err := s.Store.FinishRotation(r.Context(), t, s.DevActor, r.PathValue("id"))
+	if err != nil {
+		return nil, err
+	}
+	s.configChanged()
+	return s.keyView(r.Context(), t, k)
+}
+
+// keyView is one key as GET /keys shows it.
+func (s *Server) keyView(ctx context.Context, t string, k store.KeyRecord) (model.APIKey, error) {
+	usage, err := s.Store.KeyUsage(ctx, t)
+	if err != nil {
+		return model.APIKey{}, err
+	}
+	starts, err := s.Store.RotationStarts(ctx, t)
+	if err != nil {
+		return model.APIKey{}, err
+	}
+	bySecret, err := s.Store.RotationSecrets(ctx, t, rotatingSince([]store.KeyRecord{k}, starts))
+	if err != nil {
+		return model.APIKey{}, err
+	}
+	out := withUsage(k.APIKey, usage[k.ID])
+	out.Rotation = rotationOf(k, starts, bySecret)
+	return out, nil
 }
 
 func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {

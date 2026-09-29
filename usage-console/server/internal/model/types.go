@@ -95,11 +95,17 @@ type APIKey struct {
 }
 
 // KeyRotation is a rotating key's overlap window. Each field is null when
-// it wasn't recorded. Which secret each request used isn't recorded yet.
+// it wasn't recorded.
 type KeyRotation struct {
 	StartedAt *int64  `json:"startedAt"` // epoch ms, from the audit log
 	StartedBy *string `json:"startedBy"`
 	EndsAt    *int64  `json:"endsAt"` // epoch ms, from rotate_until
+	// Requests since the rotation started, by the secret that authenticated
+	// them; null without a start. Unrecorded is requests from before
+	// receipts recorded the secret.
+	OldSecretRequests  *int `json:"oldSecretRequests"`
+	NewSecretRequests  *int `json:"newSecretRequests"`
+	UnrecordedRequests int  `json:"unrecordedRequests"`
 }
 
 type Budget struct {
@@ -194,6 +200,9 @@ type Receipt struct {
 	TTFTMS            *int        `json:"ttftMs,omitempty"`
 	KeyID             string      `json:"keyId"`
 	KeyName           string      `json:"keyName"`
+	// SecretID is which of the key's secrets authenticated the request (the
+	// first 12 hex of its hash); empty when not recorded.
+	SecretID string `json:"secretId,omitempty"`
 	Team              string      `json:"team"`
 	Project           string      `json:"project"`
 	Actor             string      `json:"actor,omitempty"`

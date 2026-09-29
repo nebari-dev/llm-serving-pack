@@ -488,6 +488,53 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect((await catalog.api<C[]>('/changes')).find((c) => c.targetKind === 'Budget')).toMatchObject({ action: 'Deleted budget', target: `key ${name} · $1,000 monthly` })
   }, 120_000)
 
+  it('splits a rotation’s traffic by secret, extends its overlap and retires the old secret', async () => {
+    type K = { id: string; status: string; rotation?: { endsAt: number | null; oldSecretRequests: number | null; newSecretRequests: number | null } | null }
+    type C = import('@/data/catalog').Change
+    const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+    const call = (secret: string) =>
+      fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5-mini', max_tokens: 20, messages: [{ role: 'user', content: 'hi' }] }),
+      }).then((r) => r.status)
+    const name = `api-mode-rotate-${Date.now().toString(36)}`
+    const { key, secret: oldSecret } = await send<{ key: K; secret: string }>('POST', '/keys', {
+      name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    const keyNow = async () => (await catalog.api<K[]>('/keys')).find((k) => k.id === key.id)!
+    try {
+      const { secret: newSecret } = await send<{ key: K; secret: string }>('POST', `/keys/${key.id}/rotate`, { overlapHours: 1 })
+      expect(await call(oldSecret)).not.toBe(401)
+      expect(await call(newSecret)).not.toBe(401)
+      expect(await call(newSecret)).not.toBe(401)
+      let r: K['rotation']
+      for (let i = 0; i < 30; i++) {
+        r = (await keyNow()).rotation
+        if (r?.oldSecretRequests === 1 && r.newSecretRequests === 2) break
+        await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(r).toMatchObject({ oldSecretRequests: 1, newSecretRequests: 2 })
+
+      const extended = await send<K>('POST', `/keys/${key.id}/rotation/extend`, { hours: 24 })
+      expect(extended.rotation!.endsAt! - r!.endsAt!).toBeGreaterThan(24 * 3_600_000 - 60_000)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Extended rotation overlap', targetKind: 'Key' })
+      expect((await catalog.api<C[]>('/changes'))[0].target).toMatch(new RegExp(`^${name} · until \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC$`))
+      // The overlap can't run past 7 days from now.
+      expect(await status(send('POST', `/keys/${key.id}/rotation/extend`, { hours: 168 }))).toBe(400)
+
+      const retired = await send<K>('POST', `/keys/${key.id}/rotation/finish`)
+      expect(retired).toMatchObject({ status: 'active' })
+      expect(retired.rotation ?? null).toBeNull()
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Retired old secret', target: name })
+      expect(await call(oldSecret)).toBe(401)
+      expect(await call(newSecret)).not.toBe(401)
+      expect(await status(send('POST', `/keys/${key.id}/rotation/finish`))).toBe(409)
+      expect(await status(send('POST', `/keys/${key.id}/rotation/extend`, { hours: 1 }))).toBe(409)
+    } finally {
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
+
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session
     type C = import('@/data/catalog').Change
