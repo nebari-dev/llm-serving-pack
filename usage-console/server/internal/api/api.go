@@ -28,8 +28,9 @@ type Server struct {
 	Tenants  []string
 	DevActor string
 	// ConfigChanged, if set, runs after a write to anything the gateway
-	// enforces (keys, aliases, budgets, rules) and before the response, so
-	// the key check sees it at once. Warden catches up on its next reload.
+	// enforces (keys, aliases, budgets, rules, prices) and before the
+	// response, so the key check sees it at once. Warden is asked to reload
+	// too; if it can't be reached it catches up on its next tick.
 	ConfigChanged func()
 	// WardenURL is Warden's admin base URL (http://localhost:8084), for the
 	// degradation banner. Empty when Warden isn't in the request path.
@@ -43,6 +44,21 @@ func (s *Server) configChanged() {
 	if s.ConfigChanged != nil {
 		s.ConfigChanged()
 	}
+	if s.WardenURL == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(s.WardenURL, "/")+"/reload", nil)
+	if err != nil {
+		return
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("warden reload: %v (it reloads on its next tick)", err)
+		return
+	}
+	res.Body.Close()
 }
 
 func (s *Server) Handler() http.Handler {

@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,7 +56,11 @@ func main() {
 
 	var cur gateway.Current
 	var loadedAt atomic.Int64
+	// Loads are serialized so a slow tick can't overwrite a newer /reload.
+	var loadMu sync.Mutex
 	load := func() error {
+		loadMu.Lock()
+		defer loadMu.Unlock()
 		s, err := gateway.LoadSnapshot(ctx, st, demo.Tenant)
 		if err == nil {
 			cur.Store(s)
@@ -108,6 +113,15 @@ func main() {
 			pt = 1
 		}
 		fmt.Fprintf(rw, "# TYPE warden_snapshot_age_seconds gauge\nwarden_snapshot_age_seconds %.3f\n# TYPE warden_passthrough gauge\nwarden_passthrough %d\n", age(), pt)
+	})
+	// The control plane calls this after a config write, so a new cap or rule
+	// applies at once instead of on the next tick. It answers once loaded.
+	mux.HandleFunc("POST /reload", func(rw http.ResponseWriter, _ *http.Request) {
+		if err := load(); err != nil {
+			http.Error(rw, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintln(rw, "reloaded")
 	})
 	mux.HandleFunc("POST /passthrough", func(rw http.ResponseWriter, r *http.Request) {
 		on, err := strconv.ParseBool(r.URL.Query().Get("on"))

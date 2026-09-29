@@ -579,18 +579,13 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       const v1 = await send<V>('POST', `/rules/${id}/publish`, undefined, made.etag)
       expect(v1).toMatchObject({ mode: 'monitor', version: 1, draft: null })
       expect(await latest()).toMatchObject({ action: 'Published rule in monitor mode', target: `${name} v1` })
-      await new Promise((ok) => setTimeout(ok, 6000)) // Warden reloads every 5s
+      // The control plane has Warden reload before the write returns.
       expect((await call()).code).not.toBe('policy_blocked')
 
       const v2 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'enforce' }, v1.etag)
       expect(v2).toMatchObject({ mode: 'enforce', version: 2 })
       expect(await latest()).toMatchObject({ action: 'Published rule', target: `${name} v2` })
-      let refused: Awaited<ReturnType<typeof call>> | undefined
-      for (let i = 0; i < 20 && refused?.code !== 'policy_blocked'; i++) {
-        refused = await call()
-        if (refused.code !== 'policy_blocked') await new Promise((ok) => setTimeout(ok, 500))
-      }
-      expect(refused).toMatchObject({ status: 403, code: 'policy_blocked', message: `Rule ${name} v2 blocks this request.` })
+      expect(await call()).toMatchObject({ status: 403, code: 'policy_blocked', message: `Rule ${name} v2 blocks this request.` })
 
       // A draft edit doesn't touch the live version; a stale write is refused.
       const drafted = await send<V>('PUT', `/rules/${id}/draft`, { ...rule, description: 'edited' }, v2.etag)

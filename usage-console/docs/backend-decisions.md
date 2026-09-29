@@ -1,6 +1,6 @@
 # Backend: decisions and open questions
 
-Written 2026-09-29 at the end of the backend writes pass (`7659a28`..`dabb753`
+Written 2026-09-29 at the end of the backend writes pass (`7659a28` onward
 on `backend-api`). Each item says what the code does today, what's open,
 and a recommendation. Items marked **Decide** block work; the rest are
 defaults I picked that you may want to change.
@@ -176,9 +176,9 @@ retire-old-secret-now are in.
 - **The api-mode suite writes to the live dev database.** It creates keys
   (revoked afterwards), budgets, rules and a scheduled price (all removed
   afterwards). Revoked test keys accumulate in the Keys list.
-- Warden picks up config writes on its next 5s reload. A `POST /reload` on
-  Warden's admin port, called after writes, would make enforcement
-  immediate.
+- Config writes reach Warden at once: the control plane calls Warden's
+  `POST /reload` before responding. If Warden is unreachable, the write
+  still succeeds and Warden catches up on its next 5s tick.
 - Console work these endpoints unlock: forms for budgets, rules, aliases,
   prices and rotation. All still disabled in api mode, plus sharing one SSE
   stream per tab. The mock-mode budget trace text still uses the old

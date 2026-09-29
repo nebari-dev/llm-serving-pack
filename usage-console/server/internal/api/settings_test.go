@@ -41,3 +41,19 @@ func TestSetWardenPassthroughFailsWhenWardenRefuses(t *testing.T) {
 		t.Fatal("an unreachable Warden was taken as success")
 	}
 }
+
+// After a config write Warden reloads at once, rather than on its next tick.
+func TestConfigChangeReloadsWarden(t *testing.T) {
+	var got []string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Method+" "+r.URL.Path)
+	}))
+	defer fake.Close()
+	reloaded := false
+	(&Server{WardenURL: fake.URL, ConfigChanged: func() { reloaded = true }}).configChanged()
+	if !reloaded || len(got) != 1 || got[0] != "POST /reload" {
+		t.Fatalf("local reload %v, warden calls %v", reloaded, got)
+	}
+	// No Warden in the path: nothing to call, and no error.
+	(&Server{}).configChanged()
+}
