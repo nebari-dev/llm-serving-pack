@@ -87,6 +87,8 @@ func (s *Server) Handler() http.Handler {
 	h("PUT "+p+"/aliases/{alias}", s.putAlias)
 	h("DELETE "+p+"/aliases/{alias}", s.deleteAlias)
 	h("GET "+p+"/pricing", s.pricing)
+	h("POST "+p+"/pricing/{model}", s.setPrice)
+	h("DELETE "+p+"/pricing/{model}/{at}", s.cancelPrice)
 	h("GET "+p+"/backends", s.backends)
 	h("GET "+p+"/routes", s.routes)
 	h("GET "+p+"/keys", s.keys)

@@ -43,6 +43,10 @@ type PriceChange struct {
 	From      float64 `json:"from"`
 	To        float64 `json:"to"`
 	Effective string  `json:"effective"`
+	// EffectiveAt is the exact start (epoch ms), which names the row to cancel
+	// while it's still scheduled.
+	EffectiveAt int64 `json:"effectiveAt"`
+	Scheduled   bool  `json:"scheduled"`
 }
 
 type Backend struct {

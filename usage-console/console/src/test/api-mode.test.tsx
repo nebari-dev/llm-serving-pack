@@ -624,6 +624,36 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 90_000)
 
+  it('schedules and cancels an effective-dated price change, with audit rows', async () => {
+    type P = Omit<import('@/data/catalog').PricingView, 'changes'> & { changes: { model: string; field: string; to: number; effectiveAt: number; scheduled: boolean }[] }
+    type C = import('@/data/catalog').Change
+    const m = 'llama-3.3-70b'
+    const before = await catalog.api<P>('/pricing')
+    const cur = catalog.modelById[m]
+    const at = '2099-01-01T00:00:00Z'
+    const target = cur.inPerM + 0.01
+    let scheduled: number | undefined
+    try {
+      const after = await send<P>('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: at })
+      const change = after.changes.find((c) => c.model === m && c.field === 'Input' && c.scheduled)
+      expect(change).toMatchObject({ to: target, effectiveAt: Date.parse(at), scheduled: true })
+      scheduled = change!.effectiveAt
+      expect(after.effectiveFrom[m]).toBe(before.effectiveFrom[m]) // today's price is untouched
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Scheduled model price change', targetKind: 'Pricing' })
+      expect((await catalog.api<C[]>('/changes'))[0].target).toMatch(new RegExp(`^${m} input \\$[\\d.]+ → \\$[\\d.]+ per 1M from 2099-01-01 00:00 UTC$`))
+
+      expect(await status(send('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: '2098-06-01T00:00:00Z' }))).toBe(400) // before the scheduled one
+      expect(await status(send('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: '2020-01-01T00:00:00Z' }))).toBe(400) // backdated
+      expect(await status(send('POST', `/pricing/${m}`, { inPerM: -1, effectiveFrom: '2099-06-01T00:00:00Z' }))).toBe(400)
+      expect(await status(send('POST', '/pricing/no-such-model', { inPerM: 1 }))).toBe(404)
+    } finally {
+      if (scheduled) await send('DELETE', `/pricing/${m}/${scheduled}`)
+    }
+    expect((await catalog.api<P>('/pricing')).changes.some((c) => c.model === m && c.scheduled)).toBe(false)
+    expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Cancelled model price change', target: `${m} change from 2099-01-01 00:00 UTC` })
+    expect(await status(send('DELETE', `/pricing/${m}/${Date.parse(at)}`))).toBe(404)
+  })
+
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session
     type C = import('@/data/catalog').Change
