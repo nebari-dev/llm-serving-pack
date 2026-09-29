@@ -130,18 +130,44 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 
 ## 2. Writes
 
+The backend for most of these landed 2026-09-29; the console forms haven't,
+so their controls stay disabled in api mode. Every write below has an audit
+row in the same transaction and takes `If-Match` (409 with the current row
+when stale). Open questions are in `docs/backend-decisions.md`.
+
 - [ ] Rules: create, publish, mode and fail mode, with audit rows. Warden
   picks up changes on its next snapshot.
-- [ ] Routes and backends: apply. There's no reconciler yet, so "apply"
-  writes config and the sync state says so.
+  - Backend done: `POST /rules`, `PUT`/`DELETE /rules/{id}/draft`,
+    `POST /rules/{id}/publish` (mode, fail mode, `?dryRun=true`),
+    `POST /rules/{id}/rollback`, `GET /rules/{id}/versions`,
+    `DELETE /rules/{id}`. Published versions are immutable; the first
+    publish defaults to monitor mode. Console: the Guardrails builder.
+- [ ] Routes and backends: apply. Not built: route config doesn't reach
+  Agent Router's routing, so there's nothing for an apply to change yet
+  (decisions §6).
 - [ ] Budgets: create and edit. The gateway enforces every budget whose
   scope covers a key (its team, project or the key itself), not only the
   key's budget_id; the strictest over-cap one decides.
+  - Backend done: `POST /budgets`, `PATCH`/`DELETE /budgets/{id}`, with
+    `?dryRun=true`. Console: "Add budget" and edit on Spend.
 - [ ] Aliases, including saving the savings analysis's draft alias changes.
-- [ ] Detector thresholds.
+  - Backend done: `PUT`/`DELETE /aliases/{alias}`; overlapping patterns
+    resolve by longest prefix. Console: "New alias" on Models. The savings
+    analysis is still a §3 item.
+- [ ] Detector thresholds. Not built: the regex detectors have no
+  confidence to threshold (decisions §6).
 - [ ] Key rotation: extend the overlap, retire the old secret now.
+  - Backend done: `POST /keys/{id}/rotation/extend` and `/finish`.
+    Console: the two disabled buttons on Keys.
 - [ ] Receipts record which secret (old or new) authenticated a request, so
   rotation can show traffic moving between them (§7.5.8).
+  - Backend done: `receipts.secret_id`, and a rotating key's
+    `oldSecretRequests`/`newSecretRequests` in `GET /keys`. Console: the
+    split on the rotation panel.
+- [ ] Model prices: `POST /pricing/{model}` sets or schedules the next
+  effective-dated row; `DELETE /pricing/{model}/{effectiveAt}` cancels a
+  scheduled one. Where prices come from is open (decisions §1). Console: a
+  price form on Models.
 
 ## 3. New systems
 
@@ -166,4 +192,7 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 - [ ] Pricing sync: keep `model_pricing` current from the providers' published
   prices, not the demo seed. A price change adds a new effective-dated row, so
   receipts keep the rate they were costed with. Today every cost is tokens ×
-  seed prices from `internal/demo`.
+  seed prices from `internal/demo`. The write path exists (`POST /pricing`);
+  the source is a decision (decisions §1).
+- [ ] Redaction rehydration (§4.5 step 5): seeded rules say "rehydrate on
+  return", but nothing restores redacted values in responses.
