@@ -65,10 +65,17 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     show as not connected.
   - CSV export downloads the breakdown. PDF is disabled, with the reason
     given. Budgets are editable (see Writes).
-- [ ] **Traffic streams.** Each api-mode Traffic tab holds two SSE
+- [x] **Traffic streams.** Each api-mode Traffic tab held two SSE
   connections (the global receipt stream and Traffic's filtered one), so
-  three tabs use up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
-  and later requests hang. Share one stream per tab.
+  three tabs used up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
+  and later requests hung. Now a tab holds one: `receiptStream` owns it, and
+  Traffic narrows it to its filters while open (still filtered by the server,
+  §6), then widens it again on the way out.
+  - Live rows outside the Traffic window are dropped. The stream ignores the
+    window, so `?day=` today or a Spend bar's `?until=` kept taking rows
+    after the window closed.
+  - Still one connection per tab: six api-mode tabs of any page reach the
+    limit again. Serving the console over HTTP/2 lifts it.
 - [x] **Keys.** `GET /keys` carries each key's 24h spend and hourly
   requests, and the list re-reads it every 30 s.
   - Spend over 24h and an hourly sparkline per key, both from `receipts_5m`

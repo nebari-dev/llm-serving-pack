@@ -21,6 +21,26 @@ const choose = (option: HTMLElement) => {
   fireEvent.click(option)
 }
 
+/** Records the tab's open streams, and lets a test push events down them. */
+class FakeEventSource {
+  static open = new Set<FakeEventSource>()
+  private listeners = new Map<string, ((e: MessageEvent<string>) => void)[]>()
+  readonly url: string
+  constructor(url: string) {
+    this.url = url
+    FakeEventSource.open.add(this)
+  }
+  addEventListener(type: string, f: (e: MessageEvent<string>) => void) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), f])
+  }
+  close() {
+    FakeEventSource.open.delete(this)
+  }
+  emit(type: string, data: unknown) {
+    for (const f of this.listeners.get(type) ?? []) f(new MessageEvent(type, { data: JSON.stringify(data) }))
+  }
+}
+
 describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against a live control plane', () => {
   let App: typeof import('@/App').default
   let catalog: typeof import('@/data/catalog')
@@ -31,7 +51,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       realFetch(typeof input === 'string' && input.startsWith('/') ? base + input : input, init),
     )
     // jsdom has no EventSource; the stream itself is covered by the server.
-    vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
+    vi.stubGlobal('EventSource', FakeEventSource)
     window.matchMedia ??= ((q: string) => ({
       matches: false, media: q, onchange: null,
       addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
@@ -200,6 +220,37 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(rows.length).toBeGreaterThan(0)
     expect(rows.every((tr) => tr.getAttribute('aria-label')?.endsWith('Blocked'))).toBe(true)
     expect(document.body.textContent).toMatch(/\d[\d,]* matching/)
+  })
+
+  it('holds one stream per tab, narrowed to Traffic’s filters, and keeps live rows inside the window', async () => {
+    const until = Date.now() + 3_600_000
+    window.history.pushState({}, '', `/traffic?verdict=blocked&until=${until}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    // Browsers allow six connections per host over HTTP/1.1: one stream per surface ran three tabs out.
+    expect(FakeEventSource.open.size).toBe(1)
+    const [es] = FakeEventSource.open
+    expect(new URL(es.url, base).searchParams.getAll('verdict')).toEqual(['blocked'])
+
+    const seed = { ...catalog.seedReceipts[0], verdict: 'blocked' as const, inFlight: false }
+    es.emit('receipt', { ...seed, id: 'sse-now', ts: Date.now(), resolvedModel: 'sse-test-now' })
+    es.emit('receipt', { ...seed, id: 'sse-later', ts: until + 1000, resolvedModel: 'sse-test-later' })
+    es.emit('dropped', { count: 3 })
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 400))
+    })
+    const labels = [...document.querySelectorAll('tbody tr[aria-rowindex]')].map((tr) => tr.getAttribute('aria-label') ?? '')
+    expect(labels.some((l) => l.includes('sse-test-now'))).toBe(true)
+    expect(labels.some((l) => l.includes('sse-test-later'))).toBe(false)
+    expect(document.body.textContent).toContain('Missed 3 receipts')
+
+    // Leaving Traffic widens the same tab's stream again.
+    cleanup()
+    await act(async () => {})
+    expect(FakeEventSource.open.size).toBe(1)
+    expect([...FakeEventSource.open][0].url).not.toContain('?')
   })
 
   it('serves Spend from the aggregates, matching Overview, with its basis', async () => {

@@ -128,7 +128,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
         if (!o) reset()
       }}
     >
-      <DialogContent className="max-w-xl" showCloseButton={step === 'form'}>
+      <DialogContent className="flex max-w-xl flex-col" showCloseButton={step === 'form'}>
         {step === 'secret' ? (
           <SecretOnce
             secret={secret}
@@ -240,7 +240,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
                     <TriangleAlert />
                     <AlertTitle>A key that never expires stays valid if it leaks.</AlertTitle>
                     <AlertDescription className="flex flex-col gap-2">
-                      <span>You'll get a rotation reminder every 90 days instead. Prefer an expiry and rotate before it.</span>
+                      <span>{dataMode === 'api' ? 'Prefer an expiry and rotate before it.' : "You'll get a rotation reminder every 90 days instead. Prefer an expiry and rotate before it."}</span>
                       <Checkbox checked={neverAck} onCheckedChange={setNeverAck}>
                         I understand this key will not expire
                       </Checkbox>

@@ -45,6 +45,12 @@ function usePersisted<T extends string>(key: string, initial: T): [T, (v: T) => 
 
 type Listener = () => void
 
+/** What a narrowed stream hands back: see ReceiptStream.tail. */
+export interface Tailer {
+  onReceipts: (batch: Receipt[]) => void
+  onDropped: (count: number) => void
+}
+
 class ReceiptStream {
   private rows: Receipt[] = seedReceipts
   private listeners = new Set<Listener>()
@@ -54,17 +60,20 @@ class ReceiptStream {
 
   subscribe = (l: Listener) => {
     this.listeners.add(l)
-    if (!this.started) {
-      this.started = true
-      if (dataMode === 'api') this.connect()
-      else this.simulate()
-    }
+    this.start()
     return () => {
       this.listeners.delete(l)
     }
   }
 
   getSnapshot = () => this.rows
+
+  private start() {
+    if (this.started) return
+    this.started = true
+    if (dataMode === 'api') this.connect()
+    else this.simulate()
+  }
 
   private emit() {
     for (const l of this.listeners) l()
@@ -74,19 +83,67 @@ class ReceiptStream {
   // arrives twice for streamed requests: in flight, then settled. EventSource
   // reconnects on its own after a drop.
   // Applied in batches, so a burst costs one render per flush (§10).
+  //
+  // A tab holds one connection. Browsers allow six per host over HTTP/1.1,
+  // and one stream per surface used them up across a few tabs, so every
+  // later request hung. While Traffic is open it narrows this stream to its
+  // filters (the server still filters, §6) and takes each batch through tail().
+  private es: EventSource | undefined
+  private query = ''
+  private tailer: Tailer | null = null
+  private queue: Receipt[] = []
+  private timer: number | undefined
+
   private connect() {
-    const es = new EventSource(`${API_BASE}/stream/traffic`)
-    let queue: Receipt[] = []
-    let timer: number | undefined
+    this.es?.close()
+    this.flush()
+    const es = new EventSource(`${API_BASE}/stream/traffic${this.query ? `?${this.query}` : ''}`)
+    this.es = es
     es.addEventListener('receipt', (e) => {
-      queue.push(JSON.parse((e as MessageEvent<string>).data) as Receipt)
-      timer ??= window.setTimeout(() => {
-        timer = undefined
-        const batch = queue
-        queue = []
-        this.upsertMany(batch)
-      }, 250)
+      this.queue.push(JSON.parse((e as MessageEvent<string>).data) as Receipt)
+      this.timer ??= window.setTimeout(() => this.flush(), 250)
     })
+    es.addEventListener('dropped', (e) => {
+      const { count } = JSON.parse((e as MessageEvent<string>).data) as { count: number }
+      this.tailer?.onDropped(count)
+    })
+  }
+
+  private flush() {
+    window.clearTimeout(this.timer)
+    this.timer = undefined
+    const batch = this.queue
+    if (!batch.length) return
+    this.queue = []
+    this.upsertMany(batch)
+    this.tailer?.onReceipts(batch)
+  }
+
+  /**
+   * Narrows the tab's stream to `query` (the /stream/traffic filters) and
+   * hands each batch to `t` until the returned function is called, which
+   * widens it again. One tailer at a time: a newer one replaces the older.
+   */
+  tail(query: string, t: Tailer) {
+    if (dataMode !== 'api') return () => {}
+    this.flush()
+    this.tailer = t
+    const reconnect = this.started && query !== this.query
+    this.query = query
+    if (reconnect) this.connect()
+    else this.start()
+    return () => {
+      if (this.tailer !== t) return
+      this.flush()
+      this.tailer = null
+      // A filter change untails and tails again in one commit; don't open
+      // an unfiltered stream in between.
+      queueMicrotask(() => {
+        if (this.tailer || !this.query) return
+        this.query = ''
+        this.connect()
+      })
+    }
   }
 
   /** Loads a receipt outside the live window (deep links) into byId. */
@@ -135,12 +192,15 @@ class ReceiptStream {
   }
 
   private upsertMany(batch: Receipt[]) {
+    // Known means in the live rows: byId also holds receipts loaded elsewhere
+    // (Traffic pages, deep links), and it is capped.
+    const known = new Set(this.rows.map((r) => r.id))
     const settled = new Map<string, Receipt>()
     const fresh: Receipt[] = []
     for (const r of batch) {
-      if (this.byId.has(r.id) || settled.has(r.id)) settled.set(r.id, r)
+      if (known.has(r.id) || settled.has(r.id)) settled.set(r.id, r)
       else fresh.push(r)
-      this.byId.set(r.id, r)
+      this.remember(r)
     }
     // A receipt that arrived and settled in the same batch is new, in its settled form.
     const newRows = fresh.map((r) => settled.get(r.id) ?? r).reverse()

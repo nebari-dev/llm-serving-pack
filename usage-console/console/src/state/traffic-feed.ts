@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { API_BASE, api, dataMode, keys, type Receipt } from '@/data/catalog'
+import { api, dataMode, keys, type Receipt } from '@/data/catalog'
 import { useLive } from './live'
 import { receiptStream } from './app-state'
 
@@ -38,8 +38,6 @@ export interface TrafficFeed {
 const PAGE = 200
 // Rows kept in memory. Past this the oldest go, and scrolling fetches them again.
 const MAX_ROWS = 10_000
-// Live rows are applied in batches, so a burst costs one render per flush (§10).
-const FLUSH_MS = 250
 
 function matches(r: Receipt, f: Filters, w: TrafficWindow) {
   if (r.ts < w.since) return false
@@ -114,33 +112,25 @@ function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
 
     // A day in the past has no live tail.
     if (w.before !== null && w.before <= Date.now()) return () => void (live = false)
-    const es = new EventSource(`${API_BASE}/stream/traffic?${queryString(filters, null)}`)
-    let queue: Receipt[] = []
-    let timer: number | undefined
-    const flush = () => {
-      timer = undefined
-      const batch = queue
-      queue = []
-      for (const r of batch) receiptStream.remember(r)
-      setState((s) => {
-        if (s.key !== key) return s
-        const rows = applyLive(s.rows, batch)
-        // Trimmed rows can be fetched again by scrolling.
-        return { ...s, rows, reachedEnd: s.reachedEnd && rows.length < MAX_ROWS }
-      })
-    }
-    es.addEventListener('receipt', (e) => {
-      queue.push(JSON.parse((e as MessageEvent<string>).data) as Receipt)
-      timer ??= window.setTimeout(flush, FLUSH_MS)
-    })
-    es.addEventListener('dropped', (e) => {
-      const { count } = JSON.parse((e as MessageEvent<string>).data) as { count: number }
-      setDropped((d) => d + count)
+    // The tab's one receipt stream, narrowed to these filters and already
+    // batched. It ignores the window, so a window that ends later (today, a
+    // Spend bar) stops taking rows once it closes.
+    const untail = receiptStream.tail(queryString(filters, null).toString(), {
+      onReceipts: (batch) => {
+        const inWindow = batch.filter((r) => r.ts >= w.since && (w.before === null || r.ts < w.before))
+        if (!live || !inWindow.length) return
+        setState((s) => {
+          if (s.key !== key) return s
+          const rows = applyLive(s.rows, inWindow)
+          // Trimmed rows can be fetched again by scrolling.
+          return { ...s, rows, reachedEnd: s.reachedEnd && rows.length < MAX_ROWS }
+        })
+      },
+      onDropped: (count) => live && setDropped((d) => d + count),
     })
     return () => {
       live = false
-      es.close()
-      window.clearTimeout(timer)
+      untail()
     }
     // key covers filters and the window.
     // eslint-disable-next-line react-hooks/exhaustive-deps
