@@ -100,6 +100,29 @@ curl localhost:8081/v1/chat/completions \
 The `X-Stargate-Receipt` response header names the receipt. `X-Data-Region: eu`
 triggers the `eu-only` reroute.
 
+### Restarting after a change
+
+`make dev-aigw` doesn't rebuild on change. To pick up server changes without
+stopping the rest of the stack:
+
+```sh
+make migrate                                  # if you added a migration
+make restart                                  # stargate-api and Warden
+make restart WHAT="api warden ingest aigw" AIGW=~/bin/aigw   # everything but the upstream and traffic
+```
+
+`scripts/restart.sh` builds into `bin/`, finds each process by its listening
+port (api :8080, warden :8083, ingest :4317, aigw :1975), stops it by pid and
+starts the new build in the background, logging to `tmp/<name>.log`. Restart
+`aigw` after editing `aigw/config.yaml`, and `ingest` after changing what it
+reads from the access log.
+
+Never stop these with `pkill -f`: `make dev-aigw` runs everything under one
+shell whose command line matches every command, and its `trap 'kill 0'`
+takes the whole stack down. A restarted process no longer belongs to that
+shell, so Ctrl-C on `make dev-aigw` leaves it running; stop it by port, e.g.
+`kill $(lsof -tiTCP:8080 -sTCP:LISTEN)`.
+
 ## Commands
 
 | | |
@@ -108,7 +131,7 @@ triggers the `eu-only` reroute.
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
 | `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
-| `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`. |
+| `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`, and `POST /reload`, which the API calls after every config write. |
 | `aigw/config.yaml` | Agent Router config: the ext_authz key check, Warden's ext_proc and the filter order it needs, routes for every demo model plus Warden's backend hints, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
 | `cmd/trafficgen` | Poisson traffic at `-rps`, with the mockup's mix of keys, PII, secrets and EU requests. |
 
@@ -136,7 +159,18 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 - `GET degradations` lists what the banner should show, worst first: Warden unreachable, its kill switch on, or its config cache stale (when `serve -warden` names Warden's admin URL, as `make dev-aigw` does), plus, from the last 15 minutes of receipts, requests Warden passed or refused because it couldn't decide, and backends failing at least 5% of 20+ requests.
 - `GET stream/traffic` is SSE, with the same filters as `receipts`. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled. A connection that falls behind misses receipts, and a `dropped` event with `{count}` says how many.
 
-Every mutation writes an `audit_log` row in the same transaction.
+Writes (the console doesn't call most of them yet):
+
+- `PUT aliases/{alias}` with `{target}`, `DELETE aliases/{alias}`. A `*` only ends a pattern, and a pattern that would capture catalog models other than its target is refused. Overlapping patterns resolve by longest prefix.
+- `POST budgets` with `{scopeType, scope, capUsd, onExceed}`; `PATCH budgets/{id}` with `{capUsd?, onExceed?}`; `DELETE budgets/{id}`. `?dryRun=true` on create and edit returns the budget with its spend, the active keys it would cover and `overCap`, and writes nothing. One budget per scope, monthly only. The gateway enforces every budget that covers a key (its team, project or name); the strictest over-cap one decides.
+- `POST rules` creates an unpublished rule; `PUT rules/{id}/draft` and `DELETE rules/{id}/draft` edit or drop its pending draft; `POST rules/{id}/publish` with `{mode?, failMode?}` publishes the draft (or just the new mode or fail mode) as the next version, `?dryRun=true` to see the change; `POST rules/{id}/rollback` with `{version}`; `GET rules/{id}/versions`; `DELETE rules/{id}` for a rule that isn't live. The first publish defaults to monitor mode; published versions are immutable.
+- `POST keys/{id}/rotation/extend` with `{hours}`, `POST keys/{id}/rotation/finish`. A rotating key in `GET keys` counts requests since the rotation started per secret (`oldSecretRequests`, `newSecretRequests`), from `receipts.secret_id`.
+- `POST pricing/{model}` with any of `{inPerM, outPerM, cachedPerM, reasoningPerM}` and `effectiveFrom` (RFC 3339, default now) adds the model's next price row; `DELETE pricing/{model}/{effectiveAt}` cancels one that hasn't taken effect.
+
+Aliases, budgets and rules carry an `etag`. Updating or deleting one needs
+`If-Match: <etag>` (428 without it; 409 with the current resource when it's
+stale); creating an alias with `PUT` needs `If-None-Match: *`. Every mutation
+writes an `audit_log` row in the same transaction.
 
 ## Not yet (by design for this slice)
 

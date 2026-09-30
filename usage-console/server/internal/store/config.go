@@ -95,12 +95,12 @@ type KeyRecord struct {
 	RotateUntil *time.Time
 }
 
-const keyCols = `id, name, prefix, team_id, project, allowed_models, allowed_regions, coalesce(budget_id, ''),
+const keyCols = `id, name, prefix, team_id, project, allowed_models, allowed_regions,
 	to_char(expires_at, 'YYYY-MM-DD'), status, hash, coalesce(next_hash, ''), rotate_until`
 
 func scanKey(r pgx.Row) (KeyRecord, error) {
 	var k KeyRecord
-	err := r.Scan(&k.ID, &k.Name, &k.Prefix, &k.Team, &k.Project, &k.AllowedModels, &k.AllowedRegions, &k.BudgetID,
+	err := r.Scan(&k.ID, &k.Name, &k.Prefix, &k.Team, &k.Project, &k.AllowedModels, &k.AllowedRegions,
 		&k.ExpiresAt, &k.Status, &k.Hash, &k.NextHash, &k.RotateUntil)
 	return k, err
 }
@@ -155,7 +155,6 @@ type NewKey struct {
 	Project        string   `json:"project"`
 	AllowedModels  []string `json:"allowedModels"`
 	AllowedRegions []string `json:"allowedRegions"`
-	BudgetID       string   `json:"budgetId"`
 	ExpiresAt      *string  `json:"expiresAt"`
 }
 
@@ -188,10 +187,10 @@ func (s *Store) CreateKey(ctx context.Context, tenant, actor string, in NewKey) 
 	}
 	defer tx.Rollback(ctx)
 	k, err := scanKey(tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, budget_id, expires_at, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11::date,'active')
+		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, expires_at, status)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'active')
 		RETURNING `+keyCols,
-		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.Project, in.AllowedModels, in.AllowedRegions, in.BudgetID, in.ExpiresAt))
+		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.Project, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
 	if err != nil {
 		return KeyRecord{}, "", err
 	}

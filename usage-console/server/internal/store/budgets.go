@@ -184,8 +184,7 @@ func (s *Store) UpdateBudget(ctx context.Context, tenant, actor, id, ifMatch str
 	return now, tx.Commit(ctx)
 }
 
-// DeleteBudget removes a budget. Keys that named it keep working, with their
-// budget_id cleared; enforcement goes by scope, not budget_id.
+// DeleteBudget removes a budget.
 func (s *Store) DeleteBudget(ctx context.Context, tenant, actor, id, ifMatch string) error {
 	tx, err := s.Config.Begin(ctx)
 	if err != nil {
@@ -198,9 +197,6 @@ func (s *Store) DeleteBudget(ctx context.Context, tenant, actor, id, ifMatch str
 	}
 	if ifMatch != "" && ifMatch != BudgetETag(was) {
 		return &StaleError{Current: withVersion(was)}
-	}
-	if _, err := tx.Exec(ctx, `UPDATE api_keys SET budget_id = NULL WHERE tenant_id = $1 AND budget_id = $2`, tenant, id); err != nil {
-		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM budgets WHERE tenant_id = $1 AND id = $2`, tenant, id); err != nil {
 		return err

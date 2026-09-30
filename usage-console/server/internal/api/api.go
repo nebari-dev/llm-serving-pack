@@ -82,6 +82,8 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, 404, errBody("not_found", "not found"))
 			case errors.Is(err, store.ErrConflict):
 				writeJSON(w, 409, errBody("conflict", err.Error()))
+			case errors.As(err, new(preconditionRequired)):
+				writeJSON(w, 428, errBody("precondition_required", err.Error()))
 			case errors.As(err, new(conflict)):
 				writeJSON(w, 409, errBody("conflict", err.Error()))
 			case errors.As(err, new(badRequest)):
@@ -145,6 +147,20 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// preconditionRequired is an update or delete without If-Match (428).
+type preconditionRequired string
+
+func (p preconditionRequired) Error() string { return string(p) }
+
+// ifMatch is the version an update or delete says it's changing (§6). One
+// that doesn't say is refused: it could overwrite a change it never saw.
+func ifMatch(r *http.Request) (string, error) {
+	if m := r.Header.Get("If-Match"); m != "" {
+		return m, nil
+	}
+	return "", preconditionRequired("send If-Match with the etag of the version you're changing")
+}
+
 // conflict is a write the resource's current state doesn't allow (409).
 type conflict string
 
@@ -186,7 +202,27 @@ func (s *Server) models(_ http.ResponseWriter, r *http.Request, _ string) (any, 
 }
 
 func (s *Server) routes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	return s.Store.Routes(r.Context(), t)
+	rs, err := s.Store.Routes(r.Context(), t)
+	return notReconciledRoutes(rs), err
+}
+
+// NotReconciled is every backend's and route's sync state until a reconciler
+// exists (§4.4). The sync_state column holds seed values nothing observed,
+// so the API doesn't pass them on.
+const NotReconciled = "not_reconciled"
+
+func notReconciledBackends(bs []model.Backend) []model.Backend {
+	for i := range bs {
+		bs[i].Sync = NotReconciled
+	}
+	return bs
+}
+
+func notReconciledRoutes(rs []model.Route) []model.Route {
+	for i := range rs {
+		rs[i].Sync = NotReconciled
+	}
+	return rs
 }
 
 func (s *Server) detectors(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
@@ -198,7 +234,8 @@ func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any,
 }
 
 // backends overlays live p50 and error rate from the last hour of receipts.
-// Health stays as configured until health probes exist.
+// Health stays as configured until health probes exist; sync state is
+// NotReconciled.
 func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	bs, err := s.Store.Backends(r.Context(), t)
 	if err != nil {
@@ -213,7 +250,7 @@ func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any
 			bs[i].P50, bs[i].ErrorRate = st.P50, math.Round(st.ErrorRate*10)/10
 		}
 	}
-	return bs, nil
+	return notReconciledBackends(bs), nil
 }
 
 func (s *Server) keys(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
@@ -300,7 +337,7 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	}
 	k, secret, err := s.Store.CreateKey(r.Context(), t, s.DevActor, in)
 	if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.Code == "23503" {
-		return nil, badRequest("unknown team or budget")
+		return nil, badRequest("unknown team")
 	}
 	if err != nil {
 		return nil, err

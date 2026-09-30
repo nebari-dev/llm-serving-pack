@@ -1,6 +1,6 @@
 # Local dev loop for the control plane. `make dev` starts everything; the
 # console then runs with `cd ../console && npm run dev:api`.
-.PHONY: db db-down migrate backfill api gateway upstream traffic ingest warden aigw dev dev-aigw test
+.PHONY: db db-down migrate backfill api gateway upstream traffic ingest warden aigw dev dev-aigw test restart
 
 # Agent Router CLI: https://github.com/theagentrouter/agent-router/releases
 AIGW ?= aigw
@@ -67,3 +67,9 @@ dev-aigw: migrate
 	sleep 2; $(AIGW) run aigw/config.yaml & \
 	sleep 4; go run ./cmd/trafficgen -gateway http://localhost:1975 & \
 	wait
+
+# Rebuild and restart parts of a running stack after a server change, found by
+# port, without stopping the rest: WHAT is any of api warden ingest aigw.
+WHAT ?= api warden
+restart:
+	AIGW=$(AIGW) scripts/restart.sh $(WHAT)

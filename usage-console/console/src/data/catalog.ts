@@ -24,6 +24,9 @@ export let routes: Route[] = mock.routes
 export let keys: ApiKey[] = mock.keys
 export let keyById: Record<string, ApiKey> = mock.keyById
 export let budgets: Budget[] = mock.budgets
+/** The budget that decides a key's requests (the gateway's rule); see mock.governingBudget. */
+export const governingBudget = (k: { team: string; project: string; name: string }) => mock.governingBudget(k, budgets)
+export const coveringBudgets = (k: { team: string; project: string; name: string }) => budgets.filter((b) => mock.budgetCovers(b, k))
 export let rules: PolicyRule[] = mock.rules
 export let detectors: Detector[] = mock.detectors
 export let seedReceipts: Receipt[] = mock.seedReceipts
@@ -131,7 +134,6 @@ export interface NewKeyInput {
   project: string
   allowedModels: string[]
   allowedRegions: string[]
-  budgetId?: string
   expiresAt: string | null
 }
 

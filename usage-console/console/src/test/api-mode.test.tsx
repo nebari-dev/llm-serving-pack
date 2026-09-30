@@ -120,9 +120,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   })
 
   it('checks the budgets covering a key by scope, not only the one it names', async () => {
-    // research has no budget_id; its team's budget still governs it.
+    // Keys don't name a budget (budget_id is gone); research's team budget governs it.
     const key = catalog.keys.find((k) => k.name === 'research')!
-    expect(key.budgetId).toBeFalsy()
+    expect(catalog.keys.filter((k) => 'budgetId' in k).map((k) => k.name)).toEqual([])
     const [r] = await catalog.api<{ id: string; trace: { step: string; input: string }[] }[]>(`/receipts?limit=1&key=${key.id}&range=1h`)
     expect(r.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(/^team budget research · \$\d+ of \$20000$/)
     window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
@@ -131,6 +131,48 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await new Promise((ok) => setTimeout(ok, 300))
     })
     expect(document.body.textContent).toContain('team budget research · $')
+  })
+
+  // No reconciler exists (§4.4), so routing is read-only and nothing claims a
+  // sync state, a reconcile event or a failover it didn't observe.
+  it('shows routing read-only, with no reconciler and no fixture states', async () => {
+    const [bs, rs] = await Promise.all([catalog.api<{ sync: string }[]>('/backends'), catalog.api<{ sync: string }[]>('/routes')])
+    expect(new Set([...bs, ...rs].map((x) => x.sync))).toEqual(new Set(['not_reconciled']))
+    const page = async (tab: string, act2?: () => Promise<void>) => {
+      window.history.pushState({}, '', `/routing?tab=${tab}`)
+      const r = render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 300))
+      })
+      await act2?.()
+      const text = document.body.textContent ?? ''
+      r.unmount()
+      return text
+    }
+    const fixtures = ['Synced', 'Applying', 'Drift detected', 'Reconcile failed', 'Pending apply', 'Recent reconcile events', '529 overloaded', 'timeout after 60s', 'Endpoint', 'Replicas']
+
+    const routesText = await page('routes', async () => {
+      expect(screen.queryByRole('button', { name: /Edit route/ })).toBeNull()
+      expect(screen.getByRole('button', { name: /Add provider/ })).toHaveProperty('disabled', true)
+    })
+    expect(routesText).toContain('No reconciler')
+    expect(routesText).toContain('Read-only: there’s no reconciler to apply route changes yet.')
+    for (const s of fixtures) expect(routesText).not.toContain(s)
+
+    const backendsText = await page('backends', async () => {
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: catalog.backends[0].name })[0])
+        await new Promise((ok) => setTimeout(ok, 200))
+      })
+      expect(screen.queryByRole('button', { name: /Review changes|Apply changes|Adopt into console/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /View generated YAML/ })).toBeNull()
+    })
+    expect(backendsText).toContain('No reconciler')
+    for (const s of fixtures) expect(backendsText).not.toContain(s)
+
+    const fallbackText = await page('fallback')
+    for (const s of ['Recent failovers', '529 overloaded', 'backend not reconciled']) expect(fallbackText).not.toContain(s)
+    expect(fallbackText).toContain('Fallback chains')
   })
 
   it('lists server-filtered traffic, with a provider filter from the backends', async () => {
@@ -392,38 +434,50 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   })
 
   // Backend writes the console doesn't call yet: each one validates, writes its
-  // audit row, and refuses a stale If-Match with 409.
+  // audit row, refuses an update or delete without If-Match (428), and a
+  // stale one with 409. NEW creates an alias: If-None-Match: *.
+  const NEW = 'new'
   const status = (p: Promise<unknown>) => p.then(() => 200, (e: { status?: number }) => e.status ?? 0)
   const send = <T,>(method: string, path: string, body?: unknown, ifMatch?: string) =>
-    catalog.api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: ifMatch ? { 'If-Match': ifMatch } : {} })
+    catalog.api<T>(path, {
+      method,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: ifMatch === NEW ? { 'If-None-Match': '*' } : ifMatch ? { 'If-Match': ifMatch } : {},
+    })
 
   it('writes aliases with audit rows, validation and If-Match', async () => {
     type A = import('@/data/catalog').AliasView & { etag: string }
     type C = import('@/data/catalog').Change
     const name = `api-mode-test-${Date.now().toString(36)}`
     const path = `/aliases/${encodeURIComponent(name)}`
+    let etag = ''
     try {
-      const made = await send<A>('PUT', path, { target: 'gpt-5-mini' })
+      expect(await status(send('PUT', path, { target: 'gpt-5-mini' }))).toBe(428)
+      const made = await send<A>('PUT', path, { target: 'gpt-5-mini' }, NEW)
+      etag = made.etag
       expect(made).toMatchObject({ alias: name, target: 'gpt-5-mini' })
       expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.etag).toBe(made.etag)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
         action: 'Created alias', target: `${name} → gpt-5-mini`, targetKind: 'Alias', actor: catalog.session.actor.email,
       })
 
+      expect(await status(send('PUT', path, { target: 'gpt-5.5' }, NEW))).toBe(409) // it exists now
       const moved = await send<A>('PUT', path, { target: 'claude-haiku-4-5' }, made.etag)
+      etag = moved.etag
       expect(moved.etag).not.toBe(made.etag)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed alias target', target: `${name} gpt-5-mini → claude-haiku-4-5` })
       // Written against the version before that one: stale.
       expect(await status(send('PUT', path, { target: 'gpt-5.5' }, made.etag))).toBe(409)
-      expect(await status(send('PUT', path, { target: 'no-such-model' }))).toBe(400)
+      expect(await status(send('PUT', path, { target: 'no-such-model' }, etag))).toBe(400)
       // A pattern that would capture catalog models is refused.
-      expect(await status(send('PUT', `/aliases/${encodeURIComponent('gpt-*')}`, { target: 'gpt-5-mini' }))).toBe(400)
+      expect(await status(send('PUT', `/aliases/${encodeURIComponent('gpt-*')}`, { target: 'gpt-5-mini' }, NEW))).toBe(400)
+      expect(await status(send('DELETE', path))).toBe(428)
     } finally {
-      await send('DELETE', path).catch(() => {})
+      await send('DELETE', path, undefined, etag).catch(() => {})
     }
     expect((await catalog.api<A[]>('/aliases')).some((a) => a.alias === name)).toBe(false)
     expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted alias', target: name })
-    expect(await status(send('DELETE', path))).toBe(404)
+    expect(await status(send('DELETE', path, undefined, etag))).toBe(404)
   })
 
   // §11's exit test: a cap set through the API stops real requests at the
@@ -438,6 +492,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
     })
     let id = ''
+    let etag = ''
     try {
       const draft = { scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block' }
       const dry = await send<{ dryRun: boolean; budget: B; covers: string[]; overCap: boolean }>('POST', '/budgets?dryRun=true', draft)
@@ -445,6 +500,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<B[]>('/budgets')).some((b) => b.scope === name)).toBe(false)
 
       const made = await send<B>('POST', '/budgets', draft)
+      etag = made.etag
       id = made.id
       expect(made).toMatchObject({ scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block', period: 'monthly' })
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `key ${name} · $0.01 monthly, block`, targetKind: 'Budget' })
@@ -475,13 +531,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(blocked?.errorCode).toBe('budget_exceeded')
       expect(blocked!.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(new RegExp(`^key budget ${name} · \\$0\\.\\d\\d of \\$0\\.01$`))
 
+      expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 1000 }))).toBe(428)
       const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.etag)
+      etag = raised.etag
       expect(raised.capUsd).toBe(1000)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Raised budget cap', target: `${name} $0.01 → $1,000` })
       expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 5 }, made.etag))).toBe(409)
-      expect(await status(send('PATCH', `/budgets/${id}`, { onExceed: 'explode' }))).toBe(400)
+      expect(await status(send('PATCH', `/budgets/${id}`, { onExceed: 'explode' }, etag))).toBe(400)
+      expect(await status(send('DELETE', `/budgets/${id}`))).toBe(428)
     } finally {
-      if (id) await send('DELETE', `/budgets/${id}`).catch(() => {})
+      if (id) await send('DELETE', `/budgets/${id}`, undefined, etag).catch(() => {})
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
     expect((await catalog.api<B[]>('/budgets')).some((b) => b.id === id)).toBe(false)
@@ -576,6 +635,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<V[]>('/rules')).find((r) => r.id === id)).toMatchObject({ mode: 'draft', version: 0 })
 
       // First publish: monitor mode by default. Traffic isn't blocked.
+      expect(await status(send('POST', `/rules/${id}/publish`))).toBe(428)
       const v1 = await send<V>('POST', `/rules/${id}/publish`, undefined, made.etag)
       expect(v1).toMatchObject({ mode: 'monitor', version: 1, draft: null })
       expect(await latest()).toMatchObject({ action: 'Published rule in monitor mode', target: `${name} v1` })
@@ -600,20 +660,21 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(versions.map((v) => [v.version, v.mode])).toEqual([[3, 'monitor'], [2, 'enforce'], [1, 'monitor']])
       expect(versions[0].publishedBy).toBe(catalog.session.actor.email)
 
-      expect(await status(send('DELETE', `/rules/${id}`))).toBe(409) // still live: disable first
-      await send('DELETE', `/rules/${id}/draft`)
+      expect(await status(send('DELETE', `/rules/${id}`, undefined, v3.etag))).toBe(409) // still live: disable first
+      const discarded = await send<V>('DELETE', `/rules/${id}/draft`, undefined, v3.etag)
       expect(await latest()).toMatchObject({ action: 'Discarded rule draft', target: name })
-      await send('POST', `/rules/${id}/publish`, { mode: 'disabled' })
+      const v4 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'disabled' }, discarded.etag)
       expect(await latest()).toMatchObject({ action: 'Disabled rule', target: `${name} v4` })
-      await send('DELETE', `/rules/${id}`)
+      await send('DELETE', `/rules/${id}`, undefined, v4.etag)
       expect(await latest()).toMatchObject({ action: 'Deleted rule', target: name })
       expect((await catalog.api<V[]>('/rules')).some((r) => r.id === id)).toBe(false)
       expect((await catalog.api<unknown[]>(`/rules/${id}/versions`)).length).toBe(4) // history outlives the rule
       id = ''
     } finally {
       if (id) {
-        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }).catch(() => {})
-        await send('DELETE', `/rules/${id}`).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === id)?.etag
+        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/rules/${id}`, undefined, await etagNow()).catch(() => {})
       }
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }

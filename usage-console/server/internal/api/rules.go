@@ -76,11 +76,15 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request, t string) (a
 }
 
 func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
 	c, err := s.ruleContent(r, t)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.SaveDraft(r.Context(), t, s.DevActor, r.PathValue("id"), r.Header.Get("If-Match"), c)
+	v, err := s.Store.SaveDraft(r.Context(), t, s.DevActor, r.PathValue("id"), m, c)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +93,11 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request, t string)
 }
 
 func (s *Server) discardRuleDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
-	v, err := s.Store.DiscardDraft(r.Context(), t, s.DevActor, r.PathValue("id"), r.Header.Get("If-Match"))
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.Store.DiscardDraft(r.Context(), t, s.DevActor, r.PathValue("id"), m)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -147,16 +155,20 @@ func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (
 	case in.FailMode != "" && in.FailMode != "open" && in.FailMode != "closed":
 		return nil, badRequest("failMode must be open or closed")
 	}
-	id, ifMatch := r.PathValue("id"), r.Header.Get("If-Match")
+	id := r.PathValue("id")
 	if dryRun(r) {
-		cur, next, err := s.Store.PlanPublish(r.Context(), t, id, ifMatch, in.Mode, in.FailMode)
+		cur, next, err := s.Store.PlanPublish(r.Context(), t, id, r.Header.Get("If-Match"), in.Mode, in.FailMode)
 		if err != nil {
 			return nil, publishErr(err)
 		}
 		return RulePublishDryRun{DryRun: true, Rule: next, Changes: ruleChanges(cur, next),
 			Note: "Replay against recorded traffic isn't connected yet, so this shows the rule change only."}, nil
 	}
-	v, err := s.Store.Publish(r.Context(), t, s.DevActor, id, ifMatch, in.Mode, in.FailMode)
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.Store.Publish(r.Context(), t, s.DevActor, id, m, in.Mode, in.FailMode)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -168,13 +180,17 @@ func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (
 // rollbackRule takes {version}: that version's content and mode go live as
 // the next version.
 func (s *Server) rollbackRule(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
 	var in struct {
 		Version int `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Version < 1 {
 		return nil, badRequest("version is required")
 	}
-	v, err := s.Store.Rollback(r.Context(), t, s.DevActor, r.PathValue("id"), r.Header.Get("If-Match"), in.Version)
+	v, err := s.Store.Rollback(r.Context(), t, s.DevActor, r.PathValue("id"), m, in.Version)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -188,8 +204,12 @@ func (s *Server) ruleVersions(_ http.ResponseWriter, r *http.Request, t string) 
 }
 
 func (s *Server) deleteRule(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
 	id := r.PathValue("id")
-	if err := s.Store.DeleteRule(r.Context(), t, s.DevActor, id, r.Header.Get("If-Match")); err != nil {
+	if err := s.Store.DeleteRule(r.Context(), t, s.DevActor, id, m); err != nil {
 		return nil, publishErr(err)
 	}
 	s.configChanged()

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, budgets, createKey, dataMode, models, rotateKey, teams } from '@/data/catalog'
+import { type ApiKey, coveringBudgets, createKey, dataMode, models, rotateKey, teams } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
@@ -64,7 +64,6 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   const [project, setProject] = useState('')
   const [allowed, setAllowed] = useState<string[]>(['gpt-5-mini'])
   const [allowedRegions, setAllowedRegions] = useState<string[]>(['us-east'])
-  const [budget, setBudget] = useState<string>('team')
   const [expiry, setExpiry] = useState<Expiry | ''>('')
   const [customDate, setCustomDate] = useState('')
   const [neverAck, setNeverAck] = useState(false)
@@ -82,7 +81,6 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
     setProject('')
     setAllowed(['gpt-5-mini'])
     setAllowedRegions(['us-east'])
-    setBudget('team')
     setExpiry('')
     setCustomDate('')
     setNeverAck(false)
@@ -104,7 +102,6 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
         project: project.trim(),
         allowedModels: allowed,
         allowedRegions,
-        budgetId: budget === 'team' ? budgets.find((b) => b.scope === team)?.id : undefined,
         expiresAt,
       })
       onCreate(res.key)
@@ -117,11 +114,9 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
     }
   }
 
-  const teamBudget = budgets.find((b) => b.scope === team)
-  const budgetItems = [
-    { value: 'team', label: teamBudget ? `Team budget · ${teamBudget.scope} ($${int(teamBudget.capUsd)}/mo)` : 'Team budget · none set' },
-    { value: 'none', label: 'No budget for this key' },
-  ]
+  // Budgets apply by scope, so the key gets whatever covers its team,
+  // project and name; there's nothing to pick.
+  const covering = coveringBudgets({ team, project: project.trim(), name })
 
   return (
     <Dialog
@@ -210,21 +205,21 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
                 {tried && allowedRegions.length === 0 && <p className="text-sm text-destructive-foreground">Pick at least one region.</p>}
               </fieldset>
 
-              <Field>
-                <FieldLabel>Budget</FieldLabel>
-                <Select items={budgetItems} value={budget} onValueChange={(v) => v && setBudget(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {budgetItems.map((b) => (
-                      <SelectItem key={b.value} value={b.value}>
-                        {b.label}
-                      </SelectItem>
+              <div className="flex flex-col gap-1">
+                <span className="text-sm font-medium">Budgets</span>
+                {covering.length ? (
+                  <ul className="text-sm">
+                    {covering.map((b) => (
+                      <li key={b.id}>
+                        {b.scopeType} budget <span className="font-mono">{b.scope}</span> · ${int(b.capUsd)}/mo, {b.onExceed}
+                      </li>
                     ))}
-                  </SelectContent>
-                </Select>
-              </Field>
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No budget covers this team or project yet.</p>
+                )}
+                <p className="text-xs text-muted-foreground">Every budget on the key's team, project or name applies to it. Manage them on Spend.</p>
+              </div>
 
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">

@@ -8,7 +8,7 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgets, dataMode, fromWire, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgets, dataMode, fromWire, governingBudget, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
 import { clock, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
@@ -115,7 +115,7 @@ export function KeysPage() {
     <div className="flex flex-col">
       <PageHeader
         title="Keys"
-        description="Gateway keys that apps use instead of provider credentials. Each key is scoped to a team and project, an allow-list of models and regions, and optionally a budget."
+        description="Gateway keys that apps use instead of provider credentials. Each key is scoped to a team and project and an allow-list of models and regions. Budgets on its team, project or the key itself apply to it."
         actions={
           <Button onClick={() => setCreating(true)}>
             <Plus /> Create key
@@ -146,7 +146,7 @@ export function KeysPage() {
           <TableBody>
             {list.map((k) => {
               const e = expiryInfo(k)
-              const budget = budgets.find((b) => b.id === k.budgetId)
+              const budget = governingBudget(k)
               const revoked = k.status === 'revoked'
               return (
                 <TableRow key={k.id} className={cn('cursor-pointer', revoked && 'text-muted-foreground')} onClick={() => openKey(k.id)}>
@@ -253,7 +253,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
   const { openReceipt } = useApp()
   const all = useReceipts()
   const receipts = useMemo(() => all.filter((r) => r.keyId === k.id), [all, k.id])
-  const budget = budgets.find((b) => b.id === k.budgetId)
+  const budget = governingBudget(k)
   const e = expiryInfo(k)
   const revoked = k.status === 'revoked'
   const spend = spend24h(k)
@@ -344,7 +344,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
                 </Link>
               </dd>
             ) : (
-              <dd className="pt-1 text-sm text-muted-foreground">No budget attached</dd>
+              <dd className="pt-1 text-sm text-muted-foreground">No budget covers this key</dd>
             )}
           </div>
         </dl>

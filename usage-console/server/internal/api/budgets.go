@@ -49,6 +49,13 @@ func (s *Server) createBudget(w http.ResponseWriter, r *http.Request, t string) 
 // updateBudget takes {capUsd?, onExceed?}. The scope and period are fixed:
 // a budget on another scope is a new budget.
 func (s *Server) updateBudget(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	match := r.Header.Get("If-Match")
+	if !dryRun(r) {
+		var err error
+		if match, err = ifMatch(r); err != nil {
+			return nil, err
+		}
+	}
 	var in struct {
 		CapUSD   *float64 `json:"capUsd"`
 		OnExceed *string  `json:"onExceed"`
@@ -79,13 +86,13 @@ func (s *Server) updateBudget(w http.ResponseWriter, r *http.Request, t string) 
 		return nil, err
 	}
 	if dryRun(r) {
-		if m := r.Header.Get("If-Match"); m != "" && m != store.BudgetETag(bs[i]) {
+		if match != "" && match != store.BudgetETag(bs[i]) {
 			bs[i].ETag = store.BudgetETag(bs[i])
 			return nil, &store.StaleError{Current: bs[i]}
 		}
 		return s.budgetDryRun(r.Context(), t, next)
 	}
-	b, err := s.Store.UpdateBudget(r.Context(), t, s.DevActor, id, r.Header.Get("If-Match"), edit)
+	b, err := s.Store.UpdateBudget(r.Context(), t, s.DevActor, id, match, edit)
 	if err != nil {
 		return nil, err
 	}
@@ -94,8 +101,12 @@ func (s *Server) updateBudget(w http.ResponseWriter, r *http.Request, t string) 
 }
 
 func (s *Server) deleteBudget(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
 	id := r.PathValue("id")
-	if err := s.Store.DeleteBudget(r.Context(), t, s.DevActor, id, r.Header.Get("If-Match")); err != nil {
+	if err := s.Store.DeleteBudget(r.Context(), t, s.DevActor, id, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()

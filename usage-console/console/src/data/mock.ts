@@ -6,7 +6,8 @@ export type Verdict = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'truncat
 export type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
 export type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
 export type Provenance = 'console' | 'git' | 'adopted'
-export type SyncState = 'synced' | 'applying' | 'failed' | 'drift'
+/** not_reconciled: api mode before a reconciler exists (§4.4); nothing is applied or observed. */
+export type SyncState = 'synced' | 'applying' | 'failed' | 'drift' | 'not_reconciled'
 
 export interface Team {
   id: string
@@ -22,7 +23,6 @@ export interface ApiKey {
   project: string
   allowedModels: string[]
   allowedRegions: string[]
-  budgetId?: string
   expiresAt: string | null
   lastUsed: string
   requests24h: number
@@ -268,10 +268,10 @@ export const routes: Route[] = [
 type SeedKey = Omit<ApiKey, 'hourly24h'>
 
 const seedKeys: SeedKey[] = [
-  { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], budgetId: 'b1', expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
-  { id: 'k2', name: 'agents-prod', prefix: 'ngw_live_c19e', team: 'agents', project: 'orchestrator', allowedModels: ['claude-sonnet-5', 'claude-opus-4-1', 'gpt-5.5'], allowedRegions: ['us-east'], budgetId: 'b2', expiresAt: '2026-12-31', lastUsed: '3s ago', requests24h: 9_812, status: 'active' },
-  { id: 'k3', name: 'batch-summarize', prefix: 'ngw_live_02bd', team: 'batch', project: 'nightly-digest', allowedModels: ['gpt-5-mini', 'claude-opus-4-1', 'llama-3.3-70b'], allowedRegions: ['us-east', 'eu-private'], budgetId: 'b3', expiresAt: '2026-11-15', lastUsed: '41s ago', requests24h: 4_406, status: 'active' },
-  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], budgetId: 'b4', expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'rotating', rotation: { startedAt: Date.now() - 20 * 3_600_000, startedBy: 'priya@acme.dev', endsAt: Date.now() + 28 * 3_600_000, split: { newShare: 0.61, oldActors: ['web-assistant-7c9', 'web-assistant-2f1'] } } },
+  { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
+  { id: 'k2', name: 'agents-prod', prefix: 'ngw_live_c19e', team: 'agents', project: 'orchestrator', allowedModels: ['claude-sonnet-5', 'claude-opus-4-1', 'gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2026-12-31', lastUsed: '3s ago', requests24h: 9_812, status: 'active' },
+  { id: 'k3', name: 'batch-summarize', prefix: 'ngw_live_02bd', team: 'batch', project: 'nightly-digest', allowedModels: ['gpt-5-mini', 'claude-opus-4-1', 'llama-3.3-70b'], allowedRegions: ['us-east', 'eu-private'], expiresAt: '2026-11-15', lastUsed: '41s ago', requests24h: 4_406, status: 'active' },
+  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'rotating', rotation: { startedAt: Date.now() - 20 * 3_600_000, startedBy: 'priya@acme.dev', endsAt: Date.now() + 28 * 3_600_000, split: { newShare: 0.61, oldActors: ['web-assistant-7c9', 'web-assistant-2f1'] } } },
   { id: 'k5', name: 'research', prefix: 'ngw_live_e55f', team: 'research', project: 'evals', allowedModels: ['claude-opus-4-1', 'gpt-5.5', 'claude-sonnet-5'], allowedRegions: ['us-east'], expiresAt: null, lastUsed: '6m ago', requests24h: 1_204, status: 'active' },
   { id: 'k6', name: 'secops-triage', prefix: 'ngw_live_41d2', team: 'security', project: 'soc', allowedModels: ['llama-3.3-70b', 'claude-haiku-4-5'], allowedRegions: ['eu-private', 'eu-central'], expiresAt: '2026-10-02', lastUsed: '2h ago', requests24h: 88, status: 'active' },
   { id: 'k7', name: 'legacy-intranet', prefix: 'ngw_live_77aa', team: 'web', project: 'intranet', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2026-08-30', lastUsed: '26d ago', requests24h: 0, status: 'revoked' },
@@ -304,6 +304,25 @@ export interface Budget {
   projectedUsd: number
   /** The scope's daily average the projection uses. */
   trailingDailyUsd: number
+}
+
+/** Whether a budget applies to a key: its team, its project, or the key itself. */
+export function budgetCovers(b: Budget, k: { team: string; project: string; name: string }) {
+  return b.scopeType === 'team' ? b.scope === k.team : b.scopeType === 'project' ? b.scope === k.project : b.scope === k.name
+}
+
+/**
+ * The budget that decides a key's requests, as the gateway picks it: of every
+ * budget covering the key, the strictest over its cap (block, then throttle,
+ * then warn), else the one nearest its cap.
+ */
+export function governingBudget(k: { team: string; project: string; name: string }, list: Budget[]): Budget | undefined {
+  const severity = { warn: 1, throttle: 2, block: 3 }
+  const rank = (b: Budget) => (b.currentUsd >= b.capUsd ? severity[b.onExceed] : 0)
+  const ratio = (b: Budget) => (b.capUsd > 0 ? b.currentUsd / b.capUsd : 0)
+  return list
+    .filter((b) => budgetCovers(b, k))
+    .sort((a, b) => rank(b) - rank(a) || ratio(b) - ratio(a) || a.id.localeCompare(b.id))[0]
 }
 
 export const budgets: Budget[] = [
@@ -396,6 +415,15 @@ function weightedKey(r: () => number) {
 const backendFor = (model: string) =>
   backends.find((b) => b.models.includes(model) && b.health !== 'down') ?? backends[0]
 
+/** The trace's budget step, worded as the gateway words it. */
+function budgetStep(b: Budget | undefined): TraceStep {
+  if (!b) return { step: 'Budget checked', input: 'no budget applies', outcome: 'skipped', ms: 0.1, state: 'skip' }
+  const usd = (n: number) => (n < 100 ? `$${n.toFixed(2)}` : `$${Math.round(n)}`)
+  const over = b.currentUsd >= b.capUsd
+  const outcome = !over ? 'within cap' : b.onExceed === 'block' ? 'over cap · blocked' : b.onExceed === 'throttle' ? 'over cap · throttle active, admitted' : 'over cap · warning only'
+  return { step: 'Budget checked', input: `${b.scopeType} budget ${b.scope} · ${usd(b.currentUsd)} of ${usd(b.capUsd)}`, outcome, ms: 0.1, state: !over ? 'ok' : b.onExceed === 'block' ? 'fail' : 'warn' }
+}
+
 function cost(m: Model, inTok: number, cached: number, out: number, reasoning: number) {
   return ((inTok - cached) * m.inPerM + cached * m.cachedPerM + out * m.outPerM + reasoning * m.reasoningPerM) / 1_000_000
 }
@@ -471,13 +499,7 @@ export function makeReceipt(ts: number, r: () => number = rand, opts: { inFlight
 
   const trace: TraceStep[] = [
     { step: 'Identity resolved', input: `Bearer ${key.prefix}…`, outcome: `${key.name} → ${key.team} / ${key.project}`, ms: 0.3, state: 'ok' },
-    {
-      step: 'Budget checked',
-      input: key.budgetId ? `budget ${budgets.find((b) => b.id === key.budgetId)?.scope}` : 'no budget attached',
-      outcome: key.budgetId ? (key.team === 'support' ? 'over cap · throttle active, admitted' : 'within cap') : 'skipped',
-      ms: 0.1,
-      state: key.team === 'support' ? 'warn' : key.budgetId ? 'ok' : 'skip',
-    },
+    budgetStep(governingBudget(key, budgets)),
     {
       step: 'Rules evaluated',
       input: `${ruleEvals.length} rules · policy v${rules[0].version}`,

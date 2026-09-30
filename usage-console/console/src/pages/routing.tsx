@@ -29,7 +29,7 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Backend, backends as seedBackends, modelById, type Provenance, type Route, routes, type SyncState } from '@/data/catalog'
+import { type Backend, backends as seedBackends, dataMode, modelById, type Provenance, type Route, routes, type SyncState } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { backendDiff, type BackendSpec, backendSpecs, backendYaml, routeYaml } from './routing-yaml'
 
@@ -37,6 +37,12 @@ import { backendDiff, type BackendSpec, backendSpecs, backendYaml, routeYaml } f
 // first-class column. §4.4 provenance + reconciliation, §7.6 cross-cutting states.
 
 type Tab = 'routes' | 'backends' | 'fallback'
+
+// Api mode: there's no reconciler (§4.4), so nothing here can apply a change
+// or report a cluster's state. Routing is read-only, and the mockup's specs,
+// reconcile events and failovers aren't shown.
+const live = dataMode === 'api'
+const noReconciler = 'Read-only: there’s no reconciler to apply route changes yet.'
 
 interface BackendState extends Backend {
   spec: BackendSpec
@@ -134,9 +140,15 @@ export function RoutingPage() {
         title="Routing"
         description="Where each request goes: routes match requests to model targets, backends are the providers behind them. Console-owned resources are editable; Git-managed ones are read-only here and link to their source."
         actions={
-          <Button render={<Link to="/onboarding" />}>
-            <Plus /> Add provider
-          </Button>
+          live ? (
+            <Button disabled title="Adding providers isn’t connected yet: the control plane doesn’t hold provider credentials.">
+              <Plus /> Add provider
+            </Button>
+          ) : (
+            <Button render={<Link to="/onboarding" />}>
+              <Plus /> Add provider
+            </Button>
+          )
         }
       >
         <TabsList variant="underline" className="-mb-4">
@@ -276,6 +288,7 @@ function BackendsList({
                 <td className="px-3 py-2.5 text-right">{b.p50 ? <Duration ms={b.p50} /> : <span className="font-mono text-muted-foreground">—</span>}</td>
                 <td className={cn('num px-3 py-2.5 text-right font-mono', b.errorRate > 2 && 'text-v-blocked-fg')}>{b.errorRate.toFixed(1)}%</td>
                 <td className="py-2.5 pr-6 pl-3" onClick={(e) => e.stopPropagation()}>
+                  {!live && (
                   <div className="flex justify-end gap-1">
                     {b.pending && (
                       <Button variant="ghost" size="xs" onClick={() => onCancel(b.name)}>
@@ -289,6 +302,7 @@ function BackendsList({
                       <Download /> Export
                     </Button>
                   </div>
+                  )}
                 </td>
               </tr>
             ))}
@@ -296,7 +310,9 @@ function BackendsList({
         </table>
       </div>
       <p className="px-6 py-3 text-xs text-muted-foreground">
-        Console-owned backends reconcile from the console database; drift is reverted on the next loop and reported here. Git-managed backends are mirrored read-only from the cluster.
+        {live
+          ? 'Read-only: there’s no reconciler yet, so these are the control plane’s configured backends. Nothing applies them to Agent Router or reports their state back. p50 and errors come from the last hour of receipts when a backend served at least 5 requests; otherwise they, and health, are as configured.'
+          : 'Console-owned backends reconcile from the console database; drift is reverted on the next loop and reported here. Git-managed backends are mirrored read-only from the cluster.'}
       </p>
     </Section>
   )
@@ -322,6 +338,7 @@ function BackendDetail({
   const [draft, setDraft] = useState<BackendSpec>(b.spec)
   const [reviewing, setReviewing] = useState(false)
   const [adoptOpen, setAdoptOpen] = useState(false)
+  if (live) return <LiveBackendDetail b={b} />
   const editable = b.provenance !== 'git'
   const dirty = JSON.stringify(draft) !== JSON.stringify(b.spec)
 
@@ -532,6 +549,38 @@ function BackendDetail({
   )
 }
 
+/** A backend as the control plane has it, with nothing it can't back up. */
+function LiveBackendDetail({ b }: { b: BackendState }) {
+  return (
+    <>
+      <DrawerHeader className="flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ProvenanceBadge provenance={b.provenance} source={b.source} />
+          <SyncStateIndicator state={b.sync} />
+          {b.captureContent && <CaptureMarker />}
+        </div>
+        <DrawerTitle className="font-mono">{b.name}</DrawerTitle>
+        <DrawerDescription>
+          {b.provider} · {b.region} · serves {b.models.join(', ')}
+        </DrawerDescription>
+      </DrawerHeader>
+      <DrawerBody className="gap-4">
+        <p className="text-sm text-muted-foreground">{noReconciler.replace('route', 'backend')}</p>
+        <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm">
+          <dt className="text-muted-foreground">Health</dt>
+          <dd>{healthLabel[b.health]} <span className="text-xs text-muted-foreground">(as configured; no health probes yet)</span></dd>
+          <dt className="text-muted-foreground">p50</dt>
+          <dd>{b.p50 ? <Duration ms={b.p50} /> : '—'}</dd>
+          <dt className="text-muted-foreground">Errors</dt>
+          <dd className="num font-mono text-xs">{b.errorRate.toFixed(1)}%</dd>
+          <dd className="col-span-2 text-xs text-muted-foreground">From the last hour of receipts when it served at least 5 requests; otherwise as configured.</dd>
+        </dl>
+        <p className="text-xs text-muted-foreground">A backend’s spec (endpoint, timeout, retries) and its generated YAML aren’t connected yet: the control plane doesn’t store them.</p>
+      </DrawerBody>
+    </>
+  )
+}
+
 // ---- Routes ---------------------------------------------------------------
 
 const captureBackends = new Set(seedBackends.filter((b) => b.captureContent).map((b) => b.name))
@@ -551,6 +600,7 @@ function RoutesList() {
                 <ProvenanceBadge provenance={r.provenance} />
                 <SyncStateIndicator state={r.sync} />
                 {captures && <CaptureMarker />}
+                {!live && (
                 <div className="ml-auto flex gap-1">
                   {r.provenance !== 'git' ? (
                     <Button variant="ghost" size="xs" onClick={() => setEditing(r)}>
@@ -566,6 +616,7 @@ function RoutesList() {
                     <Download /> Export
                   </Button>
                 </div>
+                )}
               </div>
               <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1.3fr)_minmax(0,1fr)]">
                 <div>
@@ -611,7 +662,9 @@ function RoutesList() {
         })}
       </ul>
       <p className="border-t border-border px-6 py-3 text-xs text-muted-foreground">
-        The visual editor compiles to an AIGatewayRoute. Routes it can’t express — regex header matches, per-rule filters — open in a YAML editor with schema validation instead.
+        {live
+          ? `${noReconciler} These routes are the control plane’s config: the dev gateway and Warden’s reroutes use them, and Agent Router routes from its own config file.`
+          : 'The visual editor compiles to an AIGatewayRoute. Routes it can’t express — regex header matches, per-rule filters — open in a YAML editor with schema validation instead.'}
       </p>
       {editing && <RouteEditor route={editing} onClose={() => setEditing(null)} />}
       {yamlFor && <YamlDialog title={yamlFor.name} yaml={routeYaml(yamlFor)} open onOpenChange={(o) => !o && setYamlFor(null)} />}
@@ -768,6 +821,13 @@ function FallbackView() {
           ))}
         </ul>
       </Section>
+      {live ? (
+        <Section title="Fallbacks in traffic" description="Receipts record each fallback; there’s no failover log apart from them.">
+          <Link to="/traffic?reason=fallback" className="text-sm underline-offset-4 hover:underline">
+            Requests that fell back →
+          </Link>
+        </Section>
+      ) : (
       <Section title="Recent failovers" description="Each links to the receipts that fell back.">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-muted-foreground">
@@ -802,6 +862,7 @@ function FallbackView() {
           </tbody>
         </table>
       </Section>
+      )}
     </>
   )
 }

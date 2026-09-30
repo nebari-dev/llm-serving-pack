@@ -56,9 +56,9 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		if k.Status == "revoked" {
 			revokedAt = &now
 		}
-		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, budget_id, expires_at, status, revoked_at)
-		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,''),$11,$12,$13)`,
-			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.Project, k.AllowedModels, k.AllowedRegions, k.BudgetID, k.ExpiresAt, k.Status, revokedAt)
+		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, expires_at, status, revoked_at)
+		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.Project, k.AllowedModels, k.AllowedRegions, k.ExpiresAt, k.Status, revokedAt)
 	}
 	for _, r := range demo.Rules {
 		when, _ := json.Marshal(r.When)

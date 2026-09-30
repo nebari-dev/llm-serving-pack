@@ -24,9 +24,14 @@ func (s *Server) aliases(_ http.ResponseWriter, r *http.Request, t string) (any,
 	return aliasViews(aliases, requested), nil
 }
 
-// putAlias takes {"target": model}: it creates the alias in the path, or
-// points it at a new target. If-Match, when sent, must be its version.
+// putAlias takes {"target": model}: it creates the alias in the path
+// (If-None-Match: *), or points it at a new target (If-Match: its etag).
 func (s *Server) putAlias(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	// An update names the version it replaces; a create says there's none.
+	match, create := r.Header.Get("If-Match"), r.Header.Get("If-None-Match") == "*"
+	if match == "" && !create {
+		return nil, preconditionRequired("send If-Match with the alias's etag to change it, or If-None-Match: * to create it")
+	}
 	var in struct {
 		Target string `json:"target"`
 	}
@@ -45,7 +50,7 @@ func (s *Server) putAlias(w http.ResponseWriter, r *http.Request, t string) (any
 	if err := store.ValidateAlias(alias, in.Target, ids); err != nil {
 		return nil, badRequest(err.Error())
 	}
-	if err := s.Store.PutAlias(r.Context(), t, s.DevActor, alias, in.Target, r.Header.Get("If-Match")); err != nil {
+	if err := s.Store.PutAlias(r.Context(), t, s.DevActor, alias, in.Target, match, create); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -53,8 +58,12 @@ func (s *Server) putAlias(w http.ResponseWriter, r *http.Request, t string) (any
 }
 
 func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
 	alias := r.PathValue("alias")
-	if err := s.Store.DeleteAlias(r.Context(), t, s.DevActor, alias, r.Header.Get("If-Match")); err != nil {
+	if err := s.Store.DeleteAlias(r.Context(), t, s.DevActor, alias, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()

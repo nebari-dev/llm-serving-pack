@@ -61,10 +61,10 @@ var Routes = []model.Route{
 func date(s string) *string { return &s }
 
 var Keys = []model.APIKey{
-	{ID: "k1", Name: "support-bot", Prefix: "ngw_live_7f3a", Team: "support", Project: "helpdesk", AllowedModels: []string{"gpt-5-mini", "claude-sonnet-5"}, AllowedRegions: []string{"us-east", "eu-central"}, BudgetID: "b1", ExpiresAt: date("2027-03-01"), Status: "active"},
-	{ID: "k2", Name: "agents-prod", Prefix: "ngw_live_c19e", Team: "agents", Project: "orchestrator", AllowedModels: []string{"claude-sonnet-5", "claude-opus-4-1", "gpt-5.5"}, AllowedRegions: []string{"us-east"}, BudgetID: "b2", ExpiresAt: date("2026-12-31"), Status: "active"},
-	{ID: "k3", Name: "batch-summarize", Prefix: "ngw_live_02bd", Team: "batch", Project: "nightly-digest", AllowedModels: []string{"gpt-5-mini", "claude-opus-4-1", "llama-3.3-70b"}, AllowedRegions: []string{"us-east", "eu-private"}, BudgetID: "b3", ExpiresAt: date("2026-11-15"), Status: "active"},
-	{ID: "k4", Name: "web-chat", Prefix: "ngw_live_9a0c", Team: "web", Project: "assistant", AllowedModels: []string{"gpt-5-mini", "claude-haiku-4-5"}, AllowedRegions: []string{"us-east"}, BudgetID: "b4", ExpiresAt: date("2027-01-20"), Status: "rotating"},
+	{ID: "k1", Name: "support-bot", Prefix: "ngw_live_7f3a", Team: "support", Project: "helpdesk", AllowedModels: []string{"gpt-5-mini", "claude-sonnet-5"}, AllowedRegions: []string{"us-east", "eu-central"}, ExpiresAt: date("2027-03-01"), Status: "active"},
+	{ID: "k2", Name: "agents-prod", Prefix: "ngw_live_c19e", Team: "agents", Project: "orchestrator", AllowedModels: []string{"claude-sonnet-5", "claude-opus-4-1", "gpt-5.5"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2026-12-31"), Status: "active"},
+	{ID: "k3", Name: "batch-summarize", Prefix: "ngw_live_02bd", Team: "batch", Project: "nightly-digest", AllowedModels: []string{"gpt-5-mini", "claude-opus-4-1", "llama-3.3-70b"}, AllowedRegions: []string{"us-east", "eu-private"}, ExpiresAt: date("2026-11-15"), Status: "active"},
+	{ID: "k4", Name: "web-chat", Prefix: "ngw_live_9a0c", Team: "web", Project: "assistant", AllowedModels: []string{"gpt-5-mini", "claude-haiku-4-5"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2027-01-20"), Status: "rotating"},
 	{ID: "k5", Name: "research", Prefix: "ngw_live_e55f", Team: "research", Project: "evals", AllowedModels: []string{"claude-opus-4-1", "gpt-5.5", "claude-sonnet-5"}, AllowedRegions: []string{"us-east"}, Status: "active"},
 	{ID: "k6", Name: "secops-triage", Prefix: "ngw_live_41d2", Team: "security", Project: "soc", AllowedModels: []string{"llama-3.3-70b", "claude-haiku-4-5"}, AllowedRegions: []string{"eu-private", "eu-central"}, ExpiresAt: date("2026-10-02"), Status: "active"},
 	{ID: "k7", Name: "legacy-intranet", Prefix: "ngw_live_77aa", Team: "web", Project: "intranet", AllowedModels: []string{"gpt-5-mini"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2026-08-30"), Status: "revoked"},

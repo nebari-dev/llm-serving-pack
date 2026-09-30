@@ -133,7 +133,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 The backend for most of these landed 2026-09-29; the console forms haven't,
 so their controls stay disabled in api mode. Every write below has an audit
 row in the same transaction and takes `If-Match` (409 with the current row
-when stale). Open questions are in `docs/backend-decisions.md`.
+when stale; 428 without it on an update or delete). Open questions are in
+`docs/backend-decisions.md`.
 
 - [ ] Rules: create, publish, mode and fail mode, with audit rows. Warden
   picks up changes on its next snapshot.
@@ -142,20 +143,22 @@ when stale). Open questions are in `docs/backend-decisions.md`.
     `POST /rules/{id}/rollback`, `GET /rules/{id}/versions`,
     `DELETE /rules/{id}`. Published versions are immutable; the first
     publish defaults to monitor mode. Console: the Guardrails builder.
-- [ ] Routes and backends: apply. Not built: route config doesn't reach
-  Agent Router's routing, so there's nothing for an apply to change yet
-  (decisions §6).
+- [x] Routes and backends: read-only (decided 2026-09-30). Route config
+  doesn't reach Agent Router's routing, so there's nothing for an apply to
+  change yet. The API reports sync as `not_reconciled`, and in api mode the
+  Routing page drops the edit, apply, adopt and YAML paths and the mockup's
+  specs, reconcile events and failovers (decisions §6).
 - [ ] Budgets: create and edit. The gateway enforces every budget whose
-  scope covers a key (its team, project or the key itself), not only the
-  key's budget_id; the strictest over-cap one decides.
+  scope covers a key (its team, project or the key itself); the strictest
+  over-cap one decides. Keys no longer name a budget (`budget_id` dropped).
   - Backend done: `POST /budgets`, `PATCH`/`DELETE /budgets/{id}`, with
     `?dryRun=true`. Console: "Add budget" and edit on Spend.
 - [ ] Aliases, including saving the savings analysis's draft alias changes.
   - Backend done: `PUT`/`DELETE /aliases/{alias}`; overlapping patterns
     resolve by longest prefix. Console: "New alias" on Models. The savings
     analysis is still a §3 item.
-- [ ] Detector thresholds. Not built: the regex detectors have no
-  confidence to threshold (decisions §6).
+- [ ] Detector thresholds. On hold (decided 2026-09-30): the regex
+  detectors have no confidence to threshold (decisions §6).
 - [ ] Key rotation: extend the overlap, retire the old secret now.
   - Backend done: `POST /keys/{id}/rotation/extend` and `/finish`.
     Console: the two disabled buttons on Keys.

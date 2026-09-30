@@ -45,6 +45,7 @@ const syncMeta: Record<SyncState, { label: string; tone: 'allowed' | 'neutral' |
   applying: { label: 'Applying…', tone: 'neutral', Icon: CircleDashed },
   failed: { label: 'Reconcile failed', tone: 'blocked', Icon: CircleX },
   drift: { label: 'Drift detected', tone: 'degraded', Icon: TriangleAlert },
+  not_reconciled: { label: 'No reconciler', tone: 'neutral', Icon: CircleDashed },
 }
 
 export function SyncStateIndicator({ state, className }: { state: SyncState; className?: string }) {
@@ -61,6 +62,7 @@ export function SyncStateIndicator({ state, className }: { state: SyncState; cla
   return (
     <StateChip
       tone={tone}
+      title={state === 'not_reconciled' ? 'There’s no reconciler yet: nothing applies this to Agent Router or reports its state back.' : undefined}
       className={cn(state === 'applying' && 'border-dashed', className)}
       icon={<Icon className={cn('size-3', state === 'applying' && 'motion-safe:animate-spin motion-safe:[animation-duration:var(--duration-loading)]')} aria-hidden="true" />}
     >

@@ -122,9 +122,10 @@ func lockAlias(ctx context.Context, tx pgx.Tx, tenant, alias string) (*AliasRow,
 	return &a, err
 }
 
-// PutAlias creates an alias or points it at a new target. Setting the target
-// it already has changes nothing and writes no audit row.
-func (s *Store) PutAlias(ctx context.Context, tenant, actor, alias, target, ifMatch string) error {
+// PutAlias creates an alias (create: it must not exist yet) or points it at a
+// new target (ifMatch: its current etag). Setting the target it already has
+// changes nothing and writes no audit row.
+func (s *Store) PutAlias(ctx context.Context, tenant, actor, alias, target, ifMatch string, create bool) error {
 	tx, err := s.Config.Begin(ctx)
 	if err != nil {
 		return err
@@ -145,6 +146,9 @@ func (s *Store) PutAlias(ctx context.Context, tenant, actor, alias, target, ifMa
 			return err
 		}
 		return tx.Commit(ctx)
+	}
+	if create {
+		return &StaleError{Current: withAliasETag(*cur)}
 	}
 	if err := checkMatch(ifMatch, *cur); err != nil {
 		return err
@@ -185,3 +189,11 @@ func (s *Store) DeleteAlias(ctx context.Context, tenant, actor, alias, ifMatch s
 	}
 	return tx.Commit(ctx)
 }
+
+// aliasWithETag is an alias row with its version, as a 409 carries it.
+type aliasWithETag struct {
+	AliasRow
+	ETag string `json:"etag"`
+}
+
+func withAliasETag(a AliasRow) aliasWithETag { return aliasWithETag{a, ETag(a)} }

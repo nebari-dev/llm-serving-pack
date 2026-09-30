@@ -87,7 +87,6 @@ type APIKey struct {
 	Project        string   `json:"project"`
 	AllowedModels  []string `json:"allowedModels"`
 	AllowedRegions []string `json:"allowedRegions"`
-	BudgetID       string   `json:"budgetId,omitempty"`
 	ExpiresAt      *string  `json:"expiresAt"`
 	LastUsedAt     *int64   `json:"lastUsedAt"` // epoch ms; the console formats it
 	Requests24h    int      `json:"requests24h"`

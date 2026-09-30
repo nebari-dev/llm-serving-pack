@@ -59,10 +59,9 @@ key), and the strictest over-cap one decides. There's create/edit/delete
 with dry runs, and a $0.01 cap set through the API stops real requests at
 Agent Router (api-mode test).
 
-- **Decide: `api_keys.budget_id` is now vestigial.** Enforcement goes by
-  scope. Options: drop the column and the key form's budget field, or make
-  the key form's "budget" create a key-scoped budget. I recommend dropping
-  it; budgets are managed on Spend.
+- **Decided 2026-09-30: `api_keys.budget_id` is dropped** (migration 005).
+  Keys don't name a budget; the key form lists the budgets that will cover
+  the new key, and budgets are managed on Spend.
 - **Decide: projects are free text on keys.** §5.2 has a
   `projects(id, team_id, name)` table. Today a project budget needs at least
   one active key in that project, so you can't set a budget before the keys
@@ -74,7 +73,6 @@ Agent Router (api-mode test).
 - **Defaults I picked:**
   - One budget per scope, enforced by a unique index.
   - Monthly budgets only, since spend is month to date.
-  - Deleting a budget clears `budget_id` on keys that named it.
   - A key-scoped budget matches by key name.
 - **Overshoot.** Warden reads spend from its 5s snapshot of
   `receipts_daily`, so a key can overspend by up to about 5s of traffic plus
@@ -109,7 +107,8 @@ reports the change and says replay isn't connected.
 
 ## 4. Aliases
 
-Done: `PUT`/`DELETE /aliases/{alias}` with audit rows and If-Match, and
+Done: `PUT`/`DELETE /aliases/{alias}` with audit rows and If-Match (or
+`If-None-Match: *` to create), and
 aliases are per tenant. Overlapping `*` patterns now resolve by longest
 prefix, which closes the open item from last session.
 
@@ -133,42 +132,44 @@ retire-old-secret-now are in.
   and only tells a key's own secrets apart; say if policy forbids it.
 - Overlap can't end more than 7 days from now, matching the rotate
   dialog's maximum.
-- Key writes (create, revoke, rotate) don't use If-Match yet.
+- Key writes (revoke, rotate, extend, finish) don't have an etag yet, so
+  they don't take If-Match (§7).
 
-## 6. Not built: needs a decision first
+## 6. Not built, by decision
 
-- **Routes and backends "apply".** Route config in Postgres only feeds the
-  dev gateway's candidates and Warden's reroute hints. Real routing is
-  Agent Router's `aigw/config.yaml` (static `AIGatewayRoute`), and there's
-  no reconciler (§4.4). An "apply" would change nothing on the real path,
-  or claim it had. The seeded sync states ("drift", "applying") and backend
-  health/p50 are fixtures that api mode shows as real; the Routing page
-  isn't in the real-data checklist yet.
-  - **Decide:**
-    - (a) Build the reconciler: generate `AIGatewayRoute` and SSA it in a
-      cluster, or regenerate `config.yaml` and restart aigw locally.
-    - (b) Writes store the desired state, and a sync state of "not applied"
-      says so.
-    - (c) Keep routing read-only, and mark the fixture states as not
-      connected.
-  - I recommend (c) now and (a) as its own project.
-- **Detector thresholds.** The detectors are regexes (`gateway/detect.go`),
-  with no confidence score, so a threshold changes nothing. The
-  `detectors` table's threshold, `hits_24h` and `fp` are seed values.
-  - **Decide:** real detectors first (Presidio-style NER, per §5.3), or
-    show thresholds read-only as "not used by the regex detectors" until
-    then. Hit and false-positive counts should come from receipts (a §3
-    item).
+- **Routes and backends stay read-only (decided 2026-09-30).** Route config
+  in Postgres only feeds the dev gateway's candidates and Warden's reroute
+  hints. Real routing is Agent Router's `aigw/config.yaml` (static
+  `AIGatewayRoute`), and there's no reconciler (§4.4), so an "apply" would
+  change nothing on the real path. `GET /backends` and `GET /routes` report
+  every sync state as `not_reconciled` instead of the seeded ones, and in
+  api mode the Routing page has no edit, apply, adopt or YAML paths. It
+  doesn't show the mockup's backend specs, reconcile events or failover
+  log either; it links to fallback receipts instead. The reconciler
+  (generate and apply `AIGatewayRoute`, or regenerate `config.yaml`
+  locally) is its own project.
+  - Still seed values in api mode: provenance (Console/Git/Adopted, and
+    Git source links), backend health, and p50/errors for a backend that
+    served fewer than 5 requests in the last hour. The page says health is
+    as configured; provenance isn't labelled yet.
+- **Detector thresholds are on hold (decided 2026-09-30).** The detectors
+  are regexes (`gateway/detect.go`) with no confidence score, so a
+  threshold would change nothing. They wait for real detectors
+  (Presidio-style NER, per §5.3). The `detectors` table's threshold,
+  `hits_24h` and `fp` are seed values; hit and false-positive counts from
+  receipts are a §3 item.
 
 ## 7. Cross-cutting
 
 - **Decide: auth and roles.** Every write acts as `dev@localhost`, and
   §5.2's roles aren't enforced. Before this leaves dev: who may publish
   rules, change prices, delete budgets?
-- **Decide: require If-Match?** §6 wants optimistic concurrency on every
-  mutable resource. Writes accept `If-Match` and return 409 with the
-  current row when it's stale, but a write without `If-Match` goes through.
-  Once the console sends it, should a missing one be a 428?
+- **If-Match is required (decided 2026-09-30).** Updating or deleting an
+  alias, budget or rule without `If-Match` is a 428; a stale one is a 409
+  with the current resource. Creating an alias with `PUT` takes
+  `If-None-Match: *`. Dry runs don't need it. Key writes (revoke, rotate,
+  extend, finish), price writes and the kill switch don't carry an etag yet,
+  so they don't require it.
 - **No database-backed Go tests.** SQL only runs in the api-mode suite
   against the live stack. That's where the ambiguous-column bug in the rule
   drafts query surfaced. I recommend a Postgres + Timescale test harness
@@ -181,5 +182,5 @@ retire-old-secret-now are in.
   still succeeds and Warden catches up on its next 5s tick.
 - Console work these endpoints unlock: forms for budgets, rules, aliases,
   prices and rotation. All still disabled in api mode, plus sharing one SSE
-  stream per tab. The mock-mode budget trace text still uses the old
-  budget_id wording.
+  stream per tab.
+- Restarting after a server change: `make restart` (see server/README.md).

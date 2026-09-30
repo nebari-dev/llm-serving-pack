@@ -289,8 +289,7 @@ func modelAllowed(k *store.KeyRecord, resolved string) *Reject {
 }
 
 // governingBudget picks the budget that decides a request for k. Every budget
-// whose scope covers the key applies, whether or not the key's budget_id
-// names it: its team, its project, the key itself. The strictest over-cap one
+// whose scope covers the key applies: its team, its project, the key itself. The strictest over-cap one
 // wins (block, then throttle, then warn); with none over cap it's the one
 // nearest its cap, so the trace shows the tightest headroom.
 func (s *Snapshot) governingBudget(k *store.KeyRecord) (model.Budget, float64, bool) {

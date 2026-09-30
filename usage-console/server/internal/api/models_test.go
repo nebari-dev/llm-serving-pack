@@ -77,3 +77,16 @@ func TestPricingViewWithOnlySeedRowsHasNoChanges(t *testing.T) {
 		t.Fatalf("no history encodes as [], not null: %#v", empty.Changes)
 	}
 }
+
+// There's no reconciler (§4.4): the sync_state column holds seed values
+// nothing observed, so the API reports every backend and route as not
+// reconciled rather than pass them on.
+func TestSyncStateIsNotReconciled(t *testing.T) {
+	bs := notReconciledBackends([]model.Backend{{Name: "a", Sync: "synced"}, {Name: "b", Sync: "drift"}})
+	rs := notReconciledRoutes([]model.Route{{Name: "r", Sync: "applying"}})
+	for _, s := range []string{bs[0].Sync, bs[1].Sync, rs[0].Sync} {
+		if s != NotReconciled {
+			t.Fatalf("sync %q", s)
+		}
+	}
+}
