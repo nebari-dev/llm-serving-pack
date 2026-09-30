@@ -62,10 +62,13 @@ export const seedDeprecations: Record<string, string> | null = dataMode === 'api
 export class ApiError extends Error {
   readonly status: number
   readonly code: string
-  constructor(status: number, code: string, message: string) {
+  /** On a 409 from a stale If-Match: the resource as it is now (§6). */
+  readonly current?: unknown
+  constructor(status: number, code: string, message: string, current?: unknown) {
     super(message)
     this.status = status
     this.code = code
+    this.current = current
   }
 }
 
@@ -76,7 +79,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`)
+    throw new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`, body?.current)
   }
   return res.json() as Promise<T>
 }
@@ -173,4 +176,71 @@ export async function rotateKey(k: ApiKey, overlapHours: number): Promise<{ key:
   const at = Date.now()
   const rotation = { startedAt: at, startedBy: session.actor.email, endsAt: at + overlapHours * 3_600_000, split: { newShare: 0, oldActors: [] } }
   return { key: { ...k, status: 'rotating', rotation }, secret: mockSecret() }
+}
+
+// ---- budgets ---------------------------------------------------------------
+// Api mode writes through the control plane (audited, If-Match on edit and
+// delete, dryRun for the preview). Mock mode edits the fixtures in memory.
+
+export type BudgetInput = Pick<Budget, 'scopeType' | 'scope' | 'capUsd' | 'onExceed'>
+export type BudgetEdit = Pick<Budget, 'capUsd' | 'onExceed'>
+/** What a budget write would do (§6 dryRun): its spend now, and the active keys it covers. */
+export interface BudgetPreview {
+  budget: Budget
+  covers: string[]
+  overCap: boolean
+}
+
+const storeBudget = (b: Budget) => {
+  budgets = budgets.some((x) => x.id === b.id) ? budgets.map((x) => (x.id === b.id ? b : x)) : [...budgets, b]
+}
+
+/** Keeps the catalog's budgets (read by the key form) in step with a fresh GET /budgets. */
+export function syncBudgets(list: Budget[]) {
+  budgets = list
+}
+
+function mockPreview(b: Budget): BudgetPreview {
+  const covers = keys.filter((k) => k.status !== 'revoked' && mock.budgetCovers(b, k)).map((k) => k.name)
+  return { budget: b, covers: covers.sort(), overCap: b.currentUsd >= b.capUsd }
+}
+
+const blankBudget = (input: BudgetInput): Budget => ({ ...input, id: '', period: 'monthly', currentUsd: 0, projectedUsd: 0, trailingDailyUsd: 0 })
+
+/** The preview of creating `input`, or of editing `existing` to it. */
+export async function previewBudget(input: BudgetInput, existing?: Budget): Promise<BudgetPreview> {
+  if (dataMode === 'api') {
+    const edit: BudgetEdit = { capUsd: input.capUsd, onExceed: input.onExceed }
+    const res = existing
+      ? await api<BudgetPreview>(`/budgets/${existing.id}?dryRun=true`, { method: 'PATCH', body: JSON.stringify(edit) })
+      : await api<BudgetPreview>('/budgets?dryRun=true', { method: 'POST', body: JSON.stringify(input) })
+    return { budget: res.budget, covers: res.covers, overCap: res.overCap }
+  }
+  return mockPreview(existing ? { ...existing, ...input } : blankBudget(input))
+}
+
+export async function createBudget(input: BudgetInput): Promise<Budget> {
+  let b: Budget
+  if (dataMode === 'api') b = await api<Budget>('/budgets', { method: 'POST', body: JSON.stringify(input) })
+  else {
+    if (budgets.some((x) => x.scopeType === input.scopeType && x.scope === input.scope)) throw new ApiError(409, 'conflict', 'conflict')
+    b = { ...blankBudget(input), id: 'b' + Math.random().toString(36).slice(2, 7) }
+  }
+  storeBudget(b)
+  return b
+}
+
+/** Edits `b` as the caller last saw it; a 409 ApiError carries the budget as it is now. */
+export async function updateBudget(b: Budget, edit: BudgetEdit): Promise<Budget> {
+  const next =
+    dataMode === 'api'
+      ? await api<Budget>(`/budgets/${b.id}`, { method: 'PATCH', body: JSON.stringify(edit), headers: { 'If-Match': b.etag ?? '' } })
+      : { ...b, ...edit }
+  storeBudget(next)
+  return next
+}
+
+export async function deleteBudget(b: Budget): Promise<void> {
+  if (dataMode === 'api') await api(`/budgets/${b.id}`, { method: 'DELETE', headers: { 'If-Match': b.etag ?? '' } })
+  budgets = budgets.filter((x) => x.id !== b.id)
 }

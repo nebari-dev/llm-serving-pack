@@ -1,5 +1,5 @@
-import { ArrowRight, Download, FileText, TrendingUp } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { ArrowRight, Download, FileText, Pencil, Trash2, TrendingUp } from 'lucide-react'
+import { useEffect, useMemo, useReducer, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { StackedBars, Meter } from '@/components/gw/charts'
 import { DiffView } from '@/components/gw/diff-view'
@@ -14,11 +14,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgets, dataMode, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { type Budget, budgets, dataMode, syncBudgets, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
 import { int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
+import { BudgetDialog, capMoney, DeleteBudgetDialog } from './budget-dialogs'
 import { type Dim, dims, mockSpendView } from './spend-data'
 
 // §7.5.5 Spend and budgets. Two modes on one screen (trend / breakdown),
@@ -98,6 +99,15 @@ export function SpendPage() {
   const initial = useMemo(() => (api ? emptyView(range, dim) : mockSpendView(range, dim)), [range, dim])
   const { data: view, loaded } = useLive<SpendView>(api ? `/spend?range=${range}&by=${dim}` : null, initial, 60_000)
   const liveBudgets = useLive<Budget[]>(api ? '/budgets' : null, budgets, 60_000)
+  // Mock-mode writes edit the catalog's fixtures; this re-renders after one.
+  const [, bumpBudgets] = useReducer((n: number) => n + 1, 0)
+  const budgetList = api ? liveBudgets.data : budgets
+  useEffect(() => {
+    if (api && liveBudgets.loaded) syncBudgets(liveBudgets.data)
+  }, [liveBudgets.data, liveBudgets.loaded])
+  const [editing, setEditing] = useState<Budget | 'new' | null>(null)
+  const [deleting, setDeleting] = useState<Budget | null>(null)
+  const budgetsChanged = () => (api ? liveBudgets.reload() : bumpBudgets())
   const { period } = view
   const windowTotal = view.rows.reduce((a, r) => a + r.spendUsd, 0)
   const prevTotal = view.rows.reduce((a, r) => a + r.prevSpendUsd, 0)
@@ -263,22 +273,22 @@ export function SpendPage() {
         title="Budgets"
         description={
           loaded
-            ? `Monthly caps, UTC. Period ${utcDate(period.periodStart)} – ${utcDate(lastDay)}, resets in ${Math.ceil(period.remainingDays)} days.${api ? ' Budgets are read-only here: creating and editing them isn’t connected yet.' : ''}`
+            ? `Monthly caps, UTC. Period ${utcDate(period.periodStart)} – ${utcDate(lastDay)}, resets in ${Math.ceil(period.remainingDays)} days.`
             : 'Monthly caps, UTC.'
         }
         actions={
-          api ? (
-            <Button variant="outline" disabled title="Creating budgets isn't connected yet: the control plane serves budgets read-only.">
-              Add budget
-            </Button>
-          ) : (
-            <Button variant="outline" onClick={() => toast.add({ title: 'Budget editor is not part of this mockup', type: 'info' })}>
-              Add budget
-            </Button>
-          )
+          <Button variant="outline" disabled={!liveBudgets.loaded} onClick={() => setEditing('new')}>
+            Add budget
+          </Button>
         }
       >
-        {liveBudgets.loaded ? <BudgetTable budgets={liveBudgets.data} remainingDays={period.remainingDays} /> : <Skeleton shape="block" className="h-[240px]" />}
+        {liveBudgets.loaded ? (
+          <BudgetTable budgets={budgetList} remainingDays={period.remainingDays} onEdit={setEditing} onDelete={setDeleting} />
+        ) : (
+          <Skeleton shape="block" className="h-[240px]" />
+        )}
+        {editing && <BudgetDialog budget={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={budgetsChanged} />}
+        {deleting && <DeleteBudgetDialog budget={deleting} onClose={() => setDeleting(null)} onDeleted={budgetsChanged} />}
       </Section>
 
       <Section
@@ -486,7 +496,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
  */
 function enforcement(b: Budget) {
   const pct = b.currentUsd / b.capUsd
-  const cap = money(b.capUsd, 0)
+  const cap = capMoney(b.capUsd)
   const over = b.currentUsd >= b.capUsd
   if (api) {
     if (over) {
@@ -530,7 +540,17 @@ function enforcement(b: Budget) {
   return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
 }
 
-function BudgetTable({ budgets, remainingDays }: { budgets: Budget[]; remainingDays: number }) {
+function BudgetTable({
+  budgets,
+  remainingDays,
+  onEdit,
+  onDelete,
+}: {
+  budgets: Budget[]
+  remainingDays: number
+  onEdit: (b: Budget) => void
+  onDelete: (b: Budget) => void
+}) {
   if (!budgets.length) return <p className="py-6 text-center text-sm text-muted-foreground">No budgets set.</p>
   return (
     <Table aria-label="Budgets">
@@ -542,6 +562,9 @@ function BudgetTable({ budgets, remainingDays }: { budgets: Budget[]; remainingD
           <TableHead className="w-56">Consumption</TableHead>
           <TableHead>Enforcement</TableHead>
           <TableHead className="text-right">Projected</TableHead>
+          <TableHead className="w-20">
+            <span className="sr-only">Actions</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -587,6 +610,14 @@ function BudgetTable({ budgets, remainingDays }: { budgets: Budget[]; remainingD
                 <div className="text-xs text-muted-foreground" title="Month to date plus the trailing 7-day average × days remaining">
                   {crossDay ? `crosses cap ~${utcDate(crossDay)}` : `7-day avg ${money(b.trailingDailyUsd)}/day`}
                 </div>
+              </TableCell>
+              <TableCell className="py-2 text-right whitespace-nowrap">
+                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${b.scope}`} title="Edit cap or action" onClick={() => onEdit(b)}>
+                  <Pencil />
+                </Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${b.scope}`} title="Delete budget" onClick={() => onDelete(b)}>
+                  <Trash2 />
+                </Button>
               </TableCell>
             </TableRow>
           )

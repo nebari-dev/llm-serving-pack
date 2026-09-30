@@ -73,9 +73,12 @@ function Button({
   disabled,
   children,
   ref,
-  render = <button type="button" />,
+  render,
   ...props
 }: ButtonProps) {
+  // The default element's own `type` would beat props.type in useRender, so a
+  // <Button type="submit"> never submitted its form. Take it from props.
+  render ??= <button type={props.type ?? 'button'} />;
   const isDisabled = disabled || loading;
   const isIconSize = size?.startsWith('icon') ?? false;
 

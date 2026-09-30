@@ -1,10 +1,25 @@
 // Live check against a running control plane: hydrate from the API, then
 // render every route and open a receipt. Opt-in, since it needs `make dev`:
 //   VITE_STARGATE_API=http://localhost:8080 VITE_DATA=api npx vitest run src/test/api-mode.test.tsx
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 const base = import.meta.env.VITE_STARGATE_API as string | undefined
+
+/** The open form dialog (toasts have role="dialog" too). */
+const formDialog = () =>
+  waitFor(() => {
+    const d = document.querySelector<HTMLElement>('[data-slot="dialog-content"]')
+    expect(d).toBeTruthy()
+    return d!
+  })
+const formDialogClosed = () => waitFor(() => expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull(), { timeout: 5000 })
+
+/** Picks a Select option the way a mouse does: Base UI ignores a click that didn't start with pointerdown on the item. */
+const choose = (option: HTMLElement) => {
+  fireEvent.pointerDown(option, { pointerType: 'mouse' })
+  fireEvent.click(option)
+}
 
 describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against a live control plane', () => {
   let App: typeof import('@/App').default
@@ -218,7 +233,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const text = document.body.textContent ?? ''
     expect(text).toContain('trailing 7-day average')
     expect(text).toContain("Savings analysis isn't connected yet")
-    expect(text).toContain('creating and editing them isn’t connected yet')
+    expect(text).not.toContain('isn’t connected yet: the control plane serves budgets read-only')
+    expect(screen.getByRole('button', { name: 'Add budget' })).toHaveProperty('disabled', false)
     expect(text).not.toContain('spend is up')
     expect(text).not.toContain('requests/min')
     expect(text).not.toContain('Warns owners')
@@ -480,17 +496,32 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(await status(send('DELETE', path, undefined, etag))).toBe(404)
   })
 
-  // §11's exit test: a cap set through the API stops real requests at the
-  // gateway, and the blocked ones carry the reason.
-  it('writes budgets with dry runs and audit rows, and the gateway enforces the new cap', async () => {
-    type B = import('@/data/catalog').Budget & { etag: string }
-    type C = import('@/data/catalog').Change
-    type R = { verdict: string; errorCode?: string; trace: { step: string; input: string }[] }
-    const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
-    const name = `api-mode-budget-${Date.now().toString(36)}`
-    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+  const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+  /** Spends past a cent with long gpt-5.5 prompts until Warden (reloading every 5s from the aggregates) refuses one. */
+  const spendUntilRefused = async (secret: string) => {
+    const prompt = 'Summarize the following incident log. '.repeat(500)
+    // The fake upstream also answers some requests 429; only Warden's carry budget_exceeded.
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
+      })
+      const code = res.status === 429 ? ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code : undefined
+      if (code === 'budget_exceeded') return code
+      await new Promise((ok) => setTimeout(ok, 1000))
+    }
+    return ''
+  }
+  const testKey = (name: string) =>
+    send<{ key: { id: string }; secret: string }>('POST', '/keys', {
       name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
     })
+
+  it('writes budgets with dry runs, validation, audit rows and If-Match', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type C = import('@/data/catalog').Change
+    const name = `api-mode-budget-${Date.now().toString(36)}`
+    const { key } = await testKey(name)
     let id = ''
     let etag = ''
     try {
@@ -508,29 +539,6 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       for (const bad of [{ ...draft, period: 'weekly' }, { ...draft, capUsd: 0 }, { ...draft, scopeType: 'team', scope: 'nobody' }, { ...draft, onExceed: 'explode' }])
         expect(await status(send('POST', '/budgets', { ...bad, scope: bad.scope + (bad.scopeType === 'key' ? '-x' : '') }))).toBe(400)
 
-      // Spend past a cent: long prompts on gpt-5.5, until Warden (reloading every
-      // 5s from the aggregates) refuses one.
-      const prompt = 'Summarize the following incident log. '.repeat(500)
-      // The fake upstream also answers some requests 429; only Warden's carry budget_exceeded.
-      let refused = ''
-      for (let i = 0; i < 40 && !refused; i++) {
-        const res = await fetch(`${gateway}/v1/chat/completions`, {
-          method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
-        })
-        const code = res.status === 429 ? ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code : undefined
-        if (code === 'budget_exceeded') refused = code
-        else await new Promise((ok) => setTimeout(ok, 1000))
-      }
-      expect(refused).toBe('budget_exceeded')
-      let blocked: R | undefined
-      for (let i = 0; i < 20 && !blocked; i++) {
-        blocked = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=blocked`))[0]
-        if (!blocked) await new Promise((ok) => setTimeout(ok, 500))
-      }
-      expect(blocked?.errorCode).toBe('budget_exceeded')
-      expect(blocked!.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(new RegExp(`^key budget ${name} · \\$0\\.\\d\\d of \\$0\\.01$`))
-
       expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 1000 }))).toBe(428)
       const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.etag)
       etag = raised.etag
@@ -545,6 +553,82 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
     expect((await catalog.api<B[]>('/budgets')).some((b) => b.id === id)).toBe(false)
     expect((await catalog.api<C[]>('/changes')).find((c) => c.targetKind === 'Budget')).toMatchObject({ action: 'Deleted budget', target: `key ${name} · $1,000 monthly` })
+  })
+
+  // §11's exit test: a cap set in the UI stops real requests at the gateway,
+  // and the blocked ones carry the reason. Then the same budget is edited
+  // over a change made meanwhile (§6: a 409 is a merge, not an overwrite) and
+  // deleted, all from Spend.
+  it('sets a budget cap on Spend that stops spend at the gateway, merges a stale edit and deletes it', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type C = import('@/data/catalog').Change
+    type R = { verdict: string; errorCode?: string; trace: { step: string; input: string }[] }
+    const name = `api-mode-ui-budget-${Date.now().toString(36)}`
+    const { key, secret } = await testKey(name)
+    const mine = async () => (await catalog.api<B[]>('/budgets')).find((b) => b.scope === name)
+    try {
+      window.history.pushState({}, '', '/spend')
+      render(<App />)
+      await act(async () => {})
+      const add = await screen.findByRole('button', { name: 'Add budget' })
+      await waitFor(() => expect(add).toHaveProperty('disabled', false))
+      fireEvent.click(add)
+      let dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Key/ }))
+      const picker = within(dialog).getByRole('combobox', { name: 'Key' })
+      await waitFor(() => expect(picker).toHaveProperty('disabled', false)) // keys load when the form opens
+      fireEvent.click(picker)
+      choose(await screen.findByRole('option', { name }))
+      fireEvent.change(within(dialog).getByLabelText('Monthly cap (USD)'), { target: { value: '0.01' } })
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Block/ }))
+      // The dry run says what saving would do before anything is written.
+      await waitFor(() => expect(dialog.textContent).toContain(`Covers 1 active key: ${name}`), { timeout: 5000 })
+      expect(await mine()).toBeUndefined()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Create budget' }))
+      await formDialogClosed()
+      const made = await mine()
+      expect(made).toMatchObject({ scopeType: 'key', capUsd: 0.01, onExceed: 'block', period: 'monthly' })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `key ${name} · $0.01 monthly, block` })
+      const table = screen.getByRole('table', { name: 'Budgets' })
+      await waitFor(() => expect(table.textContent).toContain(name), { timeout: 5000 })
+      expect(table.textContent).toContain('Blocks new requests at $0.01')
+
+      expect(await spendUntilRefused(secret)).toBe('budget_exceeded')
+      let blocked: R | undefined
+      for (let i = 0; i < 20 && !blocked; i++) {
+        blocked = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=blocked`))[0]
+        if (!blocked) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(blocked?.errorCode).toBe('budget_exceeded')
+      expect(blocked!.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(new RegExp(`^key budget ${name} · \\$0\\.\\d\\d of \\$0\\.01$`))
+
+      // Edit: someone else raises the cap to $5 while the form is open.
+      fireEvent.click(within(table).getByRole('button', { name: `Edit budget ${name}` }))
+      dialog = await formDialog()
+      fireEvent.change(within(dialog).getByLabelText('Monthly cap (USD)'), { target: { value: '1000' } })
+      await send('PATCH', `/budgets/${made!.id}`, { capUsd: 5 }, made!.etag)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
+      await waitFor(() => expect(dialog.textContent).toContain('changed since you opened it'), { timeout: 5000 })
+      expect(dialog.textContent).toMatch(/Cap\s*\$5\s*\$1,000/)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save mine over theirs' }))
+      await formDialogClosed()
+      expect((await mine())?.capUsd).toBe(1000)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Raised budget cap', target: `${name} $5 → $1,000` })
+
+      await waitFor(() => expect(table.textContent).toContain('$1,000'), { timeout: 5000 })
+      fireEvent.click(within(table).getByRole('button', { name: `Delete budget ${name}` }))
+      dialog = await formDialog()
+      expect(dialog.textContent).toContain(name)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete budget' }))
+      await formDialogClosed()
+      expect(await mine()).toBeUndefined()
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted budget', target: `key ${name} · $1,000 monthly` })
+      await waitFor(() => expect(table.textContent).not.toContain(name), { timeout: 5000 })
+    } finally {
+      const b = await mine()
+      if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
   }, 120_000)
 
   it('splits a rotation’s traffic by secret, extends its overlap and retires the old secret', async () => {

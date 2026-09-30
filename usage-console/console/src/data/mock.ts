@@ -304,6 +304,8 @@ export interface Budget {
   projectedUsd: number
   /** The scope's daily average the projection uses. */
   trailingDailyUsd: number
+  /** The version an edit or delete names in If-Match (api mode). */
+  etag?: string
 }
 
 /** Whether a budget applies to a key: its team, its project, or the key itself. */

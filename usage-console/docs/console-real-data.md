@@ -63,8 +63,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - The surge callout is hidden (the spec has no surge rule), and so is
     savings, which needs per-request output length and alias writes. Both
     show as not connected.
-  - CSV export downloads the breakdown. PDF and "Add budget" are disabled,
-    with the reason given.
+  - CSV export downloads the breakdown. PDF is disabled, with the reason
+    given. Budgets are editable (see Writes).
 - [ ] **Traffic streams.** Each api-mode Traffic tab holds two SSE
   connections (the global receipt stream and Traffic's filtered one), so
   three tabs use up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
@@ -130,8 +130,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 
 ## 2. Writes
 
-The backend for most of these landed 2026-09-29; the console forms haven't,
-so their controls stay disabled in api mode. Every write below has an audit
+The backend for most of these landed 2026-09-29. Budgets have their console
+form (2026-09-30); the rest stay disabled in api mode until theirs land. Every write below has an audit
 row in the same transaction and takes `If-Match` (409 with the current row
 when stale; 428 without it on an update or delete). Open questions are in
 `docs/backend-decisions.md`.
@@ -148,11 +148,22 @@ when stale; 428 without it on an update or delete). Open questions are in
   change yet. The API reports sync as `not_reconciled`, and in api mode the
   Routing page drops the edit, apply, adopt and YAML paths and the mockup's
   specs, reconcile events and failovers (decisions §6).
-- [ ] Budgets: create and edit. The gateway enforces every budget whose
-  scope covers a key (its team, project or the key itself); the strictest
-  over-cap one decides. Keys no longer name a budget (`budget_id` dropped).
-  - Backend done: `POST /budgets`, `PATCH`/`DELETE /budgets/{id}`, with
-    `?dryRun=true`. Console: "Add budget" and edit on Spend.
+- [x] Budgets: create, edit and delete on Spend (2026-09-30). The gateway
+  enforces every budget whose scope covers a key (its team, project or the
+  key itself); the strictest over-cap one decides. Keys no longer name a
+  budget (`budget_id` dropped).
+  - Backend: `POST /budgets`, `PATCH`/`DELETE /budgets/{id}`, with
+    `?dryRun=true`.
+  - Console: "Add budget" and per-row edit and delete. Scope is team,
+    project or key (projects come from active keys, decisions §2); the
+    scope is fixed once made. What happens at the cap has no default. The
+    form shows the dry run as you type: keys covered, spend this month, and
+    a warning when the budget is already over the new cap. A stale edit or
+    delete (409) shows both versions and asks: keep theirs, or save mine
+    over theirs (§6). Throttle is offered with its caveat (not enforced).
+  - Exit test (§11): the api-mode suite sets a $0.01 block cap through the
+    form, drives the gateway until Warden refuses with `budget_exceeded`,
+    and finds the blocked receipt with the budget in its trace.
 - [ ] Aliases, including saving the savings analysis's draft alias changes.
   - Backend done: `PUT`/`DELETE /aliases/{alias}`; overlapping patterns
     resolve by longest prefix. Console: "New alias" on Models. The savings
