@@ -24,6 +24,6 @@
     "playwright": "^1.63.0",
     "remark": "^15.0.1",
     "unist-util-visit": "^5.1.0",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.2"
   }
 }
