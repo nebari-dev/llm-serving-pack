@@ -32,8 +32,8 @@ type RuleEnv struct {
 
 var ruleName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-// ruleFields are what "is" and "is not" compare, as the engine reads them.
-var ruleFields = []string{"team", "project", "key", "model", "provider", "header x-data-region"}
+// RuleFields are what "is" and "is not" compare, as the engine reads them.
+var RuleFields = []string{"team", "project", "key", "model", "provider", "header x-data-region"}
 
 // ValidateRule checks a rule against what the engine can evaluate. The
 // engine applies a rule's first action only, so a rule has exactly one.
@@ -61,7 +61,7 @@ func ValidateRule(r RuleContent, env RuleEnv) error {
 			}
 			hasEntity = true
 		case "is", "is not", "equals", "not equals":
-			if !slices.Contains(ruleFields, c.Field) {
+			if !slices.Contains(RuleFields, c.Field) {
 				return fmt.Errorf("condition %d: unknown field %q", n, c.Field)
 			}
 		default:

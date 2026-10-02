@@ -137,19 +137,35 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 
 ## 2. Writes
 
-The backend for most of these landed 2026-09-29. Budgets have their console
-form (2026-09-30); the rest stay disabled in api mode until theirs land. Every write below has an audit
+The backend for most of these landed 2026-09-29. Budgets and rules have their
+console forms (2026-09-30); the rest stay disabled in api mode until theirs land. Every write below has an audit
 row in the same transaction and takes `If-Match` (409 with the current row
 when stale; 428 without it on an update or delete). Open questions are in
 `docs/backend-decisions.md`.
 
-- [ ] Rules: create, publish, mode and fail mode, with audit rows. Warden
-  picks up changes on its next snapshot.
-  - Backend done: `POST /rules`, `PUT`/`DELETE /rules/{id}/draft`,
+- [x] Rules: create, publish, mode and fail mode, with audit rows, on
+  Guardrails (2026-09-30). Warden reloads before each write returns.
+  - Backend: `POST /rules`, `PUT`/`DELETE /rules/{id}/draft`,
     `POST /rules/{id}/publish` (mode, fail mode, `?dryRun=true`),
     `POST /rules/{id}/rollback`, `GET /rules/{id}/versions`,
-    `DELETE /rules/{id}`. Published versions are immutable; the first
-    publish defaults to monitor mode. Console: the Guardrails builder.
+    `DELETE /rules/{id}`, and `GET /rules/vocabulary` (the entities, fields
+    and route targets validation accepts, so the builder offers only those).
+    Published versions are immutable; the first publish defaults to monitor
+    mode.
+  - Console (`pages/guardrails-live.tsx`): "New rule", then an explicit
+    "Save draft" and "Discard draft"; "Publish…" shows the server's dry run
+    and publishes as monitor, enforce or disabled; a disabled or unpublished
+    rule can be deleted. Versions lists the selected rule's real history,
+    diffs each version against the one before, and rolls back. A stale save
+    shows both versions: keep theirs, or save mine over theirs.
+  - The builder matches the engine (user's choice, 2026-09-30): one list of
+    conditions that must all match, and one action. Groups, "any of", regex,
+    the response field and a second action aren't offered, and the page says
+    why. The stored "rehydrate on return" text is kept and flagged as not
+    built. Replay says it isn't connected. Reordering isn't connected.
+  - Exit test: the api-mode suite builds a rule in the builder, publishes it
+    enforcing, sees the gateway refuse with `policy_blocked`, merges a stale
+    draft, rolls back from Versions, disables and deletes it.
 - [x] Routes and backends: read-only (decided 2026-09-30). Route config
   doesn't reach Agent Router's routing, so there's nothing for an apply to
   change yet. The API reports sync as `not_reconciled`, and in api mode the

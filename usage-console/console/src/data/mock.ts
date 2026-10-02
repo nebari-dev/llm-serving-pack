@@ -342,7 +342,7 @@ export interface PolicyRule {
   ordinal: number
   name: string
   description: string
-  mode: 'enforce' | 'monitor' | 'draft'
+  mode: 'enforce' | 'monitor' | 'draft' | 'disabled'
   failMode: 'open' | 'closed'
   version: number
   when: { field: string; op: string; value: string[] }[]

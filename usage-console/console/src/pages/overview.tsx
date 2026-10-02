@@ -203,7 +203,7 @@ function StatusStrip() {
   const warden = useLive(dataMode === 'api' ? '/session' : null, session, 15_000).data.warden
   // A backend is called out when it's configured down, or failing now.
   const degradedBackends = backends.filter((b) => b.health === 'down' || b.sync === 'failed' || b.errorRate >= 5)
-  const failOpen = rules.filter((r) => r.failMode === 'open' && r.mode !== 'draft')
+  const failOpen = rules.filter((r) => r.failMode === 'open' && r.mode !== 'draft' && r.mode !== 'disabled')
   const last = receipts.reduce((m, r) => Math.max(m, r.ts), 0)
   const quiet = !last || now - last > 5 * 60_000
   return (
@@ -400,7 +400,7 @@ function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary:
       to: `/keys?key=${a.keyId}`,
     })),
     ...rules
-      .filter((r) => r.mode !== 'draft' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
+      .filter((r) => r.mode !== 'draft' && r.mode !== 'disabled' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
       .map((r) => ({
         id: `rule-${r.id}`,
         tone: 'degraded' as const,

@@ -244,3 +244,57 @@ export async function deleteBudget(b: Budget): Promise<void> {
   if (dataMode === 'api') await api(`/budgets/${b.id}`, { method: 'DELETE', headers: { 'If-Match': b.etag ?? '' } })
   budgets = budgets.filter((x) => x.id !== b.id)
 }
+
+// ---- rules -----------------------------------------------------------------
+// Api mode only: the Guardrails builder saves drafts, publishes versions and
+// rolls back through the control plane. Mock mode keeps the page's own state.
+
+/** What an author writes; mode and version come from publishing. */
+export interface RuleContent {
+  name: string
+  description: string
+  failMode: 'open' | 'closed'
+  when: PolicyRule['when']
+  then: PolicyRule['then']
+}
+/** A rule as GET /rules shows it: the live version, any saved draft, and the ETag covering both. */
+export type RuleView = PolicyRule & { draft: (RuleContent & { updatedAt: number; updatedBy: string }) | null; etag: string }
+/** What a rule may name (GET /rules/vocabulary): exactly what the server's validation accepts. */
+export interface RuleVocabulary {
+  entities: string[]
+  fields: string[]
+  targets: string[]
+}
+export interface RuleVersion extends RuleContent {
+  version: number
+  mode: PolicyRule['mode']
+  publishedAt: number | null
+  publishedBy: string | null
+}
+export type PublishMode = 'monitor' | 'enforce' | 'disabled'
+/** What a publish would leave live (§6 dryRun). Replay isn't connected, and `note` says so. */
+export interface RulePublishPlan {
+  rule: PolicyRule
+  changes: { field: string; from: unknown; to: unknown }[]
+  note: string
+}
+
+const json = (method: string, body?: unknown, etag?: string): RequestInit => ({
+  method,
+  body: body === undefined ? undefined : JSON.stringify(body),
+  headers: etag ? { 'If-Match': etag } : {},
+})
+
+/** Keeps the catalog's rules (read by Overview) in step with a fresh GET /rules. */
+export function syncRules(list: RuleView[]) {
+  rules = list
+}
+
+export const createRule = (c: RuleContent) => api<RuleView>('/rules', json('POST', c))
+/** Saves over `r` as the caller last saw it; a 409 ApiError carries the rule as it is now. */
+export const saveRuleDraft = (r: RuleView, c: RuleContent) => api<RuleView>(`/rules/${r.id}/draft`, json('PUT', c, r.etag))
+export const discardRuleDraft = (r: RuleView) => api<RuleView>(`/rules/${r.id}/draft`, json('DELETE', undefined, r.etag))
+export const planPublish = (r: RuleView, mode: PublishMode) => api<RulePublishPlan>(`/rules/${r.id}/publish?dryRun=true`, json('POST', { mode }, r.etag))
+export const publishRule = (r: RuleView, mode: PublishMode) => api<RuleView>(`/rules/${r.id}/publish`, json('POST', { mode }, r.etag))
+export const rollbackRule = (r: RuleView, version: number) => api<RuleView>(`/rules/${r.id}/rollback`, json('POST', { version }, r.etag))
+export const deleteRule = (r: RuleView) => api<{ id: string }>(`/rules/${r.id}`, json('DELETE', undefined, r.etag))

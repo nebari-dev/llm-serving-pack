@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	h("PATCH "+p+"/budgets/{id}", s.updateBudget)
 	h("DELETE "+p+"/budgets/{id}", s.deleteBudget)
 	h("GET "+p+"/rules", s.rules)
+	h("GET "+p+"/rules/vocabulary", s.ruleVocabulary)
 	h("POST "+p+"/rules", s.createRule)
 	h("PUT "+p+"/rules/{id}/draft", s.saveRuleDraft)
 	h("DELETE "+p+"/rules/{id}/draft", s.discardRuleDraft)

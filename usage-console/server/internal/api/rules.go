@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"slices"
 
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
@@ -33,6 +34,29 @@ func (s *Server) ruleEnv(ctx context.Context, t string) (store.RuleEnv, error) {
 		env.Regions = append(env.Regions, b.Region)
 	}
 	return env, nil
+}
+
+// RuleVocabulary is what a rule may name, so the builder offers exactly what
+// ValidateRule accepts: the engine's entities for "contains entity", the
+// fields "is" compares, and the models and backend regions "route to" takes.
+type RuleVocabulary struct {
+	Entities []string `json:"entities"`
+	Fields   []string `json:"fields"`
+	Targets  []string `json:"targets"`
+}
+
+func ruleVocabulary(env store.RuleEnv) RuleVocabulary {
+	targets := slices.Concat(env.Models, env.Regions)
+	slices.Sort(targets)
+	return RuleVocabulary{Entities: env.Entities, Fields: store.RuleFields, Targets: slices.Compact(targets)}
+}
+
+func (s *Server) ruleVocabulary(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	env, err := s.ruleEnv(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	return ruleVocabulary(env), nil
 }
 
 func (s *Server) ruleContent(r *http.Request, t string) (store.RuleContent, error) {
@@ -215,4 +239,3 @@ func (s *Server) deleteRule(_ http.ResponseWriter, r *http.Request, t string) (a
 	s.configChanged()
 	return map[string]string{"id": id}, nil
 }
-

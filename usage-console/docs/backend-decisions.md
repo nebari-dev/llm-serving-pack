@@ -86,6 +86,10 @@ monitor, disabled), fail mode, rollback, history, and delete for rules that
 aren't live. First publish defaults to monitor mode. Publish's `dryRun`
 reports the change and says replay isn't connected.
 
+- **Console builder follows the engine (decided 2026-09-30).** In api mode the
+  Guardrails builder offers one all-of list of conditions and one action, and
+  says the rest isn't connected. The three decisions below are still open;
+  answering "several actions" or "nested groups" means engine work first.
 - **Decide: one action per rule.** The engine applies only `then[0]`, so
   writes allow exactly one action. §5.3 shows several (redact and reroute).
   Support several, with §5.3's ordering semantics?

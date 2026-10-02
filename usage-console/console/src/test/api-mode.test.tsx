@@ -815,6 +815,141 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 90_000)
 
+  it('authors a rule in the Guardrails builder, publishes it, sees it block, merges a stale draft, rolls back and deletes it', async () => {
+    type V = { id: string; name: string; mode: string; version: number; etag: string; when: unknown; then: unknown; draft: { description: string } | null }
+    type C = import('@/data/catalog').Change
+    const name = `api-mode-ui-rule-${Date.now().toString(36)}`
+    const { key, secret } = await testKey(name)
+    const call = async () => {
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 20, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      return ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code
+    }
+    const mine = async () => (await catalog.api<V[]>('/rules')).find((r) => r.name === name)
+    const latest = async () => (await catalog.api<C[]>('/changes'))[0]
+    const settle = () => act(async () => { await new Promise((ok) => setTimeout(ok, 300)) })
+    try {
+      window.history.pushState({}, '', '/guardrails?rule=r1')
+      render(<App />)
+      await act(async () => {})
+      // What the engine doesn't do is stated, not simulated.
+      await screen.findByText(/Replay isn’t connected yet/)
+      const builder = screen.getByRole('region', { name: 'Rule builder' })
+      await waitFor(() => expect(builder.textContent).toContain('Rehydration isn’t built yet'), { timeout: 5000 })
+      expect(within(builder).queryByRole('button', { name: /Group/ })).toBeNull()
+      expect(builder.textContent).toContain('Groups and “any of” aren’t connected yet')
+
+      fireEvent.click(screen.getByRole('button', { name: 'New rule' }))
+      await settle()
+      fireEvent.change(within(builder).getByLabelText('Rule name'), { target: { value: name } })
+      fireEvent.change(within(builder).getByLabelText('Description'), { target: { value: 'api-mode UI test' } })
+      fireEvent.click(within(builder).getByRole('combobox', { name: 'Field' }))
+      choose(await screen.findByRole('option', { name: 'Key' }))
+      const value = within(builder).getByLabelText('Add Key value')
+      fireEvent.change(value, { target: { value: name } })
+      fireEvent.keyDown(value, { key: 'Enter' })
+      expect(within(builder).getByRole('combobox', { name: 'Action' }).textContent).toContain('Block request')
+      fireEvent.click(within(builder).getByRole('radio', { name: /Block \(fail-closed\)/ }))
+      expect(await mine()).toBeUndefined()
+      fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+      await waitFor(async () => expect(await mine()).toMatchObject({ mode: 'draft', version: 0, draft: { description: 'api-mode UI test' } }), { timeout: 5000 })
+      expect(await latest()).toMatchObject({ action: 'Created rule', target: name })
+      const made = (await mine())!
+      expect(made.when).toEqual([{ field: 'key', op: 'is', value: [name] }])
+      expect(made.then).toEqual([{ action: 'block', detail: '' }])
+
+      // Publish shows the server's dry run first, then enforces.
+      const publish = screen.getByRole('button', { name: 'Publish…' })
+      await waitFor(() => expect(publish).toHaveProperty('disabled', false))
+      fireEvent.click(publish)
+      let dialog = await formDialog()
+      await waitFor(() => expect(dialog.textContent).toMatch(/Replay against recorded traffic isn.t connected yet/), { timeout: 5000 })
+      expect(dialog.textContent).toMatch(/Mode\s*draft\s*→\s*monitor/)
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Enforce/ }))
+      await waitFor(() => expect(dialog.textContent).toMatch(/Mode\s*draft\s*→\s*enforce/), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Publish and enforce' }))
+      await formDialogClosed()
+      expect(await mine()).toMatchObject({ mode: 'enforce', version: 1, draft: null })
+      expect(await latest()).toMatchObject({ action: 'Published rule', target: `${name} v1` })
+      expect(await call()).toBe('policy_blocked')
+
+      // A mode change alone is a new version.
+      await waitFor(() => expect(publish).toHaveProperty('disabled', false))
+      fireEvent.click(publish)
+      dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Monitor/ }))
+      await waitFor(() => expect(dialog.textContent).toMatch(/Mode\s*enforce\s*→\s*monitor/), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Publish in monitor mode' }))
+      await formDialogClosed()
+      expect(await mine()).toMatchObject({ mode: 'monitor', version: 2 })
+      expect(await call()).not.toBe('policy_blocked')
+
+      // Someone else saves a draft while this one is open: both are shown.
+      await settle()
+      fireEvent.change(within(builder).getByLabelText('Description'), { target: { value: 'mine' } })
+      const v2 = (await mine())!
+      await send('PUT', `/rules/${v2.id}/draft`, { name, description: 'theirs', failMode: 'closed', when: v2.when, then: v2.then }, v2.etag)
+      fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
+      const merge = (await screen.findByText('This rule changed since you opened it', {}, { timeout: 5000 })).closest<HTMLElement>('[data-slot="alert"]')!
+      expect(merge.textContent).toContain('theirs')
+      expect(merge.textContent).toContain('mine')
+      fireEvent.click(within(merge).getByRole('button', { name: 'Save mine over theirs' }))
+      await waitFor(async () => expect((await mine())?.draft?.description).toBe('mine'), { timeout: 5000 })
+      expect(await latest()).toMatchObject({ action: 'Edited rule draft', target: name })
+      await settle()
+      fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }))
+      dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard draft' }))
+      await formDialogClosed()
+      expect((await mine())?.draft).toBeNull()
+      expect(await latest()).toMatchObject({ action: 'Discarded rule draft', target: name })
+
+      // Versions: the real history, and rollback publishes v1 again as v3.
+      fireEvent.click(screen.getByRole('tab', { name: 'Versions' }))
+      await settle()
+      const history = await screen.findByRole('list', { name: `Versions of ${name}` }, { timeout: 5000 })
+      await waitFor(() => expect(within(history).getAllByRole('button').length).toBe(2), { timeout: 5000 })
+      fireEvent.click(within(history).getByRole('button', { name: /^v1/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Roll back to v1' }))
+      dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back to v1' }))
+      await formDialogClosed()
+      expect(await mine()).toMatchObject({ mode: 'enforce', version: 3 })
+      expect(await latest()).toMatchObject({ action: 'Rolled back rule', target: `${name} v2 → v1 (as v3)` })
+      expect(await call()).toBe('policy_blocked')
+      await waitFor(() => expect(within(history).getAllByRole('button').length).toBe(3), { timeout: 5000 })
+
+      // Only a rule that isn't live can be deleted: disable it, then delete.
+      fireEvent.click(screen.getByRole('tab', { name: 'Rules' }))
+      await settle()
+      expect(screen.queryByRole('button', { name: 'Delete rule' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Publish…' }))
+      dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Disabled/ }))
+      await waitFor(() => expect(dialog.textContent).toMatch(/Mode\s*enforce\s*→\s*disabled/), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Disable rule' }))
+      await formDialogClosed()
+      expect(await mine()).toMatchObject({ mode: 'disabled', version: 4 })
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete rule' }))
+      dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete rule' }))
+      await formDialogClosed()
+      expect(await mine()).toBeUndefined()
+      expect(await latest()).toMatchObject({ action: 'Deleted rule', target: name })
+      await waitFor(() => expect(screen.getByRole('navigation', { name: 'Rules' }).textContent).not.toContain(name), { timeout: 5000 })
+    } finally {
+      const r = await mine()
+      if (r) {
+        const etagNow = async () => (await mine())?.etag
+        if (r.version > 0) await send('POST', `/rules/${r.id}/publish`, { mode: 'disabled' }, r.etag).catch(() => {})
+        await send('DELETE', `/rules/${r.id}`, undefined, await etagNow()).catch(() => {})
+      }
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 120_000)
+
   it('schedules and cancels an effective-dated price change, with audit rows', async () => {
     type P = Omit<import('@/data/catalog').PricingView, 'changes'> & { changes: { model: string; field: string; to: number; effectiveAt: number; scheduled: boolean }[] }
     type C = import('@/data/catalog').Change

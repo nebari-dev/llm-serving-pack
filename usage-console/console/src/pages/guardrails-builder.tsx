@@ -12,6 +12,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { backends, models, type RuleVocabulary, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import {
   type Action,
@@ -21,7 +22,9 @@ import {
   fieldDefs,
   type Group,
   type Node,
+  promptEntities,
   routeTargets,
+  toContent,
   toJson,
   uid,
 } from './guardrails-model'
@@ -30,6 +33,34 @@ import {
 // keyboard-operable (every control is a native button, select, or input).
 
 type Opt = { value: string; label: string }
+type FieldDef = (typeof fieldDefs)[number]
+
+const apiFieldLabels: Record<string, string> = {
+  team: 'Team',
+  project: 'Project',
+  key: 'Key',
+  model: 'Requested model',
+  provider: 'Provider',
+  'header x-data-region': 'Header x-data-region',
+}
+
+/** Api mode: the fields and values the server's validation accepts, nothing more. */
+function apiFieldDefs(v: RuleVocabulary): FieldDef[] {
+  const suggest: Record<string, string[] | undefined> = {
+    team: teams.map((t) => t.name),
+    model: models.map((m) => m.id),
+    provider: [...new Set(backends.map((b) => b.provider))],
+  }
+  return [
+    { value: 'prompt', label: 'Prompt', ops: ['contains entity'], suggestions: v.entities },
+    ...v.fields.map((f) => ({
+      value: f,
+      label: apiFieldLabels[f] ?? f,
+      ops: f.startsWith('header ') ? ['equals', 'not equals'] : ['is', 'is not'],
+      suggestions: suggest[f],
+    })),
+  ]
+}
 
 function StrSelect({
   value,
@@ -137,16 +168,16 @@ function ValueChips({
   )
 }
 
-function CondRow({ c, onChange, onRemove }: { c: Cond; onChange: (c: Cond) => void; onRemove: () => void }) {
-  const def = fieldDefs.find((f) => f.value === c.field) ?? fieldDefs[0]
+function CondRow({ c, onChange, onRemove, defs }: { c: Cond; onChange: (c: Cond) => void; onRemove: () => void; defs: FieldDef[] }) {
+  const def = defs.find((f) => f.value === c.field) ?? defs[0]
   return (
     <div className="flex flex-wrap items-center gap-1.5 py-1">
       <StrSelect
         label="Field"
         value={c.field}
-        options={fieldDefs.map((f) => ({ value: f.value, label: f.label }))}
+        options={defs.map((f) => ({ value: f.value, label: f.label }))}
         onChange={(field) => {
-          const nd = fieldDefs.find((f) => f.value === field)!
+          const nd = defs.find((f) => f.value === field)!
           onChange({ ...c, field, op: nd.ops[0], value: [] })
         }}
       />
@@ -170,11 +201,16 @@ function GroupEditor({
   onChange,
   onRemove,
   depth = 0,
+  defs = fieldDefs,
+  flat = false,
 }: {
   g: Group
   onChange: (g: Group) => void
   onRemove?: () => void
   depth?: number
+  defs?: FieldDef[]
+  /** Api mode: one list, all of which must match. The engine has no groups or "any of". */
+  flat?: boolean
 }) {
   const set = (i: number, n: Node) => onChange({ ...g, children: g.children.map((x, j) => (j === i ? n : x)) })
   const del = (i: number) => onChange({ ...g, children: g.children.filter((_, j) => j !== i) })
@@ -182,6 +218,9 @@ function GroupEditor({
     <div className={cn('flex flex-col', depth > 0 && 'rounded-md border border-border bg-muted/40 p-2')}>
       <div className="flex items-center gap-2 text-sm">
         <span className="text-muted-foreground">Match</span>
+        {flat ? (
+          <span>all of</span>
+        ) : (
         <StrSelect
           label="Group combinator"
           value={g.combinator}
@@ -191,6 +230,7 @@ function GroupEditor({
           ]}
           onChange={(v) => onChange({ ...g, combinator: v as 'all' | 'any' })}
         />
+        )}
         {onRemove && (
           <Button variant="ghost" size="xs" onClick={onRemove} className="ml-auto text-muted-foreground">
             Remove group
@@ -205,18 +245,18 @@ function GroupEditor({
               <GroupEditor g={n} depth={depth + 1} onChange={(ng) => set(i, ng)} onRemove={() => del(i)} />
             </div>
           ) : (
-            <CondRow key={n.id} c={n} onChange={(nc) => set(i, nc)} onRemove={() => del(i)} />
+            <CondRow key={n.id} c={n} defs={defs} onChange={(nc) => set(i, nc)} onRemove={() => del(i)} />
           ),
         )}
         <div className="flex gap-1 pt-1">
           <Button
             variant="ghost"
             size="xs"
-            onClick={() => onChange({ ...g, children: [...g.children, { kind: 'cond', id: uid('c'), field: 'key.team', op: 'is', value: [] }] })}
+            onClick={() => onChange({ ...g, children: [...g.children, { kind: 'cond', id: uid('c'), field: flat ? 'team' : 'key.team', op: 'is', value: [] }] })}
           >
             <Plus /> Condition
           </Button>
-          {depth < 2 && (
+          {!flat && depth < 2 && (
             <Button
               variant="ghost"
               size="xs"
@@ -234,7 +274,54 @@ function GroupEditor({
             </Button>
           )}
         </div>
+        {flat && <p className="pt-1 text-xs text-muted-foreground">Groups and “any of” aren’t connected yet: the engine evaluates one list of conditions, all of which must match.</p>}
       </div>
+    </div>
+  )
+}
+
+const actionLabels: Record<Action['type'], string> = { block: 'Block request', redact: 'Redact entities', reroute: 'Route to' }
+
+/** Api mode: exactly one action, and only what the engine does with it. */
+function ApiActionRow({ draft, vocab, onChange }: { draft: Draft; vocab: RuleVocabulary; onChange: (a: Action) => void }) {
+  const a = draft.then[0]
+  const found = promptEntities(draft)
+  return (
+    <div className="flex flex-col gap-1.5 py-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <StrSelect
+          label="Action"
+          value={a.type}
+          options={(['block', 'redact', 'reroute'] as const).map((t) => ({ value: t, label: actionLabels[t] }))}
+          onChange={(t) =>
+            onChange(
+              t === 'redact'
+                ? { id: a.id, type: 'redact', entities: found, rehydrate: false }
+                : t === 'reroute'
+                  ? { id: a.id, type: 'reroute', to: vocab.targets[0] ?? '' }
+                  : { id: a.id, type: 'block', message: '' },
+            )
+          }
+        />
+        {a.type === 'reroute' && (
+          <StrSelect label="Route target" value={a.to} options={vocab.targets.map((t) => ({ value: t, label: t }))} onChange={(to) => onChange({ ...a, to })} className="font-mono" />
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {a.type === 'block' && 'Callers get a 403 naming the rule, and the entity when a prompt condition matched one.'}
+        {a.type === 'reroute' && 'Sends matching requests to that catalog model, or to a healthy backend in that region.'}
+        {a.type === 'redact' &&
+          (found.length ? `Replaces what the prompt conditions find (${found.join(', ')}) with placeholders before the request leaves.` : '')}
+      </p>
+      {a.type === 'redact' && !found.length && (
+        <p className="text-xs font-medium text-v-degraded-fg">Add a “Prompt contains entity” condition: redact removes what it finds.</p>
+      )}
+      {a.type === 'redact' && a.rehydrate && (
+        <p className="text-xs text-v-degraded-fg">
+          This rule’s stored text says “rehydrate on return”. Rehydration isn’t built yet, so placeholders stay in the response.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">One action per rule: the engine runs a rule’s first action only.</p>
     </div>
   )
 }
@@ -270,7 +357,8 @@ function ActionRow({ a, onChange, onRemove }: { a: Action; onChange: (a: Action)
   )
 }
 
-export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: Draft) => void }) {
+/** `vocab` switches to api mode: only what the engine evaluates, from the server's own list. */
+export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange: (d: Draft) => void; vocab?: RuleVocabulary }) {
   const [asJson, setAsJson] = useState(false)
   const reroutes = draft.then.filter((a) => a.type === 'reroute')
   const hasBlock = draft.then.some((a) => a.type === 'block')
@@ -287,6 +375,16 @@ export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: D
             className="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
           />
         </label>
+        {vocab && (
+          <label className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Description</span>
+            <input
+              value={draft.description}
+              onChange={(e) => onChange({ ...draft, description: e.target.value })}
+              className="h-8 min-w-48 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+        )}
         <Button variant="outline" size="sm" onClick={() => setAsJson((v) => !v)} aria-pressed={asJson}>
           {asJson ? <ListTree /> : <Braces />}
           {asJson ? 'View as builder' : 'View as JSON'}
@@ -296,7 +394,7 @@ export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: D
       {asJson ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">Stored shape (read-only). Rules are stored structured; this text is a view of the builder, not the source.</p>
-          <CodeBlock code={JSON.stringify(toJson(draft), null, 2)} className="w-full" showLineNumbers>
+          <CodeBlock code={JSON.stringify(vocab ? toContent(draft) : toJson(draft), null, 2)} className="w-full" showLineNumbers>
             <CodeBlockBody maxLines={24} className="text-xs" />
           </CodeBlock>
         </div>
@@ -304,11 +402,16 @@ export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: D
         <>
           <fieldset className="flex flex-col gap-1">
             <legend className="mb-1 text-base font-semibold">When</legend>
-            <GroupEditor g={draft.when} onChange={(when) => onChange({ ...draft, when })} />
+            <GroupEditor g={draft.when} onChange={(when) => onChange({ ...draft, when })} defs={vocab ? apiFieldDefs(vocab) : fieldDefs} flat={!!vocab} />
           </fieldset>
 
           <fieldset className="flex flex-col gap-1">
             <legend className="mb-1 text-base font-semibold">Then</legend>
+            {vocab ? (
+              <div className="ml-2 border-l border-border-strong pl-3">
+                <ApiActionRow draft={draft} vocab={vocab} onChange={(a) => onChange({ ...draft, then: [a] })} />
+              </div>
+            ) : (
             <div className="ml-2 border-l border-border-strong pl-3">
               {draft.then.length === 0 && <p className="py-1 text-xs text-muted-foreground">No actions. Matching requests are recorded but not changed.</p>}
               {draft.then.map((a, i) => (
@@ -329,6 +432,7 @@ export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: D
                 </DropdownMenuPortal>
               </DropdownMenu>
             </div>
+            )}
             {reroutes.length > 1 && (
               <p role="alert" className="mt-2 flex items-start gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-2 text-sm text-v-degraded-fg">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />

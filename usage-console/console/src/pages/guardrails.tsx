@@ -9,13 +9,14 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type PolicyRule, rules as seedRules } from '@/data/catalog'
+import { dataMode, type PolicyRule, rules as seedRules } from '@/data/catalog'
 import { int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useReceipts } from '@/state/app-state'
 import { RuleBuilder } from './guardrails-builder'
 import { DetectorsTab } from './guardrails-detectors'
-import { blankDraft, type Draft, fromRule, hashDraft, lineDiff, toLines } from './guardrails-model'
+import { LiveGuardrailsPage } from './guardrails-live'
+import { blankDraft, type Draft, fromRule, hashDraft, lineDiff, modeChip, toLines } from './guardrails-model'
 import { ReplayPane } from './guardrails-replay'
 import { VersionsTab } from './guardrails-versions'
 
@@ -35,13 +36,11 @@ interface RuleEntry {
   description: string
 }
 
-const modeChip: Record<Mode, { label: string; className?: string }> = {
-  enforce: { label: 'Enforce' },
-  monitor: { label: 'Monitor', className: 'border-dashed' },
-  draft: { label: 'Draft', className: 'border-dashed bg-transparent' },
+export function GuardrailsPage() {
+  return dataMode === 'api' ? <LiveGuardrailsPage /> : <MockGuardrailsPage />
 }
 
-export function GuardrailsPage() {
+function MockGuardrailsPage() {
   const [params, setParams] = useSearchParams()
   const receipts = useReceipts()
   const [entries, setEntries] = useState<RuleEntry[]>(() =>

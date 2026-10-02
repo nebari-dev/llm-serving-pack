@@ -1,4 +1,4 @@
-import type { PolicyRule } from '@/data/catalog'
+import type { PolicyRule, RuleContent } from '@/data/catalog'
 
 // Structured rule model for the builder (§5.3). Rules are stored structured,
 // not as text — the JSON and YAML-ish renderings below are views of this.
@@ -19,6 +19,13 @@ export interface Draft {
   when: Group
   then: Action[]
   failMode?: 'open' | 'closed'
+}
+
+export const modeChip: Record<PolicyRule['mode'], { label: string; className?: string }> = {
+  enforce: { label: 'Enforce' },
+  monitor: { label: 'Monitor', className: 'border-dashed' },
+  draft: { label: 'Draft', className: 'border-dashed bg-transparent' },
+  disabled: { label: 'Disabled', className: 'border-dashed bg-transparent text-muted-foreground' },
 }
 
 let seq = 0
@@ -170,3 +177,62 @@ export function hashDraft(d: Draft): number {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619)
   return h >>> 0
 }
+
+// ---- api mode --------------------------------------------------------------
+// The engine evaluates one flat list of conditions, all of which must match,
+// and a rule's first action only (decisions §3). Api-mode drafts keep to that
+// shape, and use the engine's field names ("team", not "key.team").
+
+/** Entities the prompt conditions look for: what a redact removes. */
+export function promptEntities(d: Draft): string[] {
+  const out = new Set<string>()
+  for (const n of d.when.children) if (n.kind === 'cond' && n.field === 'prompt' && n.op === 'contains entity') n.value.forEach((v) => out.add(v))
+  return [...out]
+}
+
+const REHYDRATE = ' · rehydrate on return'
+
+export function fromContent(c: RuleContent, ruleId: string | null): Draft {
+  const children: Node[] = c.when.map((w) => ({ kind: 'cond', id: uid('c'), field: w.field, op: w.op, value: w.value }))
+  const d: Draft = { ruleId, name: c.name, description: c.description, when: { kind: 'group', id: uid('g'), combinator: 'all', children }, then: [], failMode: c.failMode }
+  d.then = c.then.slice(0, 1).map((a): Action => {
+    if (a.action === 'redact') return { id: uid('a'), type: 'redact', entities: promptEntities(d), rehydrate: a.detail.includes(REHYDRATE.slice(3)) }
+    if (a.action === 'route to') return { id: uid('a'), type: 'reroute', to: a.detail }
+    return { id: uid('a'), type: 'block', message: a.detail }
+  })
+  return d
+}
+
+/**
+ * The draft as the server stores it. A redact's detail names what it removes;
+ * a stored "rehydrate on return" is kept as written, though nothing does it yet.
+ */
+export function toContent(d: Draft): RuleContent {
+  return {
+    name: d.name,
+    description: d.description,
+    failMode: d.failMode ?? 'closed',
+    when: d.when.children.flatMap((n) => (n.kind === 'cond' ? [{ field: n.field, op: n.op, value: n.value }] : [])),
+    then: d.then.slice(0, 1).map((a) => {
+      if (a.type === 'redact') return { action: 'redact', detail: promptEntities(d).join(', ') + (a.rehydrate ? REHYDRATE : '') }
+      if (a.type === 'reroute') return { action: 'route to', detail: a.to }
+      return { action: 'block', detail: a.message }
+    }),
+  }
+}
+
+export const sameContent = (a: RuleContent, b: RuleContent) => JSON.stringify(a) === JSON.stringify(b)
+
+export function blankApiDraft(): Draft {
+  return {
+    ruleId: null,
+    name: '',
+    description: '',
+    when: { kind: 'group', id: uid('g'), combinator: 'all', children: [{ kind: 'cond', id: uid('c'), field: 'prompt', op: 'contains entity', value: [] }] },
+    then: [{ id: uid('a'), type: 'block', message: '' }],
+    failMode: undefined,
+  }
+}
+
+/** The line view of stored content, for version and publish diffs. */
+export const contentLines = (c: RuleContent) => toLines(fromContent(c, null))
