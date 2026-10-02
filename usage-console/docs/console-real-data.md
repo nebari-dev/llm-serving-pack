@@ -212,8 +212,16 @@ when stale; 428 without it on an update or delete). Open questions are in
   capture, or a replay over hashes/metadata only.
 - [ ] Rule version history (policy_rules keeps only a version number).
 - [ ] False-positive review queue.
-- [ ] Detector hit and false-positive counts computed from receipts, and
-  custom detector patterns.
+- [x] Detector hit counts computed from receipts (2026-10-02). `GET /detectors`
+  now lists the engine's own detectors (kind, pattern, placeholder), the live
+  rules naming each one, and 24h redacted and blocked requests from receipts.
+  The seeded `detectors` table is no longer read. In api mode the Detectors
+  tab drops the thresholds, the browser-only regex tester and the fixture
+  queue, and says custom entities and false-positive review aren't connected.
+  Monitor-mode matches aren't counted: receipts record "would redact" with no
+  entity.
+- [ ] False-positive counts, and custom detector patterns (an entity registry
+  the engine reads).
 - [ ] Provider credentials: list, replace, test connection. Also onboarding.
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, reconcile events.

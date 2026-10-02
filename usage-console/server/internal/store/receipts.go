@@ -447,6 +447,37 @@ func (s *Store) RuleCounts(ctx context.Context, tenant string) (map[string]RuleC
 	return out, rows.Err()
 }
 
+// DetectorHits is what one entity detector did in the last 24 hours, as
+// receipts record it: enforced redactions by type, and blocks whose detail
+// names the entity. Monitor-mode matches record only "would redact", with no
+// entity, so they aren't here.
+type DetectorHits struct{ RedactedRequests, RedactedMatches, Blocked int }
+
+func (s *Store) DetectorHits(ctx context.Context, tenant string) (map[string]DetectorHits, error) {
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT e->>'type', count(DISTINCT r.id)::int, coalesce(sum((e->>'count')::int), 0)::int, 0
+		FROM receipts r, jsonb_array_elements(r.redactions) e
+		WHERE r.tenant_id = $1 AND r.ts > now() - interval '24 hours'
+		GROUP BY 1
+		UNION ALL
+		SELECT substring(error_detail from 'matched entity "([^"]+)"'), 0, 0, count(*)::int
+		FROM receipts
+		WHERE tenant_id = $1 AND ts > now() - interval '24 hours' AND error_code = 'policy_blocked' AND error_detail LIKE '%matched entity "%'
+		GROUP BY 1`, tenant)
+	out := map[string]DetectorHits{}
+	defer rows.Close()
+	for rows.Next() {
+		var e string
+		var h DetectorHits
+		if err := rows.Scan(&e, &h.RedactedRequests, &h.RedactedMatches, &h.Blocked); err != nil {
+			return nil, err
+		}
+		cur := out[e]
+		out[e] = DetectorHits{cur.RedactedRequests + h.RedactedRequests, cur.RedactedMatches + h.RedactedMatches, cur.Blocked + h.Blocked}
+	}
+	return out, rows.Err()
+}
+
 type BackendStats struct {
 	P50       int
 	ErrorRate float64

@@ -924,7 +924,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       // Only a rule that isn't live can be deleted: disable it, then delete.
       fireEvent.click(screen.getByRole('tab', { name: 'Rules' }))
       await settle()
-      expect(screen.queryByRole('button', { name: 'Delete rule' })).toBeNull()
+      // A live rule can't be deleted, and the page says why before anyone clicks.
+      expect(screen.getByRole('button', { name: 'Delete rule' })).toHaveProperty('disabled', true)
+      expect(screen.getByRole('region', { name: 'Rule builder' }).textContent).toContain('To delete it, disable it first')
       fireEvent.click(screen.getByRole('button', { name: 'Publish…' }))
       dialog = await formDialog()
       fireEvent.click(within(dialog).getByRole('radio', { name: /^Disabled/ }))
@@ -949,6 +951,77 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 120_000)
+
+  it('counts real detector hits from receipts on Detectors, and says what isn’t connected', async () => {
+    type D = { entity: string; kind: string; pattern: string; usedBy: { rule: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }
+    type V = { id: string; etag: string; version: number }
+    const name = `api-mode-detect-${Date.now().toString(36)}`
+    const { key, secret } = await testKey(name)
+    const call = (content: string) =>
+      fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 20, messages: [{ role: 'user', content }] }),
+      }).then((r) => r.status)
+    const detectors = async () => Object.fromEntries((await catalog.api<D[]>('/detectors')).map((d) => [d.entity, d]))
+    const made: V[] = []
+    const rule = async (suffix: string, entity: string, action: string) => {
+      const r = await send<V>('POST', '/rules', {
+        name: `${name}-${suffix}`, description: 'api-mode test', failMode: 'closed',
+        when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
+        then: [{ action, detail: action === 'redact' ? entity : '' }],
+      })
+      made.push(await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'enforce' }, r.etag))
+    }
+    try {
+      await rule('redact', 'email', 'redact')
+      await rule('block', 'secret', 'block')
+      const before = await detectors()
+      expect(Object.keys(before).sort()).toEqual(['Acme account ID', 'SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
+      expect(before['credit card'].kind).toBe('regex + Luhn check')
+      expect(before.email.usedBy).toContainEqual({ rule: `${name}-redact`, version: 1, mode: 'enforce', action: 'redact' })
+
+      expect(await call('write to jane.doe@example.com today')).toBe(200)
+      expect(await call(`my key is sk-${'a'.repeat(24)}`)).toBe(403)
+      // The 24h totals move with background traffic and age out, so check this
+      // test's own receipts carry what the counts read, and that they're counted.
+      type R = { verdict: string; redactions: { type: string; count: number }[]; errorCode?: string; errorDetail?: string }
+      let mine: R[] = []
+      for (let i = 0; i < 30 && mine.length < 2; i++) {
+        mine = await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}`)
+        if (mine.length < 2) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(mine.find((r) => r.verdict === 'redacted')?.redactions).toEqual([{ type: 'email', count: 1 }])
+      expect(mine.find((r) => r.verdict === 'blocked')).toMatchObject({ errorCode: 'policy_blocked', errorDetail: expect.stringContaining('matched entity "secret"') })
+      const after = await detectors()
+      expect(after.email.redactedRequests24h).toBeGreaterThan(0)
+      expect(after.secret.blocked24h).toBeGreaterThan(0)
+
+      window.history.pushState({}, '', '/guardrails')
+      render(<App />)
+      await act(async () => {})
+      fireEvent.click(screen.getByRole('tab', { name: 'Detectors' }))
+      const table = await screen.findByRole('table', { name: 'Detectors' }, { timeout: 5000 })
+      await waitFor(() => expect(table.textContent).toContain(`${name}-redact`), { timeout: 5000 })
+      const email = within(table).getByRole('row', { name: /^email/ })
+      expect(email.textContent).toContain('[EMAIL_1]')
+      const page = document.body.textContent!
+      // No made-up numbers or controls: no thresholds, no fixture queue, no browser-only regex tester.
+      expect(screen.queryAllByRole('slider')).toHaveLength(0)
+      expect(page).not.toContain('Person name')
+      expect(page).not.toContain('dana@acme.dev')
+      expect(page).toContain('Monitor-mode matches aren’t counted')
+      expect(page).toContain('Custom entities aren’t connected yet')
+      expect(page).toContain('False-positive review isn’t connected yet')
+    } finally {
+      for (const r of made) {
+        const now = (await catalog.api<V[]>('/rules')).find((x) => x.id === r.id)
+        if (!now) continue
+        const off = await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'disabled' }, now.etag).catch(() => now)
+        await send('DELETE', `/rules/${r.id}`, undefined, off.etag).catch(() => {})
+      }
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
 
   it('schedules and cancels an effective-dated price change, with audit rows', async () => {
     type P = Omit<import('@/data/catalog').PricingView, 'changes'> & { changes: { model: string; field: string; to: number; effectiveAt: number; scheduled: boolean }[] }

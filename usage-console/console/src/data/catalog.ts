@@ -28,7 +28,8 @@ export let budgets: Budget[] = mock.budgets
 export const governingBudget = (k: { team: string; project: string; name: string }) => mock.governingBudget(k, budgets)
 export const coveringBudgets = (k: { team: string; project: string; name: string }) => budgets.filter((b) => mock.budgetCovers(b, k))
 export let rules: PolicyRule[] = mock.rules
-export let detectors: Detector[] = mock.detectors
+/** Mock-mode Detectors fixtures; api mode reads GET /detectors on the tab. */
+export const detectors: Detector[] = mock.detectors
 export let seedReceipts: Receipt[] = mock.seedReceipts
 export let trafficSeries: SeriesPoint[] = mock.trafficSeries
 export let spendSeries: SpendPoint[] = mock.spendSeries
@@ -93,7 +94,7 @@ const index = <T,>(xs: T[], id: (x: T) => string) => Object.fromEntries(xs.map((
 /** Loads the catalog from the control plane. A no-op in mock mode. */
 export async function hydrate() {
   if (dataMode !== 'api') return
-  const [t, m, b, r, k, bu, ru, d, rc, ts, ss, ch, se] = await Promise.all([
+  const [t, m, b, r, k, bu, ru, rc, ts, ss, ch, se] = await Promise.all([
     api<Team[]>('/teams'),
     api<Model[]>('/models'),
     api<Backend[]>('/backends'),
@@ -101,7 +102,6 @@ export async function hydrate() {
     api<WireKey[]>('/keys'),
     api<Budget[]>('/budgets'),
     api<PolicyRule[]>('/rules'),
-    api<Detector[]>('/detectors'),
     api<Receipt[]>('/receipts?limit=240'),
     api<SeriesPoint[]>('/series/traffic?range=24h'),
     api<SpendPoint[]>('/series/spend?days=30'),
@@ -117,7 +117,6 @@ export async function hydrate() {
   keyById = index(keys, (x) => x.id)
   budgets = bu
   rules = ru
-  detectors = d
   seedReceipts = rc
   trafficSeries = ts
   spendSeries = ss
@@ -259,6 +258,17 @@ export interface RuleContent {
 }
 /** A rule as GET /rules shows it: the live version, any saved draft, and the ETag covering both. */
 export type RuleView = PolicyRule & { draft: (RuleContent & { updatedAt: number; updatedBy: string }) | null; etag: string }
+/** An engine detector (GET /detectors): how it matches, the live rules using it, and its last 24h from receipts. */
+export interface DetectorView {
+  entity: string
+  kind: string
+  pattern: string
+  placeholder: string
+  usedBy: { rule: string; version: number; mode: PolicyRule['mode']; action: string }[]
+  redactedRequests24h: number
+  redactedMatches24h: number
+  blocked24h: number
+}
 /** What a rule may name (GET /rules/vocabulary): exactly what the server's validation accepts. */
 export interface RuleVocabulary {
   entities: string[]

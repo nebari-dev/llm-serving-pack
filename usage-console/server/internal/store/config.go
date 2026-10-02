@@ -125,14 +125,6 @@ func (s *Store) Rules(ctx context.Context, tenant string) ([]model.PolicyRule, e
 	})
 }
 
-func (s *Store) Detectors(ctx context.Context, tenant string) ([]model.Detector, error) {
-	rows, _ := s.Config.Query(ctx, `SELECT id, name, kind, threshold::float8, hits_24h, fp FROM detectors WHERE tenant_id = $1 ORDER BY ctid`, tenant)
-	return collect(rows, func(r pgx.Rows) (model.Detector, error) {
-		var d model.Detector
-		return d, r.Scan(&d.ID, &d.Name, &d.Kind, &d.Threshold, &d.Hits24h, &d.FP)
-	})
-}
-
 func (s *Store) Changes(ctx context.Context, tenant string, limit int) ([]model.Change, error) {
 	rows, _ := s.Config.Query(ctx, `
 		SELECT id, ts, actor, action, target, target_kind, coalesce(effect, ''), coalesce(effect_tone, ''), source

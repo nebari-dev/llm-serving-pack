@@ -226,10 +226,6 @@ func notReconciledRoutes(rs []model.Route) []model.Route {
 	return rs
 }
 
-func (s *Server) detectors(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	return s.Store.Detectors(r.Context(), t)
-}
-
 func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500))
 }

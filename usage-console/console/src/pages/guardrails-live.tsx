@@ -30,10 +30,9 @@ import {
 } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { RuleBuilder } from './guardrails-builder'
-import { DetectorsTab } from './guardrails-detectors'
+import { LiveDetectorsTab } from './guardrails-detectors-live'
 import { blankApiDraft, contentLines, type Draft, fromContent, lineDiff, modeChip, sameContent, toContent } from './guardrails-model'
 
 // §7.5.7 Guardrails in api mode: the builder saves drafts to the control plane,
@@ -52,7 +51,6 @@ const contentOf = (r: RuleView): RuleContent => r.draft ?? r
 
 export function LiveGuardrailsPage() {
   const [params, setParams] = useSearchParams()
-  const receipts = useReceipts()
   const live = useLive<RuleView[]>('/rules', catalogRules as RuleView[])
   const vocab = useLive<RuleVocabulary | null>('/rules/vocabulary', null, 300_000)
   // A write's answer shows at once, until the next fetch replaces it.
@@ -151,7 +149,7 @@ export function LiveGuardrailsPage() {
   }
 
   const canPublish = !!view && !dirty && !busy
-  const canDelete = !!view && !edit && (view.mode === 'draft' || view.mode === 'disabled')
+  const isLive = !!view && (view.mode === 'enforce' || view.mode === 'monitor')
   const hint = !draft
     ? ''
     : !draft.failMode
@@ -160,7 +158,9 @@ export function LiveGuardrailsPage() {
         ? 'Save the draft to publish it.'
         : view && view.version === 0
           ? 'Publishing makes it v1, in monitor mode unless you choose otherwise.'
-          : ''
+          : isLive
+            ? 'To delete it, disable it first: Publish… → Disabled. That keeps a version recording the change.'
+            : ''
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -249,8 +249,8 @@ export function LiveGuardrailsPage() {
                       Discard draft
                     </Button>
                   )}
-                  {canDelete && (
-                    <Button variant="ghost" size="sm" onClick={() => setDialog('delete')}>
+                  {view && !isNew && (
+                    <Button variant="ghost" size="sm" onClick={() => setDialog('delete')} disabled={isLive || busy}>
                       <Trash2 /> Delete rule
                     </Button>
                   )}
@@ -285,7 +285,7 @@ export function LiveGuardrailsPage() {
         </TabsPanel>
 
         <TabsPanel value="detectors">
-          <DetectorsTab receiptIds={receipts.filter((r) => r.verdict === 'redacted').slice(0, 4).map((r) => r.id)} />
+          <LiveDetectorsTab />
         </TabsPanel>
 
         <TabsPanel value="versions">

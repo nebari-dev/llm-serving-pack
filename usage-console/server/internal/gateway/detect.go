@@ -80,6 +80,29 @@ func redact(entity, text string) string {
 // string: the response-inspection check that truncates a stream.
 var exfil = regexp.MustCompile(`!\[[^\]]*\]\(https?://[^)\s]*\?[^)\s]*\)`)
 
+// DetectorInfo describes a detector for the console: how it matches, and
+// what a redaction writes in place of the first match.
+type DetectorInfo struct {
+	Entity      string `json:"entity"`
+	Kind        string `json:"kind"`
+	Pattern     string `json:"pattern"`
+	Placeholder string `json:"placeholder"`
+}
+
+// DetectorList is every detector, in Entities order.
+func DetectorList() []DetectorInfo {
+	out := make([]DetectorInfo, 0, len(detectors))
+	for _, e := range Entities() {
+		d := detectors[e]
+		kind := "regex"
+		if d.valid != nil {
+			kind = "regex + Luhn check"
+		}
+		out = append(out, DetectorInfo{Entity: e, Kind: kind, Pattern: d.re.String(), Placeholder: "[" + d.label + "_1]"})
+	}
+	return out
+}
+
 // Entities is the entity types rules can name in "contains entity".
 func Entities() []string {
 	out := make([]string, 0, len(detectors))
