@@ -184,7 +184,7 @@ retire-old-secret-now are in.
 - Config writes reach Warden at once: the control plane calls Warden's
   `POST /reload` before responding. If Warden is unreachable, the write
   still succeeds and Warden catches up on its next 5s tick.
-- Console work these endpoints unlock: forms for budgets, rules, aliases,
-  prices and rotation. All still disabled in api mode. (Sharing one SSE
+- Console work these endpoints unlock: forms for aliases and prices, still
+  disabled in api mode. Budgets, rules and rotation are connected. (Sharing one SSE
   stream per tab is done.)
 - Restarting after a server change: `make restart` (see server/README.md).

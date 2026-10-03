@@ -339,9 +339,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       let text = document.body.textContent ?? ''
       expect(text).toContain(rotated.name)
       expect(text).toMatch(/Rotating · (58|59)m left/)
-      expect(text).toContain('isn’t recorded yet')
+      expect(text).toContain('No requests on either secret since the rotation started')
       expect(text).not.toContain('of traffic on the new secret')
       expect(text).not.toContain('web-assistant-7c9')
+      expect(text).not.toContain('b81e')
       expect(text).not.toContain('rotation reminders')
 
       fireEvent.click(screen.getByRole('button', { name: /View rotation/ }))
@@ -349,9 +350,18 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       text = document.body.textContent ?? ''
       expect(text).toContain(`Started by ${catalog.session.actor.email}`)
       expect(text).not.toContain('priya@acme.dev')
-      expect(screen.getByRole('button', { name: 'Extend overlap 24h' })).toHaveProperty('disabled', true)
-      expect(screen.getByRole('button', { name: 'Retire old secret now' })).toHaveProperty('disabled', true)
-      expect(text).toContain('aren’t connected yet')
+      expect(screen.getByRole('button', { name: 'Extend overlap 24h' })).toHaveProperty('disabled', false)
+      expect(screen.getByRole('button', { name: 'Retire old secret now' })).toHaveProperty('disabled', false)
+      expect(text).not.toContain('aren’t connected yet')
+
+      // Retiring asks first, with the old secret's real count; backing out changes nothing.
+      fireEvent.click(screen.getByRole('button', { name: 'Retire old secret now' }))
+      const d = await formDialog()
+      expect(d.textContent).toContain('No requests have used the old secret since the rotation started')
+      expect(d.textContent).not.toContain('39%')
+      fireEvent.click(within(d).getByRole('button', { name: 'Keep both secrets' }))
+      expect(within(d).getByRole('button', { name: 'Retire old secret now' })).toBeTruthy()
+      expect((await catalog.api<K[]>('/keys')).find((k) => k.id === key.id)!.status).toBe('rotating')
     } finally {
       await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
     }
@@ -709,16 +719,42 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       }
       expect(r).toMatchObject({ oldSecretRequests: 1, newSecretRequests: 2 })
 
-      const extended = await send<K>('POST', `/keys/${key.id}/rotation/extend`, { hours: 24 })
+      // The page shows the recorded split, then extends through the dialog.
+      window.history.pushState({}, '', `/keys?key=${key.id}`)
+      render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 500))
+      })
+      let text = document.body.textContent ?? ''
+      expect(text).toContain('67% of requests since the rotation started used the new secret')
+      expect(text).toMatch(/new secret\s*2 req/)
+      expect(text).toMatch(/old secret\s*1 req/)
+      fireEvent.click(screen.getByRole('button', { name: /View rotation/ }))
+      fireEvent.click(within(await formDialog()).getByRole('button', { name: 'Extend overlap 24h' }))
+      await formDialogClosed()
+      const extended = await keyNow()
       expect(extended.rotation!.endsAt! - r!.endsAt!).toBeGreaterThan(24 * 3_600_000 - 60_000)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Extended rotation overlap', targetKind: 'Key' })
       expect((await catalog.api<C[]>('/changes'))[0].target).toMatch(new RegExp(`^${name} · until \\d{4}-\\d\\d-\\d\\d \\d\\d:\\d\\d UTC$`))
       // The overlap can't run past 7 days from now.
       expect(await status(send('POST', `/keys/${key.id}/rotation/extend`, { hours: 168 }))).toBe(400)
 
-      const retired = await send<K>('POST', `/keys/${key.id}/rotation/finish`)
+      // Retire asks first, stating how many requests the old secret served.
+      fireEvent.click(screen.getByRole('button', { name: /View rotation/ }))
+      let d = await formDialog()
+      fireEvent.click(within(d).getByRole('button', { name: 'Retire old secret now' }))
+      d = await formDialog()
+      expect(d.textContent).toContain('1 request has used the old secret since the rotation started')
+      fireEvent.click(within(d).getByRole('button', { name: 'Retire old secret' }))
+      await formDialogClosed()
+      const retired = await keyNow()
       expect(retired).toMatchObject({ status: 'active' })
       expect(retired.rotation ?? null).toBeNull()
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 100))
+      })
+      text = document.body.textContent ?? ''
+      expect(text).not.toContain('Rotation in progress')
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Retired old secret', target: name })
       expect(await call(oldSecret)).toBe(401)
       expect(await call(newSecret)).not.toBe(401)

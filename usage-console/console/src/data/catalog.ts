@@ -177,6 +177,19 @@ export async function rotateKey(k: ApiKey, overlapHours: number): Promise<{ key:
   return { key: { ...k, status: 'rotating', rotation }, secret: mockSecret() }
 }
 
+/** Both secrets keep working for `hours` more. The overlap can't end more than 7 days from now. */
+export async function extendRotation(k: ApiKey, hours: number): Promise<ApiKey> {
+  if (dataMode === 'api') return fromWire(await api<WireKey>(`/keys/${k.id}/rotation/extend`, { method: 'POST', body: JSON.stringify({ hours }) }))
+  const from = Math.max(k.rotation?.endsAt ?? 0, Date.now())
+  return { ...k, rotation: { ...k.rotation!, endsAt: from + hours * 3_600_000 } }
+}
+
+/** Retires the old secret now, instead of when the overlap ends. */
+export async function finishRotation(k: ApiKey): Promise<ApiKey> {
+  if (dataMode === 'api') return fromWire(await api<WireKey>(`/keys/${k.id}/rotation/finish`, { method: 'POST' }))
+  return { ...k, status: 'active', rotation: undefined }
+}
+
 // ---- budgets ---------------------------------------------------------------
 // Api mode writes through the control plane (audited, If-Match on edit and
 // delete, dryRun for the preview). Mock mode edits the fixtures in memory.

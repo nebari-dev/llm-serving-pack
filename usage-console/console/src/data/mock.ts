@@ -39,11 +39,16 @@ export interface KeyRotation {
   startedAt: number | null
   startedBy: string | null
   endsAt: number | null
-  /**
-   * Traffic on each secret. Receipts don't record which secret a request
-   * used yet, so only mock mode has it.
-   */
+  /** Mock mode's traffic share on each secret, over the last 24h. */
   split?: { newShare: number; oldActors: string[] }
+  /**
+   * Api mode: requests since the rotation started, by the secret that
+   * authenticated them. Null when the start isn't recorded. Unrecorded is
+   * requests from before receipts recorded the secret.
+   */
+  oldSecretRequests?: number | null
+  newSecretRequests?: number | null
+  unrecordedRequests?: number
 }
 
 export interface Model {

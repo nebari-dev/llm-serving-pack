@@ -193,14 +193,22 @@ when stale; 428 without it on an update or delete). Open questions are in
     analysis is still a §3 item.
 - [ ] Detector thresholds. On hold (decided 2026-09-30): the regex
   detectors have no confidence to threshold (decisions §6).
-- [ ] Key rotation: extend the overlap, retire the old secret now.
-  - Backend done: `POST /keys/{id}/rotation/extend` and `/finish`.
-    Console: the two disabled buttons on Keys.
-- [ ] Receipts record which secret (old or new) authenticated a request, so
+- [x] Key rotation: extend the overlap, retire the old secret now.
+  - `POST /keys/{id}/rotation/extend` and `/finish`, from the rotation
+    dialog on Keys. Extend adds a fixed 24h, and is disabled with its reason
+    when that would end the overlap more than 7 days from now (the server's
+    limit). Retire asks first and states how many requests have used the
+    old secret since the rotation started (user's choice, after
+    revocation's blast radius; the mockup retired on one click with an
+    invented "39%").
+- [x] Receipts record which secret (old or new) authenticated a request, so
   rotation can show traffic moving between them (§7.5.8).
-  - Backend done: `receipts.secret_id`, and a rotating key's
-    `oldSecretRequests`/`newSecretRequests` in `GET /keys`. Console: the
-    split on the rotation panel.
+  - `receipts.secret_id`, and a rotating key's
+    `oldSecretRequests`/`newSecretRequests` in `GET /keys`. The rotation
+    panel shows the counts and the new secret's share since the rotation
+    started (not over 24h, and without the mockup's per-actor list or a
+    made-up new-secret prefix), plus any requests that didn't record a
+    secret. Without a recorded start, the split is marked as not recorded.
 - [ ] Model prices: `POST /pricing/{model}` sets or schedules the next
   effective-dated row; `DELETE /pricing/{model}/{effectiveAt}` cancels a
   scheduled one. Where prices come from is open (decisions §1). Console: a

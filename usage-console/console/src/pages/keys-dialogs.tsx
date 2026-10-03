@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, coveringBudgets, createKey, dataMode, models, rotateKey, teams } from '@/data/catalog'
+import { type ApiKey, type KeyRotation, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
@@ -340,19 +340,47 @@ export function timeLeft(ms: number, now = Date.now()) {
 
 const windowLength = (ms: number) => (ms >= 7 * 86_400_000 - 60_000 ? '7-day' : `${Math.round(ms / 3_600_000)}h`)
 
+/** Api mode's requests by secret since the rotation started; null where the start isn't recorded. */
+function secretCounts(r: KeyRotation | null | undefined) {
+  if (r?.oldSecretRequests == null || r.newSecretRequests == null) return null
+  return { old: r.oldSecretRequests, new: r.newSecretRequests, unrecorded: r.unrecordedRequests ?? 0, total: r.oldSecretRequests + r.newSecretRequests }
+}
+
+/** What retiring the old secret now cuts off, from the recorded traffic. */
+function retireBlastRadius(k: ApiKey) {
+  const split = k.rotation?.split
+  if (split) {
+    const n = Math.round(k.requests24h * (1 - split.newShare))
+    return n === 0 ? 'No requests used the old secret in the last 24 hours.' : `${int(n)} ${n === 1 ? 'request' : 'requests'} used the old secret in the last 24 hours.`
+  }
+  const c = secretCounts(k.rotation)
+  if (!c) return 'This rotation’s start isn’t recorded, so how many requests still use the old secret isn’t known.'
+  if (c.old === 0) return 'No requests have used the old secret since the rotation started.'
+  return `${int(c.old)} ${c.old === 1 ? 'request has' : 'requests have'} used the old secret since the rotation started.`
+}
+
+const maxOverlapMs = 7 * 86_400_000
+
 export function RotationStatus({ apiKey, className }: { apiKey: ApiKey; className?: string }) {
   const now = useNow(60_000)
   const r = apiKey.rotation
   const ends = r?.endsAt ? new Date(r.endsAt) : null
   const split = r?.split
-  const pct = split ? Math.round(split.newShare * 100) : 0
+  const counts = secretCounts(r)
+  const pct = split ? Math.round(split.newShare * 100) : counts?.total ? Math.round((counts.new / counts.total) * 100) : 0
   return (
     <div className={cn('flex flex-col gap-2', className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-        {split && (
+        {split ? (
           <span>
             <span className="num font-mono font-semibold">{pct}%</span> of traffic on the new secret
           </span>
+        ) : counts?.total ? (
+          <span>
+            <span className="num font-mono font-semibold">{pct}%</span> of requests since the rotation started used the new secret
+          </span>
+        ) : (
+          counts && <span>No requests on either secret since the rotation started</span>
         )}
         <span className="text-xs text-muted-foreground">
           {ends ? (
@@ -367,7 +395,29 @@ export function RotationStatus({ apiKey, className }: { apiKey: ApiKey; classNam
           )}
         </span>
       </div>
-      {split ? (
+      {!split && counts ? (
+        <>
+          {counts.total > 0 && (
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+              <span className="h-full bg-foreground/70" style={{ width: `${pct}%` }} />
+            </div>
+          )}
+          <dl className="grid grid-cols-2 gap-x-4 font-mono text-xs">
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">new secret</dt>
+              <dd className="num">{int(counts.new)} req</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-muted-foreground">old secret</dt>
+              <dd className="num">{int(counts.old)} req</dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            Both secrets work until the window closes.
+            {counts.unrecorded > 0 && ` ${int(counts.unrecorded)} more ${counts.unrecorded === 1 ? 'request' : 'requests'} since the start didn’t record which secret ${counts.unrecorded === 1 ? 'it' : 'they'} used.`}
+          </p>
+        </>
+      ) : split ? (
         <>
           <div className="flex h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
             <span className="h-full bg-foreground/70" style={{ width: `${pct}%` }} />
@@ -401,7 +451,7 @@ export function RotationStatus({ apiKey, className }: { apiKey: ApiKey; classNam
         </>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Both secrets work until the window closes. Which secret each request used isn’t recorded yet, so the traffic split between them isn’t shown.
+          Both secrets work until the window closes. The rotation’s start isn’t recorded, so the traffic split between the secrets isn’t shown.
         </p>
       )}
     </div>
@@ -414,11 +464,27 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
   const [overlap, setOverlap] = useState<Overlap>('48')
   const [secret, setSecret] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [retiring, setRetiring] = useState(false)
+  const now = useNow(60_000)
   const k = apiKey
   const close = () => {
     onOpenChange(false)
     setSecret(null)
+    setRetiring(false)
   }
+  const write = async (title: string, f: () => Promise<void>) => {
+    setBusy(true)
+    try {
+      await f()
+      close()
+    } catch (e) {
+      toast.add({ title, description: e instanceof Error ? e.message : String(e), type: 'error' })
+    } finally {
+      setBusy(false)
+    }
+  }
+  // Extending adds to the current end, and the server refuses an end past 7 days from now.
+  const extendTooFar = !!k?.rotation && Math.max(k.rotation.endsAt ?? now, now) + 24 * 3_600_000 - now > maxOverlapMs
   return (
     <Dialog
       open={!!k}
@@ -441,6 +507,34 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               close()
             }}
           />
+        ) : k && k.status === 'rotating' && retiring ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>
+                Retire the old secret of <span className="font-mono">{k.name}</span>?
+              </DialogTitle>
+              <DialogDescription>
+                {retireBlastRadius(k)} From now on the old secret gets 401, and only the new secret works.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRetiring(false)}>
+                Keep both secrets
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={busy}
+                onClick={() =>
+                  write('Could not retire old secret', async () => {
+                    onRotate(await finishRotation(k))
+                    toast.add({ title: 'Old secret retired', description: `Only the new secret works on ${k.name} now.`, type: 'success' })
+                  })
+                }
+              >
+                Retire old secret
+              </Button>
+            </DialogFooter>
+          </>
         ) : k && k.status === 'rotating' ? (
           <>
             <DialogHeader>
@@ -455,29 +549,30 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               </DialogDescription>
             </DialogHeader>
             <RotationStatus apiKey={k} />
-            {dataMode === 'api' && <p className="text-xs text-muted-foreground">Extending the overlap and retiring the old secret early aren’t connected yet.</p>}
+            {extendTooFar && <p className="text-xs text-muted-foreground">The overlap can’t end more than 7 days from now, so it can’t be extended by another 24h.</p>}
             <DialogFooter>
               <Button variant="outline" onClick={close}>
                 Close
               </Button>
               <Button
                 variant="outline"
-                disabled={dataMode === 'api'}
-                onClick={() => {
-                  toast.add({ title: 'Overlap extended by 24h', type: 'success' })
-                  close()
-                }}
+                disabled={busy || extendTooFar}
+                onClick={() =>
+                  write('Could not extend overlap', async () => {
+                    const next = await extendRotation(k, 24)
+                    onRotate(next)
+                    const ends = next.rotation?.endsAt ? new Date(next.rotation.endsAt) : null
+                    toast.add({
+                      title: 'Overlap extended by 24h',
+                      description: ends ? `Both secrets work until ${ends.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${ends.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.` : undefined,
+                      type: 'success',
+                    })
+                  })
+                }
               >
                 Extend overlap 24h
               </Button>
-              <Button
-                variant="destructive"
-                disabled={dataMode === 'api'}
-                onClick={() => {
-                  toast.add({ title: 'Old secret retired', description: '39% of traffic will get 401 until those apps pick up the new secret.', type: 'warning' })
-                  close()
-                }}
-              >
+              <Button variant="destructive" disabled={busy} onClick={() => setRetiring(true)}>
                 Retire old secret now
               </Button>
             </DialogFooter>
