@@ -7,9 +7,10 @@ import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { backends, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, type AliasView, type PricingView } from '@/data/catalog'
+import { backends, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
+import { PricingLive } from './pricing-live'
 
 // §7.4 Models → Catalog · Aliases · Pricing. §5.2 model_catalog,
 // model_pricing, model_aliases. §13: reasoning tokens are a separate cost type.
@@ -59,7 +60,7 @@ export function ModelsPage() {
         <AliasesTab />
       </TabsPanel>
       <TabsPanel value="pricing">
-        <PricingTab />
+        {live ? <PricingLive /> : <PricingTab />}
       </TabsPanel>
     </Tabs>
   )
@@ -131,8 +132,29 @@ function CatalogTab() {
   )
 }
 
+// Blended is a 3:1 input:output mix per 1M tokens.
+const blended = (inPerM: number, outPerM: number) => (inPerM * 3 + outPerM) / 4
+
+/** Api mode: a model costs what its backend charges, so show the range over
+ * the backends that serve it, or no price. */
+function LiveBlendedCost({ model, pricing }: { model: string; pricing: PricingView | null }) {
+  if (!pricing) return <Money value={0} unknown />
+  const costs = pricing.prices
+    .filter((p) => p.model === model && p.rates.input && p.rates.output)
+    .map((p) => blended(p.rates.input!.perM, p.rates.output!.perM))
+    .sort((a, b) => a - b)
+  if (costs.length === 0) return <Money value={null} />
+  if (costs[0] === costs.at(-1)) return <Money value={costs[0]} />
+  return (
+    <span title="Depends on the backend that serves it">
+      <Money value={costs[0]} />–<Money value={costs.at(-1)!} />
+    </span>
+  )
+}
+
 function AliasesTab() {
   const { data: aliases, loaded } = useLive<AliasView[]>(live ? '/aliases' : null, seedAliases, 60_000)
+  const { data: pricing } = useLive<PricingView | null>(live ? '/pricing' : null, null, 300_000)
   return (
     <>
       <div className="overflow-x-auto">
@@ -154,6 +176,7 @@ function AliasesTab() {
           <tbody>
             {aliases.map((a) => {
               const m = modelById[a.target] as (typeof models)[number] | undefined
+              const rates = seedRates?.[a.target]
               return (
                 <tr key={a.alias + a.target} className="border-b border-border hover:bg-muted/50">
                   <td className={cn(td, 'pl-6 font-mono font-medium')}>{a.alias}</td>
@@ -174,7 +197,13 @@ function AliasesTab() {
                   </td>
                   <td className={cn(td, 'num text-right font-mono')}>{a.requests24h.toLocaleString('en-US')}</td>
                   <td className={cn(td, 'pr-6 text-right')}>
-                    {m ? <Money value={(m.inPerM * 3 + m.outPerM) / 4} /> : <span className="text-xs text-muted-foreground">Not in catalog</span>}
+                    {!m ? (
+                      <span className="text-xs text-muted-foreground">Not in catalog</span>
+                    ) : live ? (
+                      <LiveBlendedCost model={a.target} pricing={pricing} />
+                    ) : (
+                      rates && <Money value={blended(rates.inPerM, rates.outPerM)} />
+                    )}
                   </td>
                 </tr>
               )
@@ -207,8 +236,10 @@ function AliasesTab() {
   )
 }
 
+/** Mock mode's pricing: the fixtures' one price per model. */
 function PricingTab() {
-  const { data: pricing, loaded } = useLive<PricingView | null>(live ? '/pricing' : null, seedPricing, 300_000)
+  const pricing: MockPricingView | null = seedPricing
+  const loaded = true
   const changes = pricing?.changes ?? []
   const showBy = changes.some((p) => p.by)
   const since = Object.values(pricing?.effectiveFrom ?? {}).sort()[0]
@@ -229,7 +260,7 @@ function PricingTab() {
             </tr>
           </thead>
           <tbody>
-            {models.map((m) => (
+            {models.flatMap((x) => (seedRates?.[x.id] ? [seedRates[x.id]] : [])).map((m) => (
               <tr key={m.id} className="border-b border-border hover:bg-muted/50">
                 <td className={cn(td, 'pl-6 font-mono font-medium')}>{m.id}</td>
                 <td className={cn(td, 'text-right')}>
@@ -250,7 +281,6 @@ function PricingTab() {
             ))}
           </tbody>
         </table>
-        {live && <p className="px-6 py-3 text-xs text-muted-foreground">Pricing sync not connected yet: every rate is the control plane’s seed price.</p>}
       </div>
       <Section
         title="Price changes"
@@ -259,8 +289,6 @@ function PricingTab() {
           <Button
             variant="outline"
             size="sm"
-            disabled={live}
-            title={live ? "CSV export isn't connected yet." : undefined}
             onClick={() => toast.add({ title: 'Exported model-pricing.csv', type: 'success' })}
           >
             <Download /> Export CSV

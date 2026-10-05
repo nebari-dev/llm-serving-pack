@@ -7,7 +7,7 @@
 // or at import time after hydrate(), see the fetched values.
 import { ago } from '@/lib/format'
 import * as mock from './mock'
-import type { ApiKey, Backend, Budget, Change, Degradation, Model, PolicyRule, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
+import type { ApiKey, Backend, Budget, Change, Degradation, Model, PairPrice, PolicyRule, PricingView, RateName, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
 
 export type * from './mock'
 
@@ -56,7 +56,9 @@ export const seedRetention: mock.RetentionView | null = dataMode === 'api' ? nul
 export const seedActivityEvents: mock.TrafficEvent[] = dataMode === 'api' ? [] : mock.activityEvents
 /** Models fixtures. Api mode reads GET /aliases and GET /pricing; the catalog has no modalities or deprecation dates yet. */
 export const seedAliases: mock.AliasView[] = dataMode === 'api' ? [] : mock.aliases
-export const seedPricing: mock.PricingView | null = dataMode === 'api' ? null : mock.pricing
+export const seedPricing: mock.MockPricingView | null = dataMode === 'api' ? null : mock.pricing
+/** Mock only: the fixtures' one price per model. Api mode prices per (model, backend) on /pricing. */
+export const seedRates: Record<string, mock.MockModel> | null = dataMode === 'api' ? null : mock.modelById
 export const seedModalities: Record<string, string[]> | null = dataMode === 'api' ? null : mock.modelModalities
 export const seedDeprecations: Record<string, string> | null = dataMode === 'api' ? null : mock.modelDeprecations
 
@@ -251,6 +253,27 @@ export async function updateBudget(b: Budget, edit: BudgetEdit): Promise<Budget>
   storeBudget(next)
   return next
 }
+
+// Price writes (api mode only; mock mode has no price editing). Each returns
+// the pricing view after the write.
+
+/** Sets rates on a pair: a number overrides it, null follows LiteLLM again. */
+export const setPairPrice = (p: PairPrice, rates: Partial<Record<RateName, number | null>>, effectiveFrom?: string) =>
+  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}`, {
+    method: 'POST',
+    body: JSON.stringify({ rates, effectiveFrom }),
+    headers: { 'If-Match': p.etag },
+  })
+
+export const cancelPairPrice = (c: { model: string; backend: string; effectiveAt: number }) =>
+  api<PricingView>(`/pricing/${encodeURIComponent(c.model)}/${encodeURIComponent(c.backend)}/${c.effectiveAt}`, { method: 'DELETE' })
+
+export const setPriceSource = (p: { model: string; backend: string }, litellmKey: string) =>
+  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}/source`, { method: 'PUT', body: JSON.stringify({ litellmKey }) })
+
+export const syncPrices = () => api<PricingView>('/pricing/sync', { method: 'POST' })
+
+export const decidePriceProposal = (id: number, decision: 'accept' | 'dismiss') => api<PricingView>(`/pricing/proposals/${id}/${decision}`, { method: 'POST' })
 
 export async function deleteBudget(b: Budget): Promise<void> {
   if (dataMode === 'api') await api(`/budgets/${b.id}`, { method: 'DELETE', headers: { 'If-Match': b.etag ?? '' } })

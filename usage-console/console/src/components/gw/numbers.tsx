@@ -22,8 +22,15 @@ export function Money({
   precision = 'cents',
   className,
   unknown,
-}: NumProps & { value: number; precision?: 'cents' | 'micro' | 'whole' }) {
+}: NumProps & { value: number | null; precision?: 'cents' | 'micro' | 'whole' }) {
   if (unknown) return <Unknown className={className} label="cost pending" />
+  // null is no price (§1 decisions): unknown, never shown as $0.
+  if (value === null)
+    return (
+      <span className={cn(base, 'text-muted-foreground', className)} title="No price for this model on this backend yet. It's costed once someone sets one.">
+        No price
+      </span>
+    )
   const text = precision === 'micro' ? microMoney(value) : money(value, precision === 'whole' ? 0 : 2)
   return <span className={cn(base, className)}>{text}</span>
 }

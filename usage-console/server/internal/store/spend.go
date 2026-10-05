@@ -91,3 +91,12 @@ func (s *Store) FirstSpendDay(ctx context.Context, tenant string) (time.Time, er
 	}
 	return t.UTC(), err
 }
+
+// UnpricedCount counts the tenant's served requests in [from, to) that have
+// no cost yet because their (model, backend) had no price.
+func (s *Store) UnpricedCount(ctx context.Context, tenant string, from, to time.Time) (int, error) {
+	var n int
+	err := s.Receipts.QueryRow(ctx, `SELECT count(*)::int FROM receipts
+		WHERE cost_usd IS NULL AND tenant_id = $1 AND ts >= $2 AND ts < $3 AND status = 200 AND NOT in_flight`, tenant, from, to).Scan(&n)
+	return n, err
+}

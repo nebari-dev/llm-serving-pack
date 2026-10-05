@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/pricing"
 )
 
 const Tenant = "demo"
@@ -32,12 +33,62 @@ var Teams = []model.Team{
 }
 
 var Models = []model.Model{
-	{ID: "gpt-5-mini", Display: "GPT-5 mini", Provider: "OpenAI", Family: "gpt-5", Context: 400_000, InPerM: 0.25, OutPerM: 2.0, CachedPerM: 0.025, ReasoningPerM: 2.0},
-	{ID: "gpt-5.5", Display: "GPT-5.5", Provider: "OpenAI", Family: "gpt-5", Context: 400_000, InPerM: 1.25, OutPerM: 10.0, CachedPerM: 0.125, ReasoningPerM: 10.0},
-	{ID: "claude-sonnet-5", Display: "Claude Sonnet 5", Provider: "Anthropic", Family: "claude", Context: 1_000_000, InPerM: 3.0, OutPerM: 15.0, CachedPerM: 0.3, ReasoningPerM: 15.0},
-	{ID: "claude-opus-4-1", Display: "Claude Opus 4.1", Provider: "Anthropic", Family: "claude", Context: 200_000, InPerM: 15.0, OutPerM: 75.0, CachedPerM: 1.5, ReasoningPerM: 75.0},
-	{ID: "claude-haiku-4-5", Display: "Claude Haiku 4.5", Provider: "Bedrock", Family: "claude", Context: 200_000, InPerM: 1.0, OutPerM: 5.0, CachedPerM: 0.1, ReasoningPerM: 5.0},
-	{ID: "llama-3.3-70b", Display: "Llama 3.3 70B", Provider: "Self-hosted", Family: "llama", Context: 128_000, InPerM: 0.12, OutPerM: 0.3, CachedPerM: 0.12, ReasoningPerM: 0.3},
+	{ID: "gpt-5-mini", Display: "GPT-5 mini", Provider: "OpenAI", Family: "gpt-5", Context: 400_000},
+	{ID: "gpt-5.5", Display: "GPT-5.5", Provider: "OpenAI", Family: "gpt-5", Context: 400_000},
+	{ID: "claude-sonnet-5", Display: "Claude Sonnet 5", Provider: "Anthropic", Family: "claude", Context: 1_000_000},
+	{ID: "claude-opus-4-1", Display: "Claude Opus 4.1", Provider: "Anthropic", Family: "claude", Context: 200_000},
+	{ID: "claude-haiku-4-5", Display: "Claude Haiku 4.5", Provider: "Bedrock", Family: "claude", Context: 200_000},
+	{ID: "llama-3.3-70b", Display: "Llama 3.3 70B", Provider: "Self-hosted", Family: "llama", Context: 128_000},
+}
+
+// seedRates are the demo's starting prices per 1M tokens: input, cached
+// input, output, reasoning. Every backend serving a model starts at them,
+// with cache writes at the input rate; the first LiteLLM sync replaces them.
+var seedRates = map[string][4]float64{
+	"gpt-5-mini":       {0.25, 0.025, 2, 2},
+	"gpt-5.5":          {1.25, 0.125, 10, 10},
+	"claude-sonnet-5":  {3, 0.3, 15, 15},
+	"claude-opus-4-1":  {15, 1.5, 75, 75},
+	"claude-haiku-4-5": {1, 0.1, 5, 5},
+	"llama-3.3-70b":    {0.12, 0.12, 0.3, 0.3},
+}
+
+// SeedPrice is one (model, backend)'s starting price row.
+type SeedPrice struct {
+	ModelID, Backend string
+	Rates            pricing.Rates
+	Sources          pricing.Sources
+	From             time.Time
+}
+
+// SeedPrices are the starting rows, effective from.
+func SeedPrices(from time.Time) []SeedPrice {
+	var out []SeedPrice
+	for _, b := range Backends {
+		for _, m := range b.Models {
+			r := seedRates[m]
+			vals := [pricing.NumRates]float64{r[0], r[1], r[0], r[2], r[3]}
+			p := SeedPrice{ModelID: m, Backend: b.Name, From: from}
+			for i := range vals {
+				p.Rates[i], p.Sources[i] = &vals[i], pricing.Seed
+			}
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// LiteLLMKeys map each (model, backend) to its entry in LiteLLM's price
+// file. claude-opus-4-1 on anthropic-prod has none: LiteLLM dropped the
+// direct Anthropic entry, and borrowing a Bedrock one is a call to make in
+// the console. vllm-internal is self-hosted, so has no list price.
+var LiteLLMKeys = map[[2]string]string{
+	{"gpt-5-mini", "openai-prod"}:         "gpt-5-mini",
+	{"gpt-5.5", "openai-prod"}:            "gpt-5.5",
+	{"claude-sonnet-5", "anthropic-prod"}: "claude-sonnet-5",
+	{"claude-haiku-4-5", "bedrock-eu"}:    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+	{"claude-sonnet-5", "bedrock-eu"}:     "eu.anthropic.claude-sonnet-5",
+	{"gpt-5-mini", "azure-openai-eu"}:     "azure/eu/gpt-5-mini-2025-08-07",
 }
 
 // Aliases resolve before routing. A trailing * is a prefix match.

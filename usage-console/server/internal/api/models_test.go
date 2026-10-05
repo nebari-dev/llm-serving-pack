@@ -1,11 +1,15 @@
 package api
 
 import (
+	"cmp"
+	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/pricing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
@@ -34,45 +38,78 @@ func day(s string) time.Time {
 	return d
 }
 
-func TestPricingViewDiffsConsecutiveRows(t *testing.T) {
-	aug, sep, oct := day("2026-08-14"), day("2026-09-01"), day("2026-10-01")
+func per(v ...float64) (r pricing.Rates) {
+	for i := range v {
+		r[i] = &v[i]
+	}
+	return r
+}
+
+func srcs(s ...pricing.Source) (out pricing.Sources) {
+	copy(out[:], s)
+	return out
+}
+
+func TestPricingViewListsEveryPairAndDiffsItsRows(t *testing.T) {
+	jan, sep, oct := day("2026-01-01"), day("2026-09-01"), day("2026-10-01")
+	seed, lite, man := pricing.Seed, pricing.LiteLLM, pricing.Manual
 	rows := []store.PriceRow{
-		{ModelID: "claude-sonnet-5", InPerM: 3, OutPerM: 18, CachedPerM: 0.3, ReasoningPerM: 18, From: day("2026-01-01"), To: &sep},
-		{ModelID: "claude-sonnet-5", InPerM: 3, OutPerM: 15, CachedPerM: 0.3, ReasoningPerM: 15, From: sep},
-		{ModelID: "gpt-5-mini", InPerM: 0.25, OutPerM: 2, CachedPerM: 0.05, From: day("2026-01-01"), To: &aug},
-		{ModelID: "gpt-5-mini", InPerM: 0.25, OutPerM: 2, CachedPerM: 0.025, From: aug},
-		{ModelID: "llama-3.3-70b", InPerM: 0.6, OutPerM: 0.6, From: day("2026-01-01"), To: &oct},
-		{ModelID: "llama-3.3-70b", InPerM: 0.5, OutPerM: 0.6, From: oct}, // scheduled
+		{ModelID: "claude-sonnet-5", Backend: "bedrock-eu", Rates: per(3, 0.3, 3, 15, 15), Sources: srcs(seed, seed, seed, seed, seed), From: jan, To: &sep},
+		{ModelID: "claude-sonnet-5", Backend: "bedrock-eu", Rates: per(2.2, 0.22, 2.75, 11, 11), Sources: srcs(man, lite, lite, lite, lite), From: sep, To: &oct},
+		{ModelID: "claude-sonnet-5", Backend: "bedrock-eu", Rates: per(2.2, 0.22, 2.75, 12, 12), Sources: srcs(man, lite, lite, lite, lite), From: oct}, // scheduled
+		{ModelID: "llama-3.3-70b", Backend: "vllm-internal", Rates: per(0.12, 0.12, 0.12, 0.3, 0.3), Sources: srcs(seed, seed, seed, seed, seed), From: jan, To: &sep},
 	}
-	got := pricingView(rows, day("2026-09-28"))
-	want := model.Pricing{
-		EffectiveFrom: map[string]string{"claude-sonnet-5": "2026-09-01", "gpt-5-mini": "2026-08-14", "llama-3.3-70b": "2026-01-01"},
-		Changes: []model.PriceChange{
-			{Model: "llama-3.3-70b", Field: "Input", From: 0.6, To: 0.5, Effective: "2026-10-01", EffectiveAt: oct.UnixMilli(), Scheduled: true},
-			{Model: "claude-sonnet-5", Field: "Output", From: 18, To: 15, Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
-			{Model: "claude-sonnet-5", Field: "Reasoning", From: 18, To: 15, Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
-			{Model: "gpt-5-mini", Field: "Cached input", From: 0.05, To: 0.025, Effective: "2026-08-14", EffectiveAt: aug.UnixMilli()},
-		},
+	pairs := [][2]string{{"claude-sonnet-5", "bedrock-eu"}, {"llama-3.3-70b", "vllm-internal"}, {"claude-opus-4-1", "anthropic-prod"}}
+	keys := map[[2]string]string{{"claude-sonnet-5", "bedrock-eu"}: "eu.anthropic.claude-sonnet-5"}
+	got := pricingView(pairs, rows, keys, day("2026-09-28"))
+
+	sonnet := got.Prices[0]
+	if sonnet.Model != "claude-sonnet-5" || sonnet.Backend != "bedrock-eu" || sonnet.LiteLLMKey != "eu.anthropic.claude-sonnet-5" ||
+		sonnet.EffectiveFrom != "2026-09-01" || !sonnet.Priced || sonnet.ETag != store.ETag(store.PriceVersion(rows[2])) {
+		t.Fatalf("sonnet: %+v", sonnet)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %+v\nwant %+v", got, want)
+	if r := sonnet.Rates["input"]; r == nil || r.PerM != 2.2 || r.Source != "manual" {
+		t.Fatalf("input is the override in effect now, not the scheduled row: %+v", r)
+	}
+	if r := sonnet.Rates["output"]; r == nil || r.PerM != 11 || r.Source != "litellm" {
+		t.Fatalf("output: %+v", r)
+	}
+	llama := got.Prices[1]
+	if llama.Priced || llama.EffectiveFrom != "" || llama.Rates["input"] != nil || llama.ETag != store.ETag(store.PriceVersion(rows[3])) {
+		t.Fatalf("a retired price is no price: %+v", llama)
+	}
+	opus := got.Prices[2]
+	if opus.Priced || opus.LiteLLMKey != "" || len(opus.Rates) != 0 || opus.ETag != store.ETag([2]string{"claude-opus-4-1", "anthropic-prod"}) {
+		t.Fatalf("a pair that never had a price: %+v", opus)
+	}
+
+	f := func(v float64) *float64 { return &v }
+	want := []model.PriceChange{
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Output", From: f(11), To: f(12), Source: "litellm", Effective: "2026-10-01", EffectiveAt: oct.UnixMilli(), Scheduled: true},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Reasoning", From: f(11), To: f(12), Source: "litellm", Effective: "2026-10-01", EffectiveAt: oct.UnixMilli(), Scheduled: true},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Input", From: f(3), To: f(2.2), Source: "manual", Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Cached input", From: f(0.3), To: f(0.22), Source: "litellm", Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Cache write", From: f(3), To: f(2.75), Source: "litellm", Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Output", From: f(15), To: f(11), Source: "litellm", Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
+		{Model: "claude-sonnet-5", Backend: "bedrock-eu", Field: "Reasoning", From: f(15), To: f(11), Source: "litellm", Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()},
+	}
+	for _, field := range []string{"Input", "Cached input", "Cache write", "Output", "Reasoning"} {
+		want = append(want, model.PriceChange{Model: "llama-3.3-70b", Backend: "vllm-internal", Field: field, From: rows[3].Rates[slices.Index(pricing.Labels[:], field)], Effective: "2026-09-01", EffectiveAt: sep.UnixMilli()})
+	}
+	slices.SortStableFunc(want, func(x, y model.PriceChange) int { return cmp.Compare(y.EffectiveAt, x.EffectiveAt) })
+	if !reflect.DeepEqual(got.Changes, want) {
+		t.Fatalf("changes:\n got %s\nwant %s", show(got.Changes), show(want))
 	}
 }
 
+func show(cs []model.PriceChange) string {
+	b, _ := json.MarshalIndent(cs, "", " ")
+	return string(b)
+}
+
 func TestPricingViewWithOnlySeedRowsHasNoChanges(t *testing.T) {
-	later := day("2026-12-01")
-	rows := []store.PriceRow{
-		{ModelID: "gpt-5.5", InPerM: 1.25, OutPerM: 10, From: day("2026-01-01"), To: &later},
-		{ModelID: "gpt-5.5", InPerM: 1.25, OutPerM: 8, From: later}, // scheduled, not yet in force
-	}
-	got := pricingView(rows, day("2026-09-28"))
-	if got.EffectiveFrom["gpt-5.5"] != "2026-01-01" {
-		t.Fatalf("the row in force now is the January one: %+v", got.EffectiveFrom)
-	}
-	if len(got.Changes) != 1 || got.Changes[0].Effective != "2026-12-01" {
-		t.Fatalf("a scheduled change is listed with its date: %+v", got.Changes)
-	}
-	empty := pricingView(rows[:1], day("2026-09-28"))
+	rows := []store.PriceRow{{ModelID: "gpt-5.5", Backend: "openai-prod", Rates: per(1.25, 0.125, 1.25, 10, 10), From: day("2026-01-01")}}
+	empty := pricingView([][2]string{{"gpt-5.5", "openai-prod"}}, rows, nil, day("2026-09-28"))
 	if empty.Changes == nil || len(empty.Changes) != 0 {
 		t.Fatalf("no history encodes as [], not null: %#v", empty.Changes)
 	}

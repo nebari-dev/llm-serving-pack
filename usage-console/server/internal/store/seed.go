@@ -34,7 +34,6 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 	}
 	for _, m := range demo.Models {
 		b.Queue(`INSERT INTO model_catalog VALUES ($1,$2,$3,$4,$5)`, m.ID, m.Display, m.Provider, m.Family, m.Context)
-		b.Queue(`INSERT INTO model_pricing VALUES ($1,$2,$3,$4,$5,'2026-01-01',NULL)`, m.ID, m.InPerM, m.OutPerM, m.CachedPerM, m.ReasoningPerM)
 	}
 	for alias, target := range demo.Aliases {
 		b.Queue(`INSERT INTO model_aliases (tenant_id, alias, target) VALUES ($1,$2,$3)`, t, alias, target)
@@ -42,6 +41,13 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 	for i, x := range demo.Backends {
 		b.Queue(`INSERT INTO backends VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13)`,
 			x.Name, t, i, x.Provider, x.Region, x.Provenance, x.Sync, x.Source, x.Models, x.Health, x.P50, x.ErrorRate, x.CaptureContent)
+	}
+	for _, p := range demo.SeedPrices(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		b.Queue(`INSERT INTO model_pricing VALUES ($1,$2,$3,$4,$5,$6,$7,'seed','seed','seed','seed','seed',$8,NULL)`,
+			p.ModelID, p.Backend, p.Rates[0], p.Rates[1], p.Rates[2], p.Rates[3], p.Rates[4], p.From)
+	}
+	for pair, key := range demo.LiteLLMKeys {
+		b.Queue(`INSERT INTO price_sources VALUES ($1,$2,$3)`, pair[0], pair[1], key)
 	}
 	for i, x := range demo.Routes {
 		targets, _ := json.Marshal(x.Targets)

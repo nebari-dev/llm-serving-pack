@@ -24,20 +24,14 @@ func (s *Store) Teams(ctx context.Context, tenant string) ([]model.Team, error) 
 	})
 }
 
-// Models returns the catalog with the price in effect now.
+// Models returns the catalog. Prices are per (model, backend): PricesNow.
 func (s *Store) Models(ctx context.Context) ([]model.Model, error) {
 	rows, _ := s.Config.Query(ctx, `
-		SELECT c.id, c.display, c.provider, c.family, c.context,
-		       p.in_per_m::float8, p.out_per_m::float8, p.cached_per_m::float8, p.reasoning_per_m::float8
-		FROM model_catalog c
-		JOIN LATERAL (
-		  SELECT * FROM model_pricing p WHERE p.model_id = c.id AND p.effective_from <= now()
-		    AND (p.effective_to IS NULL OR p.effective_to > now())
-		  ORDER BY effective_from DESC LIMIT 1) p ON true
-		ORDER BY c.provider = 'OpenAI' DESC, c.provider = 'Anthropic' DESC, c.provider, p.in_per_m`)
+		SELECT id, display, provider, family, context FROM model_catalog
+		ORDER BY provider = 'OpenAI' DESC, provider = 'Anthropic' DESC, provider, context, id`)
 	return collect(rows, func(r pgx.Rows) (model.Model, error) {
 		var m model.Model
-		return m, r.Scan(&m.ID, &m.Display, &m.Provider, &m.Family, &m.Context, &m.InPerM, &m.OutPerM, &m.CachedPerM, &m.ReasoningPerM)
+		return m, r.Scan(&m.ID, &m.Display, &m.Provider, &m.Family, &m.Context)
 	})
 }
 
@@ -161,10 +155,15 @@ func newSecret() string {
 }
 
 func audit(ctx context.Context, tx pgx.Tx, tenant, actor, action, target, kind, id string, before, after any) error {
+	return auditFrom(ctx, tx, tenant, actor, action, target, kind, id, before, after, "console")
+}
+
+// auditFrom is audit for a change made outside the console (source "sync").
+func auditFrom(ctx context.Context, tx pgx.Tx, tenant, actor, action, target, kind, id string, before, after any, source string) error {
 	bj, _ := json.Marshal(before)
 	aj, _ := json.Marshal(after)
 	_, err := tx.Exec(ctx, `INSERT INTO audit_log (tenant_id, actor, action, target, target_kind, target_id, before, after, source)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'console')`, tenant, actor, action, target, kind, id, bj, aj)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, tenant, actor, action, target, kind, id, bj, aj, source)
 	return err
 }
 

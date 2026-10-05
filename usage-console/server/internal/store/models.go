@@ -10,6 +10,8 @@ import (
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/pricing"
 )
 
 // ResolveAlias maps what a client asked for to a catalog model.
@@ -66,23 +68,43 @@ func ValidateAlias(alias, target string, catalog []string) error {
 	return nil
 }
 
-// PriceRow is one effective-dated model_pricing row.
+// PriceRow is one effective-dated model_pricing row for a (model, backend).
+// A nil rate has no price; Sources say where each set rate came from.
 type PriceRow struct {
-	ModelID                                    string
-	InPerM, OutPerM, CachedPerM, ReasoningPerM float64
-	From                                       time.Time
-	To                                         *time.Time
+	ModelID, Backend string
+	Rates            pricing.Rates
+	Sources          pricing.Sources
+	From             time.Time
+	To               *time.Time
 }
 
-// PriceRows returns every pricing row, per model oldest first.
+// PriceRows returns every pricing row, per pair oldest first.
 func (s *Store) PriceRows(ctx context.Context) ([]PriceRow, error) {
-	rows, _ := s.Config.Query(ctx, `
-		SELECT model_id, in_per_m::float8, out_per_m::float8, cached_per_m::float8, reasoning_per_m::float8, effective_from, effective_to
-		FROM model_pricing ORDER BY model_id, effective_from`)
-	return collect(rows, func(r pgx.Rows) (PriceRow, error) {
-		var p PriceRow
-		return p, r.Scan(&p.ModelID, &p.InPerM, &p.OutPerM, &p.CachedPerM, &p.ReasoningPerM, &p.From, &p.To)
-	})
+	rows, _ := s.Config.Query(ctx, `SELECT `+priceCols+` FROM model_pricing ORDER BY model_id, backend, effective_from`)
+	return collect(rows, func(r pgx.Rows) (PriceRow, error) { return scanPrice(r) })
+}
+
+// PricesNow returns the row in effect now for each priced pair.
+func (s *Store) PricesNow(ctx context.Context) ([]PriceRow, error) {
+	rows, _ := s.Config.Query(ctx, `SELECT `+priceCols+` FROM model_pricing
+		WHERE effective_from <= now() AND (effective_to IS NULL OR effective_to > now())`)
+	return collect(rows, func(r pgx.Rows) (PriceRow, error) { return scanPrice(r) })
+}
+
+// Basis is the cost_basis a receipt records for m priced at row.
+func Basis(m model.Model, row PriceRow) *model.CostBasis {
+	b := &model.CostBasis{ID: m.ID, Display: m.Display, Provider: m.Provider, Family: m.Family, Context: m.Context,
+		Backend: row.Backend, EffectiveFrom: row.From.UnixMilli(), Sources: map[string]string{}}
+	for i, dst := range []**float64{&b.InPerM, &b.CachedPerM, &b.CacheWritePerM, &b.OutPerM, &b.ReasoningPerM} {
+		*dst = row.Rates[i]
+		if row.Sources[i] != "" {
+			b.Sources[pricing.Names[i]] = string(row.Sources[i])
+		}
+	}
+	if b.ID == "" {
+		b.ID = row.ModelID
+	}
+	return b
 }
 
 // RequestedModels counts the tenant's receipts since a time by what the

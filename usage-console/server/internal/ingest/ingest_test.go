@@ -3,16 +3,40 @@ package ingest
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/pricing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
+func per(v ...float64) (r pricing.Rates) {
+	for i := range v {
+		r[i] = &v[i]
+	}
+	return r
+}
+
+var priceFrom = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+
 var snap = &gateway.Snapshot{
-	Tenant:   "demo",
-	Models:   map[string]model.Model{"gpt-5-mini": {ID: "gpt-5-mini", InPerM: 1, CachedPerM: 0.5, OutPerM: 4, ReasoningPerM: 4}},
-	Backends: []model.Backend{{Name: "openai-prod", Provider: "OpenAI", Region: "us-east"}},
+	Tenant: "demo",
+	Models: map[string]model.Model{"gpt-5-mini": {ID: "gpt-5-mini", Display: "GPT-5 mini", Provider: "OpenAI"}},
+	Prices: map[gateway.Pair]store.PriceRow{
+		{Model: "gpt-5-mini", Backend: "openai-prod"}: {ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 0.5, 2, 4, 4),
+			Sources: pricing.Sources{"litellm", "litellm", "litellm", "manual", "litellm"}, From: priceFrom},
+		{Model: "gpt-5-mini", Backend: "azure-openai-eu"}: {ModelID: "gpt-5-mini", Backend: "azure-openai-eu", Rates: per(2, 1, 2, 8, 8), From: priceFrom},
+	},
+	Backends: []model.Backend{{Name: "openai-prod", Provider: "OpenAI", Region: "us-east"}, {Name: "azure-openai-eu", Provider: "Azure", Region: "eu-west"}, {Name: "vllm-internal", Provider: "Self-hosted", Region: "eu-private"}},
+}
+
+// cost is a receipt's cost, -1 when it has none.
+func cost(rc *model.Receipt) float64 {
+	if rc.CostUSD == nil {
+		return -1
+	}
+	return *rc.CostUSD
 }
 
 // A record as Envoy sends it: every value a string, "-" for unset.
@@ -24,11 +48,12 @@ func record(over map[string]string) map[string]string {
 		"traceparent":          "00-db1ed558c800842868474eda91ecbf61-85adba6525e01f9a-01",
 		"session.id":           "-",
 		"gen_ai.request.model": "gpt-5-mini", "gen_ai.response.model": "gpt-5-mini",
-		"gen_ai.provider.name":             "default/openai-prod/route/aigw-run/rule/0/ref/0",
-		"gen_ai.usage.input_tokens":        "1000",
-		"gen_ai.usage.cached_input_tokens": "200",
-		"gen_ai.usage.output_tokens":       "500",
-		"gen_ai.usage.reasoning_tokens":    "100",
+		"gen_ai.provider.name":                     "default/openai-prod/route/aigw-run/rule/0/ref/0",
+		"gen_ai.usage.input_tokens":                "1000",
+		"gen_ai.usage.cached_input_tokens":         "200",
+		"gen_ai.usage.output_tokens":               "500",
+		"gen_ai.usage.reasoning_tokens":            "100",
+		"gen_ai.usage.cache_creation_input_tokens": "100",
 	}
 	for k, v := range over {
 		a[k] = v
@@ -50,9 +75,32 @@ func TestReceiptAllowed(t *testing.T) {
 	if rc.SessionID != "" || rc.TTFTMS == nil || *rc.TTFTMS != 120 || rc.Verdict != "allowed" {
 		t.Errorf("session=%q ttft=%v verdict=%s", rc.SessionID, rc.TTFTMS, rc.Verdict)
 	}
-	// (800*1 + 200*0.5 + 500*4 + 100*4) / 1e6
-	if want := 0.0033; rc.CostUSD < want-1e-12 || rc.CostUSD > want+1e-12 {
-		t.Errorf("cost = %v, want %v", rc.CostUSD, want)
+	// (700*1 + 200*0.5 + 100*2 + 500*4 + 100*4) / 1e6: cache reads and
+	// writes are part of the 1000 input tokens.
+	if want := 0.0034; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
+		t.Errorf("cost = %v, want %v", cost(rc), want)
+	}
+	if rc.CacheWriteTokens != 100 {
+		t.Errorf("cache writes = %d", rc.CacheWriteTokens)
+	}
+	b := rc.CostBasis
+	if b == nil || b.ID != "gpt-5-mini" || b.Display != "GPT-5 mini" || b.Backend != "openai-prod" || b.EffectiveFrom != priceFrom.UnixMilli() ||
+		*b.CacheWritePerM != 2 || *b.OutPerM != 4 || b.Sources["output"] != "manual" || b.Sources["input"] != "litellm" {
+		t.Errorf("cost basis = %+v", b)
+	}
+}
+
+func TestReceiptIsPricedForTheBackendThatServedIt(t *testing.T) {
+	rc, _ := Receipt(snap, record(map[string]string{"gen_ai.provider.name": "default/azure-openai-eu/route/aigw-run/rule/0/ref/0"}))
+	if want := (700*2 + 200*1 + 100*2 + 500*8 + 100*8) / 1e6; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
+		t.Errorf("cost = %v, want %v", cost(rc), want)
+	}
+}
+
+func TestReceiptWithNoPriceHasNoCost(t *testing.T) {
+	rc, _ := Receipt(snap, record(map[string]string{"gen_ai.provider.name": "default/vllm-internal/route/aigw-run/rule/0/ref/0"}))
+	if rc.Status != 200 || rc.CostUSD != nil || rc.CostBasis != nil {
+		t.Errorf("an unpriced pair has no cost, not $0: cost=%v basis=%+v", rc.CostUSD, rc.CostBasis)
 	}
 }
 
@@ -61,8 +109,8 @@ func TestReceiptUpstreamErrorAfterRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.ErrorCode != "upstream_error" || rc.CostUSD != 0 || rc.OutputTokens != 0 {
-		t.Errorf("code=%s cost=%v out=%d", rc.ErrorCode, rc.CostUSD, rc.OutputTokens)
+	if rc.ErrorCode != "upstream_error" || cost(rc) != 0 || rc.OutputTokens != 0 {
+		t.Errorf("code=%s cost=%v out=%d", rc.ErrorCode, cost(rc), rc.OutputTokens)
 	}
 	if rc.Trace[1].State != "warn" || rc.Trace[2].State != "fail" {
 		t.Errorf("trace states: %+v", rc.Trace)
@@ -94,8 +142,8 @@ func TestReceiptTraceIDFallsBackToRequestID(t *testing.T) {
 
 func TestReceiptClientDisconnect(t *testing.T) {
 	rc, _ := Receipt(snap, record(map[string]string{"response_code": "0", "response_flags": "DC"}))
-	if rc.ErrorCode != "client_disconnected" || rc.CostUSD != 0 {
-		t.Errorf("code=%s cost=%v", rc.ErrorCode, rc.CostUSD)
+	if rc.ErrorCode != "client_disconnected" || cost(rc) != 0 {
+		t.Errorf("code=%s cost=%v", rc.ErrorCode, cost(rc))
 	}
 }
 
@@ -130,8 +178,8 @@ func TestReceiptModelBlockedByKeyCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.Verdict != "blocked" || rc.ErrorCode != "model_not_allowed" || rc.Status != 403 || rc.CostUSD != 0 {
-		t.Errorf("verdict=%s code=%s status=%d cost=%v", rc.Verdict, rc.ErrorCode, rc.Status, rc.CostUSD)
+	if rc.Verdict != "blocked" || rc.ErrorCode != "model_not_allowed" || rc.Status != 403 || cost(rc) != 0 {
+		t.Errorf("verdict=%s code=%s status=%d cost=%v", rc.Verdict, rc.ErrorCode, rc.Status, cost(rc))
 	}
 	if rc.KeyName != "web-chat" || rc.Team != "web" || rc.Project != "assistant" || rc.RequestedModel != "gpt-5.5" {
 		t.Errorf("identity: %s %s %s model=%s", rc.KeyName, rc.Team, rc.Project, rc.RequestedModel)
@@ -152,8 +200,8 @@ func TestReceiptTakesWardensDecision(t *testing.T) {
 	if rc.Verdict != "rerouted" || rc.RequestedModel != "claude-opus-4-1" || rc.ResolvedModel != "gpt-5-mini" || rc.RouteReason != "policy" || rc.RequestHash != "sha256:ab" {
 		t.Errorf("receipt = %+v", rc)
 	}
-	if len(rc.Rules) != 1 || rc.CostUSD == 0 {
-		t.Errorf("rules %v cost %v", rc.Rules, rc.CostUSD)
+	if len(rc.Rules) != 1 || cost(rc) <= 0 {
+		t.Errorf("rules %v cost %v", rc.Rules, cost(rc))
 	}
 	var steps []string
 	for _, s := range rc.Trace {
@@ -173,7 +221,7 @@ func TestReceiptBlockedByWarden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.Verdict != "blocked" || rc.Status != 429 || rc.ErrorCode != "budget_exceeded" || rc.RequestedModel != "gpt-5-mini" || rc.InputTokens != 42 || rc.CostUSD != 0 {
+	if rc.Verdict != "blocked" || rc.Status != 429 || rc.ErrorCode != "budget_exceeded" || rc.RequestedModel != "gpt-5-mini" || rc.InputTokens != 42 || cost(rc) != 0 {
 		t.Errorf("receipt = %+v", rc)
 	}
 	if len(rc.Trace) != 3 || rc.Trace[1].State != "fail" {

@@ -31,6 +31,9 @@ type Usage struct {
 	TotalTokens         int `json:"total_tokens"`
 	PromptTokensDetails struct {
 		CachedTokens int `json:"cached_tokens"`
+		// CacheCreationTokens is Agent Router's name for prompt tokens written
+		// to the cache (Anthropic's cache_creation_input_tokens).
+		CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
@@ -107,6 +110,11 @@ func Simulate(backend string, req ChatRequest, r *rand.Rand) Plan {
 	u.CompletionTokens = out
 	if r.Float64() < 0.4 {
 		u.PromptTokensDetails.CachedTokens = int(float64(prompt) * r.Float64() * 0.7)
+	}
+	// Only Anthropic models bill cache writes; the rest of the prompt that
+	// wasn't read from the cache is sometimes written to it.
+	if strings.HasPrefix(req.Model, "claude") && r.Float64() < 0.3 {
+		u.PromptTokensDetails.CacheCreationTokens = int(float64(prompt-u.PromptTokensDetails.CachedTokens) * r.Float64())
 	}
 	if strings.HasPrefix(req.Model, "gpt-5") && r.Float64() < 0.5 {
 		u.CompletionTokensDetails.ReasoningTokens = int(r.Float64() * 3000)

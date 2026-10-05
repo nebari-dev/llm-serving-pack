@@ -17,7 +17,7 @@ const NotifyChannel = "receipts"
 var receiptCols = []string{
 	"id", "ts", "tenant_id", "trace_id", "session_id", "duration_ms", "ttft_ms", "key_id", "key_name", "team", "project", "actor",
 	"requested_model", "resolved_model", "backend", "provider", "region", "route_reason", "fallback_from",
-	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis",
+	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis", "cache_write_tokens",
 	"verdict", "inbound_verdict", "redactions", "rules", "status", "error_code", "error_detail",
 	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id",
 }
@@ -44,7 +44,7 @@ func receiptValues(r *model.Receipt) []any {
 	return []any{
 		r.ID, time.UnixMilli(r.TS), r.TenantID, r.TraceID, nullStr(r.SessionID), r.DurationMS, r.TTFTMS, r.KeyID, r.KeyName, r.Team, r.Project, nullStr(r.Actor),
 		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
-		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis,
+		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis, r.CacheWriteTokens,
 		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
 		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID),
 	}
@@ -111,7 +111,7 @@ const selectReceipt = `SELECT id, ts, tenant_id, trace_id, coalesce(session_id, 
 	requested_model, resolved_model, backend, provider, region, route_reason, coalesce(fallback_from, ''),
 	input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd::float8,
 	verdict, inbound_verdict, redactions, rules, status, coalesce(error_code, ''), coalesce(error_detail, ''),
-	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, '') FROM receipts`
+	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, ''), cache_write_tokens FROM receipts`
 
 func scanReceipt(row pgx.Row) (model.Receipt, error) {
 	var r model.Receipt
@@ -121,12 +121,12 @@ func scanReceipt(row pgx.Row) (model.Receipt, error) {
 		&r.RequestedModel, &r.ResolvedModel, &r.Backend, &r.Provider, &r.Region, &r.RouteReason, &r.FallbackFrom,
 		&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CostUSD,
 		&r.Verdict, &r.InboundVerdict, &red, &rules, &r.Status, &r.ErrorCode, &r.ErrorDetail,
-		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID)
+		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID, &r.CacheWriteTokens)
 	if err != nil {
 		return r, err
 	}
 	if basis != nil {
-		r.CostBasis = new(model.Model)
+		r.CostBasis = new(model.CostBasis)
 		if err := json.Unmarshal(basis, r.CostBasis); err != nil {
 			return r, err
 		}
@@ -297,7 +297,7 @@ func (s *Store) SpendSeries(ctx context.Context, tenant string, days int, teams 
 	today := time.Now().UTC().Truncate(24 * time.Hour)
 	start := today.AddDate(0, 0, -(days - 1))
 	rows, _ := s.Receipts.Query(ctx, `
-		SELECT bucket, team, sum(cost_usd)::float8 FROM receipts_daily
+		SELECT bucket, team, coalesce(sum(cost_usd), 0)::float8 FROM receipts_daily
 		WHERE tenant_id = $1 AND bucket >= $2 GROUP BY 1, 2`, tenant, start)
 	type row struct {
 		t    time.Time
@@ -406,7 +406,7 @@ type MonthSpend struct {
 func (s *Store) MonthToDate(ctx context.Context, tenant string) (MonthSpend, error) {
 	ms := MonthSpend{ByTeam: map[string]float64{}, ByKey: map[string]float64{}}
 	rows, _ := s.Receipts.Query(ctx, `
-		SELECT team, key_id, sum(cost_usd)::float8 FROM receipts_daily
+		SELECT team, key_id, coalesce(sum(cost_usd), 0)::float8 FROM receipts_daily
 		WHERE tenant_id = $1 AND bucket >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
 		GROUP BY 1, 2`, tenant)
 	defer rows.Close()

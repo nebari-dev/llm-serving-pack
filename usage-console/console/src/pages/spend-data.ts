@@ -4,7 +4,7 @@
 // hand-tuned shares, so the breakdown and the trend reconcile to the same
 // totals.
 
-import { keys, modelById, now, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
+import { keys, modelById, now, seedRates, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
 import type { TimeRange } from '@/state/app-state'
 
 export type Dim = SpendDim
@@ -34,8 +34,8 @@ export interface Cell {
 const typicalTokens = { in: 3_200, out: 520 }
 
 function avgCost(model: string) {
-  const m = modelById[model]
-  return (typicalTokens.in * m.inPerM + typicalTokens.out * m.outPerM) / 1e6
+  const m = seedRates?.[model]
+  return m ? (typicalTokens.in * m.inPerM + typicalTokens.out * m.outPerM) / 1e6 : 0
 }
 
 const p50ByModel: Record<string, number> = {

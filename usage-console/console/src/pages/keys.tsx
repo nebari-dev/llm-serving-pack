@@ -265,7 +265,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
       const g = m.get(r.resolvedModel) ?? { model: r.resolvedModel, n: 0, tokens: 0, cost: 0, ms: [] }
       g.n++
       g.tokens += r.inputTokens + r.outputTokens + r.reasoningTokens
-      g.cost += r.costUsd
+      g.cost += r.costUsd ?? 0 // unpriced requests aren't in spend either
       g.ms.push(r.durationMs)
       m.set(r.resolvedModel, g)
     }

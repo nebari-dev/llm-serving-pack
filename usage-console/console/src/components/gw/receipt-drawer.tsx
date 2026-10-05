@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { API_BASE, changes, dataMode, type Receipt } from '@/data/catalog'
+import { API_BASE, changes, dataMode, type PriceSource, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
@@ -45,6 +45,8 @@ const inbound: Record<Receipt['inboundVerdict'], string> = {
 }
 
 // What policyMode means for this request, when it isn't the normal case.
+const sourceLabel: Record<PriceSource, string> = { seed: 'seed', litellm: 'LiteLLM', manual: 'override' }
+
 const modes: Record<NonNullable<Receipt['policyMode']>, { label: string; note?: string }> = {
   enforced: { label: 'enforced' },
   passthrough: { label: 'passthrough', note: "Warden's kill switch was on: rules were recorded but not enforced." },
@@ -131,18 +133,22 @@ function ReceiptBody({ r }: { r: Receipt }) {
     toast.add({ title: `${what} copied`, type: 'success' })
   }
 
-  const inputBilled = r.inputTokens - r.cachedInputTokens
+  const cacheWrites = r.cacheWriteTokens ?? 0
+  const inputBilled = Math.max(r.inputTokens - r.cachedInputTokens - cacheWrites, 0)
   // Priced from the snapshot stored with the receipt (§5.1), never today's prices.
+  // Older snapshots have no cache-write rate and no sources.
   const lines = [
-    { label: 'Input', tok: inputBilled, rate: basis?.inPerM },
-    { label: 'Cached input', tok: r.cachedInputTokens, rate: basis?.cachedPerM },
-    { label: 'Output', tok: r.outputTokens, rate: basis?.outPerM },
-    { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM },
+    { label: 'Input', tok: inputBilled, rate: basis?.inPerM, source: basis?.sources?.input },
+    { label: 'Cached input', tok: r.cachedInputTokens, rate: basis?.cachedPerM, source: basis?.sources?.cachedInput },
+    ...(cacheWrites > 0 || basis?.cacheWritePerM != null ? [{ label: 'Cache write', tok: cacheWrites, rate: basis?.cacheWritePerM, source: basis?.sources?.cacheWrite }] : []),
+    { label: 'Output', tok: r.outputTokens, rate: basis?.outPerM, source: basis?.sources?.output },
+    { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM, source: basis?.sources?.reasoning },
   ]
   const blocked = r.verdict === 'blocked'
-  const lineTotal = lines.reduce((sum, l) => sum + (l.rate === undefined ? 0 : (l.tok * l.rate) / 1e6), 0)
+  const lineTotal = lines.reduce((sum, l) => sum + (l.rate == null ? 0 : (l.tok * l.rate) / 1e6), 0)
   // The recorded total is the number of record; say so if the lines disagree with it.
-  const mismatch = basis && !r.inFlight && !blocked && Math.abs(lineTotal - r.costUsd) > 1e-6
+  const mismatch = basis && r.costUsd !== null && !r.inFlight && !blocked && Math.abs(lineTotal - r.costUsd) > 1e-6
+  const unpriced = r.costUsd === null && !r.inFlight
 
   return (
     <>
@@ -292,15 +298,18 @@ function ReceiptBody({ r }: { r: Receipt }) {
             <tbody>
               {lines.map((l) => (
                 <tr key={l.label} className="border-b border-border">
-                  <td className="py-1.5">{l.label}</td>
+                  <td className="py-1.5">
+                    {l.label}
+                    {l.source && <span className="ml-1.5 text-xs text-muted-foreground">{sourceLabel[l.source]}</span>}
+                  </td>
                   <td className="py-1.5 text-right">
                     <TokenCount value={l.tok} exact unknown={r.inFlight && l.label !== 'Input' && l.label !== 'Cached input'} />
                   </td>
                   <td className="py-1.5 text-right">
-                    <Money value={l.rate ?? 0} unknown={l.rate === undefined} className="text-muted-foreground" />
+                    <Money value={l.rate ?? 0} unknown={l.rate == null} className="text-muted-foreground" />
                   </td>
                   <td className="py-1.5 text-right">
-                    <Money value={blocked ? 0 : ((l.rate ?? 0) * l.tok) / 1e6} precision="micro" unknown={r.inFlight || l.rate === undefined} />
+                    <Money value={blocked ? 0 : ((l.rate ?? 0) * l.tok) / 1e6} precision="micro" unknown={r.inFlight || l.rate == null} />
                   </td>
                 </tr>
               ))}
@@ -318,8 +327,12 @@ function ReceiptBody({ r }: { r: Receipt }) {
           </table>
           <p className="mt-2 text-xs text-muted-foreground">
             {basis
-              ? `Priced with the ${basis.display} (${basis.provider}) rates recorded with this receipt at ${clock(r.ts)}, not today's prices.`
-              : blocked
+              ? basis.backend
+                ? `Priced with the ${basis.display} rates on ${basis.backend} ${basis.pricedLater ? 'that were set after this request arrived' : `recorded with this receipt at ${clock(r.ts)}`}, not today's prices.`
+                : `Priced with the ${basis.display} (${basis.provider}) rates recorded with this receipt at ${clock(r.ts)}, not today's prices.`
+              : unpriced
+                ? `${r.resolvedModel} on ${r.backend} had no price when this request arrived, so it has no cost and isn't in spend or budgets yet. It's costed once someone sets a price for that pair on Models → Pricing.`
+                : blocked
                 ? 'Blocked before the upstream call: nothing was billed.'
                 : r.inFlight
                   ? 'Priced when the stream ends and usage arrives.'

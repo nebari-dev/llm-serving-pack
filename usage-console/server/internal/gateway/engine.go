@@ -18,6 +18,7 @@ import (
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/fakellm"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/pricing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
@@ -26,12 +27,35 @@ type Snapshot struct {
 	Tenant   string
 	KeyBy    map[string]*store.KeyRecord // by secret hash (current and rotating)
 	Models   map[string]model.Model
+	Prices   map[Pair]store.PriceRow // the row in effect for each priced pair
 	Aliases  map[string]string
 	Backends []model.Backend
 	Routes   []model.Route
 	Budgets  map[string]model.Budget
 	Rules    []model.PolicyRule // ordinal order
 	Spend    store.MonthSpend
+}
+
+// Pair is a (model, backend), which is what a price belongs to.
+type Pair struct{ Model, Backend string }
+
+// Cost prices a served request at its pair's row in effect: nil, nil when
+// the pair has no price (or lacks a rate the tokens need).
+func (s *Snapshot) Cost(modelID, backend string, t pricing.Tokens) (*float64, *model.CostBasis) {
+	row, ok := s.Prices[Pair{modelID, backend}]
+	if !ok {
+		return nil, nil
+	}
+	c := pricing.Cost(row.Rates, t)
+	if c == nil {
+		return nil, nil
+	}
+	return c, store.Basis(s.Models[modelID], row)
+}
+
+// TokensOf is a receipt's token counts for pricing.
+func TokensOf(rc *model.Receipt) pricing.Tokens {
+	return pricing.Tokens{Input: rc.InputTokens, Cached: rc.CachedInputTokens, CacheWrite: rc.CacheWriteTokens, Output: rc.OutputTokens, Reasoning: rc.ReasoningTokens}
 }
 
 type Input struct {
@@ -158,8 +182,12 @@ func (s *Snapshot) substitute(b model.Backend, m string) string {
 	fam := s.Models[m].Family
 	best, price := "", -1.0
 	for _, x := range b.Models {
-		if s.Models[x].Family == fam && s.Models[x].InPerM > price {
-			best, price = x, s.Models[x].InPerM
+		in := 0.0
+		if r := s.Prices[Pair{x, b.Name}].Rates[pricing.Input]; r != nil {
+			in = *r
+		}
+		if s.Models[x].Family == fam && in > price {
+			best, price = x, in
 		}
 	}
 	if best != "" {
@@ -607,6 +635,7 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 	rc.InputTokens = d.promptToks
 	trace := []model.TraceStep{d.identity, d.budgetStep}
 
+	rc.CostUSD = new(float64) // nothing billed unless served
 	if d.Reject != nil {
 		rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = "blocked", d.Reject.Status, d.Reject.Code, d.Reject.Message
 		rc.ResolvedModel = d.Req.Model
@@ -648,14 +677,12 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 		rc.CachedInputTokens = res.Usage.PromptTokensDetails.CachedTokens
 		rc.OutputTokens = res.Usage.CompletionTokens
 		rc.ReasoningTokens = res.Usage.CompletionTokensDetails.ReasoningTokens
+		rc.CacheWriteTokens = res.Usage.PromptTokensDetails.CacheCreationTokens
 	} else if res.Status == 200 {
 		rc.OutputTokens = fakellm.EstimateTokens(res.Content) // stream cut before usage arrived
 	}
 	if res.Status == 200 {
-		p := s.Models[m]
-		rc.CostBasis = &p
-		rc.CostUSD = (float64(rc.InputTokens-rc.CachedInputTokens)*p.InPerM + float64(rc.CachedInputTokens)*p.CachedPerM +
-			float64(rc.OutputTokens)*p.OutPerM + float64(rc.ReasoningTokens)*p.ReasoningPerM) / 1_000_000
+		rc.CostUSD, rc.CostBasis = s.Cost(m, b.Name, TokensOf(rc))
 	} else {
 		rc.ErrorCode = "upstream_error"
 		if res.Status == 429 {

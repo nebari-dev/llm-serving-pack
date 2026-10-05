@@ -129,10 +129,10 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     gateway's own alias rule, so requests a policy or fallback later
     rerouted still count. Conditions and owner aren't in the schema: "always"
     and "Not recorded". New alias stays disabled until alias writes.
-  - Price history from `model_pricing` (GET /pricing): each model's current
-    effective date, and one change per rate that differs between
-    consecutive rows. The seed has none yet. Sources show "Seed price" until
-    the pricing sync; CSV export is disabled.
+  - Prices per (model, backend) from GET /pricing (2026-10-05, decisions §1).
+    Each rate shows its source: LiteLLM, override or seed. A pair without a
+    price shows "No price". History has one change per rate that differs
+    between consecutive rows, including ended prices. CSV export is disabled.
   - Catalog modalities and deprecation dates show as not connected (§3).
 
 ## 2. Writes
@@ -209,10 +209,14 @@ when stale; 428 without it on an update or delete). Open questions are in
     started (not over 24h, and without the mockup's per-actor list or a
     made-up new-secret prefix), plus any requests that didn't record a
     secret. Without a recorded start, the split is marked as not recorded.
-- [ ] Model prices: `POST /pricing/{model}` sets or schedules the next
-  effective-dated row; `DELETE /pricing/{model}/{effectiveAt}` cancels a
-  scheduled one. Where prices come from is open (decisions §1). Console: a
-  price form on Models.
+- [x] Model prices (2026-10-05). The Edit dialog on Models → Pricing sets
+  each rate to follow LiteLLM or to an override, now or scheduled, plus the
+  pair's LiteLLM entry. Endpoints:
+  - `POST /pricing/{model}/{backend}` sets or schedules rates (If-Match).
+  - `DELETE …/{effectiveAt}` cancels a scheduled change.
+  - `PUT …/source` sets the LiteLLM entry. The key must be in the file, and
+    a sync runs at once.
+  - Proposals: accept or dismiss.
 
 ## 3. New systems
 
@@ -242,10 +246,17 @@ when stale; 428 without it on an update or delete). Open questions are in
 - [ ] Spend savings analysis (§7.5.5): requests a cheaper same-family model
   would have served. Needs output length per request, or an aggregate of it.
 - [ ] Spend close report as a PDF, with an audit row for each export.
-- [ ] Pricing sync: keep `model_pricing` current from the providers' published
-  prices, not the demo seed. A price change adds a new effective-dated row, so
-  receipts keep the rate they were costed with. Today every cost is tokens ×
-  seed prices from `internal/demo`. The write path exists (`POST /pricing`);
-  the source is a decision (decisions §1).
+- [x] Pricing sync (2026-10-05, decisions §1).
+  - stargate-api reads LiteLLM's price file daily, retrying hourly after a
+    failure; Sync now runs it on demand. Rates nobody overrode apply as new
+    effective-dated rows, audited as "LiteLLM sync".
+  - A LiteLLM move on an overridden rate becomes a proposal.
+  - Seed prices were retired at the first sync. Pairs without a LiteLLM
+    entry (llama on vllm-internal, opus 4.1 on anthropic-prod) have no price.
+  - Receipts for an unpriced pair have no cost, and Spend counts them. Once
+    the pair gets a price, a minute ticker costs them at it, marked
+    `pricedLater`.
+  - Cache writes count on receipts (Agent Router's `CacheCreationInputToken`)
+    and bill at their own rate.
 - [ ] Redaction rehydration (§4.5 step 5): seeded rules say "rehydrate on
   return", but nothing restores redacted values in responses.

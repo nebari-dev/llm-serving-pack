@@ -28,20 +28,52 @@ audited. Any sync would write through the same path.
 | Cloud billing exports (AWS CUR, Azure cost exports) | What was actually billed | After the fact, not per request; good for month-end reconciliation only |
 | Self-hosted (`vllm-internal`) | Nothing: there's no list price | Needs an internal chargeback rate, or $0 |
 
-**Recommendation.** Manual entry is the authority, and a daily job reads
-LiteLLM's file and *proposes* changes. It never applies them: a proposal
-becomes a scheduled row only when someone approves it. Contract rates and
-self-hosted rates stay manual. That needs a small mapping table from our
-catalog id plus backend to LiteLLM's key (for example `claude-sonnet-5` via
-`bedrock-eu` maps to a `bedrock/...` key).
+**Decided (2026-10-05): LiteLLM by default, manual overrides per backend.**
+- Prices are per (model, backend). A small mapping table links each pair
+  to its LiteLLM key (for example `claude-sonnet-5` via `bedrock-eu` maps
+  to a `bedrock/...` key).
+- A daily job reads LiteLLM's file. A change to a rate nobody overrode
+  applies automatically, as a new effective-dated row with an audit row.
+- Manual overrides can be partial: override one rate (say input) and the
+  others keep following LiteLLM.
+- When LiteLLM changes a rate that has a manual override, the job doesn't
+  apply it. It proposes it ("LiteLLM's price moved since you set this
+  override"), and someone accepts or dismisses it.
+- A pair with no LiteLLM entry and no override (self-hosted
+  `vllm-internal`) shows "no price", not $0, until someone sets a rate.
+- Each receipt's `cost_basis` records which source priced each rate.
+- Read "per rate": a LiteLLM change to a rate nobody overrode still
+  applies automatically, even if another rate on the same pair is
+  overridden.
+- Decided the same day:
+  - A receipt for a pair with no price stores no cost. When someone
+    later sets a rate for that pair, those receipts are priced at it.
+  - The seed rows are retired at the first sync. Pairs LiteLLM covers
+    move to its rates; a pair it doesn't cover (`vllm-internal`) has no
+    price after that.
+  - Cache writes are in scope. That means a cache-write rate and a
+    cache-write token count on receipts.
+  - Long-context, batch and priority tiers are still open.
+- Built 2026-10-05. See `docs/console-real-data.md` (Model prices, Pricing
+  sync) for what shipped. Defaults I picked:
+  - Price writes require If-Match. The sync writes the same rows, so a
+    stale edit would overwrite it.
+  - Accepting a proposal puts the rate back on LiteLLM. A manual edit to a
+    rate dismisses its open proposal.
+  - A sync change starts at the moment of the sync. If a manual change is
+    scheduled, the synced row runs until it.
+  - LiteLLM has no cached, cache-write or reasoning rate for some entries.
+    Those tokens then bill at its input or output rate.
+- **Decide: reasoning tokens may be billed twice.** The cost formula adds
+  `reasoning_tokens × reasoning rate` to `output_tokens × output rate`. The
+  fake upstream reports reasoning apart from completion tokens, so that
+  holds today. OpenAI counts reasoning inside `completion_tokens`, so with
+  real traffic reasoning would be charged twice. Fix: bill `output −
+  reasoning` at the output rate (as for cached input), once we confirm what
+  Agent Router logs as `llm_output_token`.
 
-**Decide: schema gaps a real price list exposes.**
-- **The same model costs different amounts on different backends**
-  (Anthropic direct vs Bedrock EU). `model_pricing` is keyed by model only.
-  Should a price be per (model, backend)?
-- **Prompt-cache writes** (`cache_creation_input_token_cost`) have their own
-  rate. Receipts don't count cache-write tokens, and the schema has no
-  column for the rate.
+**Decide: schema gaps a real price list exposes.** Per-backend prices and
+cache writes are done (above).
 - **Long-context tiers** (LiteLLM's `…_above_200k_tokens`), plus batch and
   priority tiers. There's one rate per token type today.
 - **Who may change prices.** The catalog is shared by every tenant, so a

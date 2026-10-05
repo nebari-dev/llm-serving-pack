@@ -165,7 +165,14 @@ Writes (the console doesn't call most of them yet):
 - `POST budgets` with `{scopeType, scope, capUsd, onExceed}`; `PATCH budgets/{id}` with `{capUsd?, onExceed?}`; `DELETE budgets/{id}`. `?dryRun=true` on create and edit returns the budget with its spend, the active keys it would cover and `overCap`, and writes nothing. One budget per scope, monthly only. The gateway enforces every budget that covers a key (its team, project or name); the strictest over-cap one decides.
 - `POST rules` creates an unpublished rule; `PUT rules/{id}/draft` and `DELETE rules/{id}/draft` edit or drop its pending draft; `POST rules/{id}/publish` with `{mode?, failMode?}` publishes the draft (or just the new mode or fail mode) as the next version, `?dryRun=true` to see the change; `POST rules/{id}/rollback` with `{version}`; `GET rules/{id}/versions`; `DELETE rules/{id}` for a rule that isn't live. The first publish defaults to monitor mode; published versions are immutable.
 - `POST keys/{id}/rotation/extend` with `{hours}`, `POST keys/{id}/rotation/finish`. A rotating key in `GET keys` counts requests since the rotation started per secret (`oldSecretRequests`, `newSecretRequests`), from `receipts.secret_id`.
-- `POST pricing/{model}` with any of `{inPerM, outPerM, cachedPerM, reasoningPerM}` and `effectiveFrom` (RFC 3339, default now) adds the model's next price row; `DELETE pricing/{model}/{effectiveAt}` cancels one that hasn't taken effect.
+- Prices are per (model, backend), with LiteLLM as the default source (see `docs/backend-decisions.md` §1).
+  - `GET pricing` lists every pair the tenant's backends serve: its rates and their sources, LiteLLM's last values, history, open proposals, and the sync's state.
+  - `POST pricing/{model}/{backend}` (If-Match: the pair's `etag`) takes `{rates: {input|cachedInput|cacheWrite|output|reasoning: number | null}, effectiveFrom?}`. A number overrides the rate; null goes back to following LiteLLM.
+  - `DELETE pricing/{model}/{backend}/{effectiveAt}` cancels a change that hasn't taken effect.
+  - `PUT pricing/{model}/{backend}/source` with `{litellmKey}` sets which LiteLLM entry prices the pair (`""` for none).
+  - `POST pricing/sync` runs the sync now.
+  - `POST pricing/proposals/{id}/accept|dismiss`.
+- The sync reads `-litellm-url` (default: LiteLLM's GitHub copy) once a day.
 
 Aliases, budgets and rules carry an `etag`. Updating or deleting one needs
 `If-Match: <etag>` (428 without it; 409 with the current resource when it's

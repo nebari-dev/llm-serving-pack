@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/model"
@@ -15,7 +16,7 @@ import (
 // full design Warden receives this as a pushed, versioned snapshot (§4.1);
 // here the gateway polls.
 func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapshot, error) {
-	s := &Snapshot{Tenant: tenant, KeyBy: map[string]*store.KeyRecord{}, Models: map[string]model.Model{}, Budgets: map[string]model.Budget{}}
+	s := &Snapshot{Tenant: tenant, KeyBy: map[string]*store.KeyRecord{}, Models: map[string]model.Model{}, Prices: map[Pair]store.PriceRow{}, Budgets: map[string]model.Budget{}}
 	keys, err := st.Keys(ctx, tenant)
 	if err != nil {
 		return nil, err
@@ -33,6 +34,13 @@ func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapsho
 	}
 	for _, m := range models {
 		s.Models[m.ID] = m
+	}
+	prices, err := st.PricesNow(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range prices {
+		s.Prices[Pair{p.ModelID, p.Backend}] = p
 	}
 	if s.Aliases, err = st.Aliases(ctx, tenant); err != nil {
 		return nil, err
@@ -67,7 +75,7 @@ func (c *Current) Store(s *Snapshot) { c.p.Store(s) }
 
 // DemoSnapshot is the seeded demo config without a database, for tests.
 func DemoSnapshot() *Snapshot {
-	s := &Snapshot{Tenant: demo.Tenant, KeyBy: map[string]*store.KeyRecord{}, Models: map[string]model.Model{}, Budgets: map[string]model.Budget{},
+	s := &Snapshot{Tenant: demo.Tenant, KeyBy: map[string]*store.KeyRecord{}, Models: map[string]model.Model{}, Prices: map[Pair]store.PriceRow{}, Budgets: map[string]model.Budget{},
 		Aliases: maps.Clone(demo.Aliases), Backends: slices.Clone(demo.Backends), Routes: slices.Clone(demo.Routes), Rules: slices.Clone(demo.Rules),
 		Spend: store.MonthSpend{ByTeam: map[string]float64{}, ByKey: map[string]float64{}}}
 	for _, k := range demo.Keys {
@@ -76,6 +84,9 @@ func DemoSnapshot() *Snapshot {
 	}
 	for _, m := range demo.Models {
 		s.Models[m.ID] = m
+	}
+	for _, p := range demo.SeedPrices(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		s.Prices[Pair{p.ModelID, p.Backend}] = store.PriceRow{ModelID: p.ModelID, Backend: p.Backend, Rates: p.Rates, Sources: p.Sources, From: p.From}
 	}
 	for _, b := range demo.Budgets {
 		s.Budgets[b.ID] = b

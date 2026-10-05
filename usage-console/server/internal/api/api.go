@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -38,6 +39,10 @@ type Server struct {
 	// Environment names the deployment this control plane serves, shown in
 	// the console header ("production" gets the production accent).
 	Environment string
+	// LiteLLMURL is where the price sync reads LiteLLM's file; empty is
+	// LiteLLM's GitHub copy.
+	LiteLLMURL string
+	syncMu     sync.Mutex
 }
 
 func (s *Server) configChanged() {
@@ -105,8 +110,12 @@ func (s *Server) Handler() http.Handler {
 	h("PUT "+p+"/aliases/{alias}", s.putAlias)
 	h("DELETE "+p+"/aliases/{alias}", s.deleteAlias)
 	h("GET "+p+"/pricing", s.pricing)
-	h("POST "+p+"/pricing/{model}", s.setPrice)
-	h("DELETE "+p+"/pricing/{model}/{at}", s.cancelPrice)
+	h("POST "+p+"/pricing/sync", s.syncNow)
+	h("POST "+p+"/pricing/proposals/{id}/accept", s.acceptProposal)
+	h("POST "+p+"/pricing/proposals/{id}/dismiss", s.dismissProposal)
+	h("POST "+p+"/pricing/{model}/{backend}", s.setPrice)
+	h("PUT "+p+"/pricing/{model}/{backend}/source", s.setPriceSource)
+	h("DELETE "+p+"/pricing/{model}/{backend}/{at}", s.cancelPrice)
 	h("GET "+p+"/backends", s.backends)
 	h("GET "+p+"/routes", s.routes)
 	h("GET "+p+"/keys", s.keys)

@@ -44,6 +44,7 @@ const (
 	attrCached      = "gen_ai.usage.cached_input_tokens"
 	attrOutput      = "gen_ai.usage.output_tokens"
 	attrReasoning   = "gen_ai.usage.reasoning_tokens"
+	attrCacheWrite  = "gen_ai.usage.cache_creation_input_tokens"
 	attrKeyID       = "stargate.key_id"
 	attrTeam        = "stargate.team"
 	attrProject     = "stargate.project"
@@ -84,6 +85,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		KeyName: "unauthenticated", RequestedModel: get(attrReqModel), ResolvedModel: get(attrRespModel),
 		RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "skipped",
 		InputTokens: num(attrInput), CachedInputTokens: num(attrCached), OutputTokens: num(attrOutput), ReasoningTokens: num(attrReasoning),
+		CacheWriteTokens: num(attrCacheWrite), CostUSD: new(float64), // nothing billed unless served
 		Status: num(attrStatus), Redactions: []model.Redaction{}, Rules: []model.RuleEval{},
 	}
 	if rc.ResolvedModel == "" {
@@ -166,11 +168,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		}
 		up.Outcome, up.State = fmt.Sprintf("%d", rc.Status), "fail"
 	default:
-		if p, ok := s.Models[rc.ResolvedModel]; ok {
-			rc.CostBasis = &p
-			rc.CostUSD = (float64(rc.InputTokens-rc.CachedInputTokens)*p.InPerM + float64(rc.CachedInputTokens)*p.CachedPerM +
-				float64(rc.OutputTokens)*p.OutPerM + float64(rc.ReasoningTokens)*p.ReasoningPerM) / 1_000_000
-		}
+		rc.CostUSD, rc.CostBasis = s.Cost(rc.ResolvedModel, rc.Backend, gateway.TokensOf(rc))
 	}
 	rc.Trace = append(append([]model.TraceStep{identity}, policy...), route, up)
 	return rc, nil

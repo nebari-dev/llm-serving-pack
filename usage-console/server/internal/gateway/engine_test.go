@@ -64,8 +64,11 @@ func TestAllowedRequestCostsFromPricing(t *testing.T) {
 		t.Fatalf("got %s via %s status %d", rc.Verdict, rc.Backend, rc.Status)
 	}
 	// 1000 in × $0.25/M + 500 out × $2/M
-	if want := 0.00125; rc.CostUSD < want-1e-9 || rc.CostUSD > want+1e-9 {
+	if want := 0.00125; rc.CostUSD == nil || *rc.CostUSD < want-1e-9 || *rc.CostUSD > want+1e-9 {
 		t.Fatalf("cost %v, want %v", rc.CostUSD, want)
+	}
+	if rc.CostBasis == nil || rc.CostBasis.Backend != "openai-prod" {
+		t.Fatalf("cost basis %+v", rc.CostBasis)
 	}
 	if len(rc.Trace) != 6 {
 		t.Fatalf("trace has %d steps", len(rc.Trace))
@@ -153,7 +156,7 @@ func TestOpusFallbackSubstitutesSameFamily(t *testing.T) {
 func TestRateLimitIsNotRetried(t *testing.T) {
 	up := &fixedUp{statuses: []int{429}}
 	rc := run(t, DemoSnapshot(), Input{Secret: secret("k2"), Req: chat("claude-sonnet-5", "hi")}, up)
-	if rc.Status != 429 || rc.ErrorCode != "upstream_rate_limited" || len(up.calls) != 1 || rc.CostUSD != 0 {
+	if rc.Status != 429 || rc.ErrorCode != "upstream_rate_limited" || len(up.calls) != 1 || rc.CostUSD == nil || *rc.CostUSD != 0 {
 		t.Fatalf("got %d %s cost %v; calls %v", rc.Status, rc.ErrorCode, rc.CostUSD, up.calls)
 	}
 }

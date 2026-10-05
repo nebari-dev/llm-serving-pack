@@ -57,10 +57,35 @@ export interface Model {
   provider: string
   family: string
   context: number
+}
+
+/** Mock fixtures only: one price per model. In api mode prices are per
+ * (model, backend), in PricingView.prices. */
+export interface MockModel extends Model {
   inPerM: number
   outPerM: number
   cachedPerM: number
   reasoningPerM: number
+}
+
+/** The price a receipt was costed with (§5.1). Receipts from before per-backend
+ * prices carry only the model and its four rates. */
+export interface CostBasis {
+  id: string
+  display: string
+  provider: string
+  backend?: string
+  /** When the price row took effect, epoch ms. */
+  effectiveFrom?: number
+  inPerM: number | null
+  cachedPerM: number | null
+  cacheWritePerM?: number | null
+  outPerM: number | null
+  reasoningPerM: number | null
+  /** Where each rate came from, keyed input, cachedInput, cacheWrite, output, reasoning. */
+  sources?: Partial<Record<RateName, PriceSource>>
+  /** Had no price when it arrived; priced once its (model, backend) got one. */
+  pricedLater?: boolean
 }
 
 export interface TraceStep {
@@ -103,9 +128,12 @@ export interface Receipt {
   cachedInputTokens: number
   outputTokens: number
   reasoningTokens: number
-  costUsd: number
-  /** The price row this receipt was costed with (§5.1); absent on receipts written before it was recorded. */
-  costBasis?: Model
+  /** Input tokens written to the provider's prompt cache; part of inputTokens. */
+  cacheWriteTokens?: number
+  /** null when the (model, backend) had no price: unknown, not $0. */
+  costUsd: number | null
+  /** The price row this receipt was costed with (§5.1); absent on receipts written before it was recorded, and on unpriced ones. */
+  costBasis?: CostBasis
   verdict: Verdict
   inboundVerdict: InboundVerdict
   /** How Warden handled the request; absent when nothing evaluated policy. */
@@ -150,7 +178,7 @@ export const teams: Team[] = [
   { id: 'security', name: 'Security', costCenter: 'CC-9100' },
 ]
 
-export const models: Model[] = [
+export const models: MockModel[] = [
   { id: 'gpt-5-mini', display: 'GPT-5 mini', provider: 'OpenAI', family: 'gpt-5', context: 400_000, inPerM: 0.25, outPerM: 2.0, cachedPerM: 0.025, reasoningPerM: 2.0 },
   { id: 'gpt-5.5', display: 'GPT-5.5', provider: 'OpenAI', family: 'gpt-5', context: 400_000, inPerM: 1.25, outPerM: 10.0, cachedPerM: 0.125, reasoningPerM: 10.0 },
   { id: 'claude-sonnet-5', display: 'Claude Sonnet 5', provider: 'Anthropic', family: 'claude', context: 1_000_000, inPerM: 3.0, outPerM: 15.0, cachedPerM: 0.3, reasoningPerM: 15.0 },
@@ -159,7 +187,7 @@ export const models: Model[] = [
   { id: 'llama-3.3-70b', display: 'Llama 3.3 70B', provider: 'Self-hosted', family: 'llama', context: 128_000, inPerM: 0.12, outPerM: 0.3, cachedPerM: 0.12, reasoningPerM: 0.3 },
 ]
 
-export const modelById = Object.fromEntries(models.map((m) => [m.id, m]))
+export const modelById: Record<string, MockModel> = Object.fromEntries(models.map((m) => [m.id, m]))
 
 /** Not in the catalog schema yet (§3 New systems: modalities and deprecation dates). */
 export const modelModalities: Record<string, string[]> = {
@@ -195,27 +223,87 @@ export const aliases: AliasView[] = [
   { alias: 'fast', target: 'claude-haiku-4-5', provenance: 'console', requests24h: 9_411 },
 ]
 
-/** A rate that differs from the model's previous model_pricing row. */
-export interface PriceChange {
+/** Mock only: a rate that differs from the model's previous price. */
+export interface MockPriceChange {
   model: string
   field: string
   from: number
   to: number
   /** YYYY-MM-DD */
   effective: string
-  /** Who or what made the change; the control plane doesn't record it yet. */
+  /** Who or what made the change. */
   by?: string
 }
 
-/** GET /pricing: when each current price took effect, and changes newest first. */
-export interface PricingView {
+/** Mock only: the fixtures' pricing, one price per model. */
+export interface MockPricingView {
   effectiveFrom: Record<string, string>
-  changes: PriceChange[]
-  /** Mock only: where each price comes from. There's no pricing sync yet. */
+  changes: MockPriceChange[]
   source?: Record<string, string>
 }
 
-export const pricing: PricingView = {
+export type RateName = 'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning'
+export type PriceSource = 'seed' | 'litellm' | 'manual'
+
+/** A (model, backend)'s price in effect now. A missing rate has no price. */
+export interface PairPrice {
+  model: string
+  backend: string
+  litellmKey?: string
+  /** YYYY-MM-DD the row in effect started; absent with no price. */
+  effectiveFrom?: string
+  rates: Partial<Record<RateName, { perM: number; source: PriceSource }>>
+  priced: boolean
+  /** The last value LiteLLM gave each rate: what an override goes back to following. */
+  litellm?: Partial<Record<RateName, number>>
+  etag: string
+}
+
+/** One rate moving between consecutive rows of a pair; null where there was no price. */
+export interface PriceChange {
+  model: string
+  backend: string
+  field: string
+  from: number | null
+  to: number | null
+  /** Where the new rate came from; absent when it ended. */
+  source?: PriceSource
+  /** YYYY-MM-DD */
+  effective: string
+  effectiveAt: number
+  scheduled: boolean
+}
+
+/** A LiteLLM move on an overridden rate, waiting to be accepted or dismissed. */
+export interface PriceProposal {
+  id: number
+  model: string
+  backend: string
+  rate: RateName
+  current: number
+  proposed: number
+  litellmKey: string
+  createdAt: number
+}
+
+/** GET /pricing (api mode). */
+export interface PricingView {
+  prices: PairPrice[]
+  changes: PriceChange[]
+  proposals: PriceProposal[]
+  sync: {
+    source: string
+    lastRunAt: number
+    lastOkAt: number
+    error?: string
+    applied: number
+    proposed: number
+    retired: number
+    nextRunAt: number
+  }
+}
+
+export const pricing: MockPricingView = {
   effectiveFrom: {
     'gpt-5-mini': '2026-08-14',
     'gpt-5.5': '2026-06-02',
@@ -431,7 +519,7 @@ function budgetStep(b: Budget | undefined): TraceStep {
   return { step: 'Budget checked', input: `${b.scopeType} budget ${b.scope} · ${usd(b.currentUsd)} of ${usd(b.capUsd)}`, outcome, ms: 0.1, state: !over ? 'ok' : b.onExceed === 'block' ? 'fail' : 'warn' }
 }
 
-function cost(m: Model, inTok: number, cached: number, out: number, reasoning: number) {
+function cost(m: MockModel, inTok: number, cached: number, out: number, reasoning: number) {
   return ((inTok - cached) * m.inPerM + cached * m.cachedPerM + out * m.outPerM + reasoning * m.reasoningPerM) / 1_000_000
 }
 
@@ -680,6 +768,8 @@ export interface SpendView {
   to: number
   prevFrom: number
   rows: SpendRow[]
+  /** Api mode: served requests in [from, to) with no price yet, which the totals leave out. */
+  unpriced?: number
   trend: {
     bucketMs: number
     points: { t: number; values: Record<string, number> }[]

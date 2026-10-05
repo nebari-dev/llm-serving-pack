@@ -43,6 +43,9 @@ type SpendView struct {
 	To       int64      `json:"to"`
 	PrevFrom int64      `json:"prevFrom"`
 	Rows     []SpendRow `json:"rows"`
+	// Unpriced counts served requests in [from, to) whose (model, backend)
+	// had no price: the totals leave them out until one is set.
+	Unpriced int        `json:"unpriced"`
 	Trend    SpendTrend `json:"trend"`
 	Period   Projection `json:"period"`
 }
@@ -222,6 +225,9 @@ func (s *Server) spend(_ http.ResponseWriter, r *http.Request, t string) (any, e
 
 	cur, err := s.Store.SpendCells(ctx, t, from, now)
 	if err != nil {
+		return nil, err
+	}
+	if out.Unpriced, err = s.Store.UnpricedCount(ctx, t, from, now); err != nil {
 		return nil, err
 	}
 	prev, err := s.Store.SpendCells(ctx, t, prevFrom, from)

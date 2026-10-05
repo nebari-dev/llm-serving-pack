@@ -92,6 +92,7 @@ spec:
               gen_ai.usage.cached_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%"
               gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
               gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              gen_ai.usage.cache_creation_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cache_creation_input_token)%"
               session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
               start_time: "%START_TIME%"
               request.path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
@@ -219,6 +220,8 @@ spec:
       type: OutputToken
     - metadataKey: llm_reasoning_token
       type: ReasoningToken
+    - metadataKey: llm_cache_creation_input_token
+      type: CacheCreationInputToken
 ---
 # Retry 5xx (anthropic-prod returns 529 when "overloaded"). Retries stay on the
 # same priority until passive health checking ejects the backend; only then does

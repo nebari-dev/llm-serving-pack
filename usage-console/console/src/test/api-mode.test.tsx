@@ -106,7 +106,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   })
 
   it('filters, pages and counts receipts on the server', async () => {
-    type R = { id: string; ts: number; verdict: string; keyId: string; costBasis?: { inPerM: number }; status: number }
+    type R = { id: string; ts: number; verdict: string; keyId: string; backend: string; costUsd: number | null; cacheWriteTokens: number; costBasis?: { inPerM: number | null; backend?: string }; status: number }
     const blocked = await catalog.api<R[]>('/receipts?limit=50&verdict=blocked&range=7d')
     expect(blocked.length).toBeGreaterThan(0)
     expect(blocked.every((r) => r.verdict === 'blocked')).toBe(true)
@@ -133,9 +133,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(uncountable.count).toBeNull()
     expect(uncountable.reason).toBeTruthy()
 
-    // Settled, successful receipts carry the price snapshot they were costed with.
-    const ok = p1.find((r) => r.status === 200 && !('inFlight' in r))
-    expect(ok?.costBasis?.inPerM).toBeGreaterThanOrEqual(0)
+    // Settled, successful receipts carry the price snapshot they were costed
+    // with, for the backend that served them; with no price, no cost (not $0).
+    const settled = p1.filter((r) => r.status === 200 && !('inFlight' in r))
+    for (const r of settled) {
+      if (r.costUsd === null) expect(r.costBasis).toBeUndefined()
+      else expect(r.costBasis?.inPerM).toBeGreaterThanOrEqual(0)
+      expect(r.cacheWriteTokens).toBeGreaterThanOrEqual(0)
+    }
+    const fresh = settled.find((r) => r.costBasis?.backend)
+    if (fresh) expect(fresh.costBasis!.backend).toBe(fresh.backend)
   })
 
   it('shows the price snapshot, policy mode and what is not connected in the drawer', async () => {
@@ -147,7 +154,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     })
     const text = document.body.textContent ?? ''
     expect(text).toContain(r.traceId)
-    expect(text).toContain('rates recorded with this receipt')
+    // Priced at the snapshot for the backend that served it, or plainly unpriced.
+    expect(text).toMatch(/rates (on \S+ )?recorded with this receipt|had no price when this request arrived/)
     expect(text).toContain('Policy mode:')
     expect(text).toContain("Signed export isn't connected yet")
     expect(text).not.toContain('model_pricing row effective')
@@ -460,7 +468,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     for (const s of ['Snapshot v1842', 'on 2 of 6 pods', 'sk-proj-…Q7f', 'priya@acme.dev', 'otel-collector.nebari-gateway', 'platform-gitops', '7 years', '1,412', '4,806']) expect(text).not.toContain(s)
   })
 
-  it('shows real aliases, their 24h traffic and price history on Models', async () => {
+  it('shows real aliases, their 24h traffic and per-backend prices on Models', async () => {
     type A = import('@/data/catalog').AliasView
     type P = import('@/data/catalog').PricingView
     const [aliases, pricing] = await Promise.all([catalog.api<A[]>('/aliases'), catalog.api<P>('/pricing')])
@@ -469,8 +477,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(summarize?.target).toBe('gpt-5-mini')
     expect(summarize!.requests24h).toBeGreaterThan(0)
     for (const a of aliases) expect(catalog.modelById[a.target]).toBeDefined()
-    // Every catalog model has a price row in force; the seed has no changes yet.
-    for (const m of catalog.models) expect(pricing.effectiveFrom[m.id]).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    // Prices are per (model, backend): every pair a backend serves is listed, priced or not.
+    for (const b of catalog.backends) for (const m of b.models) expect(pricing.prices.some((p) => p.model === m && p.backend === b.name)).toBe(true)
+    for (const p of pricing.prices.filter((p) => p.priced)) expect(p.effectiveFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(Array.isArray(pricing.changes)).toBe(true)
 
     const page = async (tab: string, check?: () => void) => {
@@ -494,15 +503,21 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(aliasText).toContain('summarize-*')
     expect(aliasText).toContain(summarize!.requests24h.toLocaleString('en-US'))
     expect(aliasText).toContain('Not recorded')
+    expect(aliasText).not.toContain('NaN')
     for (const s of ['31,204', '4,120', 'input tokens < 64k', 'key.team in', 'priya@acme.dev', 'platform-gitops']) expect(aliasText).not.toContain(s)
 
     const priceText = await page('pricing', () => {
       expect(screen.getByRole('button', { name: /Export CSV/ })).toHaveProperty('disabled', true)
+      expect(screen.getByRole('button', { name: /Sync now/ })).toHaveProperty('disabled', false)
     })
-    expect(priceText).toContain(pricing.effectiveFrom['gpt-5-mini'])
-    if (pricing.changes.length === 0) expect(priceText).toContain('No price changes since')
-    expect(priceText).toContain('Pricing sync not connected yet')
-    for (const s of ['catalog sync', 'list price', '2026-08-14', '2026-06-02', 'Changed by']) expect(priceText).not.toContain(s)
+    for (const p of pricing.prices) expect(priceText).toContain(p.backend)
+    const unpriced = pricing.prices.filter((p) => !p.priced)
+    if (unpriced.length) expect(priceText).toContain('No price')
+    if (pricing.prices.some((p) => Object.values(p.rates).some((r) => r?.source === 'litellm'))) expect(priceText).toContain('LiteLLM')
+    expect(priceText).toContain('LiteLLM sync')
+    if (pricing.sync.lastOkAt) expect(priceText).toMatch(/Last synced/)
+    if (pricing.changes.length === 0) expect(priceText).toContain('No price changes yet')
+    for (const s of ['Pricing sync not connected yet', 'Seed price', 'catalog sync', 'list price', '2026-08-14', '2026-06-02', 'NaN']) expect(priceText).not.toContain(s)
 
     const catalogText = await page('catalog')
     for (const m of catalog.models) expect(catalogText).toContain(m.id)
@@ -1059,35 +1074,105 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 60_000)
 
-  it('schedules and cancels an effective-dated price change, with audit rows', async () => {
-    type P = Omit<import('@/data/catalog').PricingView, 'changes'> & { changes: { model: string; field: string; to: number; effectiveAt: number; scheduled: boolean }[] }
+  it('syncs prices from LiteLLM per (model, backend), with audit rows', async () => {
+    type P = import('@/data/catalog').PricingView
     type C = import('@/data/catalog').Change
-    const m = 'llama-3.3-70b'
+    const after = await send<P>('POST', '/pricing/sync')
+    expect(after.sync.error ?? '').toBe('')
+    expect(Date.now() - after.sync.lastOkAt).toBeLessThan(60_000)
+    const pair = (m: string, b: string) => after.prices.find((p) => p.model === m && p.backend === b)!
+    // A mapped pair follows LiteLLM (unless someone overrode a rate).
+    const mini = pair('gpt-5-mini', 'openai-prod')
+    expect(mini.litellmKey).toBe('gpt-5-mini')
+    expect(mini.priced).toBe(true)
+    expect(Object.values(mini.rates).some((r) => r?.source === 'litellm')).toBe(true)
+    expect(Object.values(mini.rates).some((r) => r?.source === 'seed')).toBe(false)
+    // The same model is priced separately on each backend.
+    expect(pair('claude-sonnet-5', 'bedrock-eu').litellmKey).toBe('eu.anthropic.claude-sonnet-5')
+    expect(pair('claude-sonnet-5', 'anthropic-prod').litellmKey).toBe('claude-sonnet-5')
+    // No LiteLLM entry: the seed price is retired, so it's no price rather than a made-up one.
+    for (const [m, b] of [['llama-3.3-70b', 'vllm-internal'], ['claude-opus-4-1', 'anthropic-prod']]) {
+      const p = pair(m, b)
+      expect(p.litellmKey ?? '').toBe('')
+      expect(Object.values(p.rates).some((r) => r?.source === 'seed')).toBe(false)
+    }
+    // The sync audits as itself.
+    const synced = (await catalog.api<C[]>('/changes?limit=500')).filter((c) => c.targetKind === 'Pricing' && c.actor === 'LiteLLM sync')
+    expect(synced.length).toBeGreaterThan(0)
+    expect(synced.some((c) => c.action === 'Retired model price' && /^llama-3\.3-70b on vllm-internal /.test(c.target))).toBe(true)
+    // Spend says how many requests it leaves out for having no price.
+    expect(typeof (await catalog.api<{ unpriced: number }>('/spend?range=24h')).unpriced).toBe('number')
+  }, 60_000)
+
+  it('overrides one rate, then follows LiteLLM again, with If-Match and audit rows', async () => {
+    type P = import('@/data/catalog').PricingView
+    type C = import('@/data/catalog').Change
+    const [m, b] = ['gpt-5-mini', 'openai-prod']
+    const path = `/pricing/${m}/${b}`
+    const get = async () => (await catalog.api<P>('/pricing')).prices.find((p) => p.model === m && p.backend === b)!
+    const cur = await get()
+    expect(cur.rates.input?.source).toBe('litellm')
+    const lite = cur.rates.input!.perM
+    const output = cur.rates.output!
+
+    expect(await status(send('POST', path, { rates: { input: lite + 0.01 } }))).toBe(428)
+    expect(await status(send('POST', path, { rates: { input: lite + 0.01 } }, '"stale"'))).toBe(409)
+    expect(await status(send('POST', '/pricing/gpt-5.5/bedrock-eu', { rates: { input: 1 } }, cur.etag))).toBe(404) // not a pair a backend serves
+    expect(await status(send('POST', path, { rates: { wholesale: 1 } }, cur.etag))).toBe(400)
+    expect(await status(send('POST', path, { rates: { input: -1 } }, cur.etag))).toBe(400)
+
+    let overridden = false
+    try {
+      const after = await send<P>('POST', path, { rates: { input: lite + 0.01 } }, cur.etag)
+      overridden = true
+      const p = after.prices.find((x) => x.model === m && x.backend === b)!
+      expect(p.rates.input).toEqual({ perM: +(lite + 0.01).toFixed(6), source: 'manual' })
+      expect(p.rates.output).toEqual(output) // the other rates keep following LiteLLM
+      const row = (await catalog.api<C[]>('/changes'))[0]
+      expect(row).toMatchObject({ action: 'Changed model price', targetKind: 'Pricing', actor: 'dev@localhost' })
+      expect(row.target).toMatch(new RegExp(`^${m} on ${b} input \\$[\\d.]+ → \\$[\\d.]+ per 1M from `))
+      // A sync leaves the override alone.
+      const synced = await send<P>('POST', '/pricing/sync')
+      expect(synced.prices.find((x) => x.model === m && x.backend === b)!.rates.input?.source).toBe('manual')
+    } finally {
+      if (overridden) {
+        const back = await send<P>('POST', path, { rates: { input: null } }, (await get()).etag)
+        expect(back.prices.find((x) => x.model === m && x.backend === b)!.rates.input).toEqual({ perM: lite, source: 'litellm' })
+        expect((await catalog.api<C[]>('/changes'))[0].target).toMatch(new RegExp(`^${m} on ${b} input \\$[\\d.]+ → \\$${lite} per 1M from `))
+      }
+    }
+  }, 60_000)
+
+  it('schedules and cancels an effective-dated price change on one backend', async () => {
+    type P = import('@/data/catalog').PricingView
+    type C = import('@/data/catalog').Change
+    const [m, b] = ['gpt-5-mini', 'azure-openai-eu']
+    const path = `/pricing/${m}/${b}`
+    const pair = (v: P) => v.prices.find((p) => p.model === m && p.backend === b)!
     const before = await catalog.api<P>('/pricing')
-    const cur = catalog.modelById[m]
     const at = '2099-01-01T00:00:00Z'
-    const target = cur.inPerM + 0.01
     let scheduled: number | undefined
     try {
-      const after = await send<P>('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: at })
-      const change = after.changes.find((c) => c.model === m && c.field === 'Input' && c.scheduled)
-      expect(change).toMatchObject({ to: target, effectiveAt: Date.parse(at), scheduled: true })
+      const after = await send<P>('POST', path, { rates: { input: 9.99 }, effectiveFrom: at }, pair(before).etag)
+      const change = after.changes.find((c) => c.model === m && c.backend === b && c.field === 'Input' && c.scheduled)
+      expect(change).toMatchObject({ to: 9.99, source: 'manual', effectiveAt: Date.parse(at), scheduled: true })
       scheduled = change!.effectiveAt
-      expect(after.effectiveFrom[m]).toBe(before.effectiveFrom[m]) // today's price is untouched
+      expect(pair(after).rates).toEqual(pair(before).rates) // today's price is untouched
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Scheduled model price change', targetKind: 'Pricing' })
-      expect((await catalog.api<C[]>('/changes'))[0].target).toMatch(new RegExp(`^${m} input \\$[\\d.]+ → \\$[\\d.]+ per 1M from 2099-01-01 00:00 UTC$`))
-
-      expect(await status(send('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: '2098-06-01T00:00:00Z' }))).toBe(400) // before the scheduled one
-      expect(await status(send('POST', `/pricing/${m}`, { inPerM: target, effectiveFrom: '2020-01-01T00:00:00Z' }))).toBe(400) // backdated
-      expect(await status(send('POST', `/pricing/${m}`, { inPerM: -1, effectiveFrom: '2099-06-01T00:00:00Z' }))).toBe(400)
-      expect(await status(send('POST', '/pricing/no-such-model', { inPerM: 1 }))).toBe(404)
+      expect(await status(send('POST', path, { rates: { input: 1 }, effectiveFrom: '2098-06-01T00:00:00Z' }, pair(after).etag))).toBe(400) // before the scheduled one
+      expect(await status(send('POST', path, { rates: { input: 1 }, effectiveFrom: '2020-01-01T00:00:00Z' }, pair(after).etag))).toBe(400) // backdated
     } finally {
-      if (scheduled) await send('DELETE', `/pricing/${m}/${scheduled}`)
+      if (scheduled) await send('DELETE', `${path}/${scheduled}`)
     }
-    expect((await catalog.api<P>('/pricing')).changes.some((c) => c.model === m && c.scheduled)).toBe(false)
-    expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Cancelled model price change', target: `${m} change from 2099-01-01 00:00 UTC` })
-    expect(await status(send('DELETE', `/pricing/${m}/${Date.parse(at)}`))).toBe(404)
+    expect((await catalog.api<P>('/pricing')).changes.some((c) => c.model === m && c.backend === b && c.scheduled)).toBe(false)
+    expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Cancelled model price change', target: `${m} on ${b} change from 2099-01-01 00:00 UTC` })
+    expect(await status(send('DELETE', `${path}/${Date.parse(at)}`))).toBe(404)
   })
+
+  it('points a pair at a LiteLLM key only if the file has it', async () => {
+    expect(await status(send('PUT', '/pricing/claude-opus-4-1/anthropic-prod/source', { litellmKey: 'no-such-key' }))).toBe(400)
+    expect(await status(send('PUT', '/pricing/gpt-5.5/bedrock-eu/source', { litellmKey: 'gpt-5.5' }))).toBe(404)
+  }, 60_000)
 
   it('flips Warden’s kill switch through the control plane, with audit rows', async () => {
     type S = import('@/data/catalog').Session

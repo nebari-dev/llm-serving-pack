@@ -9,16 +9,38 @@ type Team struct {
 	CostCenter string `json:"costCenter"`
 }
 
+// Model is a catalog entry. Prices are per (model, backend): see Pricing.
 type Model struct {
-	ID            string  `json:"id"`
-	Display       string  `json:"display"`
-	Provider      string  `json:"provider"`
-	Family        string  `json:"family"`
-	Context       int     `json:"context"`
-	InPerM        float64 `json:"inPerM"`
-	OutPerM       float64 `json:"outPerM"`
-	CachedPerM    float64 `json:"cachedPerM"`
-	ReasoningPerM float64 `json:"reasoningPerM"`
+	ID       string `json:"id"`
+	Display  string `json:"display"`
+	Provider string `json:"provider"`
+	Family   string `json:"family"`
+	Context  int    `json:"context"`
+}
+
+// CostBasis is the price a receipt was costed with (§5.1). Receipts from
+// before per-backend prices carry only the model and its four rates; the
+// field names are theirs, so both decode.
+type CostBasis struct {
+	ID       string `json:"id"`
+	Display  string `json:"display"`
+	Provider string `json:"provider"`
+	Family   string `json:"family"`
+	Context  int    `json:"context"`
+	Backend  string `json:"backend,omitempty"`
+	// EffectiveFrom is when the price row took effect (epoch ms).
+	EffectiveFrom  int64    `json:"effectiveFrom,omitempty"`
+	InPerM         *float64 `json:"inPerM"`
+	CachedPerM     *float64 `json:"cachedPerM"`
+	CacheWritePerM *float64 `json:"cacheWritePerM,omitempty"`
+	OutPerM        *float64 `json:"outPerM"`
+	ReasoningPerM  *float64 `json:"reasoningPerM"`
+	// Sources say where each rate came from (seed | litellm | manual), keyed
+	// input, cachedInput, cacheWrite, output, reasoning.
+	Sources map[string]string `json:"sources,omitempty"`
+	// PricedLater marks a receipt that had no price when it settled and was
+	// priced once its (model, backend) got one.
+	PricedLater bool `json:"pricedLater,omitempty"`
 }
 
 // Alias is a model_aliases row with the requests that matched it over the
@@ -30,23 +52,77 @@ type Alias struct {
 	ETag        string `json:"etag"` // for If-Match
 }
 
-// Pricing is when each model's current price took effect, and every rate
-// change between consecutive model_pricing rows, newest first.
+// Pricing is every (model, backend) the tenant's backends serve with the
+// price in effect now, every rate change between consecutive rows (newest
+// first), the LiteLLM proposals waiting on a decision, and the sync's state.
 type Pricing struct {
-	EffectiveFrom map[string]string `json:"effectiveFrom"`
-	Changes       []PriceChange     `json:"changes"`
+	Prices    []PairPrice     `json:"prices"`
+	Changes   []PriceChange   `json:"changes"`
+	Proposals []PriceProposal `json:"proposals"`
+	Sync      PriceSync       `json:"sync"`
 }
 
+// PairPrice is a (model, backend)'s price in effect now. Rates are keyed
+// input, cachedInput, cacheWrite, output, reasoning; a missing key has no
+// price. Priced is all five set.
+type PairPrice struct {
+	Model      string `json:"model"`
+	Backend    string `json:"backend"`
+	LiteLLMKey string `json:"litellmKey,omitempty"`
+	// EffectiveFrom is the day the row in effect started; "" with no price.
+	EffectiveFrom string                `json:"effectiveFrom,omitempty"`
+	Rates         map[string]*PriceRate `json:"rates"`
+	Priced        bool                  `json:"priced"`
+	// LiteLLM is the last value LiteLLM gave each rate, which an override
+	// would go back to following.
+	LiteLLM map[string]float64 `json:"litellm,omitempty"`
+	ETag    string             `json:"etag"` // for If-Match
+}
+
+type PriceRate struct {
+	PerM   float64 `json:"perM"`
+	Source string  `json:"source"` // seed | litellm | manual
+}
+
+// PriceChange is one rate moving between consecutive rows of a pair. From
+// or To is nil where the pair had no price.
 type PriceChange struct {
-	Model     string  `json:"model"`
-	Field     string  `json:"field"`
-	From      float64 `json:"from"`
-	To        float64 `json:"to"`
-	Effective string  `json:"effective"`
+	Model   string   `json:"model"`
+	Backend string   `json:"backend"`
+	Field   string   `json:"field"`
+	From    *float64 `json:"from"`
+	To      *float64 `json:"to"`
+	// Source is where the new rate came from; "" when it ended.
+	Source    string `json:"source,omitempty"`
+	Effective string `json:"effective"`
 	// EffectiveAt is the exact start (epoch ms), which names the row to cancel
 	// while it's still scheduled.
 	EffectiveAt int64 `json:"effectiveAt"`
 	Scheduled   bool  `json:"scheduled"`
+}
+
+// PriceProposal is a LiteLLM move on an overridden rate.
+type PriceProposal struct {
+	ID         int64   `json:"id"`
+	Model      string  `json:"model"`
+	Backend    string  `json:"backend"`
+	Rate       string  `json:"rate"`
+	Current    float64 `json:"current"`
+	Proposed   float64 `json:"proposed"`
+	LiteLLMKey string  `json:"litellmKey"`
+	CreatedAt  int64   `json:"createdAt"` // epoch ms
+}
+
+// PriceSync is the LiteLLM sync's state. Times are epoch ms; 0 is never.
+type PriceSync struct {
+	Source    string `json:"source"` // the file's URL
+	LastRunAt int64  `json:"lastRunAt"`
+	LastOKAt  int64  `json:"lastOkAt"`
+	Error     string `json:"error,omitempty"` // the last run's, if it failed
+	Applied   int    `json:"applied"`
+	Proposed  int    `json:"proposed"`
+	Retired   int    `json:"retired"`
+	NextRunAt int64  `json:"nextRunAt"`
 }
 
 type Backend struct {
@@ -220,8 +296,9 @@ type Receipt struct {
 	CachedInputTokens int         `json:"cachedInputTokens"`
 	OutputTokens      int         `json:"outputTokens"`
 	ReasoningTokens   int         `json:"reasoningTokens"`
-	CostUSD           float64     `json:"costUsd"`
-	CostBasis         *Model      `json:"costBasis,omitempty"` // the price row this receipt was costed with (§5.1)
+	CacheWriteTokens  int         `json:"cacheWriteTokens"` // input tokens written to the provider's prompt cache
+	CostUSD           *float64    `json:"costUsd"`          // nil when the (model, backend) had no price: unknown, not $0
+	CostBasis         *CostBasis  `json:"costBasis,omitempty"` // the price row this receipt was costed with (§5.1)
 	Verdict           string      `json:"verdict"`
 	InboundVerdict    string      `json:"inboundVerdict"`       // allowed | stripped | blocked | skipped (not inspected)
 	PolicyMode        string      `json:"policyMode,omitempty"` // enforced | passthrough | fail-open | fail-closed; "" when nothing evaluated policy

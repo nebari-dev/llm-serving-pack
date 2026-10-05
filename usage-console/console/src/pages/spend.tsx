@@ -160,6 +160,14 @@ export function SpendPage() {
                 <Skeleton className="my-1.5 h-5 w-28" />
               )}
             </dd>
+            {!!view.unpriced && (
+              <dd className="mt-0.5 text-xs text-muted-foreground">
+                Leaves out {view.unpriced.toLocaleString('en-US')} request{view.unpriced === 1 ? '' : 's'} with{' '}
+                <Link to="/models?tab=pricing" className="underline underline-offset-4">
+                  no price yet
+                </Link>
+              </dd>
+            )}
           </div>
           <div className="md:px-4">
             <dt className="text-xs text-muted-foreground">Month to date</dt>
