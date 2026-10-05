@@ -1,6 +1,6 @@
 # Local dev loop for the control plane. `make dev` starts everything; the
 # console then runs with `cd ../console && npm run dev:api`.
-.PHONY: db db-down migrate backfill api gateway upstream traffic ingest warden aigw dev dev-aigw test restart test-stack test-stack-restart test-stack-down test-stack-reset
+.PHONY: db db-down migrate backfill api gateway upstream traffic ingest warden aigw dev dev-aigw test restart test-db test-stack test-stack-restart test-stack-down test-stack-reset
 
 # Agent Router CLI: https://github.com/theagentrouter/agent-router/releases
 AIGW ?= aigw
@@ -83,6 +83,10 @@ restart:
 # A second stack on its own databases (stargate_test, receipts_test) for the
 # console's api-mode suite: api :9080, gateway :2975 (Agent Router in Docker).
 # Then `cd ../console && npm run test:api`. Restart it after a server change.
+# test-db only creates and migrates its databases.
+test-db:
+	scripts/test-stack.sh db
+
 test-stack:
 	scripts/test-stack.sh up
 

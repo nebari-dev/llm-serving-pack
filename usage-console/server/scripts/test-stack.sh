@@ -3,6 +3,7 @@
 # own databases, so test runs never write keys, rules or audit rows into the
 # dev stack the console shows.
 #
+#   scripts/test-stack.sh db        create and migrate the test databases only (make test-db)
 #   scripts/test-stack.sh up        start it (creates, migrates and backfills the db the first time)
 #   scripts/test-stack.sh restart   rebuild and restart its processes, keeping the data
 #   scripts/test-stack.sh down      stop it
@@ -81,13 +82,20 @@ ensure_db() { # container, admin db, test db
   fi
 }
 
-up() {
+# db creates the test databases if missing and migrates them (seeding the
+# demo tenant the first time). It never touches the dev databases.
+db() {
   docker compose up -d --wait >/dev/null
   ensure_db configdb stargate stargate_test
   ensure_db receiptsdb receipts receipts_test
-  for c in stargate-api warden receipt-ingest trafficgen; do go build -o "$BIN/$c" "./cmd/$c"; done
-
+  go build -o "$BIN/stargate-api" ./cmd/stargate-api
   "$BIN/stargate-api" migrate >>"$LOGS/test-stargate-api.log" 2>&1
+  echo "test databases ready: stargate_test, receipts_test"
+}
+
+up() {
+  db
+  for c in warden receipt-ingest trafficgen; do go build -o "$BIN/$c" "./cmd/$c"; done
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \
       -gateway http://localhost:2975 -environment test \
@@ -130,6 +138,7 @@ down() {
 }
 
 case "${1:-up}" in
+  db) db ;;
   up) up ;;
   down) down ;;
   restart) down; up ;;
@@ -140,5 +149,5 @@ case "${1:-up}" in
     rm -f "$AIGW_DIR/config.yaml" "$AIGW_DIR/provider-keys.env" "$AIGW_DIR/aigw.env"
     up ;;
   aigw) run_aigw ;;
-  *) echo "usage: $0 up|down|restart|reset|aigw" >&2; exit 2 ;;
+  *) echo "usage: $0 db|up|down|restart|reset|aigw" >&2; exit 2 ;;
 esac

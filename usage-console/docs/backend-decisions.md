@@ -131,9 +131,8 @@ reports the change and says replay isn't connected.
 - **Decided 2026-10-05: more than one action per rule, later.** The engine
   applies only `then[0]` and writes allow one action; §5.3 shows several
   (redact and reroute), with its ordering semantics. Not first in line.
-- **Decide: reordering.** New rules go last. Rule order decides the outcome
-  (first block wins), and there's no write to reorder. Should a reorder be
-  its own audited, versioned change?
+- **Reordering (built 2026-10-05).** New rules go last; `PUT /rules/order`
+  moves one, checked against the order the author saw, with an audit row.
 - **Decided 2026-10-05: follow §5.2's policies (not built).** Versioning
   and matching move to policies (groups of rules) as §5.2 has them, instead
   of each rule versioned on its own.
@@ -276,7 +275,7 @@ retire-old-secret-now are in.
     | Read everything | viewer and up (every role) |
     | Draft rules | editor, security |
     | Publish or roll back rules; kill switch; capture | security, admin |
-    | Change prices; accept or dismiss price proposals | finance, admin |
+    | Change prices; accept or dismiss price proposals | admin (user, 2026-10-05: prices are shared by every tenant, so a change reprices everyone; restrict to admin when roles are built, not before) |
     | Create, edit or delete budgets | finance, admin |
     | Aliases and routing | editor, admin |
     | Own keys: create, revoke, rotate, extend, finish | the key's owner |

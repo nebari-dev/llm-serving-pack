@@ -308,7 +308,8 @@ when stale; 428 without it on an update or delete). Open questions are in
   (decided 2026-10-05).
 - [ ] More than one action per rule, with §5.3's ordering (decided
   2026-10-05, later).
-- [ ] Rule version history (policy_rules keeps only a version number).
+- [x] Rule version history: versions, history and rollback on Guardrails
+  (2026-09-30, migration 004).
 - [ ] False-positive review queue.
 - [x] Detector hit counts computed from receipts (2026-10-02). `GET /detectors`
   now lists the engine's own detectors (kind, pattern, placeholder), the live
