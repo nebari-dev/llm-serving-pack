@@ -22,6 +22,8 @@ func TestWritesWithoutIfMatchAre428(t *testing.T) {
 		{"POST", "/api/v1/demo/rules/r1/publish", `{"mode":"enforce"}`},
 		{"POST", "/api/v1/demo/rules/r1/rollback", `{"version":1}`},
 		{"DELETE", "/api/v1/demo/rules/r1", ""},
+		{"PUT", "/api/v1/demo/backends/together", `{"provider":"OpenAI-compatible"}`},
+		{"DELETE", "/api/v1/demo/backends/together", ""},
 	} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(c.method, c.path, strings.NewReader(c.body)))

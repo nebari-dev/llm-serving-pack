@@ -160,6 +160,27 @@ type Backend struct {
 	Endpoint *BackendEndpoint `json:"endpoint,omitempty"`
 	// YAML is the gateway resources the backend compiles to (API only).
 	YAML string `json:"yaml,omitempty"`
+	// Key is what the control plane may say about the provider key: never
+	// the key itself (§9.1). Nil when none was set from the console.
+	Key *ProviderKey `json:"key,omitempty"`
+	// LastTest is the last connection test of the saved backend.
+	LastTest *BackendTest `json:"lastTest,omitempty"`
+	ETag     string       `json:"etag,omitempty"` // for If-Match
+}
+
+// ProviderKey is a provider key as the console sees it: its non-secret
+// prefix and when it was set.
+type ProviderKey struct {
+	Prefix string `json:"prefix"`
+	SetAt  int64  `json:"setAt"` // epoch ms
+}
+
+// BackendTest is a connection test: OK with the models the provider listed,
+// or not, with the provider's refusal.
+type BackendTest struct {
+	At      int64  `json:"at"` // epoch ms
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
 }
 
 // BackendEndpoint is a backend's desired state: Schema and Prefix for the
@@ -173,6 +194,12 @@ type BackendEndpoint struct {
 	Port      string `json:"port"`
 	TLS       bool   `json:"tls,omitempty"`
 	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
+	// BaseURL is the endpoint as a URL, ${VAR:-default}s at their defaults
+	// (API only).
+	BaseURL string `json:"baseUrl,omitempty"`
+	// KeyVersion is when the console last set the key, which the compiled
+	// Secret carries so a replaced key shows as a change to apply.
+	KeyVersion string `json:"-"`
 }
 
 // RouteTarget is a backend a route sends to: Model, if set, replaces the

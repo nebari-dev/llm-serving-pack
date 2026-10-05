@@ -59,6 +59,43 @@ var Profiles = map[string]Profile{
 
 const rateLimitRate = 0.012
 
+// KeyedBackend stands in for a provider that needs its own key, for adding a
+// provider from the console end to end: it answers only KeyedKey, with a 401
+// in OpenAI's words otherwise, and serves KeyedModel by echoing the prompt.
+const (
+	KeyedBackend = "keyed"
+	KeyedKey     = "sk-fake-keyed-7d1c0b5e9a2f4e68"
+	KeyedModel   = "keyed-echo"
+)
+
+// models are what GET /{backend}/v1/models lists, mirroring demo.Backends.
+var models = map[string][]string{
+	"openai-prod":     {"gpt-5-mini", "gpt-5.5"},
+	"anthropic-prod":  {"claude-sonnet-5", "claude-opus-4-1"},
+	"bedrock-eu":      {"claude-haiku-4-5", "claude-sonnet-5"},
+	"vllm-internal":   {"llama-3.3-70b"},
+	"azure-openai-eu": {"gpt-5-mini"},
+	KeyedBackend:      {KeyedModel},
+}
+
+// ModelsFor is the models a fake backend lists; an unknown one lists
+// gpt-5-mini, which every simulated profile answers for.
+func ModelsFor(backend string) []string {
+	if ms, ok := models[backend]; ok {
+		return ms
+	}
+	return []string{"gpt-5-mini"}
+}
+
+// Authorized is whether a request with this Authorization header gets past
+// the backend's key check. Only KeyedBackend checks one.
+func Authorized(backend, authorization string) bool {
+	return backend != KeyedBackend || authorization == "Bearer "+KeyedKey
+}
+
+// Unauthorized is the 401 body a provider sends for a wrong key.
+const Unauthorized = `{"error":{"message":"Incorrect API key provided. You can find your API key in the fake-openai source (fakellm.KeyedKey).","type":"invalid_request_error","param":null,"code":"invalid_api_key"}}`
+
 // Plan is a fully decided response: callers either sleep through it (HTTP) or
 // just read the numbers (backfill).
 type Plan struct {

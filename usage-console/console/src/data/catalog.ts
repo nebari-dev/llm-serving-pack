@@ -40,7 +40,8 @@ export interface LiveRoute {
 export interface RoutingChange {
   kind: string
   name: string
-  change: 'added' | 'changed' | 'removed'
+  /** "key replaced": a provider key set since the last apply; the diff is its version, never the key. */
+  change: 'added' | 'changed' | 'removed' | 'key replaced'
   /** The resource's YAML, each line prefixed "+", "-" or " ". */
   diff: string
 }
@@ -56,6 +57,23 @@ export interface RoutingPlan {
   /** The desired routing as YAML, for Export. */
   yaml: string
   lastApply?: { at: number; actor: string; ok: boolean; error?: string; changes: Omit<RoutingChange, 'diff'>[] }
+}
+
+/** A provider's GET …/models with its key: the models, or the refusal in the provider's words. */
+export interface ConnectionTest {
+  ok: boolean
+  /** The provider's HTTP status; absent when it didn't answer. */
+  status?: number
+  models: string[]
+  error?: string
+  ms: number
+  at: number
+}
+
+/** A backend after a write, with the connection test the write ran. */
+export interface BackendResult {
+  backend: Backend
+  test?: ConnectionTest
 }
 
 export type * from './mock'

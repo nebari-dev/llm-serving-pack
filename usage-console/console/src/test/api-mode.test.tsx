@@ -1307,6 +1307,341 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   })
 
+  // fake-openai's "keyed" backend wants its own provider key (fakellm.KeyedKey)
+  // and answers 401 in OpenAI's words without it.
+  const fakeOpenAI = (import.meta.env.VITE_FAKE_OPENAI as string | undefined) ?? 'http://localhost:8090'
+  const KEYED_KEY = 'sk-fake-keyed-7d1c0b5e9a2f4e68'
+  const WRONG_KEY = 'sk-wrongkey-0000000000000000'
+  /** The part of a key past its prefix: in no response, ever (§9.1). */
+  const secretPart = (k: string) => k.slice(8)
+  /** Records every response body the console's fetch sees until stop(). */
+  const recordBodies = () => {
+    const prev = globalThis.fetch
+    const bodies: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const res = await prev(input, init)
+      bodies.push(await res.clone().text().catch(() => ''))
+      return res
+    }) as typeof fetch
+    return { bodies, stop: () => void (globalThis.fetch = prev) }
+  }
+  type BackendView = import('@/data/catalog').Backend
+  type BackendResult = import('@/data/catalog').BackendResult
+  type ConnectionTest = import('@/data/catalog').ConnectionTest
+  /** Deletes the named backends if they're still there (routes to them first), then applies. */
+  const dropBackends = async (...names: string[]) => {
+    for (const r of await catalog.api<LiveRoute[]>('/routes')) {
+      if ([...r.targets, ...r.fallback].some((t) => names.includes(t.backend))) await send('DELETE', `/routes/${r.name}`, undefined, r.etag).catch(() => {})
+    }
+    for (const b of await catalog.api<BackendView[]>('/backends')) {
+      if (names.includes(b.name)) await send('DELETE', `/backends/${b.name}`, undefined, b.etag).catch(() => {})
+    }
+    await applyPending()
+  }
+  /** Calls keyed-echo through the gateway until the key check has the key (it reloads every 5s). */
+  const callKeyed = async (secret: string, until: (status: number) => boolean) => {
+    let res: Response | undefined
+    for (let i = 0; i < 20 && !(res && until(res.status)); i++) {
+      if (i) await new Promise((ok) => setTimeout(ok, 1000))
+      res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'keyed-echo', max_tokens: 16, messages: [{ role: 'user', content: 'hello keyed' }] }),
+      })
+    }
+    return res!
+  }
+
+  it('adds a provider with its key, never returns the key, routes to it through the gateway, replaces the key and deletes it', async () => {
+    type C = import('@/data/catalog').Change
+    type Rc = { backend: string; resolvedModel: string; status: number }
+    const name = `keyed-${Date.now().toString(36)}`
+    const ref = `STARGATE_PROVIDER_KEY_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`
+    const provider = { name, provider: 'OpenAI-compatible', region: 'local', baseUrl: `${fakeOpenAI}/keyed/v1`, models: ['keyed-echo'] }
+    await applyPending()
+    const rec = recordBodies()
+    let keyId = ''
+    try {
+      // Test connection before saving: the key is in the request body only.
+      const wrong = await send<ConnectionTest>('POST', '/backends/test', { ...provider, apiKey: WRONG_KEY })
+      expect(wrong).toMatchObject({ ok: false, status: 401 })
+      expect(wrong.error).toContain('Incorrect API key provided')
+      const right = await send<ConnectionTest>('POST', '/backends/test', { ...provider, apiKey: KEYED_KEY })
+      expect(right).toMatchObject({ ok: true, status: 200 })
+      expect(right.models).toContain('keyed-echo')
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false) // a test stores nothing
+      expect(await status(send('POST', '/backends/test', { ...provider, provider: 'Bedrock' }))).toBe(400)
+
+      // Save it with the key: Postgres keeps the prefix, the key file the key.
+      expect(await status(send('POST', '/backends', { ...provider, provider: 'Bedrock', apiKey: KEYED_KEY }))).toBe(400)
+      expect(await status(send('POST', '/backends', { ...provider, models: [] }))).toBe(400)
+      const made = await send<BackendResult>('POST', '/backends', { ...provider, apiKey: KEYED_KEY })
+      expect(made.backend).toMatchObject({ name, sync: 'pending', key: { prefix: KEYED_KEY.slice(0, 8) }, endpoint: { apiKeyEnv: ref, baseUrl: provider.baseUrl } })
+      expect(made.test).toMatchObject({ ok: true })
+      expect(made.backend.lastTest).toMatchObject({ ok: true })
+      expect(await status(send('POST', '/backends', { ...provider, apiKey: KEYED_KEY }))).toBe(409)
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Created backend', target: expect.stringContaining(`key ${KEYED_KEY.slice(0, 8)}…`) })
+      // A model the catalog didn't know joins it, with no price.
+      expect((await catalog.api<{ id: string }[]>('/models')).some((m) => m.id === 'keyed-echo')).toBe(true)
+      const pricing = await catalog.api<{ prices: { model: string; backend: string; priced: boolean }[] }>('/pricing')
+      expect(pricing.prices.find((p) => p.model === 'keyed-echo' && p.backend === name)).toMatchObject({ priced: false })
+
+      // The plan adds its resources; the Secret names the variable, not the key.
+      const plan = await catalog.api<RoutingPlan>('/routing')
+      expect(plan.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual(
+        expect.arrayContaining([`added Backend/${name}`, `added AIServiceBackend/${name}`, `added BackendSecurityPolicy/${name}-key`, `added Secret/${name}-key`]),
+      )
+      expect(plan.changes.find((c) => c.kind === 'Secret')?.diff).toContain(`\${${ref}:-not-set}`)
+
+      // Route to it; it can't be deleted while routed.
+      const route = await send<LiveRoute>('POST', '/routes', { name, match: { models: ['keyed-echo'], headers: [] }, targets: [{ backend: name }], fallback: [] })
+      const routed = (await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)!
+      const refused = (await send('DELETE', `/backends/${name}`, undefined, routed.etag).catch((e) => e)) as { status: number; message: string }
+      expect(refused).toMatchObject({ status: 409 })
+      expect(String(refused.message)).toContain(`route ${name}`)
+
+      await applyPending()
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.sync).toBe('synced')
+      const k = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+        name, team: 'support', project: 'api-mode-test', allowedModels: ['keyed-echo'], allowedRegions: ['local'], expiresAt: '2027-01-01',
+      })
+      keyId = k.key.id
+      expect((await callKeyed(k.secret, (s) => s === 200)).status).toBe(200)
+      await waitFor(async () => {
+        const [rc] = await catalog.api<Rc[]>(`/receipts?key=${keyId}&limit=1`)
+        expect(rc).toMatchObject({ backend: name, resolvedModel: 'keyed-echo', status: 200 })
+      }, { timeout: 20_000, interval: 1000 })
+
+      // Replace the key with a wrong one: tested at once, pending until applied.
+      const before = await catalog.api<RoutingPlan>('/routing')
+      const replaced = await send<BackendResult>('PUT', `/backends/${name}/key`, { apiKey: WRONG_KEY })
+      expect(replaced.test).toMatchObject({ ok: false, status: 401 })
+      expect(replaced.backend).toMatchObject({ sync: 'pending', key: { prefix: WRONG_KEY.slice(0, 8) } })
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Replaced provider key', target: `${name} · key ${WRONG_KEY.slice(0, 8)}…` })
+      const pending = await catalog.api<RoutingPlan>('/routing')
+      expect(pending.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual([`key replaced Secret/${name}-key`])
+      expect(pending.etag).not.toBe(before.etag)
+      // The gateway sends the old key until the apply restarts it with the new one.
+      expect((await callKeyed(k.secret, (s) => s === 200)).status).toBe(200)
+      await send('POST', '/routing/apply', {}, pending.etag)
+      expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
+      expect((await callKeyed(k.secret, (s) => s === 401)).status).toBe(401)
+      // The right key back, applied: requests land again.
+      await send('PUT', `/backends/${name}/key`, { apiKey: KEYED_KEY })
+      await applyPending()
+      expect((await callKeyed(k.secret, (s) => s === 200)).status).toBe(200)
+      expect((await send<BackendResult>('POST', `/backends/${name}/test`)).test).toMatchObject({ ok: true })
+
+      // Edit with If-Match; the key stays as it is.
+      const cur = (await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)!
+      expect(await status(send('PUT', `/backends/${name}`, { ...provider, models: ['keyed-echo', 'keyed-echo-2'] }))).toBe(428)
+      const edited = await send<BackendView>('PUT', `/backends/${name}`, { ...provider, models: ['keyed-echo', 'keyed-echo-2'] }, cur.etag)
+      expect(edited).toMatchObject({ models: ['keyed-echo', 'keyed-echo-2'], key: { prefix: KEYED_KEY.slice(0, 8) } })
+      expect(await status(send('PUT', `/backends/${name}`, provider, cur.etag))).toBe(409)
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Changed backend' })
+
+      // Once no route sends to it, it can be deleted.
+      await send('DELETE', `/routes/${name}`, undefined, (await catalog.api<LiveRoute[]>('/routes')).find((r) => r.name === route.name)!.etag)
+      expect(await status(send('DELETE', `/backends/${name}`))).toBe(428)
+      await send('DELETE', `/backends/${name}`, undefined, edited.etag)
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false)
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Deleted backend' })
+      await applyPending()
+
+      // Nothing the control plane said, in any response, carried a key.
+      expect(rec.bodies.length).toBeGreaterThan(20)
+      for (const b of rec.bodies) {
+        expect(b).not.toContain(secretPart(KEYED_KEY))
+        expect(b).not.toContain(secretPart(WRONG_KEY))
+      }
+    } finally {
+      rec.stop()
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`, {}).catch(() => {})
+      await dropBackends(name)
+    }
+  }, 600_000)
+
+  it('adds a provider on Routing with Test connection, then edits it, replaces its key and deletes it from its drawer', async () => {
+    const name = `ui-keyed-${Date.now().toString(36)}`
+    await applyPending()
+    window.history.pushState({}, '', '/routing?tab=backends')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const text = () => document.body.textContent ?? ''
+    try {
+      for (const s of ['Adding providers isn’t connected', 'editing them isn’t connected']) expect(document.body.innerHTML).not.toContain(s)
+      const add = screen.getByRole('button', { name: /Add provider/ })
+      expect(add).toHaveProperty('disabled', false)
+      await act(async () => {
+        fireEvent.click(add)
+      })
+      let d = await formDialog()
+      // Cloud providers are shown, with why they can't be added yet.
+      expect(within(d).getByRole('radio', { name: /Bedrock/ }).hasAttribute('data-disabled')).toBe(true)
+      expect(d.textContent).toContain('cloud credentials')
+      choose(within(d).getByRole('radio', { name: /OpenAI-compatible/ }))
+      fireEvent.change(within(d).getByLabelText('Name'), { target: { value: name } })
+      fireEvent.change(within(d).getByLabelText('Base URL'), { target: { value: `${fakeOpenAI}/keyed/v1` } })
+      fireEvent.change(within(d).getByLabelText('Region'), { target: { value: 'local' } })
+      const keyInput = within(d).getByLabelText('API key') as HTMLInputElement
+      expect(keyInput.type).toBe('password')
+      fireEvent.change(keyInput, { target: { value: WRONG_KEY } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Test connection' }))
+      })
+      await waitFor(() => expect(d.textContent).toContain('Incorrect API key provided'), { timeout: 10_000 })
+      expect(d.textContent).toContain('401')
+      fireEvent.change(keyInput, { target: { value: KEYED_KEY } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Test connection' }))
+      })
+      await waitFor(() => expect(within(d).getByRole('button', { name: 'Add keyed-echo' })).toBeTruthy(), { timeout: 10_000 })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Add keyed-echo' }))
+      })
+      expect((within(d).getByLabelText('Models') as HTMLInputElement).value).toBe('keyed-echo')
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save provider' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.getAllByRole('button', { name }).length).toBeGreaterThan(0), { timeout: 5000 })
+      const saved = (await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)
+      expect(saved).toMatchObject({ sync: 'pending', key: { prefix: KEYED_KEY.slice(0, 8) }, lastTest: { ok: true } })
+
+      // The drawer shows the prefix and the last test, never the key.
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name })[0])
+        await new Promise((ok) => setTimeout(ok, 200))
+      })
+      expect(text()).toContain(`${KEYED_KEY.slice(0, 8)}…`)
+      expect(text()).toContain('1 model: keyed-echo')
+      expect(document.body.innerHTML).not.toContain(secretPart(KEYED_KEY))
+
+      // Replace the key: the change waits for an apply.
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
+      })
+      d = await formDialog()
+      const newKey = within(d).getByLabelText('New API key') as HTMLInputElement
+      expect(newKey.type).toBe('password')
+      fireEvent.change(newKey, { target: { value: WRONG_KEY } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Replace key' }))
+      })
+      await waitFor(() => expect(d.textContent).toContain('Incorrect API key provided'), { timeout: 10_000 }) // tested once, and it says so
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Done' }))
+      })
+      await formDialogClosed()
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.key?.prefix).toBe(WRONG_KEY.slice(0, 8))
+      await waitFor(() => expect(text()).toContain(`${WRONG_KEY.slice(0, 8)}…`), { timeout: 5000 })
+
+      // Edit its models.
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Edit provider' }))
+      })
+      d = await formDialog()
+      expect(within(d).queryByLabelText('API key')).toBeNull() // keys are replaced on their own
+      fireEvent.change(within(d).getByLabelText('Models'), { target: { value: 'keyed-echo, keyed-echo-2' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save provider' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(text()).toContain('keyed-echo-2'), { timeout: 5000 })
+
+      // Delete it (no route sends to it).
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Delete provider' }))
+      })
+      d = await formDialog()
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Delete provider' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.queryAllByRole('button', { name })).toHaveLength(0), { timeout: 5000 })
+      expect(document.body.innerHTML).not.toContain(secretPart(KEYED_KEY))
+      expect(document.body.innerHTML).not.toContain(secretPart(WRONG_KEY))
+    } finally {
+      r.unmount()
+      await dropBackends(name)
+    }
+  }, 120_000)
+
+  it('onboards with a new provider: tests the key, saves it, routes its models and applies, then a key’s first request lands on it', async () => {
+    const name = `onb-keyed-${Date.now().toString(36)}`
+    await applyPending()
+    window.history.pushState({}, '', '/onboarding')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 400))
+    })
+    const text = () => document.body.textContent ?? ''
+    let keyId = ''
+    try {
+      expect(text()).not.toContain('Adding a provider and its credentials isn’t connected')
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Connect a new provider' }))
+      })
+      const form = screen.getByRole('form', { name: 'New provider' })
+      choose(within(form).getByRole('radio', { name: /OpenAI-compatible/ }))
+      fireEvent.change(within(form).getByLabelText('Name'), { target: { value: name } })
+      fireEvent.change(within(form).getByLabelText('Base URL'), { target: { value: `${fakeOpenAI}/keyed/v1` } })
+      fireEvent.change(within(form).getByLabelText('Region'), { target: { value: 'local' } })
+      fireEvent.change(within(form).getByLabelText('API key'), { target: { value: KEYED_KEY } })
+      expect(text()).toContain('Tested once, then sealed')
+      await act(async () => {
+        fireEvent.click(within(form).getByRole('button', { name: 'Test connection' }))
+      })
+      await waitFor(() => expect(within(form).getByRole('button', { name: 'Add keyed-echo' })).toBeTruthy(), { timeout: 10_000 })
+      fireEvent.click(within(form).getByRole('button', { name: 'Add keyed-echo' }))
+      await act(async () => {
+        fireEvent.click(within(form).getByRole('button', { name: 'Save provider' }))
+      })
+      // Saved, then its models need a route and the gateway an apply.
+      const connect = await screen.findByRole('button', { name: /Route keyed-echo to .* and apply/ }, { timeout: 10_000 })
+      await act(async () => {
+        fireEvent.click(connect)
+      })
+      await waitFor(() => expect(screen.getByRole('button', { name: `Create a key for ${name}` })).toBeTruthy(), { timeout: 120_000 })
+      expect((await catalog.api<LiveRoute[]>('/routes')).find((x) => x.name === name)).toMatchObject({ sync: 'synced', targets: [{ backend: name }] })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Create a key for ${name}` }))
+      })
+      const { gatewayUrl } = await catalog.api<{ gatewayUrl: string }>('/session')
+      await waitFor(() => expect(text()).toContain(gatewayUrl), { timeout: 5000 })
+      keyId = (await catalog.api<{ id: string; name: string; project: string }[]>('/keys')).find((k) => k.project === 'onboarding' && text().includes(k.name))?.id ?? ''
+      expect(keyId).not.toBe('')
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Send a test request for me' }))
+      })
+      await waitFor(() => expect(text()).toContain('Your first request'), { timeout: 60_000 })
+      expect(text()).toContain(`via ${name}`)
+      expect(document.body.innerHTML).not.toContain(secretPart(KEYED_KEY))
+    } finally {
+      if (keyId) await catalog.api(`/keys/${keyId}/revoke`, { method: 'POST' })
+      r.unmount()
+      await dropBackends(name)
+    }
+  }, 300_000)
+
+  it('lists provider keys by prefix and last test on Settings, not as not connected', async () => {
+    window.history.pushState({}, '', '/settings')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    try {
+      const providers = screen.getByRole('region', { name: 'Providers' })
+      // Only rotation reminders are still unbuilt.
+      expect(providers.textContent?.replace('Rotation reminders aren’t connected yet.', '')).not.toContain('connected yet')
+      expect(providers.textContent).toContain('openrouter')
+      expect(providers.textContent).toContain('OPENROUTER_API_KEY')
+    } finally {
+      r.unmount()
+    }
+  })
+
   it('drafts, publishes, enforces, rolls back and deletes a rule, with versions and audit rows', async () => {
     type V = { id: string; name: string; mode: string; version: number; failMode: string; etag: string; draft: { description: string } | null }
     type C = import('@/data/catalog').Change

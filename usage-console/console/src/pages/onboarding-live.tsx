@@ -9,16 +9,19 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
-import { type ApiKey, api, type Backend, backends as seedBackends, createKey, type Receipt, type Session, session as seedSession, teams } from '@/data/catalog'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { type ApiKey, api, type Backend, backends as seedBackends, createKey, type Receipt, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { copy, FirstRequest, type Lang, readLang, Step, type StepInfo, StepMap } from './onboarding'
+import { ProviderForm } from './providers-live'
 
-// §7.5.1 Onboarding against the real control plane. The backends are the
-// ones the gateway config defines (adding one, with its credentials, isn't
-// connected yet); the key is a real key; the first request is a real receipt
-// for that key, from the caller's own app or the test request sent here.
+// §7.5.1 Onboarding against the real control plane. Pick a backend the
+// control plane has, or connect a new provider (its key tested once, then
+// sealed), route its models to it and apply; the key is a real key; the first
+// request is a real receipt for that key, from the caller's own app or the
+// test request sent here.
 
 type GatewayTest = { status: number; sessionId: string; reply?: string; error?: string; ms: number }
 
@@ -91,6 +94,9 @@ export function LiveOnboardingPage() {
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ key: ApiKey; secret: string; backend: Backend } | null>(null)
   const [firstId, setFirstId] = useState<string | null>(null)
+  // Connecting a new provider: the form, then the provider it saved until it's routed and applied.
+  const [adding, setAdding] = useState(false)
+  const [fresh, setFresh] = useState<Backend | null>(null)
 
   const backend = live.data.find((b) => b.name === name) ?? null
   const gatewayUrl = sess.gatewayUrl ?? ''
@@ -130,7 +136,7 @@ export function LiveOnboardingPage() {
       <div className="mx-auto grid w-full max-w-4xl gap-8 px-6 py-8 md:grid-cols-[12rem_minmax(0,1fr)] md:gap-10">
         <StepMap steps={steps} />
         <div className="flex min-w-0 flex-col gap-6">
-          <Step n={1} title="Pick a backend the gateway serves" done={!!created}>
+          <Step n={1} title="Pick a backend the gateway serves, or connect a provider" done={!!created}>
             {live.loaded && live.data.length === 0 && <p className="text-sm text-muted-foreground">The control plane has no backends.</p>}
             <RadioGroup
               aria-label="Backend"
@@ -155,10 +161,44 @@ export function LiveOnboardingPage() {
                 </RadioGroupItem>
               ))}
             </RadioGroup>
-            <p className="mt-3 text-xs text-muted-foreground">
-              Adding a provider and its credentials isn’t connected yet: backends are the control plane’s desired state, seeded from the gateway’s original config, and
-              can’t be edited from the console.
-            </p>
+            {!adding && !fresh && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => {
+                  setAdding(true)
+                  setName(null)
+                  setCreated(null)
+                }}
+              >
+                Connect a new provider
+              </Button>
+            )}
+            {adding && (
+              <div className="mt-4 rounded-md border border-border p-4">
+                <h3 className="mb-3 text-sm font-semibold">Connect your first provider</h3>
+                <ProviderForm
+                  label="New provider"
+                  onCancel={() => setAdding(false)}
+                  onSaved={({ backend: b }) => {
+                    setAdding(false)
+                    setFresh(b)
+                    live.reload()
+                  }}
+                />
+              </div>
+            )}
+            {fresh && (
+              <ConnectFresh
+                b={fresh}
+                onDone={() => {
+                  setName(fresh.name)
+                  setFresh(null)
+                  live.reload()
+                }}
+              />
+            )}
 
             {backend && (
               <div className="mt-5 flex flex-col gap-4">
@@ -215,6 +255,62 @@ export function LiveOnboardingPage() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A provider saved here isn't in the gateway yet: it needs a route for its
+ * models, then an apply, which restarts the gateway with every pending
+ * routing change.
+ */
+function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
+  const plan = useLive<RoutingPlan | null>('/routing', null, 10_000)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const others = (plan.data?.changes ?? []).filter((c) => c.name !== b.name && c.name !== `${b.name}-key` && c.kind !== 'AIGatewayRoute').length
+  const connect = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const routes = await api<{ name: string; targets: { backend: string }[] }[]>('/routes')
+      if (!routes.some((r) => r.targets.some((t) => t.backend === b.name))) {
+        await api('/routes', { method: 'POST', body: JSON.stringify({ name: b.name, match: { models: b.models, headers: [] }, targets: [{ backend: b.name }], fallback: [] }) })
+      }
+      const p = await api<RoutingPlan>('/routing')
+      if (p.changes.length) await api('/routing/apply', { method: 'POST', body: '{}', headers: { 'If-Match': p.etag } })
+      onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="mt-4 flex flex-col items-start gap-3 rounded-md border border-border p-4">
+      <p className="text-sm">
+        <span className="font-mono">{b.name}</span> is saved{b.key ? <> with key <span className="font-mono">{b.key.prefix}…</span></> : null}. The gateway sends to it once a route
+        matches its models and routing is applied.
+      </p>
+      {b.lastTest && !b.lastTest.ok && <p className="text-sm text-destructive-foreground">Its connection test failed: {b.lastTest.message}</p>}
+      <p className="text-xs text-muted-foreground">
+        Applying restarts the gateway with every pending routing change{others > 0 ? `, including ${others} not about this provider` : ''}. Review them on{' '}
+        <Link to="/routing" className="underline underline-offset-4">
+          Routing
+        </Link>{' '}
+        first if you’re unsure.
+      </p>
+      <Button onClick={connect} loading={busy} loadingText="Applying… the gateway is restarting" disabled={plan.data ? !plan.data.canApply : false} title={plan.data && !plan.data.canApply ? plan.data.reason : undefined}>
+        Route {b.models.join(', ')} to {b.name} and apply
+      </Button>
+      {error && (
+        <Alert variant="destructive">
+          <AlertTitle>Not connected</AlertTitle>
+          <AlertDescription>
+            <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap">{error}</pre>
+          </AlertDescription>
+        </Alert>
+      )}
     </div>
   )
 }

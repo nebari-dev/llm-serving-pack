@@ -128,7 +128,15 @@ Postgres, and "Apply" diffs the compiled routing against the file, writes it
 and runs `restart.sh aigw`, putting the old file back if aigw doesn't answer
 again. After editing `aigw/base.yaml`, delete `tmp/aigw/config.yaml` and
 restart `aigw`, or apply from the console. The test stack does the same with
-`tmp/aigw-test/config.yaml` and `docker restart`.
+`tmp/aigw-test/config.yaml` and `scripts/test-stack.sh aigw`, which recreates
+the container (`docker restart` would keep its old environment).
+
+Provider keys set from the console go to `tmp/aigw/provider-keys.env`
+(owner-only, `KEY=value` lines, gitignored; `-provider-keys` to move it), never
+to Postgres, which keeps the reference and the key's first characters.
+`restart.sh aigw` loads it after `server/.env`; the test stack merges
+`tmp/aigw-test/provider-keys.env` over `.env` into the container's
+`--env-file`. A replaced key is a pending change until routing is applied.
 
 Never stop these with `pkill -f`: `make dev-aigw` runs everything under one
 shell whose command line matches every command, and its `trap 'kill 0'`
@@ -142,7 +150,7 @@ shell, so Ctrl-C on `make dev-aigw` leaves it running; stop it by port, e.g.
 |---|---|
 | `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. With `-aigw-config` and `-aigw-restart`, applies routing to aigw. Also `migrate`, `backfill -days N -per-day N`, and `routing write -o path`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
-| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. |
+| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` and `GET /{backend}/v1/models` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. The `keyed` backend wants provider key `fakellm.KeyedKey` (401 otherwise) and echoes `keyed-echo`. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
 | `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`, and `POST /reload`, which the API calls after every config write. |
 | `aigw/base.yaml` | Agent Router's infrastructure config: the ext_authz key check, Warden's ext_proc and the filter order it needs, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. Routing (the AIGatewayRoute with Warden's backend hints, and each backend) is compiled onto it from Postgres. |
@@ -186,6 +194,10 @@ Writes (the console doesn't call most of them yet):
   - `POST pricing/sync` runs the sync now.
   - `POST pricing/proposals/{id}/accept|dismiss`.
 - The sync reads `-litellm-url` (default: LiteLLM's GitHub copy) once a day.
+- Providers (backends), applied with routing:
+  - `POST backends` with `{name, provider, region, baseUrl, models, apiKey?}`; `PUT backends/{name}` (If-Match) with the same minus name and key; `DELETE backends/{name}` (If-Match), refused (409) while a route sends to it. Models the catalog lacks are added to it with no price. Bedrock, Azure and Vertex are refused: they need cloud credentials.
+  - `PUT backends/{name}/key` with `{apiKey}` stores the key in the key store, records its prefix, and tests it. No response ever carries a key.
+  - `POST backends/test` with `{provider, baseUrl, apiKey?}` tests an unsaved provider (GET `{baseUrl}/models`; the key is used for that request only); `POST backends/{name}/test` tests a saved one with its stored key. Both return `{ok, status, models, error}`, the error in the provider's words with the key taken out.
 
 Aliases, budgets and rules carry an `etag`. Updating or deleting one needs
 `If-Match: <etag>` (428 without it; 409 with the current resource when it's

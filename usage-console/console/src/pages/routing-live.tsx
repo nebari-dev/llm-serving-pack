@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRight, ArrowUp, Download, FileCode, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Download, FileCode, KeyRound, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { DiffView } from '@/components/gw/diff-view'
@@ -20,6 +20,7 @@ import { api, ApiError, type Backend, backends as seedBackends, type LiveRoute, 
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
+import { DeleteBackendDialog, KeyText, LastTest, ProviderDialog, ReplaceKeyDialog } from './providers-live'
 import { CaptureMarker } from './routing'
 
 // §7.5.6 Routing in api mode. Routes and backends are the control plane's
@@ -88,6 +89,7 @@ export function LiveRoutingPage() {
   }
   const [editing, setEditing] = useState<LiveRoute | 'new' | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
   const current = backends.data.find((b) => b.name === selected) ?? null
 
   return (
@@ -100,7 +102,7 @@ export function LiveRoutingPage() {
             <Button variant="outline" disabled={!plan.data} onClick={() => plan.data && download('routing.yaml', plan.data.yaml)}>
               <Download /> Export YAML
             </Button>
-            <Button disabled title="Adding providers isn’t connected yet: the control plane doesn’t hold provider credentials.">
+            <Button onClick={() => setAdding(true)}>
               <Plus /> Add provider
             </Button>
           </>
@@ -136,8 +138,26 @@ export function LiveRoutingPage() {
           }}
         />
       )}
+      {adding && (
+        <ProviderDialog
+          onClose={() => {
+            setAdding(false)
+            reload()
+          }}
+        />
+      )}
       <Drawer open={!!current} onOpenChange={(o) => !o && setSelected(null)}>
-        <DrawerContent style={{ ['--drawer-content-width' as string]: 'min(44rem, 100vw)' }}>{current && <BackendDetail b={current} />}</DrawerContent>
+        <DrawerContent style={{ ['--drawer-content-width' as string]: 'min(44rem, 100vw)' }}>
+          {current && (
+            <BackendDetail
+              b={current}
+              onChanged={(deleted) => {
+                if (deleted) setSelected(null)
+                reload()
+              }}
+            />
+          )}
+        </DrawerContent>
       </Drawer>
     </Tabs>
   )
@@ -223,7 +243,9 @@ function ApplyDialog({ plan, onClose }: { plan: RoutingPlan; onClose: (applied: 
         <div className="flex max-h-[28rem] min-h-0 flex-col gap-3 overflow-y-auto">
           {plan.changes.map((c) => (
             <div key={`${c.kind}/${c.name}`} className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">{c.change === 'added' ? 'Added' : c.change === 'removed' ? 'Removed' : 'Changed'}</span>
+              <span className="text-xs text-muted-foreground">
+                {c.change === 'added' ? 'Added' : c.change === 'removed' ? 'Removed' : c.change === 'key replaced' ? 'Key replaced: the gateway restarts with the new key. Only its version is in the config, never the key.' : 'Changed'}
+              </span>
               <DiffView title={`${c.kind}/${c.name}`} diff={c.diff} />
             </div>
           ))}
@@ -718,16 +740,29 @@ function BackendsTable({ items, onOpen }: { items: Backend[]; onOpen: (name: str
         </table>
       </div>
       <p className="px-6 py-3 text-xs text-muted-foreground">
-        Backends are the control plane’s desired state; editing them isn’t connected yet. Synced means the gateway runs the backend as it is here. Health comes from the last 15 minutes of
+        Backends are the control plane’s desired state: open one to edit it, replace its key or delete it. Synced means the gateway runs the backend as it is here. Health comes from the last 15 minutes of
         receipts: idle with no requests, down when every request failed, degraded past 5% errors. p50 and errors cover the last hour.
       </p>
     </Section>
   )
 }
 
-function BackendDetail({ b }: { b: Backend }) {
+function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: boolean) => void }) {
   const [yaml, setYaml] = useState(false)
+  const [dialog, setDialog] = useState<'edit' | 'key' | 'delete' | null>(null)
+  const [testing, setTesting] = useState(false)
   const e = b.endpoint
+  const test = async () => {
+    setTesting(true)
+    try {
+      await api(`/backends/${encodeURIComponent(b.name)}/test`, { method: 'POST' })
+    } catch (err) {
+      toast.add({ title: 'Not tested', description: err instanceof Error ? err.message : String(err), type: 'error' })
+    } finally {
+      setTesting(false)
+      onChanged(false)
+    }
+  }
   return (
     <>
       <DrawerHeader className="flex-col gap-2">
@@ -744,6 +779,8 @@ function BackendDetail({ b }: { b: Backend }) {
         <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm">
           {e ? (
             <>
+              <dt className="text-muted-foreground">Base URL</dt>
+              <dd className="font-mono text-xs break-all">{e.baseUrl}</dd>
               <dt className="text-muted-foreground">Endpoint</dt>
               <dd className="font-mono text-xs break-all">
                 {e.host}:{e.port}
@@ -754,7 +791,14 @@ function BackendDetail({ b }: { b: Backend }) {
                 {e.schema} {e.prefix}
               </dd>
               <dt className="text-muted-foreground">Provider key</dt>
-              <dd className="text-xs">{e.apiKeyEnv ? <span className="font-mono">${e.apiKeyEnv}</span> : <span className="text-muted-foreground">None sent</span>}</dd>
+              <dd className="text-xs">
+                <KeyText b={b} />
+                {e.apiKeyEnv && b.key && <span className="ml-1 font-mono text-muted-foreground">(${e.apiKeyEnv})</span>}
+              </dd>
+              <dt className="text-muted-foreground">Last test</dt>
+              <dd className="text-xs">
+                <LastTest t={b.lastTest} />
+              </dd>
               <dd className="col-span-2 text-xs text-muted-foreground">{'${VAR:-default}'} values come from the gateway’s environment when it loads its config.</dd>
             </>
           ) : (
@@ -773,12 +817,55 @@ function BackendDetail({ b }: { b: Backend }) {
           <dd className="num font-mono text-xs">{b.errorRate.toFixed(1)}%</dd>
         </dl>
       </DrawerBody>
-      {b.yaml && (
-        <DrawerFooter>
+      <DrawerFooter className="flex-wrap">
+        <Button variant="outline" onClick={() => setDialog('edit')}>
+          <Pencil /> Edit provider
+        </Button>
+        {e && (
+          <>
+            <Button variant="outline" onClick={() => setDialog('key')}>
+              <KeyRound /> Replace key
+            </Button>
+            <Button variant="outline" onClick={test} loading={testing} loadingText="Testing…">
+              Test connection
+            </Button>
+          </>
+        )}
+        {b.yaml && (
           <Button variant="outline" onClick={() => setYaml(true)}>
             <FileCode /> View generated YAML
           </Button>
-        </DrawerFooter>
+        )}
+        <Button variant="ghost" onClick={() => setDialog('delete')}>
+          <Trash2 /> Delete provider
+        </Button>
+      </DrawerFooter>
+      {dialog === 'edit' && (
+        <ProviderDialog
+          backend={b}
+          onClose={(saved) => {
+            setDialog(null)
+            if (saved) onChanged(false)
+          }}
+        />
+      )}
+      {dialog === 'key' && (
+        <ReplaceKeyDialog
+          backend={b}
+          onClose={(replaced) => {
+            setDialog(null)
+            if (replaced) onChanged(false)
+          }}
+        />
+      )}
+      {dialog === 'delete' && (
+        <DeleteBackendDialog
+          backend={b}
+          onClose={(deleted) => {
+            setDialog(null)
+            if (deleted) onChanged(true)
+          }}
+        />
       )}
       {yaml && b.yaml && (
         <YamlDialog title={b.name} yaml={b.yaml} description="The gateway resources this backend compiles to: its Backend and AIServiceBackend, and a provider key’s policy and Secret." onClose={() => setYaml(false)} />

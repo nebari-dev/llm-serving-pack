@@ -201,8 +201,53 @@ retire-old-secret-now are in.
     adopt, provenance (the seeded Console/Git/Adopted values are no longer
     shown in api mode), and a Kubernetes applier. The survey's direction is
     that Stargate only writes AIGatewayRoutes it owns.
-  - Not built: editing backends, provider credentials, per-route content
-    capture (the column stays; nothing compiles it).
+  - Not built: per-route content capture (the column stays; nothing
+    compiles it).
+  - **Providers and their keys (decided 2026-10-05, built).** Backends are
+    created, edited and deleted like routes (audit rows, If-Match; delete is
+    refused while a route sends to one). Providers are API-key ones only:
+    OpenAI, Anthropic, any OpenAI-compatible endpoint, and self-hosted with
+    no key, each a base URL plus an optional key. Bedrock, Azure and Vertex
+    are shown disabled: they need cloud credentials.
+    - Keys (user's choice): Postgres keeps the reference (an env var name,
+      `STARGATE_PROVIDER_KEY_<NAME>`), the key's prefix (at most 8 characters
+      and a third of the key), when it was set, and the last connection
+      test. The key goes to a `routing.KeyStore`; the local one writes the
+      owner-only `tmp/aigw/provider-keys.env` (test stack:
+      `tmp/aigw-test/provider-keys.env`), which aigw is started with. A
+      Kubernetes one would write the Secret instead. No response carries a key.
+    - A replaced key is a pending change: the compiled Secret carries a
+      `stargate.dev/key-version` annotation (when the key was set), so the
+      plan shows `Secret/<name>-key: key replaced`, its etag moves, and the
+      apply's restart loads the key. The test stack's apply now recreates
+      the container (`test-stack.sh aigw`), since `docker restart` keeps the
+      old environment.
+    - Defaults I picked, to confirm:
+      - The key file is written when the key is saved, not at apply. Any
+        gateway restart before the apply (or the restart of a rolled-back
+        apply) already sends the new key; the plan still says pending.
+      - Saving a key tests it once and keeps the result, but saves a key
+        that fails the test (the provider may be down); the console says it
+        failed.
+      - A provider's error is shown verbatim except for the key: the key
+        itself, any 6+ characters of it past the prefix, and masked echoes
+        like OpenAI's `sk-proj-****abcd` are taken out.
+      - A model the catalog doesn't know is added to it (display = id,
+        provider = the backend's, context 0 = unknown) with no price and no
+        LiteLLM key: "no price" until someone sets a rate or a key on Models.
+        No LiteLLM key is guessed, even for OpenAI.
+      - Anthropic goes through its OpenAI-compatible endpoint
+        (`https://api.anthropic.com/v1`) with the key as a bearer token, so
+        it needs no schema translation; its test sends `x-api-key`.
+      - `localhost`/`127.0.0.1` in a base URL compiles to
+        `${STARGATE_HOST:-…}`, like the seeded fake backends, so the Docker
+        test gateway can reach the host.
+      - Deleting a backend removes its key from the file at once and keeps
+        its prices as history. A backend name is unique across tenants
+        (the existing primary key).
+      - Onboarding's "Connect a new provider" saves the provider, adds a
+        route for its models and applies everything pending (it says how
+        many other changes that includes).
   - Rule order: the gateway tries rules with more header matches first;
     among equals, in rule order. A new route goes ahead of any catch-all
     (`*` with no headers), and two routes can't claim the same model with
@@ -247,7 +292,10 @@ retire-old-secret-now are in.
   `If-None-Match: *`. Dry runs don't need it. Key writes (revoke, rotate,
   extend, finish) and the kill switch don't carry an etag. They are toggles
   that give the same result if repeated, so they don't need one (decided
-  2026-10-05).
+  2026-10-05). Replacing a provider key follows them (no If-Match, my
+  default); editing or deleting a backend takes If-Match like a route.
+  Provider writes ("Aliases and routing" in the table above) are editor and
+  admin once roles exist.
   - Price writes will require `If-Match` too (decided 2026-10-05, not
     built). Two editors changing the same rate concurrently has happened.
 - **Database-backed Go tests (decided 2026-10-05, not built).** SQL currently

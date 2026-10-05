@@ -138,8 +138,9 @@ spec:
 ---
 # Retry 5xx (anthropic-prod returns 529 when "overloaded"). Retries stay on the
 # same priority until passive health checking ejects the backend; only then does
-# traffic fail over to the next priority. The HTTPRoute is generated from the
-# console's AIGatewayRoute (routing.RouteName) and shares its name.
+# traffic fail over to the next priority. It targets the Gateway, so it covers
+# every HTTPRoute generated from the console's AIGatewayRoutes, however many
+# the routing splits into (16 rules each).
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -148,7 +149,7 @@ metadata:
 spec:
   targetRefs:
     - group: gateway.networking.k8s.io
-      kind: HTTPRoute
+      kind: Gateway
       name: aigw-run
   retry:
     numRetries: 2

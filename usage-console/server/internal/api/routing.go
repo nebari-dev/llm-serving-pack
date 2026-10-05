@@ -48,18 +48,23 @@ type RoutingPlan struct {
 }
 
 // withRouteSync sets each route's sync: synced when the gateway runs its
-// rule as it is, else failed if the last apply failed, else pending.
-func withRouteSync(rs []model.Route, running []routing.Object, lastFailed bool) []model.Route {
+// rule as it is; failed when the last apply failed trying this version of it
+// (failed maps "route/<name>" to the version tried); else pending.
+func withRouteSync(rs []model.Route, running []routing.Object, failed map[string]string) []model.Route {
 	for i := range rs {
-		rs[i].Sync = notSynced(lastFailed)
-		if routing.RouteInSync(running, rs[i]) {
+		switch {
+		case routing.RouteInSync(running, rs[i]):
 			rs[i].Sync = "synced"
+		case tried(failed, "route/"+rs[i].Name, rs[i].ETag):
+			rs[i].Sync = "failed"
+		default:
+			rs[i].Sync = "pending"
 		}
 	}
 	return rs
 }
 
-func withBackendSync(bs []model.Backend, running []routing.Object, lastFailed bool) []model.Backend {
+func withBackendSync(bs []model.Backend, running []routing.Object, failed map[string]string) []model.Backend {
 	for i := range bs {
 		bs[i].YAML = routing.BackendYAML(bs[i])
 		switch {
@@ -67,31 +72,52 @@ func withBackendSync(bs []model.Backend, running []routing.Object, lastFailed bo
 			bs[i].Sync = "no_endpoint"
 		case routing.BackendInSync(running, bs[i]):
 			bs[i].Sync = "synced"
+		case tried(failed, "backend/"+bs[i].Name, store.BackendETag(bs[i])):
+			bs[i].Sync = "failed"
 		default:
-			bs[i].Sync = notSynced(lastFailed)
+			bs[i].Sync = "pending"
 		}
 	}
 	return bs
 }
 
-func notSynced(lastFailed bool) string {
-	if lastFailed {
-		return "failed"
-	}
-	return "pending"
+// tried is whether a failed apply tried this version of the object.
+func tried(failed map[string]string, key, version string) bool {
+	v, ok := failed[key]
+	return ok && v == version
 }
 
-// observed is what the gateway runs and whether the last apply failed. With
-// no applier, ok is false.
-func (s *Server) observed(ctx context.Context, t string) (running []routing.Object, lastFailed, ok bool, err error) {
+// attempted is what an apply of the desired state tries: each route and
+// backend the gateway doesn't run as it is, at its current version.
+func attempted(running []routing.Object, rs []model.Route, bs []model.Backend) map[string]string {
+	out := map[string]string{}
+	for _, r := range rs {
+		if !routing.RouteInSync(running, r) {
+			out["route/"+r.Name] = r.ETag
+		}
+	}
+	for _, b := range bs {
+		if b.Endpoint != nil && !routing.BackendInSync(running, b) {
+			out["backend/"+b.Name] = store.BackendETag(b)
+		}
+	}
+	return out
+}
+
+// observed is what the gateway runs and, if the last apply failed, what it
+// tried (nil otherwise). With no applier, ok is false.
+func (s *Server) observed(ctx context.Context, t string) (running []routing.Object, failed map[string]string, ok bool, err error) {
 	if s.Routing == nil {
-		return nil, false, false, nil
+		return nil, nil, false, nil
 	}
 	if running, err = s.Routing.Running(ctx); err != nil {
-		return nil, false, false, err
+		return nil, nil, false, err
 	}
 	last, err := s.Store.LastApply(ctx, t)
-	return running, last != nil && !last.OK, true, err
+	if last != nil && !last.OK {
+		failed = last.Attempted
+	}
+	return running, failed, true, err
 }
 
 func (s *Server) routeViews(ctx context.Context, t string) ([]RouteView, error) {
@@ -313,12 +339,25 @@ func (s *Server) applyRouting(w http.ResponseWriter, r *http.Request, t string) 
 	if len(p.Changes) == 0 {
 		return ApplyResult{OK: true, Changes: p.Changes}, nil
 	}
+	running, err := s.Routing.Running(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rs, err := s.Store.Routes(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	bs, err := s.Store.Backends(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	tries := attempted(running, rs, bs)
 	applyErr := s.Routing.Apply(ctx, p.desired)
 	msg := ""
 	if applyErr != nil {
 		msg = applyErr.Error()
 	}
-	if err := s.Store.RecordApply(ctx, t, s.DevActor, applyErr == nil, msg, p.Changes); err != nil {
+	if err := s.Store.RecordApply(ctx, t, s.DevActor, applyErr == nil, msg, p.Changes, tries); err != nil {
 		return nil, err
 	}
 	if applyErr != nil {

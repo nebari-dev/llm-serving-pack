@@ -14,6 +14,7 @@ import { age, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
+import { LiveProviderKeys } from './providers-live'
 
 // §7.4 Settings → Providers · Retention · Integrations · Members.
 // §9.1 credentials, §4.6 retention tiers, §9.3 Warden kill switch.
@@ -87,7 +88,7 @@ export function SettingsPage() {
         description="Provider keys never leave the cluster and are never returned by the API — not even to owners. Tested once, then sealed. Never returned to callers."
       >
         {live ? (
-          <p className="max-w-3xl text-sm text-muted-foreground">Provider credentials aren’t connected yet: the control plane doesn’t hold or test provider keys, so there’s nothing to list or rotate here.</p>
+          <LiveProviderKeys />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[48rem] text-sm">

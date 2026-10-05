@@ -49,6 +49,9 @@ type Server struct {
 	// Routing puts the desired routing in front of the gateway; nil when
 	// there's no gateway to apply to (routes are then not_reconciled).
 	Routing routing.Applier
+	// Keys stores provider keys where the gateway reads them; nil when there's
+	// nowhere to (keys can't be set, and tests of a keyed backend can't run).
+	Keys    routing.KeyStore
 	syncMu  sync.Mutex
 	applyMu sync.Mutex
 }
@@ -129,6 +132,12 @@ func (s *Server) Handler() http.Handler {
 	h("PUT "+p+"/pricing/{model}/{backend}/source", s.setPriceSource)
 	h("DELETE "+p+"/pricing/{model}/{backend}/{at}", s.cancelPrice)
 	h("GET "+p+"/backends", s.backends)
+	h("POST "+p+"/backends", s.createBackend)
+	h("POST "+p+"/backends/test", s.testProvider)
+	h("PUT "+p+"/backends/{name}", s.updateBackend)
+	h("DELETE "+p+"/backends/{name}", s.deleteBackend)
+	h("PUT "+p+"/backends/{name}/key", s.setBackendKey)
+	h("POST "+p+"/backends/{name}/test", s.testBackend)
 	h("GET "+p+"/routes", s.routes)
 	h("POST "+p+"/routes", s.createRoute)
 	h("PUT "+p+"/routes/{name}", s.updateRoute)

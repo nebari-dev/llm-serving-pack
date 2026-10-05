@@ -354,6 +354,12 @@ export interface Backend {
   endpoint?: BackendEndpoint
   /** The gateway resources it compiles to (api mode). */
   yaml?: string
+  /** A provider key set from the console: its prefix only, never the key (§9.1). */
+  key?: { prefix: string; setAt: number }
+  /** The last connection test: the models listed, or the provider's refusal. */
+  lastTest?: { at: number; ok: boolean; message: string }
+  /** For If-Match on edit and delete (api mode). */
+  etag?: string
 }
 
 export const backends: Backend[] = [
@@ -373,6 +379,8 @@ export interface BackendEndpoint {
   tls?: boolean
   /** The environment variable holding the provider key the gateway sends. */
   apiKeyEnv?: string
+  /** The endpoint as a base URL, ${VAR:-default}s at their defaults. */
+  baseUrl?: string
 }
 
 export interface Route {

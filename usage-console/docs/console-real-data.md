@@ -194,7 +194,8 @@ when stale; 428 without it on an update or delete). Open questions are in
     model overrides, ordered fallback, Preview YAML from a dry run, stale
     edit refused with "Load the current version"), delete, an apply bar
     with the CRD diff before applying, and Export YAML. Backends show
-    endpoint, sync and their generated YAML; editing them isn't connected.
+    endpoint, sync and their generated YAML, and are edited from their
+    drawer (see Provider credentials below).
   - Exit test: the api-mode suite creates a route matching `x-stargate-team`,
     applies it to the test gateway (Docker), and sees a support key's
     gpt-5.5 land on vllm-internal as llama-3.3-70b; the UI test creates,
@@ -319,20 +320,49 @@ when stale; 428 without it on an update or delete). Open questions are in
   entity.
 - [ ] False-positive counts, and custom detector patterns (an entity registry
   the engine reads).
-- [ ] Provider credentials: list, replace, test connection.
+- [x] Provider credentials: add a provider, list, replace, test connection
+  (2026-10-05, decisions §6).
   - Onboarding is real in api mode (2026-10-05): it lists `/backends` with
     observed health, creates a real key for the chosen backend's models,
     shows the gateway URL from `/session`, and waits for that key's first
     receipt. "Send a test request for me" is `POST /gateway/test`: one small
     request through the gateway, in its own `X-Session-Id` (Envoy replaces a
-    caller's x-request-id, which receipt ids derive from). Adding a provider
-    and its credentials stays not connected: backends are desired state in
-    Postgres, with no editor yet.
+    caller's x-request-id, which receipt ids derive from).
+  - Server: `POST/PUT/DELETE /backends` (audit rows, If-Match on edit and
+    delete, delete refused while routed), `PUT /backends/{name}/key`,
+    `POST /backends/test` (unsaved: the key in the body only) and
+    `POST /backends/{name}/test`, which list the provider's models or give
+    its error verbatim, key removed. Migration 012 adds the key's prefix,
+    when it was set and the last test; the key goes to a `routing.KeyStore`
+    (locally the owner-only `tmp/aigw/provider-keys.env` aigw starts with).
+    The compiled Secret's `stargate.dev/key-version` annotation makes a
+    replaced key a pending `key replaced` change, applied by a restart (the
+    test stack recreates its container). Unknown models join the catalog
+    with no price.
+  - Console: Routing's "Add provider" (provider tiles, with Bedrock, Azure
+    and Vertex disabled for want of cloud credentials; name, base URL,
+    region, a password field for the key, Test connection, models to add
+    from the test) and, in a backend's drawer, the key's prefix and last
+    test, Edit provider, Replace key, Test connection and Delete provider.
+    Onboarding's "Connect a new provider" saves one, routes its models to
+    it and applies before the key step. Settings → Providers lists each
+    backend's key by prefix and its last test. Rotation reminders aren't
+    built.
+  - fake-openai: `GET /{backend}/v1/models`, and a `keyed` backend that
+    wants `fakellm.KeyedKey` and answers 401 otherwise.
+  - Exit tests (api mode): an API test adds a provider at fake-openai's
+    keyed backend (wrong key → 401 verbatim, right key → models), saves it,
+    checks no response carries the key, routes to it, applies, sees a
+    receipt land on it, replaces the key (pending, applied → 401, right key
+    → 200), edits and deletes it (refused while routed); a UI test does the
+    same on Routing; an onboarding test connects one and sends the first
+    request through it.
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, provenance, reconcile events over
   SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership
-  questions are answered: docs/llm-serving-pack-survey.md). Backend editing
-  and provider credentials. Content capture per route compiles to nothing yet.
+  questions are answered: docs/llm-serving-pack-survey.md), and a
+  Kubernetes KeyStore writing Secrets. Cloud-credential providers (Bedrock,
+  Azure, Vertex). Content capture per route compiles to nothing yet.
 - [ ] Signed receipt export, and revealing content with an audit row.
 - [ ] Traffic sampling (§7.5.3): above a rate threshold the stream sends 1 in
   N, with the rate in the header. Today the stream only counts and reports

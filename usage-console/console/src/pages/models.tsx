@@ -22,6 +22,8 @@ type Tab = 'catalog' | 'aliases' | 'pricing'
 const live = dataMode === 'api'
 
 function ctx(n: number) {
+  // 0: unknown, for a model added with a provider (no context length known).
+  if (!n) return '—'
   return n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`
 }
 

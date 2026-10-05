@@ -3,6 +3,9 @@
 // latency and streaming chunks when asked. With an X-Fake-Echo header it
 // repeats the prompt instead (fakellm.Echo). Like a real provider, it rejects a
 // Stargate API key: the gateway must never forward the caller's credentials.
+// GET /{backend}/v1/models lists a backend's models. The "keyed" backend
+// (fakellm.KeyedBackend) wants its own provider key, as a real provider does,
+// answers 401 without it, and echoes the prompt.
 package main
 
 import (
@@ -25,9 +28,33 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{backend}/v1/chat/completions", handle)
+	mux.HandleFunc("GET /{backend}/v1/models", listModels)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	log.Printf("fake-openai listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
+}
+
+// authorized answers 401 for a backend whose provider key the request lacks.
+func authorized(w http.ResponseWriter, req *http.Request) bool {
+	if fakellm.Authorized(req.PathValue("backend"), req.Header.Get("Authorization")) {
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	w.Write([]byte(fakellm.Unauthorized))
+	return false
+}
+
+func listModels(w http.ResponseWriter, req *http.Request) {
+	if !authorized(w, req) {
+		return
+	}
+	var data []any
+	for _, m := range fakellm.ModelsFor(req.PathValue("backend")) {
+		data = append(data, map[string]any{"id": m, "object": "model", "owned_by": "fake-openai"})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 }
 
 func handle(w http.ResponseWriter, req *http.Request) {
@@ -38,6 +65,9 @@ func handle(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	if !authorized(w, req) {
+		return
+	}
 	var cr fakellm.ChatRequest
 	if err := json.NewDecoder(req.Body).Decode(&cr); err != nil {
 		http.Error(w, `{"error":{"message":"invalid json"}}`, http.StatusBadRequest)
@@ -45,7 +75,7 @@ func handle(w http.ResponseWriter, req *http.Request) {
 	}
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	p := fakellm.Simulate(req.PathValue("backend"), cr, r)
-	if req.Header.Get("X-Fake-Echo") != "" {
+	if req.Header.Get("X-Fake-Echo") != "" || req.PathValue("backend") == fakellm.KeyedBackend {
 		// For checks through the gateway: reply with the prompt as it arrived,
 		// and say so in a header too, which nothing on the way back rewrites
 		// (Warden restores redacted values in the body).

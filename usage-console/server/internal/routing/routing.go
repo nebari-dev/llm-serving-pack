@@ -23,10 +23,17 @@ import (
 // Namespace is where aigw's standalone config keeps everything.
 const Namespace = "default"
 
-// RouteName is the one AIGatewayRoute the console's routes compile into. The
-// gateway's BackendTrafficPolicy (retries, health checks) targets the HTTPRoute
-// generated from it by this name.
-const RouteName = "aigw-run"
+// RouteName is the AIGatewayRoute the console's routes compile into, with
+// -2, -3… when they need more than MaxRules. HintRouteName holds Warden's
+// reroute hints the same way.
+const (
+	RouteName     = "aigw-run"
+	HintRouteName = "stargate-hints"
+)
+
+// MaxRules is Gateway API's limit on rules per HTTPRoute, which each
+// AIGatewayRoute becomes.
+const MaxRules = 16
 
 // Object is one resource of the gateway's config, comments stripped.
 type Object struct {
@@ -78,9 +85,16 @@ type doc struct {
 }
 
 type meta struct {
-	Name      string `yaml:"name"`
-	Namespace string `yaml:"namespace"`
+	Name        string            `yaml:"name"`
+	Namespace   string            `yaml:"namespace"`
+	Annotations map[string]string `yaml:"annotations,omitempty"`
 }
+
+// KeyVersionAnnotation is on a provider key's Secret: when the console last
+// set the key. The key itself is never in the config (the Secret names the
+// environment variable holding it), so this is what makes a replaced key a
+// change to apply, and the restart that apply does is what loads it.
+const KeyVersionAnnotation = "stargate.dev/key-version"
 
 type ref struct {
 	Name  string `yaml:"name,omitempty"`
@@ -204,21 +218,38 @@ func intp(i int) *int { return &i }
 // Compile is the gateway config for the desired state: the AIGatewayRoute,
 // then each backend's resources. A backend with no endpoint is left out.
 func Compile(backends []model.Backend, routes []model.Route) []Object {
-	spec := routeSpec{ParentRefs: []ref{{Name: RouteName, Kind: "Gateway", Group: "gateway.networking.k8s.io"}}, LLMRequestCosts: costs}
+	var hints, rules []rule
 	for _, b := range backends {
 		if b.Endpoint != nil {
-			spec.Rules = append(spec.Rules, rule{
+			hints = append(hints, rule{
 				Matches:     []match{{Headers: []header{{Name: HintHeader, Value: b.Name}, {Type: "RegularExpression", Name: ModelHeader, Value: ".+"}}}},
 				BackendRefs: []backendRef{{Name: b.Name}},
 			})
 		}
 	}
 	for _, r := range routes {
-		spec.Rules = append(spec.Rules, compileRule(r))
+		rules = append(rules, compileRule(r))
 	}
-	out := []Object{newObject("aigateway.envoyproxy.io/v1beta1", "AIGatewayRoute", RouteName, spec)}
+	out := aiGatewayRoutes(RouteName, rules)
+	out = append(out, aiGatewayRoutes(HintRouteName, hints)...)
 	for _, b := range backends {
 		out = append(out, backendObjects(b)...)
+	}
+	return out
+}
+
+// aiGatewayRoutes puts rules in order into AIGatewayRoutes of at most
+// MaxRules: name, then name-2, name-3… Among rules with as many matches the
+// gateway tries routes by name, then rules in order, so order holds.
+func aiGatewayRoutes(name string, rules []rule) []Object {
+	var out []Object
+	for i := 0; i < len(rules); i += MaxRules {
+		n := name
+		if i > 0 {
+			n = fmt.Sprintf("%s-%d", name, i/MaxRules+1)
+		}
+		spec := routeSpec{ParentRefs: []ref{{Name: RouteName, Kind: "Gateway", Group: "gateway.networking.k8s.io"}}, Rules: rules[i:min(i+MaxRules, len(rules))], LLMRequestCosts: costs}
+		out = append(out, newObject("aigateway.envoyproxy.io/v1beta1", "AIGatewayRoute", n, spec))
 	}
 	return out
 }
@@ -242,6 +273,10 @@ func backendObjects(b model.Backend) []Object {
 	}
 	if e.APIKeyEnv != "" {
 		secret := b.Name + "-key"
+		sm := meta{Name: secret, Namespace: Namespace}
+		if e.KeyVersion != "" {
+			sm.Annotations = map[string]string{KeyVersionAnnotation: e.KeyVersion}
+		}
 		out = append(out,
 			newObject("aigateway.envoyproxy.io/v1beta1", "BackendSecurityPolicy", secret, securityPolicySpec{
 				TargetRefs: []groupRef{{Group: "aigateway.envoyproxy.io", Kind: "AIServiceBackend", Name: b.Name}},
@@ -249,7 +284,7 @@ func backendObjects(b model.Backend) []Object {
 				APIKey:     apiKey{SecretRef: meta{Name: secret, Namespace: Namespace}},
 			}),
 			Object{Kind: "Secret", Name: secret, node: toNode(doc{
-				APIVersion: "v1", Kind: "Secret", Metadata: meta{Name: secret, Namespace: Namespace}, Type: "Opaque",
+				APIVersion: "v1", Kind: "Secret", Metadata: sm, Type: "Opaque",
 				StringData: map[string]string{"apiKey": "${" + e.APIKeyEnv + ":-not-set}"},
 			})},
 		)
@@ -404,8 +439,27 @@ func Render(base []byte, objs []Object) []byte {
 type Change struct {
 	Kind   string `json:"kind"`
 	Name   string `json:"name"`
-	Change string `json:"change"` // added, changed or removed
+	Change string `json:"change"` // added, changed, removed, or "key replaced"
 	Diff   string `json:"diff"`
+}
+
+// withoutKeyVersion is a Secret's value with its key version left out.
+func withoutKeyVersion(o Object) any {
+	v, _ := o.value().(map[string]any)
+	md, _ := v["metadata"].(map[string]any)
+	if ann, ok := md["annotations"].(map[string]any); ok {
+		delete(ann, KeyVersionAnnotation)
+		if len(ann) == 0 {
+			delete(md, "annotations")
+		}
+	}
+	return v
+}
+
+// keyReplaced is whether running and desired are the same Secret but for
+// the key version: the key was set or replaced since the last apply.
+func keyReplaced(running, desired Object) bool {
+	return desired.Kind == "Secret" && reflect.DeepEqual(withoutKeyVersion(running), withoutKeyVersion(desired))
 }
 
 // Diff is what applying desired would change in running: desired's order,
@@ -423,7 +477,11 @@ func Diff(running, desired []Object) []Change {
 		switch {
 		case !ok:
 			out = append(out, Change{o.Kind, o.Name, "added", lineDiff("", o.YAML())})
-		case !reflect.DeepEqual(r.value(), o.value()):
+		case reflect.DeepEqual(r.value(), o.value()):
+		case keyReplaced(r, o):
+			// The diff is the version annotation; the key is in neither copy.
+			out = append(out, Change{o.Kind, o.Name, "key replaced", lineDiff(r.YAML(), o.YAML())})
+		default:
 			// Lay the running copy's keys out like ours, so the diff shows
 			// only what differs.
 			shown := cloneNode(r.node)
@@ -554,22 +612,26 @@ func find(objs []Object, kind, name string) (Object, bool) {
 	return Object{}, false
 }
 
-// RouteInSync is whether the running AIGatewayRoute has the route's rule as
-// it is now.
+// RouteInSync is whether a running AIGatewayRoute has the route's rule as it
+// is now.
 func RouteInSync(running []Object, r model.Route) bool {
-	o, ok := find(running, "AIGatewayRoute", RouteName)
-	if !ok {
-		return false
-	}
-	var spec struct {
-		Rules []any `yaml:"rules"`
-	}
-	if err := get(o.node, "spec").Decode(&spec); err != nil {
-		return false
-	}
 	var want any
 	_ = toNode(compileRule(r)).Decode(&want)
-	return slices.ContainsFunc(spec.Rules, func(x any) bool { return reflect.DeepEqual(x, want) })
+	for _, o := range running {
+		if o.Kind != "AIGatewayRoute" {
+			continue
+		}
+		var spec struct {
+			Rules []any `yaml:"rules"`
+		}
+		if err := get(o.node, "spec").Decode(&spec); err != nil {
+			continue
+		}
+		if slices.ContainsFunc(spec.Rules, func(x any) bool { return reflect.DeepEqual(x, want) }) {
+			return true
+		}
+	}
+	return false
 }
 
 // BackendInSync is whether the gateway runs every resource the backend

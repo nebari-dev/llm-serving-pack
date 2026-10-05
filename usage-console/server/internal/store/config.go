@@ -48,27 +48,6 @@ func (s *Store) Aliases(ctx context.Context, tenant string) (map[string]string, 
 	return out, err
 }
 
-func (s *Store) Backends(ctx context.Context, tenant string) ([]model.Backend, error) {
-	rows, _ := s.Config.Query(ctx, `
-		SELECT name, provider, region, provenance, sync_state, coalesce(source_ref, ''), models, health, p50_ms, error_rate::float8, capture_content,
-		       schema, coalesce(prefix, ''), host, port, tls, coalesce(api_key_env, '')
-		FROM backends WHERE tenant_id = $1 ORDER BY ordinal`, tenant)
-	return collect(rows, func(r pgx.Rows) (model.Backend, error) {
-		var b model.Backend
-		var schema, host, port *string
-		var e model.BackendEndpoint
-		if err := r.Scan(&b.Name, &b.Provider, &b.Region, &b.Provenance, &b.Sync, &b.Source, &b.Models, &b.Health, &b.P50, &b.ErrorRate, &b.CaptureContent,
-			&schema, &e.Prefix, &host, &port, &e.TLS, &e.APIKeyEnv); err != nil {
-			return b, err
-		}
-		if host != nil {
-			e.Schema, e.Host, e.Port = *schema, *host, *port
-			b.Endpoint = &e
-		}
-		return b, nil
-	})
-}
-
 // Budgets returns caps only; spend is filled in from the receipts db.
 func (s *Store) Budgets(ctx context.Context, tenant string) ([]model.Budget, error) {
 	rows, _ := s.Config.Query(ctx, `SELECT `+budgetCols+` FROM budgets WHERE tenant_id = $1 ORDER BY id`, tenant)

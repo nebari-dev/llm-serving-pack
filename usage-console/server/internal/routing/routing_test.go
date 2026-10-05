@@ -1,7 +1,9 @@
 package routing
 
 import (
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,26 +37,82 @@ func diffLines(c Change) (added, removed []string) {
 	return
 }
 
-// The seed is the hand-written config as it stood when the console took it
-// over, so compiling it reproduces that config's routing. The one difference
-// is Warden's reroute hint: the hand-written config only had it for the four
-// fake backends, so a rule rerouting to local or openrouter fell through to
-// the model's own route.
-func TestSeedCompilesToTodaysConfig(t *testing.T) {
-	running := readOwned(t, "testdata/config-2026-10-05.yaml")
-	changes := Diff(running, Compile(demo.Backends, demo.Routes))
-	if len(changes) != 1 || changes[0].Kind != "AIGatewayRoute" || changes[0].Name != "aigw-run" || changes[0].Change != "changed" {
-		t.Fatalf("changes = %+v, want only AIGatewayRoute aigw-run changed", changes)
-	}
-	added, removed := diffLines(changes[0])
-	if len(removed) != 0 || len(added) != 18 {
-		t.Fatalf("diff removes %d and adds %d lines, want 0 and 18:\n%s", len(removed), len(added), changes[0].Diff)
-	}
-	text := strings.Join(added, "\n")
-	for _, want := range []string{"value: local", "- name: local", "value: openrouter", "- name: openrouter"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("added lines lack %q:\n%s", want, text)
+// rulesOf is every rule of every AIGatewayRoute in objs, as YAML.
+func rulesOf(t *testing.T, objs []Object) []string {
+	t.Helper()
+	var out []string
+	for _, o := range objs {
+		if o.Kind != "AIGatewayRoute" {
+			continue
 		}
+		var spec struct {
+			Rules []any `yaml:"rules"`
+		}
+		if err := get(o.node, "spec").Decode(&spec); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range spec.Rules {
+			out = append(out, encode(toNode(r)))
+		}
+	}
+	return out
+}
+
+// The seed is the hand-written config as it stood when the console took it
+// over, so compiling it gives the gateway the same rules: the hand-written
+// config's, plus Warden's reroute hint for local and openrouter, which it
+// lacked (a rule rerouting there fell through to the model's own route). The
+// hints now live in their own AIGatewayRoute.
+func TestSeedCompilesToTodaysConfig(t *testing.T) {
+	was := rulesOf(t, readOwned(t, "testdata/config-2026-10-05.yaml"))
+	now := rulesOf(t, Compile(demo.Backends, demo.Routes))
+	extra := slices.Clone(now)
+	for _, r := range was {
+		i := slices.Index(extra, r)
+		if i < 0 {
+			t.Fatalf("compiled routing lacks the hand-written rule:\n%s", r)
+		}
+		extra = slices.Delete(extra, i, i+1)
+	}
+	if len(extra) != 2 || !strings.Contains(extra[0], "value: local") || !strings.Contains(extra[1], "value: openrouter") {
+		t.Fatalf("compiled routing adds %d rules, want the local and openrouter hints:\n%s", len(extra), strings.Join(extra, "---\n"))
+	}
+}
+
+// Gateway API allows 16 rules per route (an HTTPRoute, which each
+// AIGatewayRoute becomes): hints and routes each split across as many
+// AIGatewayRoutes as they need, in order, so rule order still holds among
+// equals (routes with the same match count are tried by name).
+func TestCompileSplitsAt16Rules(t *testing.T) {
+	var bs []model.Backend
+	for i := range 20 {
+		b := demo.Backends[0]
+		b.Name = fmt.Sprintf("b%02d", i)
+		bs = append(bs, b)
+	}
+	var rs []model.Route
+	for i := range 33 {
+		rs = append(rs, model.Route{Name: fmt.Sprintf("r%02d", i), Match: model.RouteMatch{Models: []string{fmt.Sprintf("m%02d", i)}}, Targets: []model.RouteTarget{{Backend: "b00"}}})
+	}
+	sizes := map[string]int{}
+	var names []string
+	for _, o := range Compile(bs, rs) {
+		if o.Kind == "AIGatewayRoute" {
+			names = append(names, o.Name)
+			sizes[o.Name] = len(rulesOf(t, []Object{o}))
+		}
+	}
+	if got, want := strings.Join(names, " "), "aigw-run aigw-run-2 aigw-run-3 stargate-hints stargate-hints-2"; got != want {
+		t.Fatalf("AIGatewayRoutes = %s, want %s", got, want)
+	}
+	for n, want := range map[string]int{"aigw-run": 16, "aigw-run-2": 16, "aigw-run-3": 1, "stargate-hints": 16, "stargate-hints-2": 4} {
+		if sizes[n] != want {
+			t.Errorf("%s has %d rules, want %d", n, sizes[n], want)
+		}
+	}
+	running := Compile(bs, rs)
+	if !RouteInSync(running, rs[32]) {
+		t.Errorf("a route in the third AIGatewayRoute isn't in sync with a config compiled from it")
 	}
 }
 
@@ -141,10 +199,10 @@ func TestDiff(t *testing.T) {
 		}
 		return strings.Join(s, ", ")
 	}
-	if got, want := kinds(Diff(one, two)), "changed AIGatewayRoute/aigw-run, added Backend/anthropic-prod, added AIServiceBackend/anthropic-prod"; got != want {
+	if got, want := kinds(Diff(one, two)), "changed AIGatewayRoute/stargate-hints, added Backend/anthropic-prod, added AIServiceBackend/anthropic-prod"; got != want {
 		t.Errorf("Diff(one, two) = %s, want %s", got, want)
 	}
-	if got, want := kinds(Diff(two, one)), "changed AIGatewayRoute/aigw-run, removed Backend/anthropic-prod, removed AIServiceBackend/anthropic-prod"; got != want {
+	if got, want := kinds(Diff(two, one)), "changed AIGatewayRoute/stargate-hints, removed Backend/anthropic-prod, removed AIServiceBackend/anthropic-prod"; got != want {
 		t.Errorf("Diff(two, one) = %s, want %s", got, want)
 	}
 	if got := Diff(two, two); len(got) != 0 {

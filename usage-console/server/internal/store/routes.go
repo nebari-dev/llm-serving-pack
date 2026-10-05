@@ -195,11 +195,14 @@ type RoutingApply struct {
 	OK      bool             `json:"ok"`
 	Error   string           `json:"error,omitempty"`
 	Changes []routing.Change `json:"changes"`
+	// Attempted is what the apply tried (api.attempted), for a failed one's
+	// sync states.
+	Attempted map[string]string `json:"-"`
 }
 
-// RecordApply logs an apply and its audit row. Changes keep their kind, name
-// and change, not their diffs.
-func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, applyErr string, changes []routing.Change) error {
+// RecordApply logs an apply, what it tried, and its audit row. Changes keep
+// their kind, name and change, not their diffs.
+func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, applyErr string, changes []routing.Change, tried map[string]string) error {
 	brief := make([]routing.Change, len(changes))
 	var names []string
 	for i, c := range changes {
@@ -216,7 +219,8 @@ func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, 
 	if !ok {
 		errCol = &applyErr
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO routing_applies (tenant_id, actor, ok, error, changes) VALUES ($1,$2,$3,$4,$5)`, tenant, actor, ok, errCol, cj); err != nil {
+	tj, _ := json.Marshal(tried)
+	if _, err := tx.Exec(ctx, `INSERT INTO routing_applies (tenant_id, actor, ok, error, changes, attempted) VALUES ($1,$2,$3,$4,$5,$6)`, tenant, actor, ok, errCol, cj, tj); err != nil {
 		return err
 	}
 	action, target := "Applied routing", fmt.Sprintf("%d %s: %s", len(changes), plural(len(changes), "change", "changes"), strings.Join(names, ", "))
@@ -241,9 +245,9 @@ func (s *Store) LastApply(ctx context.Context, tenant string) (*RoutingApply, er
 	var a RoutingApply
 	var ts time.Time
 	var errCol *string
-	var changes []byte
-	err := s.Config.QueryRow(ctx, `SELECT ts, actor, ok, error, changes FROM routing_applies WHERE tenant_id = $1 ORDER BY ts DESC, id DESC LIMIT 1`, tenant).
-		Scan(&ts, &a.Actor, &a.OK, &errCol, &changes)
+	var changes, tried []byte
+	err := s.Config.QueryRow(ctx, `SELECT ts, actor, ok, error, changes, attempted FROM routing_applies WHERE tenant_id = $1 ORDER BY ts DESC, id DESC LIMIT 1`, tenant).
+		Scan(&ts, &a.Actor, &a.OK, &errCol, &changes, &tried)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -254,5 +258,5 @@ func (s *Store) LastApply(ctx context.Context, tenant string) (*RoutingApply, er
 	if errCol != nil {
 		a.Error = *errCol
 	}
-	return &a, json.Unmarshal(changes, &a.Changes)
+	return &a, errors.Join(json.Unmarshal(changes, &a.Changes), json.Unmarshal(tried, &a.Attempted))
 }

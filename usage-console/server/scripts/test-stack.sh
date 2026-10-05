@@ -7,6 +7,7 @@
 #   scripts/test-stack.sh restart   rebuild and restart its processes, keeping the data
 #   scripts/test-stack.sh down      stop it
 #   scripts/test-stack.sh reset     stop it, drop its databases, start fresh
+#   scripts/test-stack.sh aigw      recreate the gateway container (what an apply runs)
 #
 # Then, from console/:  npm run test:api
 #
@@ -18,7 +19,9 @@
 #                 fixed internal ports), reaching the above via host.docker.internal.
 #                 It runs tmp/aigw-test/config.yaml, written from aigw/base.yaml and
 #                 the test db's routing; the api applies routing there and
-#                 restarts the container.
+#                 recreates the container, with server/.env and the provider keys
+#                 set from the console (tmp/aigw-test/provider-keys.env) as its
+#                 environment.
 #   trafficgen    0.5 rps into :2975
 #
 # fake-openai (:8090) and the local model server are shared with the dev
@@ -51,6 +54,26 @@ stop_port() {
 
 psql_in() { docker compose exec -T "$1" psql -U stargate -d "$2" -Atq -c "$3"; }
 
+# run_aigw (re)creates the gateway container. Its environment is fixed when
+# the container is created (`docker restart` keeps it), so an apply recreates
+# it to pick up provider keys set from the console. They're merged over
+# server/.env into one owner-only env file, the console's winning.
+run_aigw() {
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  local merged="$AIGW_DIR/aigw.env"
+  ( umask 077
+    { if [ -f .env ]; then cat .env; echo; fi; if [ -f "$AIGW_DIR/provider-keys.env" ]; then cat "$AIGW_DIR/provider-keys.env"; fi; } |
+      awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { if (!($1 in at)) order[++n] = $1; at[$1] = $0 } END { for (i = 1; i <= n; i++) print at[order[i]] }' >"$merged" )
+  docker run -d --name "$CONTAINER" -p 2975:1975 -v "$PWD/$AIGW_DIR:/config:ro" --env-file "$merged" \
+    -e STARGATE_HOST=host.docker.internal -e LOCAL_LLM_HOST=host.docker.internal \
+    -e STARGATE_AUTHZ_PORT=9082 -e STARGATE_WARDEN_PORT=9083 -e STARGATE_OTLP_PORT=9317 \
+    "$IMAGE" run /config/config.yaml >/dev/null
+  for _ in $(seq 1 120); do
+    docker logs "$CONTAINER" 2>&1 | grep -q "listening on" && break
+    sleep 0.5
+  done
+}
+
 ensure_db() { # container, admin db, test db
   if [ -z "$(psql_in "$1" "$2" "SELECT 1 FROM pg_database WHERE datname = '$3'")" ]; then
     psql_in "$1" "$2" "CREATE DATABASE $3"
@@ -68,7 +91,7 @@ up() {
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \
       -gateway http://localhost:2975 -environment test \
-      -aigw-config "$AIGW_DIR/config.yaml" -aigw-restart "docker restart $CONTAINER" -aigw-log "docker logs --tail 30 $CONTAINER 2>&1" \
+      -aigw-config "$AIGW_DIR/config.yaml" -aigw-restart "scripts/test-stack.sh aigw" -aigw-log "docker logs --tail 30 $CONTAINER 2>&1" \
       >>"$LOGS/test-stargate-api.log" 2>&1 &
     wait_up 9080 stargate-api
   fi
@@ -87,19 +110,7 @@ up() {
   fi
 
   [ -f "$AIGW_DIR/config.yaml" ] || "$BIN/stargate-api" routing write -o "$AIGW_DIR/config.yaml" >>"$LOGS/test-stargate-api.log" 2>&1
-  if [ -z "$(docker ps -q -f name="^$CONTAINER$")" ]; then
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    local envfile=()
-    [ -f .env ] && envfile=(--env-file .env)
-    docker run -d --name "$CONTAINER" -p 2975:1975 -v "$PWD/$AIGW_DIR:/config:ro" ${envfile[@]+"${envfile[@]}"} \
-      -e STARGATE_HOST=host.docker.internal -e LOCAL_LLM_HOST=host.docker.internal \
-      -e STARGATE_AUTHZ_PORT=9082 -e STARGATE_WARDEN_PORT=9083 -e STARGATE_OTLP_PORT=9317 \
-      "$IMAGE" run /config/config.yaml >/dev/null
-    for _ in $(seq 1 120); do
-      docker logs "$CONTAINER" 2>&1 | grep -q "listening on" && break
-      sleep 0.5
-    done
-  fi
+  [ -n "$(docker ps -q -f name="^$CONTAINER$")" ] || run_aigw
 
   if ! { [ -f "$LOGS/test-trafficgen.pid" ] && kill -0 "$(cat "$LOGS/test-trafficgen.pid")" 2>/dev/null; }; then
     nohup "$BIN/trafficgen" -gateway http://localhost:2975 -rps 0.5 >>"$LOGS/test-trafficgen.log" 2>&1 &
@@ -126,7 +137,8 @@ case "${1:-up}" in
     down
     psql_in configdb stargate "DROP DATABASE IF EXISTS stargate_test"
     psql_in receiptsdb receipts "DROP DATABASE IF EXISTS receipts_test"
-    rm -f "$AIGW_DIR/config.yaml"
+    rm -f "$AIGW_DIR/config.yaml" "$AIGW_DIR/provider-keys.env" "$AIGW_DIR/aigw.env"
     up ;;
-  *) echo "usage: $0 up|down|restart|reset" >&2; exit 2 ;;
+  aigw) run_aigw ;;
+  *) echo "usage: $0 up|down|restart|reset|aigw" >&2; exit 2 ;;
 esac

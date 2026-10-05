@@ -14,7 +14,9 @@
 #   aigw    Agent Router (:1975) on tmp/aigw/config.yaml, written from
 #           aigw/base.yaml and Postgres's routing the first time; needed after
 #           editing aigw/base.yaml (then delete tmp/aigw/config.yaml first, or
-#           apply from the console). Uses $AIGW (default: aigw on PATH).
+#           apply from the console). Its environment is server/.env, then the
+#           provider keys in tmp/aigw/provider-keys.env (set from the console).
+#           Uses $AIGW (default: aigw on PATH).
 #
 # Run `make migrate` first if you added a migration.
 #
@@ -31,7 +33,19 @@ BIN=${BIN:-bin}
 LOGS=${LOGS:-tmp}
 AIGW=${AIGW:-aigw}
 AIGW_CONFIG=tmp/aigw/config.yaml
+AIGW_KEYS=tmp/aigw/provider-keys.env
 mkdir -p "$BIN" "$LOGS"
+
+# load_env exports KEY=VALUE lines with their values taken literally (no
+# quotes or $ expansion: docker --env-file's format), skipping comments.
+load_env() {
+  [ -f "$1" ] || return 0
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '' | '#'*) continue ;; esac
+    export "${line%%=*}=${line#*=}"
+  done <"$1"
+}
 
 what=("$@")
 [ ${#what[@]} -eq 0 ] && what=(api warden)
@@ -86,12 +100,18 @@ for w in "${what[@]}"; do
         wait_down 1975
       fi
       # server/.env (gitignored) holds upstream settings aigw substitutes into
-      # its config: OPENROUTER_API_KEY, LOCAL_LLM_PORT and the rest.
+      # its config: OPENROUTER_API_KEY, LOCAL_LLM_PORT and the rest. Then the
+      # provider keys set from the console, which stargate-api writes to an
+      # owner-only file next to the config; they win over .env.
       if [ ! -f "$AIGW_CONFIG" ]; then
         [ -x "$BIN/stargate-api" ] || go build -o "$BIN/stargate-api" ./cmd/stargate-api
         "$BIN/stargate-api" routing write -o "$AIGW_CONFIG"
       fi
-      ( [ -f .env ] && set -a && . ./.env; nohup "$AIGW" run "$AIGW_CONFIG" >>"$LOGS/aigw.log" 2>&1 & )
+      (
+        if [ -f .env ]; then set -a; . ./.env; set +a; fi
+        load_env "$AIGW_KEYS"
+        nohup "$AIGW" run "$AIGW_CONFIG" >>"$LOGS/aigw.log" 2>&1 &
+      )
       wait_up 1975 aigw ;;
     *) echo "unknown part: $w (want api, warden, ingest or aigw)" >&2; exit 2 ;;
   esac
