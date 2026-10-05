@@ -14,8 +14,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   until OIDC), notification bell (from `/degradations`), version footer
   (console, control plane, Warden). The env switch becomes a label: one
   control plane serves one environment.
-- [x] **Overview.** Gateway overhead isn't measured, so the status strip
-  shows the age of the last receipt instead.
+- [x] **Overview.** The status strip shows the age of the last receipt and
+  the measured gateway overhead p50 (§3, 2026-10-05).
   - Spend today, and the deltas against the previous period.
   - Attention items (rule over baseline, failing backend, key anomaly).
   - Warden cache age.
@@ -187,10 +187,15 @@ when stale; 428 without it on an update or delete). Open questions are in
   - Exit test (§11): the api-mode suite sets a $0.01 block cap through the
     form, drives the gateway until Warden refuses with `budget_exceeded`,
     and finds the blocked receipt with the budget in its trace.
-- [ ] Aliases, including saving the savings analysis's draft alias changes.
-  - Backend done: `PUT`/`DELETE /aliases/{alias}`; overlapping patterns
-    resolve by longest prefix. Console: "New alias" on Models. The savings
-    analysis is still a §3 item.
+- [x] Aliases (2026-10-05). New alias, Edit (retarget) and Delete on Models
+  call `PUT`/`DELETE /aliases/{alias}` with If-None-Match / If-Match; the
+  table shows a write's result at once so a follow-up carries the new etag.
+  Saving the savings analysis's draft alias changes waits on that analysis
+  (§3).
+- [x] Rule order (2026-10-05). Move up/down on Guardrails calls
+  `PUT /rules/order {from, to}`: order decides outcomes (first block wins,
+  last reroute wins), so a `from` that isn't the current order is a 409. One
+  audit row ("Reordered rules", the moves), then Warden reloads.
 - [ ] Detector thresholds. On hold (decided 2026-09-30): the regex
   detectors have no confidence to threshold (decisions §6).
 - [x] Key rotation: extend the overlap, retire the old secret now.
@@ -218,6 +223,24 @@ when stale; 428 without it on an update or delete). Open questions are in
     a sync runs at once.
   - Proposals: accept or dismiss.
 
+## 2b. Backends seen, not seeded (2026-10-05)
+
+- [x] `GET /backends` health, p50 and error rate come from receipts, never the
+  seed: health from the banner's 15-minute window (idle with no requests,
+  down when every request of at least 3 failed, degraded on the banner's
+  failing rule or when every one of fewer failed), p50 and errors from the
+  last hour, with `requests1h`. Errors count every upstream failure,
+  auth included. Overview's strip and Routing poll it. The engine's own
+  reroute still reads the seeded health column.
+- [x] Real upstreams next to fake-openai: `local` (any OpenAI-compatible
+  server on this machine; Docker Model Runner by default, serving `smollm2`)
+  and `openrouter` (`gpt-4o-mini`, priced from LiteLLM's
+  `openrouter/openai/gpt-4o-mini`), with key `local-dev` (k8) allowed both.
+  `OPENROUTER_API_KEY` and the local server's port/prefix/model go in
+  `server/.env` (see `.env.example`). A receipt keeps the catalog model when
+  the upstream names its own (a GGUF path, `openai/gpt-4o-mini`) and the
+  trace says what the upstream called it.
+
 ## 3. New systems
 
 - [ ] Replay: run Warden's evaluator over stored receipts. Needs content
@@ -234,15 +257,34 @@ when stale; 428 without it on an update or delete). Open questions are in
   entity.
 - [ ] False-positive counts, and custom detector patterns (an entity registry
   the engine reads).
-- [ ] Provider credentials: list, replace, test connection. Also onboarding.
+- [ ] Provider credentials: list, replace, test connection.
+  - Onboarding is real in api mode (2026-10-05): it lists `/backends` with
+    observed health, creates a real key for the chosen backend's models,
+    shows the gateway URL from `/session`, and waits for that key's first
+    receipt. "Send a test request for me" is `POST /gateway/test`: one small
+    request through the gateway, in its own `X-Session-Id` (Envoy replaces a
+    caller's x-request-id, which receipt ids derive from). Adding a provider
+    and its credentials stays not connected: backends come from
+    `server/aigw/config.yaml`.
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, reconcile events.
 - [ ] Signed receipt export, and revealing content with an audit row.
 - [ ] Traffic sampling (§7.5.3): above a rate threshold the stream sends 1 in
   N, with the rate in the header. Today the stream only counts and reports
   what it dropped.
-- [ ] Model modalities and deprecation dates (new catalog columns).
-- [ ] Gateway overhead p50 (not in receipts today).
+- [x] Model modalities and deprecation dates (2026-10-05). The daily
+  LiteLLM sync also saves, per priced-from key, the input modalities
+  (`supports_vision`/`_audio_input`/`_pdf_input`, transcription = audio
+  only) and `deprecation_date` (`litellm_facts`). `GET /models` adds the
+  union of modalities over the model's backends and each backend's
+  retirement date; Models → Catalog flags dates within 30 days. A model no
+  backend has an entry for shows Unknown (smollm2, llama-3.3-70b,
+  claude-opus-4-1 on anthropic-prod).
+- [x] Gateway overhead p50 (2026-10-05). The access log carries
+  `%COMMON_DURATION(DS_RX_END:US_TX_BEG:us)%` (whole request received to
+  first byte upstream: key check, Warden, Agent Router) into
+  `receipts.overhead_us`; `GET /gateway/overhead` gives the last hour's p50
+  and p95 against spec G6's 10ms, shown on the Overview status strip.
 - [ ] Spend savings analysis (§7.5.5): requests a cheaper same-family model
   would have served. Needs output length per request, or an aggregate of it.
 - [ ] Spend close report as a PDF, with an audit row for each export.

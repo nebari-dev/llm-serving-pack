@@ -89,6 +89,10 @@ func (g *Generator) Next(r *rand.Rand) Request {
 	if k.Team == "agents" {
 		maxTokens = 2400
 	}
+	if m == "smollm2" || m == "gpt-4o-mini" {
+		// Real upstreams: a small model on this machine, OpenRouter's billing.
+		promptTokens, maxTokens = 40+r.IntN(200), 64
+	}
 	user := text(r, promptTokens)
 
 	req := Request{

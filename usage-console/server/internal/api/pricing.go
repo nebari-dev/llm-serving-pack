@@ -368,6 +368,15 @@ func (s *Server) dismissProposal(_ http.ResponseWriter, r *http.Request, t strin
 
 // fetchLiteLLM loads and parses LiteLLM's price file.
 func (s *Server) fetchLiteLLM(ctx context.Context) (map[string]pricing.Rates, error) {
+	b, err := s.fetchLiteLLMFile(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pricing.ParseLiteLLM(b)
+}
+
+// fetchLiteLLMFile loads LiteLLM's price file.
+func (s *Server) fetchLiteLLMFile(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.liteLLMURL(), nil)
@@ -382,11 +391,7 @@ func (s *Server) fetchLiteLLM(ctx context.Context) (map[string]pricing.Rates, er
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s returned %d", s.liteLLMURL(), res.StatusCode)
 	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
-	if err != nil {
-		return nil, err
-	}
-	return pricing.ParseLiteLLM(b)
+	return io.ReadAll(io.LimitReader(res.Body, 64<<20))
 }
 
 // SyncPrices fetches LiteLLM's file and applies it (store.ApplySync). One
@@ -395,7 +400,11 @@ func (s *Server) SyncPrices(ctx context.Context) error {
 	s.syncMu.Lock()
 	defer s.syncMu.Unlock()
 	started := time.Now()
-	file, err := s.fetchLiteLLM(ctx)
+	raw, err := s.fetchLiteLLMFile(ctx)
+	var file map[string]pricing.Rates
+	if err == nil {
+		file, err = pricing.ParseLiteLLM(raw)
+	}
 	if err != nil {
 		if rerr := s.Store.RecordSyncFailure(ctx, started, time.Now(), err); rerr != nil {
 			log.Printf("record sync failure: %v", rerr)
@@ -410,6 +419,13 @@ func (s *Server) SyncPrices(ctx context.Context) error {
 		return err
 	}
 	log.Printf("LiteLLM sync: %d applied, %d proposed, %d retired", res.Applied, res.Proposed, res.Retired)
+	// Modalities and deprecation dates ride along; a failure here leaves the
+	// last ones in place and doesn't fail the price sync.
+	if facts, err := pricing.ParseFacts(raw); err != nil {
+		log.Printf("LiteLLM facts: %v", err)
+	} else if err := s.Store.SaveFacts(ctx, facts, time.Now()); err != nil {
+		log.Printf("LiteLLM facts: %v", err)
+	}
 	if res.Applied+res.Retired > 0 {
 		s.afterPriceWrite(ctx)
 	}

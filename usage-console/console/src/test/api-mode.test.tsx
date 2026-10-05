@@ -1,6 +1,7 @@
 // Live check against a running control plane: hydrate from the API, then
-// render every route and open a receipt. Opt-in, since it needs `make dev`:
-//   VITE_STARGATE_API=http://localhost:8080 VITE_DATA=api npx vitest run src/test/api-mode.test.tsx
+// render every route and open a receipt. It writes keys, rules, budgets and
+// audit rows, so it runs against the test stack, never the dev one:
+//   (cd ../server && scripts/test-stack.sh up) && npm run test:api
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -59,6 +60,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 
     catalog = await import('@/data/catalog')
+    // Refuse the dev stack: this suite's writes would land in the console's own history.
+    const env = (await catalog.api<{ environment: string }>('/session')).environment
+    if (env !== 'test') throw new Error(`${base} is the "${env}" control plane; run the suite against the test stack (server/scripts/test-stack.sh up, npm run test:api)`)
     await catalog.hydrate()
     App = (await import('@/App')).default
   })
@@ -103,6 +107,17 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await new Promise((ok) => setTimeout(ok, 500))
     })
     expect(document.body.textContent).toContain(older[0].traceId)
+    cleanup()
+
+    // A recent served receipt carries the gateway's own time on it.
+    const [served] = (await catalog.api<{ id: string; overheadUs?: number }[]>('/receipts?limit=50')).filter((x) => x.overheadUs != null)
+    expect(served).toBeDefined()
+    window.history.pushState({}, '', `/traffic?receipt=${served.id}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    expect(document.body.textContent).toContain(`${(served.overheadUs! / 1000).toFixed(1)}ms gateway overhead`)
   })
 
   it('filters, pages and counts receipts on the server', async () => {
@@ -167,7 +182,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const key = catalog.keys.find((k) => k.name === 'research')!
     expect(catalog.keys.filter((k) => 'budgetId' in k).map((k) => k.name)).toEqual([])
     const [r] = await catalog.api<{ id: string; trace: { step: string; input: string }[] }[]>(`/receipts?limit=1&key=${key.id}&range=1h`)
-    expect(r.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(/^team budget research · \$\d+ of \$20000$/)
+    expect(r.trace.find((s) => s.step === 'Budget checked')?.input).toMatch(/^team budget research · \$[\d.]+ of \$20000$/)
     window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
     render(<App />)
     await act(async () => {
@@ -216,6 +231,92 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const fallbackText = await page('fallback')
     for (const s of ['Recent failovers', '529 overloaded', 'backend not reconciled']) expect(fallbackText).not.toContain(s)
     expect(fallbackText).toContain('Fallback chains')
+  })
+
+  it('reports backend health, p50 and errors from receipts, never the seed', async () => {
+    type B = { name: string; health: string; p50: number; errorRate: number; requests1h: number }
+    const bs = await catalog.api<B[]>('/backends')
+    for (const b of bs) expect(['healthy', 'degraded', 'down', 'idle']).toContain(b.health)
+    // Nothing routes to azure-openai-eu, so it has no receipts: idle, not the seeded "down" at 100%.
+    expect(bs.find((b) => b.name === 'azure-openai-eu')).toMatchObject({ health: 'idle', p50: 0, errorRate: 0, requests1h: 0 })
+    expect(bs.map((b) => b.name)).toEqual(expect.arrayContaining(['local', 'openrouter']))
+
+    window.history.pushState({}, '', '/')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    const strip = screen.getByLabelText('System status').textContent ?? ''
+    expect(strip).not.toContain('not routed')
+    expect(strip).toMatch(/\d+ idle/)
+    r.unmount()
+
+    window.history.pushState({}, '', '/routing?tab=backends')
+    const r2 = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'azure-openai-eu' })[0])
+      await new Promise((ok) => setTimeout(ok, 200))
+    })
+    const text = document.body.textContent ?? ''
+    expect(text).not.toContain('as configured')
+    expect(text).toContain('No requests in the last 15 minutes')
+    r2.unmount()
+  })
+
+  it('onboards for real: a live backend, a new key, and a request through the gateway that lands as a receipt', async () => {
+    window.history.pushState({}, '', '/onboarding')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 400))
+    })
+    const text = () => document.body.textContent ?? ''
+    for (const fake of ['gw.acme.dev', 'Mockup tip', 'ngw_live_7f3a91c4', 'models available']) expect(text()).not.toContain(fake)
+    // The backends the control plane has, with their observed health.
+    choose(screen.getByRole('radio', { name: /^local/ }))
+    expect(text()).toContain('smollm2')
+    let keyId = ''
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Create a key for local' }))
+      })
+      const { gatewayUrl } = await catalog.api<{ gatewayUrl: string }>('/session')
+      await waitFor(() => expect(text()).toContain(gatewayUrl), { timeout: 5000 })
+      keyId = (await catalog.api<{ id: string; name: string; project: string }[]>('/keys')).find((k) => k.project === 'onboarding' && text().includes(k.name))?.id ?? ''
+      expect(keyId).not.toBe('')
+      expect(text()).toMatch(/ngw_live_\w{4}/)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Send a test request for me' }))
+      })
+      // The real model answers, and the page becomes that request's receipt.
+      await waitFor(() => expect(text()).toContain('Your first request'), { timeout: 60_000 })
+      expect(text()).toContain('via local')
+      expect(text()).toMatch(/smollm2/)
+    } finally {
+      if (keyId) await catalog.api(`/keys/${keyId}/revoke`, { method: 'POST' })
+      r.unmount()
+    }
+  }, 90_000)
+
+  it('measures gateway overhead p50 from receipts against the 10ms goal, on Overview', async () => {
+    type O = { p50Ms: number | null; p95Ms: number | null; samples: number; windowMinutes: number; goalMs: number }
+    const o = await catalog.api<O>('/gateway/overhead')
+    expect(o).toMatchObject({ windowMinutes: 60, goalMs: 10 })
+    expect(o.samples).toBeGreaterThan(0) // trafficgen is running
+    expect(o.p50Ms).toBeGreaterThan(0)
+    expect(o.p95Ms!).toBeGreaterThanOrEqual(o.p50Ms!)
+
+    window.history.pushState({}, '', '/')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    const strip = screen.getByLabelText('System status').textContent ?? ''
+    expect(strip).toMatch(/p50 overhead \d+(\.\d)?ms/)
+    expect(strip).not.toContain('2.1ms') // the mockup's number
+    r.unmount()
   })
 
   it('lists server-filtered traffic, with a provider filter from the backends', async () => {
@@ -494,11 +595,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       return text
     }
 
-    // Alias writes are a later slice: the button is there, disabled, with the reason.
     const aliasText = await page('aliases', () => {
-      const add = screen.getByRole('button', { name: /New alias/ })
-      expect(add).toHaveProperty('disabled', true)
-      expect(add.getAttribute('title')).toMatch(/connected yet/i)
+      expect(screen.getByRole('button', { name: /New alias/ })).toHaveProperty('disabled', false)
     })
     expect(aliasText).toContain('summarize-*')
     expect(aliasText).toContain(summarize!.requests24h.toLocaleString('en-US'))
@@ -507,7 +605,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     for (const s of ['31,204', '4,120', 'input tokens < 64k', 'key.team in', 'priya@acme.dev', 'platform-gitops']) expect(aliasText).not.toContain(s)
 
     const priceText = await page('pricing', () => {
-      expect(screen.getByRole('button', { name: /Export CSV/ })).toHaveProperty('disabled', true)
+      expect(screen.getByRole('button', { name: /Export CSV/ })).toHaveProperty('disabled', pricing.changes.length === 0)
       expect(screen.getByRole('button', { name: /Sync now/ })).toHaveProperty('disabled', false)
     })
     for (const p of pricing.prices) expect(priceText).toContain(p.backend)
@@ -521,7 +619,13 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
 
     const catalogText = await page('catalog')
     for (const m of catalog.models) expect(catalogText).toContain(m.id)
-    expect(catalogText).toContain('Not connected yet')
+    // Modalities and retirement dates from LiteLLM, by backend; unknown without an entry.
+    const live = await catalog.api<import('@/data/catalog').Model[]>('/models')
+    for (const m of live) for (const d of m.deprecations ?? []) expect(catalogText).toContain(`${d.date} on ${d.backend}`)
+    expect(live.find((m) => m.id === 'smollm2')?.modalities).toBeUndefined()
+    expect(live.find((m) => m.id === 'gpt-5-mini')?.modalities).toContain('text')
+    expect(catalogText).toContain('Unknown')
+    expect(catalogText).not.toContain('Not connected yet')
     expect(catalogText).not.toContain('Deprecated 2026-12-31')
   })
 
@@ -592,6 +696,68 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     send<{ key: { id: string }; secret: string }>('POST', '/keys', {
       name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
     })
+
+  it('creates, retargets and deletes an alias from Models, with audit rows', async () => {
+    type A = import('@/data/catalog').AliasView & { etag: string }
+    type C = import('@/data/catalog').Change
+    const name = `ui-alias-${Date.now().toString(36)}`
+    window.history.pushState({}, '', '/models?tab=aliases')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /New alias/ }))
+      })
+      let d = await formDialog()
+      fireEvent.change(within(d).getByLabelText('Alias'), { target: { value: name } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('combobox', { name: 'Target model' }))
+      })
+      await act(async () => {
+        choose(await screen.findByRole('option', { name: /^smollm2/ }))
+      })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Create alias' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.getByText(name)).toBeTruthy(), { timeout: 5000 })
+      expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.target).toBe('smollm2')
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created alias', target: `${name} → smollm2` })
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Edit ${name}` }))
+      })
+      d = await formDialog()
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('combobox', { name: 'Target model' }))
+      })
+      await act(async () => {
+        choose(await screen.findByRole('option', { name: /^gpt-4o-mini/ }))
+      })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save' }))
+      })
+      await formDialogClosed()
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed alias target', target: `${name} smollm2 → gpt-4o-mini` })
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Delete ${name}` }))
+      })
+      d = await formDialog()
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Delete alias' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.queryByText(name)).toBeNull(), { timeout: 5000 })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted alias', target: name })
+    } finally {
+      const left = (await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)
+      if (left) await catalog.api(`/aliases/${encodeURIComponent(name)}`, { method: 'DELETE', headers: { 'If-Match': left.etag } })
+      r.unmount()
+    }
+  }, 30_000)
 
   it('writes budgets with dry runs, validation, audit rows and If-Match', async () => {
     type B = import('@/data/catalog').Budget & { etag: string }
@@ -1002,6 +1168,46 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 120_000)
+
+  it('reorders rules on Guardrails against the order the author saw, with an audit row', async () => {
+    type R = { id: string; name: string; ordinal: number }
+    type C = import('@/data/catalog').Change
+    const before = await catalog.api<R[]>('/rules')
+    expect(before.length).toBeGreaterThan(1)
+    const ids = before.map((r) => r.id)
+    const swapped = [ids[1], ids[0], ...ids.slice(2)]
+    expect(await status(send('PUT', '/rules/order', { from: swapped, to: ids }))).toBe(409) // not the order now
+    expect(await status(send('PUT', '/rules/order', { from: ids, to: ids.slice(1) }))).toBe(400)
+    expect(await status(send('PUT', '/rules/order', { from: ids, to: ids }))).toBe(400)
+
+    window.history.pushState({}, '', '/guardrails')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 400))
+    })
+    let moved = false
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Move ${before[0].name} down` }))
+        await new Promise((ok) => setTimeout(ok, 400))
+      })
+      moved = true
+      expect((await catalog.api<R[]>('/rules')).map((x) => x.id)).toEqual(swapped)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
+        action: 'Reordered rules', targetKind: 'Policy', target: `${before[1].name} 2 → 1, ${before[0].name} 1 → 2`,
+      })
+      expect(screen.getByRole('button', { name: `Move ${before[0].name} up` })).toBeTruthy()
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Move ${before[0].name} up` }))
+        await new Promise((ok) => setTimeout(ok, 400))
+      })
+      moved = false
+      expect((await catalog.api<R[]>('/rules')).map((x) => x.id)).toEqual(ids)
+    } finally {
+      if (moved) await send('PUT', '/rules/order', { from: swapped, to: ids })
+      r.unmount()
+    }
+  }, 30_000)
 
   it('counts real detector hits from receipts on Detectors, and says what isn’t connected', async () => {
     type D = { entity: string; kind: string; pattern: string; usedBy: { rule: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }

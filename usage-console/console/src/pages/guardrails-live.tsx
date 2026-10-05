@@ -1,4 +1,4 @@
-import { History, Lock, Plus, Save, Send, Trash2, Undo2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, History, Lock, Plus, Save, Send, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { DiffView } from '@/components/gw/diff-view'
@@ -18,6 +18,7 @@ import {
   planPublish,
   type PublishMode,
   publishRule,
+  reorderRules,
   rollbackRule,
   type RuleContent,
   type RulePublishPlan,
@@ -94,6 +95,24 @@ export function LiveGuardrailsPage() {
     setLocal({ from: live.data, rows: next })
     syncRules(next)
     live.reload()
+  }
+  const move = async (i: number, by: -1 | 1) => {
+    const from = rows.map((r) => r.id)
+    const to = from.slice()
+    ;[to[i], to[i + by]] = [to[i + by], to[i]]
+    setBusy(true)
+    try {
+      const next = await reorderRules(from, to)
+      setLocal({ from: live.data, rows: next })
+      syncRules(next)
+      toast.add({ title: 'Rules reordered', description: `${rows[i].name} is now #${i + by + 1}. Warden reloaded.`, type: 'success' })
+    } catch (e) {
+      const stale = e instanceof ApiError && e.status === 409
+      toast.add({ title: stale ? 'The order changed' : 'Not reordered', description: stale ? 'Someone changed the rules since you loaded them; this is the current order.' : String(e), type: 'error' })
+    } finally {
+      setBusy(false)
+      live.reload()
+    }
   }
   const removed = (id: string) => {
     const next = rows.filter((r) => r.id !== id)
@@ -186,10 +205,12 @@ export function LiveGuardrailsPage() {
                 <span className="text-xs text-muted-foreground">in order</span>
               </div>
               <ol className="flex flex-col border-t border-border">
-                {rows.map((r) => (
+                {rows.map((r, i) => (
                   <RuleRow
                     key={r.id}
                     rule={r}
+                    onUp={i > 0 && !busy ? () => move(i, -1) : undefined}
+                    onDown={i < rows.length - 1 && !busy ? () => move(i, 1) : undefined}
                     name={edits[r.id]?.draft.name ?? contentOf(r).name}
                     unsaved={!!edits[r.id] && !sameContent(toContent(edits[r.id].draft), toContent(saved[r.id]))}
                     selected={r.id === selectedId}
@@ -222,7 +243,7 @@ export function LiveGuardrailsPage() {
                 </Button>
               </div>
               <p className="px-4 pb-4 text-xs text-muted-foreground">
-                Rules run in order; a new rule goes last. The first block wins and stops evaluation. Reordering isn’t connected yet.
+                Rules run in order; a new rule goes last. The first block wins and stops evaluation; a later reroute overrides an earlier one. Moving a rule applies at once, with an audit row.
               </p>
             </nav>
 
@@ -332,10 +353,34 @@ export function LiveGuardrailsPage() {
   )
 }
 
-function RuleRow({ rule, name, unsaved, selected, onSelect }: { rule: RuleView; name: string; unsaved: boolean; selected: boolean; onSelect: () => void }) {
+function RuleRow({
+  rule,
+  name,
+  unsaved,
+  selected,
+  onSelect,
+  onUp,
+  onDown,
+}: {
+  rule: RuleView
+  name: string
+  unsaved: boolean
+  selected: boolean
+  onSelect: () => void
+  onUp?: () => void
+  onDown?: () => void
+}) {
   const ratio = rule.baseline7d ? rule.fired24h / rule.baseline7d : 0
   return (
-    <li className="border-b border-border">
+    <li className="group/rule relative border-b border-border">
+      <span className="absolute right-2 bottom-1.5 z-[1] flex gap-0.5 opacity-0 group-focus-within/rule:opacity-100 group-hover/rule:opacity-100">
+        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} up`} disabled={!onUp} onClick={onUp}>
+          <ArrowUp />
+        </Button>
+        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} down`} disabled={!onDown} onClick={onDown}>
+          <ArrowDown />
+        </Button>
+      </span>
       <button
         type="button"
         onClick={onSelect}

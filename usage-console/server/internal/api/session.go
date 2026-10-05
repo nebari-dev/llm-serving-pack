@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/jbouder/stargate/server/internal/buildinfo"
 )
@@ -18,6 +19,8 @@ type Session struct {
 	// Warden is nil when this control plane doesn't know where Warden is
 	// (serve without -warden, e.g. make dev on the dev gateway).
 	Warden *SessionWarden `json:"warden"`
+	// GatewayURL is the OpenAI-compatible base callers point at, "" if unknown.
+	GatewayURL string `json:"gatewayUrl"`
 }
 
 type SessionTenant struct {
@@ -49,6 +52,9 @@ func (s *Server) session(_ http.ResponseWriter, r *http.Request, t string) (any,
 	out.Environment = s.Environment
 	out.Actor = SessionActor{Email: s.DevActor}
 	out.Versions.ControlPlane = buildinfo.Get()
+	if s.GatewayURL != "" {
+		out.GatewayURL = strings.TrimSuffix(s.GatewayURL, "/") + "/v1"
+	}
 	if s.WardenURL != "" {
 		out.Warden = &SessionWarden{}
 		if h, err := s.fetchWarden(r.Context()); err == nil {

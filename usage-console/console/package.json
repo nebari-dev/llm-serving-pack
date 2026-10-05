@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:api": "VITE_STARGATE_API=http://localhost:9080 VITE_STARGATE_GATEWAY=http://localhost:2975 VITE_DATA=api vitest run src/test/api-mode.test.tsx"
   },
   "dependencies": {
     "@base-ui/react": "1.6.0",

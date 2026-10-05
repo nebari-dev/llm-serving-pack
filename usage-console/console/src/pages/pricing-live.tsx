@@ -23,6 +23,7 @@ import {
   setPriceSource,
   syncPrices,
 } from '@/data/catalog'
+import { downloadText, priceChangesCsv } from '@/lib/csv'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -212,7 +213,16 @@ export function PricingLive() {
         title="Price changes"
         description="Every receipt snapshots the price row in effect when it was written, so later changes never reprice history."
         actions={
-          <Button variant="outline" size="sm" disabled title="CSV export isn't connected yet.">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!changes.length}
+            onClick={() => {
+              const name = `price-changes-${new Date().toISOString().slice(0, 10)}.csv`
+              downloadText(name, priceChangesCsv(changes))
+              toast.add({ title: 'CSV downloaded', description: `${name}: ${changes.length} rate changes`, type: 'success' })
+            }}
+          >
             <Download /> Export CSV
           </Button>
         }

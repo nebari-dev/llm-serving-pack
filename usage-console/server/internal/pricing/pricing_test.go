@@ -178,3 +178,27 @@ func TestPriced(t *testing.T) {
 		t.Fatal("any missing rate means the pair isn't fully priced")
 	}
 }
+
+// Beside prices, the file says what a model takes in and when it's retired.
+func TestParseFacts(t *testing.T) {
+	file := []byte(`{
+		"sample_spec": {"mode": "chat"},
+		"gpt-5-mini": {"mode": "chat", "supports_vision": true, "supports_pdf_input": true, "input_cost_per_token": 1e-7, "output_cost_per_token": 1e-6},
+		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {"mode": "chat", "supports_vision": true, "deprecation_date": "2026-10-15"},
+		"whisper-1": {"mode": "audio_transcription", "supports_audio_input": true},
+		"text-embedding-3-small": {"mode": "embedding", "deprecation_date": "not a date"}
+	}`)
+	got, err := ParseFacts(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Facts{
+		"gpt-5-mini": {Modalities: []string{"text", "image", "pdf"}},
+		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {Modalities: []string{"text", "image"}, Deprecation: "2026-10-15"},
+		"whisper-1":              {Modalities: []string{"audio"}},
+		"text-embedding-3-small": {Modalities: []string{"text"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}

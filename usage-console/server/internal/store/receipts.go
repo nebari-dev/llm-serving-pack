@@ -19,7 +19,7 @@ var receiptCols = []string{
 	"requested_model", "resolved_model", "backend", "provider", "region", "route_reason", "fallback_from",
 	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis", "cache_write_tokens",
 	"verdict", "inbound_verdict", "redactions", "rules", "status", "error_code", "error_detail",
-	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id",
+	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id", "overhead_us",
 }
 
 func nullStr(s string) *string {
@@ -46,7 +46,7 @@ func receiptValues(r *model.Receipt) []any {
 		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
 		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis, r.CacheWriteTokens,
 		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
-		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID),
+		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS,
 	}
 }
 
@@ -111,7 +111,7 @@ const selectReceipt = `SELECT id, ts, tenant_id, trace_id, coalesce(session_id, 
 	requested_model, resolved_model, backend, provider, region, route_reason, coalesce(fallback_from, ''),
 	input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd::float8,
 	verdict, inbound_verdict, redactions, rules, status, coalesce(error_code, ''), coalesce(error_detail, ''),
-	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, ''), cache_write_tokens FROM receipts`
+	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, ''), cache_write_tokens, overhead_us FROM receipts`
 
 func scanReceipt(row pgx.Row) (model.Receipt, error) {
 	var r model.Receipt
@@ -121,7 +121,7 @@ func scanReceipt(row pgx.Row) (model.Receipt, error) {
 		&r.RequestedModel, &r.ResolvedModel, &r.Backend, &r.Provider, &r.Region, &r.RouteReason, &r.FallbackFrom,
 		&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CostUSD,
 		&r.Verdict, &r.InboundVerdict, &red, &rules, &r.Status, &r.ErrorCode, &r.ErrorDetail,
-		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID, &r.CacheWriteTokens)
+		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID, &r.CacheWriteTokens, &r.OverheadUS)
 	if err != nil {
 		return r, err
 	}
@@ -484,12 +484,13 @@ type BackendStats struct {
 	Requests  int
 }
 
-// BackendStats covers the last hour of settled traffic per backend.
+// BackendStats covers the last hour of settled traffic per backend. Errors
+// are what the upstream failed, as RecentBackendFailures counts them.
 func (s *Store) BackendStats(ctx context.Context, tenant string) (map[string]BackendStats, error) {
 	rows, _ := s.Receipts.Query(ctx, `
 		SELECT backend,
 		       percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms)::int,
-		       (100.0 * count(*) FILTER (WHERE status >= 500 OR status = 429) / count(*))::float8,
+		       (100.0 * count(*) FILTER (WHERE error_code IN ('upstream_error', 'upstream_rate_limited')) / count(*))::float8,
 		       count(*)::int
 		FROM receipts
 		WHERE tenant_id = $1 AND ts > now() - interval '1 hour' AND NOT in_flight AND status <> 403

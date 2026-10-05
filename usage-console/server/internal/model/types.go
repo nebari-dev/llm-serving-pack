@@ -16,6 +16,15 @@ type Model struct {
 	Provider string `json:"provider"`
 	Family   string `json:"family"`
 	Context  int    `json:"context"`
+	// From LiteLLM's file for the backends serving it; nil when none has an entry.
+	Modalities   []string      `json:"modalities,omitempty"`
+	Deprecations []Deprecation `json:"deprecations,omitempty"`
+}
+
+// Deprecation is the date a backend's provider retires a model.
+type Deprecation struct {
+	Backend string `json:"backend"`
+	Date    string `json:"date"` // YYYY-MM-DD
 }
 
 // CostBasis is the price a receipt was costed with (§5.1). Receipts from
@@ -136,6 +145,7 @@ type Backend struct {
 	Health         string   `json:"health"`
 	P50            int      `json:"p50"`
 	ErrorRate      float64  `json:"errorRate"`
+	Requests1h     int      `json:"requests1h"`
 	CaptureContent bool     `json:"captureContent,omitempty"`
 }
 
@@ -277,6 +287,7 @@ type Receipt struct {
 	TS                int64       `json:"ts"` // epoch ms
 	DurationMS        int         `json:"durationMs"`
 	TTFTMS            *int        `json:"ttftMs,omitempty"`
+	OverheadUS        *int        `json:"overheadUs,omitempty"` // the gateway's own time before the upstream call
 	KeyID             string      `json:"keyId"`
 	KeyName           string      `json:"keyName"`
 	// SecretID is which of the key's secrets authenticated the request (the

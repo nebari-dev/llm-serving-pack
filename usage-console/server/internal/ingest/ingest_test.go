@@ -239,3 +239,47 @@ func TestReceiptRecordsWhichSecret(t *testing.T) {
 		t.Fatalf("unset secret id recorded as %q", rc.SecretID)
 	}
 }
+
+// Real upstreams answer with their own name for a model: OpenRouter says
+// "openai/gpt-5-mini", Docker Model Runner the GGUF file's path. The receipt
+// keeps the catalog model the request resolved to, so it's priced and
+// charted as that, and the trace shows what the upstream called it.
+func TestReceiptKeepsTheCatalogModelWhenTheUpstreamNamesItsOwn(t *testing.T) {
+	for _, upstream := range []string{"openai/gpt-5-mini", "/Users/x/.docker/models/bundles/sha256/354b/model/model.gguf"} {
+		rc, err := Receipt(snap, record(map[string]string{"gen_ai.response.model": upstream}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rc.ResolvedModel != "gpt-5-mini" || cost(rc) <= 0 {
+			t.Errorf("%s: resolved %q, cost %v", upstream, rc.ResolvedModel, cost(rc))
+		}
+		route := rc.Trace[len(rc.Trace)-2]
+		if route.Step != "Route selected" || !strings.Contains(route.Outcome, "upstream calls it "+upstream) {
+			t.Errorf("%s: route step = %+v", upstream, route)
+		}
+	}
+}
+
+// A catalog model the upstream names is what served the request, e.g. a
+// fallback to another model.
+func TestReceiptTakesTheUpstreamsCatalogModel(t *testing.T) {
+	s := *snap
+	s.Models = map[string]model.Model{"gpt-5-mini": {ID: "gpt-5-mini"}, "gpt-5.5": {ID: "gpt-5.5"}}
+	rc, _ := Receipt(&s, record(map[string]string{"gen_ai.request.model": "gpt-5.5"}))
+	if rc.ResolvedModel != "gpt-5-mini" {
+		t.Errorf("resolved %q", rc.ResolvedModel)
+	}
+}
+
+// The gateway's own time on a request (spec G6): from the whole request in
+// hand to the first byte upstream. Unset when nothing was sent upstream.
+func TestReceiptRecordsGatewayOverhead(t *testing.T) {
+	rc, _ := Receipt(snap, record(map[string]string{"stargate.overhead_us": "2140"}))
+	if rc.OverheadUS == nil || *rc.OverheadUS != 2140 {
+		t.Errorf("overhead = %v", rc.OverheadUS)
+	}
+	rc, _ = Receipt(snap, record(map[string]string{"stargate.overhead_us": "-"}))
+	if rc.OverheadUS != nil {
+		t.Errorf("no upstream request, overhead = %v", *rc.OverheadUS)
+	}
+}

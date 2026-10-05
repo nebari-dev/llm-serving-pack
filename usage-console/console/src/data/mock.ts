@@ -57,6 +57,10 @@ export interface Model {
   provider: string
   family: string
   context: number
+  /** Api mode: inputs from LiteLLM's entries for the backends serving it; absent when none has one. */
+  modalities?: string[]
+  /** Api mode: when a backend's provider retires it, from LiteLLM. */
+  deprecations?: { backend: string; date: string }[]
 }
 
 /** Mock fixtures only: one price per model. In api mode prices are per
@@ -112,6 +116,8 @@ export interface Receipt {
   ts: number
   durationMs: number
   ttftMs?: number
+  /** Api mode: the gateway's own time before calling the upstream (key check, Warden, Agent Router), µs. */
+  overheadUs?: number
   keyId: string
   keyName: string
   team: string
@@ -327,9 +333,12 @@ export interface Backend {
   sync: SyncState
   source?: string
   models: string[]
-  health: 'healthy' | 'degraded' | 'down'
+  /** idle: no requests in the last 15 minutes (api mode only). */
+  health: 'healthy' | 'degraded' | 'down' | 'idle'
   p50: number
   errorRate: number
+  /** Settled requests in the last hour (api mode only). */
+  requests1h?: number
   captureContent?: boolean
 }
 
@@ -923,6 +932,8 @@ export interface Session {
   versions: { controlPlane: string }
   /** null when the control plane doesn't know where Warden is. */
   warden: { connected: boolean; version?: string; snapshotAgeSeconds?: number; passthrough: boolean } | null
+  /** The OpenAI-compatible base URL callers use (api mode). */
+  gatewayUrl?: string
 }
 
 export const session: Session = {

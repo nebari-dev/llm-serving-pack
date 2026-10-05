@@ -65,3 +65,22 @@ func (s *Store) RecentBackendFailures(ctx context.Context, tenant string, since 
 	}
 	return out, rows.Err()
 }
+
+// Overhead is the gateway's own time on requests (spec G6), over a window.
+type Overhead struct {
+	P50MS, P95MS *float64
+	Samples      int
+}
+
+// GatewayOverhead is the p50 and p95 of receipts' overhead_us since `since`,
+// in milliseconds; nil with no samples.
+func (s *Store) GatewayOverhead(ctx context.Context, tenant string, since time.Time) (Overhead, error) {
+	var o Overhead
+	err := s.Receipts.QueryRow(ctx, `
+		SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY overhead_us) / 1000.0,
+		       percentile_cont(0.95) WITHIN GROUP (ORDER BY overhead_us) / 1000.0,
+		       count(overhead_us)::int
+		FROM receipts
+		WHERE tenant_id = $1 AND ts >= $2 AND overhead_us IS NOT NULL`, tenant, since).Scan(&o.P50MS, &o.P95MS, &o.Samples)
+	return o, err
+}

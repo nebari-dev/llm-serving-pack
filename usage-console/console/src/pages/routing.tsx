@@ -14,6 +14,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { useLive } from '@/state/live'
 import { Link, useSearchParams } from 'react-router-dom'
 import { DiffView } from '@/components/gw/diff-view'
 import { Duration } from '@/components/gw/numbers'
@@ -50,8 +51,8 @@ interface BackendState extends Backend {
   pending?: BackendSpec
 }
 
-const healthTone = { healthy: 'allowed', degraded: 'degraded', down: 'blocked' } as const
-const healthLabel = { healthy: 'Healthy', degraded: 'Degraded', down: 'Down' } as const
+const healthTone = { healthy: 'allowed', degraded: 'degraded', down: 'blocked', idle: 'neutral' } as const
+const healthLabel = { healthy: 'Healthy', degraded: 'Degraded', down: 'Down', idle: 'Idle' } as const
 
 const reconcileError =
   'admission webhook "vaiservicebackend.aigateway.envoyproxy.io" denied the request: spec.backendRef: Backend.gateway.envoyproxy.io "azure-openai-eu" not found in namespace "nebari-gateway"'
@@ -115,6 +116,11 @@ export function RoutingPage() {
   }
 
   const [items, setItems] = useState<BackendState[]>(() => seedBackends.map((b) => ({ ...b, spec: { ...backendSpecs[b.name] } })))
+  // In api mode health, p50 and errors are observed, so keep them current.
+  const liveBackends = useLive<Backend[]>(dataMode === 'api' ? '/backends' : null, seedBackends, 30_000).data
+  useEffect(() => {
+    if (dataMode === 'api') setItems(liveBackends.map((b) => ({ ...b, spec: { ...backendSpecs[b.name] } })))
+  }, [liveBackends])
   const [selected, setSelected] = useState<string | null>(null)
   const [yamlFor, setYamlFor] = useState<BackendState | null>(null)
   const timers = useRef<number[]>([])
@@ -311,7 +317,7 @@ function BackendsList({
       </div>
       <p className="px-6 py-3 text-xs text-muted-foreground">
         {live
-          ? 'Read-only: there’s no reconciler yet, so these are the control plane’s configured backends. Nothing applies them to Agent Router or reports their state back. p50 and errors come from the last hour of receipts when a backend served at least 5 requests; otherwise they, and health, are as configured.'
+          ? 'Read-only: there’s no reconciler yet, so these are the control plane’s configured backends. Nothing applies them to Agent Router or reports their state back. Health comes from the last 15 minutes of receipts: idle with no requests, down when every request failed, degraded past 5% errors. p50 and errors cover the last hour.'
           : 'Console-owned backends reconcile from the console database; drift is reverted on the next loop and reported here. Git-managed backends are mirrored read-only from the cluster.'}
       </p>
     </Section>
@@ -568,12 +574,19 @@ function LiveBackendDetail({ b }: { b: BackendState }) {
         <p className="text-sm text-muted-foreground">{noReconciler.replace('route', 'backend')}</p>
         <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1.5 text-sm">
           <dt className="text-muted-foreground">Health</dt>
-          <dd>{healthLabel[b.health]} <span className="text-xs text-muted-foreground">(as configured; no health probes yet)</span></dd>
+          <dd>
+            {healthLabel[b.health]}{' '}
+            <span className="text-xs text-muted-foreground">
+              {b.health === 'idle' ? '(No requests in the last 15 minutes)' : '(from the last 15 minutes of receipts)'}
+            </span>
+          </dd>
+          <dt className="text-muted-foreground">Requests</dt>
+          <dd className="num font-mono text-xs">{b.requests1h ?? 0} in the last hour</dd>
           <dt className="text-muted-foreground">p50</dt>
           <dd>{b.p50 ? <Duration ms={b.p50} /> : '—'}</dd>
           <dt className="text-muted-foreground">Errors</dt>
           <dd className="num font-mono text-xs">{b.errorRate.toFixed(1)}%</dd>
-          <dd className="col-span-2 text-xs text-muted-foreground">From the last hour of receipts when it served at least 5 requests; otherwise as configured.</dd>
+          <dd className="col-span-2 text-xs text-muted-foreground">p50 and errors from the last hour of receipts; upstream errors include auth failures like a missing provider key.</dd>
         </dl>
         <p className="text-xs text-muted-foreground">A backend’s spec (endpoint, timeout, retries) and its generated YAML aren’t connected yet: the control plane doesn’t store them.</p>
       </DrawerBody>

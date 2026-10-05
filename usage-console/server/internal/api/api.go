@@ -42,6 +42,9 @@ type Server struct {
 	// LiteLLMURL is where the price sync reads LiteLLM's file; empty is
 	// LiteLLM's GitHub copy.
 	LiteLLMURL string
+	// GatewayURL is the gateway callers use (http://localhost:1975), shown on
+	// onboarding and used for its test request. Empty when unknown.
+	GatewayURL string
 	syncMu     sync.Mutex
 }
 
@@ -131,6 +134,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/rules", s.rules)
 	h("GET "+p+"/rules/vocabulary", s.ruleVocabulary)
 	h("POST "+p+"/rules", s.createRule)
+	h("PUT "+p+"/rules/order", s.reorderRules)
 	h("PUT "+p+"/rules/{id}/draft", s.saveRuleDraft)
 	h("DELETE "+p+"/rules/{id}/draft", s.discardRuleDraft)
 	h("POST "+p+"/rules/{id}/publish", s.publishRule)
@@ -153,6 +157,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/activity", s.activity)
 	h("GET "+p+"/retention", s.retention)
 	h("POST "+p+"/warden/passthrough", s.setPassthrough)
+	h("POST "+p+"/gateway/test", s.gatewayTest)
+	h("GET "+p+"/gateway/overhead", s.gatewayOverhead)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }
@@ -208,7 +214,38 @@ func (s *Server) teams(_ http.ResponseWriter, r *http.Request, t string) (any, e
 }
 
 func (s *Server) models(_ http.ResponseWriter, r *http.Request, _ string) (any, error) {
-	return s.Store.Models(r.Context())
+	ms, err := s.Store.Models(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	facts, err := s.Store.ModelFacts(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	return withFacts(ms, facts), nil
+}
+
+// withFacts adds what LiteLLM says about each model on the backends serving
+// it: the union of their modalities, in first-seen order, and any
+// deprecation dates.
+func withFacts(ms []model.Model, facts []store.PairFacts) []model.Model {
+	out := slices.Clone(ms)
+	for i := range out {
+		for _, f := range facts {
+			if f.Model != out[i].ID {
+				continue
+			}
+			for _, m := range f.Modalities {
+				if !slices.Contains(out[i].Modalities, m) {
+					out[i].Modalities = append(out[i].Modalities, m)
+				}
+			}
+			if f.Deprecation != "" {
+				out[i].Deprecations = append(out[i].Deprecations, model.Deprecation{Backend: f.Backend, Date: f.Deprecation})
+			}
+		}
+	}
+	return out
 }
 
 func (s *Server) routes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
@@ -239,8 +276,8 @@ func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any,
 	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500))
 }
 
-// backends overlays live p50 and error rate from the last hour of receipts.
-// Health stays as configured until health probes exist; sync state is
+// backends reports what receipts show, not what was seeded: health from the
+// banner's window, p50 and error rate from the last hour. Sync state is
 // NotReconciled.
 func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	bs, err := s.Store.Backends(r.Context(), t)
@@ -251,12 +288,45 @@ func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any
 	if err != nil {
 		return nil, err
 	}
+	recent, err := s.Store.RecentBackendFailures(r.Context(), t, time.Now().Add(-degradationWindow))
+	if err != nil {
+		return nil, err
+	}
 	for i := range bs {
-		if st, ok := stats[bs[i].Name]; ok && st.Requests >= 5 {
-			bs[i].P50, bs[i].ErrorRate = st.P50, math.Round(st.ErrorRate*10)/10
+		var f *store.BackendFailures
+		for j := range recent {
+			if recent[j].Backend == bs[i].Name {
+				f = &recent[j]
+			}
 		}
+		var h *store.BackendStats
+		if st, ok := stats[bs[i].Name]; ok {
+			h = &st
+		}
+		bs[i] = observedBackend(bs[i], f, h)
 	}
 	return notReconciledBackends(bs), nil
+}
+
+// observedBackend replaces a backend's seeded health, p50 and error rate with
+// observed ones. No requests in the window is "idle". Every request failing
+// (at least backendMinFailed of them) is "down"; the banner's failing rule,
+// or every one of fewer requests failing, is "degraded".
+func observedBackend(b model.Backend, recent *store.BackendFailures, hour *store.BackendStats) model.Backend {
+	b.Health, b.P50, b.ErrorRate, b.Requests1h = "idle", 0, 0, 0
+	if hour != nil {
+		b.P50, b.ErrorRate, b.Requests1h = hour.P50, math.Round(hour.ErrorRate*10)/10, hour.Requests
+	}
+	switch {
+	case recent == nil || recent.Total == 0:
+	case recent.Failed == recent.Total && recent.Failed >= backendMinFailed:
+		b.Health = "down"
+	case backendFailing(recent.Total, recent.Failed) || recent.Failed == recent.Total:
+		b.Health = "degraded"
+	default:
+		b.Health = "healthy"
+	}
+	return b
 }
 
 func (s *Server) keys(_ http.ResponseWriter, r *http.Request, t string) (any, error) {

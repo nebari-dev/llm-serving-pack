@@ -337,6 +337,8 @@ export function syncRules(list: RuleView[]) {
 }
 
 export const createRule = (c: RuleContent) => api<RuleView>('/rules', json('POST', c))
+/** Rule order decides outcomes: `from` is the order the caller saw (a 409 if it moved), `to` the one they want. */
+export const reorderRules = (from: string[], to: string[]) => api<RuleView[]>('/rules/order', json('PUT', { from, to }))
 /** Saves over `r` as the caller last saw it; a 409 ApiError carries the rule as it is now. */
 export const saveRuleDraft = (r: RuleView, c: RuleContent) => api<RuleView>(`/rules/${r.id}/draft`, json('PUT', c, r.etag))
 export const discardRuleDraft = (r: RuleView) => api<RuleView>(`/rules/${r.id}/draft`, json('DELETE', undefined, r.etag))

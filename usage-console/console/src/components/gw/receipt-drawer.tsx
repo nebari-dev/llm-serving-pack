@@ -192,6 +192,11 @@ function ReceiptBody({ r }: { r: Receipt }) {
               <Duration ms={r.ttftMs} className="text-foreground" /> to first token
             </span>
           )}
+          {r.overheadUs != null && (
+            <span title="The gateway's own time before calling the provider: key check, Warden and Agent Router.">
+              <span className="num font-mono text-foreground">{(r.overheadUs / 1000).toFixed(1)}ms</span> gateway overhead
+            </span>
+          )}
           <span className="text-muted-foreground">
             {clock(r.ts)} · {ago(r.ts)}
           </span>

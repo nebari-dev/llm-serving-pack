@@ -39,6 +39,11 @@ var Models = []model.Model{
 	{ID: "claude-opus-4-1", Display: "Claude Opus 4.1", Provider: "Anthropic", Family: "claude", Context: 200_000},
 	{ID: "claude-haiku-4-5", Display: "Claude Haiku 4.5", Provider: "Bedrock", Family: "claude", Context: 200_000},
 	{ID: "llama-3.3-70b", Display: "Llama 3.3 70B", Provider: "Self-hosted", Family: "llama", Context: 128_000},
+	// Real upstreams, not fake-openai: a model running on this machine
+	// (Docker Model Runner, Ollama, llama.cpp: any OpenAI-compatible server)
+	// and one through OpenRouter.
+	{ID: "smollm2", Display: "SmolLM2 360M (local)", Provider: "Self-hosted", Family: "smollm", Context: 8_192},
+	{ID: "gpt-4o-mini", Display: "GPT-4o mini (OpenRouter)", Provider: "OpenRouter", Family: "gpt-4o", Context: 128_000},
 }
 
 // seedRates are the demo's starting prices per 1M tokens: input, cached
@@ -66,7 +71,10 @@ func SeedPrices(from time.Time) []SeedPrice {
 	var out []SeedPrice
 	for _, b := range Backends {
 		for _, m := range b.Models {
-			r := seedRates[m]
+			r, ok := seedRates[m]
+			if !ok {
+				continue // no seed price; LiteLLM or a manual rate prices it
+			}
 			vals := [pricing.NumRates]float64{r[0], r[1], r[0], r[2], r[3]}
 			p := SeedPrice{ModelID: m, Backend: b.Name, From: from}
 			for i := range vals {
@@ -89,6 +97,7 @@ var LiteLLMKeys = map[[2]string]string{
 	{"claude-haiku-4-5", "bedrock-eu"}:    "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
 	{"claude-sonnet-5", "bedrock-eu"}:     "eu.anthropic.claude-sonnet-5",
 	{"gpt-5-mini", "azure-openai-eu"}:     "azure/eu/gpt-5-mini-2025-08-07",
+	{"gpt-4o-mini", "openrouter"}:         "openrouter/openai/gpt-4o-mini",
 }
 
 // Aliases resolve before routing. A trailing * is a prefix match.
@@ -99,6 +108,8 @@ var Backends = []model.Backend{
 	{Name: "anthropic-prod", Provider: "Anthropic", Region: "us-east", Provenance: "console", Sync: "applying", Models: []string{"claude-sonnet-5", "claude-opus-4-1"}, Health: "degraded", P50: 980, ErrorRate: 3.1},
 	{Name: "bedrock-eu", Provider: "Bedrock", Region: "eu-central", Provenance: "git", Sync: "synced", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/bedrock-eu.yaml", Models: []string{"claude-haiku-4-5", "claude-sonnet-5"}, Health: "healthy", P50: 640, ErrorRate: 0.4},
 	{Name: "vllm-internal", Provider: "Self-hosted", Region: "eu-private", Provenance: "git", Sync: "drift", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/vllm-internal.yaml", Models: []string{"llama-3.3-70b"}, Health: "healthy", P50: 220, ErrorRate: 0.1, CaptureContent: true},
+	{Name: "local", Provider: "Self-hosted", Region: "local", Provenance: "console", Sync: "synced", Models: []string{"smollm2"}, Health: "healthy"},
+	{Name: "openrouter", Provider: "OpenRouter", Region: "global", Provenance: "console", Sync: "synced", Models: []string{"gpt-4o-mini"}, Health: "healthy"},
 	{Name: "azure-openai-eu", Provider: "Azure", Region: "eu-west", Provenance: "adopted", Sync: "failed", Models: []string{"gpt-5-mini"}, Health: "down", P50: 0, ErrorRate: 100},
 }
 
@@ -118,11 +129,12 @@ var Keys = []model.APIKey{
 	{ID: "k4", Name: "web-chat", Prefix: "ngw_live_9a0c", Team: "web", Project: "assistant", AllowedModels: []string{"gpt-5-mini", "claude-haiku-4-5"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2027-01-20"), Status: "rotating"},
 	{ID: "k5", Name: "research", Prefix: "ngw_live_e55f", Team: "research", Project: "evals", AllowedModels: []string{"claude-opus-4-1", "gpt-5.5", "claude-sonnet-5"}, AllowedRegions: []string{"us-east"}, Status: "active"},
 	{ID: "k6", Name: "secops-triage", Prefix: "ngw_live_41d2", Team: "security", Project: "soc", AllowedModels: []string{"llama-3.3-70b", "claude-haiku-4-5"}, AllowedRegions: []string{"eu-private", "eu-central"}, ExpiresAt: date("2026-10-02"), Status: "active"},
+	{ID: "k8", Name: "local-dev", Prefix: "ngw_live_10ca", Team: "research", Project: "local-models", AllowedModels: []string{"smollm2", "gpt-4o-mini"}, AllowedRegions: []string{"local", "global"}, Status: "active"},
 	{ID: "k7", Name: "legacy-intranet", Prefix: "ngw_live_77aa", Team: "web", Project: "intranet", AllowedModels: []string{"gpt-5-mini"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2026-08-30"), Status: "revoked"},
 }
 
 // KeyWeights is the share of generated traffic per key (mock.ts keyWeights).
-var KeyWeights = map[string]int{"k1": 30, "k2": 22, "k3": 10, "k4": 30, "k5": 5, "k6": 3}
+var KeyWeights = map[string]int{"k1": 30, "k2": 22, "k3": 10, "k4": 30, "k5": 5, "k6": 3, "k8": 3}
 
 var Budgets = []model.Budget{
 	{ID: "b1", Scope: "support", ScopeType: "team", Period: "monthly", CapUSD: 12_000, OnExceed: "throttle"},

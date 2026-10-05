@@ -239,3 +239,26 @@ func (s *Server) deleteRule(_ http.ResponseWriter, r *http.Request, t string) (a
 	s.configChanged()
 	return map[string]string{"id": id}, nil
 }
+
+// reorderRules takes {"from": [ids], "to": [ids]}: the order the caller saw
+// and the one they want. Order decides outcomes, so a stale "from" is a 409.
+func (s *Server) reorderRules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	var in struct{ From, To []string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, badRequest("invalid JSON body")
+	}
+	err := s.Store.ReorderRules(r.Context(), t, s.DevActor, in.From, in.To)
+	var bad store.ErrBadOrder
+	switch {
+	case errors.As(err, &bad):
+		return nil, badRequest(bad.Error())
+	case errors.Is(err, store.ErrSameOrder):
+		return nil, badRequest(err.Error())
+	case errors.Is(err, store.ErrConflict):
+		return nil, conflict("the rules were reordered or changed since you loaded them")
+	case err != nil:
+		return nil, err
+	}
+	s.configChanged()
+	return s.rules(nil, r, t)
+}

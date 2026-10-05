@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"time"
 )
 
 // Rate is one token type's price.
@@ -184,4 +185,50 @@ func PlanSync(cur Current, lite *Rates, seen Seen) Plan {
 		}
 	}
 	return p
+}
+
+// Facts are what LiteLLM's file says about an entry besides its price: the
+// inputs it takes and the date its provider retires it ("" if none).
+type Facts struct {
+	Modalities  []string
+	Deprecation string // YYYY-MM-DD
+}
+
+// ParseFacts reads each entry's input modalities (text, image, audio, pdf)
+// and deprecation date. A transcription model takes audio, not text.
+func ParseFacts(b []byte) (map[string]Facts, error) {
+	var file map[string]json.RawMessage
+	if err := json.Unmarshal(b, &file); err != nil {
+		return nil, err
+	}
+	out := map[string]Facts{}
+	for key, raw := range file {
+		var e struct {
+			Mode        string `json:"mode"`
+			Vision      bool   `json:"supports_vision"`
+			Audio       bool   `json:"supports_audio_input"`
+			PDF         bool   `json:"supports_pdf_input"`
+			Deprecation string `json:"deprecation_date"`
+		}
+		if key == "sample_spec" || json.Unmarshal(raw, &e) != nil || e.Mode == "" {
+			continue
+		}
+		var f Facts
+		if e.Mode != "audio_transcription" {
+			f.Modalities = append(f.Modalities, "text")
+		}
+		for _, m := range []struct {
+			on   bool
+			name string
+		}{{e.Vision, "image"}, {e.Audio || e.Mode == "audio_transcription", "audio"}, {e.PDF, "pdf"}} {
+			if m.on {
+				f.Modalities = append(f.Modalities, m.name)
+			}
+		}
+		if _, err := time.Parse(time.DateOnly, e.Deprecation); err == nil {
+			f.Deprecation = e.Deprecation
+		}
+		out[key] = f
+	}
+	return out, nil
 }

@@ -22,6 +22,22 @@
 # claude-opus-4-1           → anthropic-prod, falling back to openai-prod's gpt-5.5
 # claude-haiku-4-5          → bedrock-eu
 # llama-3.3-70b             → vllm-internal
+#
+# Those six are served by cmd/fake-openai. Two models go to real upstreams:
+#
+# smollm2      → local: an OpenAI-compatible server on this machine. Defaults
+#                to Docker Model Runner (docker desktop enable model-runner
+#                --tcp=12434; docker model pull ai/smollm2:360M-Q4_K_M). For
+#                Ollama set LOCAL_LLM_PORT=11434 LOCAL_LLM_PREFIX=/v1
+#                LOCAL_LLM_MODEL=smollm2:360m; for llama.cpp's llama-server,
+#                LOCAL_LLM_PORT=8080 LOCAL_LLM_PREFIX=/v1.
+# gpt-4o-mini  → openrouter as openai/gpt-4o-mini, with $OPENROUTER_API_KEY.
+#                Unset, OpenRouter answers 401 and the receipts say so.
+#
+# aigw substitutes ${VAR:-default} from the environment when it loads this file.
+# The control plane's own services default to localhost on the dev ports;
+# scripts/test-stack.sh runs a second copy in Docker against the test
+# databases with STARGATE_HOST=host.docker.internal and the 9xxx ports.
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
@@ -78,8 +94,8 @@ spec:
             # Field names are what internal/ingest reads; keep them in sync.
             - type: OpenTelemetry
               openTelemetry:
-                host: localhost
-                port: 4317
+                host: ${STARGATE_HOST:-localhost}
+                port: ${STARGATE_OTLP_PORT:-4317}
                 resources:
                   service.name: agent-router
           format:
@@ -99,6 +115,10 @@ spec:
               response_code: "%RESPONSE_CODE%"
               duration: "%DURATION%"
               response_duration: "%RESPONSE_DURATION%"
+              # What the gateway adds before the provider sees the request: from
+              # the whole request in hand to the first byte sent upstream (key
+              # check, Warden, Agent Router), for spec G6's 10ms p50.
+              stargate.overhead_us: "%COMMON_DURATION(DS_RX_END:US_TX_BEG:us)%"
               response_flags: "%RESPONSE_FLAGS%"
               upstream_cluster: "%UPSTREAM_CLUSTER%"
               upstream_request_attempt_count: "%UPSTREAM_REQUEST_ATTEMPT_COUNT%"
@@ -211,6 +231,20 @@ spec:
               value: llama-3.3-70b
       backendRefs:
         - name: vllm-internal
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: smollm2
+      backendRefs:
+        - name: local
+          modelNameOverride: ${LOCAL_LLM_MODEL:-ai/smollm2:360M-Q4_K_M}
+    - matches:
+        - headers:
+            - name: x-ai-eg-model
+              value: gpt-4o-mini
+      backendRefs:
+        - name: openrouter
+          modelNameOverride: openai/gpt-4o-mini
   llmRequestCosts:
     - metadataKey: llm_input_token
       type: InputToken
@@ -299,7 +333,7 @@ spec:
         - group: gateway.envoyproxy.io
           kind: Backend
           name: stargate-authz
-          port: 8082
+          port: ${STARGATE_AUTHZ_PORT:-8082}
       headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id]
 ---
 # Warden: budgets and policy rules, after the key check. Headers and the whole
@@ -322,7 +356,7 @@ spec:
         - group: gateway.envoyproxy.io
           kind: Backend
           name: warden
-          port: 8083
+          port: ${STARGATE_WARDEN_PORT:-8083}
       messageTimeout: 250ms
       failOpen: false
       processingMode:
@@ -339,8 +373,8 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
-        port: 8083
+        hostname: ${STARGATE_HOST:-localhost}
+        port: ${STARGATE_WARDEN_PORT:-8083}
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: Backend
@@ -350,8 +384,8 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
-        port: 8082
+        hostname: ${STARGATE_HOST:-localhost}
+        port: ${STARGATE_AUTHZ_PORT:-8082}
 ---
 # One Backend + AIServiceBackend per fake provider. They share host:port and
 # differ by path prefix, matching fake-openai's /{backend}/v1/chat/completions.
@@ -363,7 +397,7 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
+        hostname: ${STARGATE_HOST:-localhost}
         port: 8090
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -391,7 +425,7 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
+        hostname: ${STARGATE_HOST:-localhost}
         port: 8090
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -419,7 +453,7 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
+        hostname: ${STARGATE_HOST:-localhost}
         port: 8090
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -447,7 +481,7 @@ metadata:
 spec:
   endpoints:
     - fqdn:
-        hostname: localhost
+        hostname: ${STARGATE_HOST:-localhost}
         port: 8090
 ---
 apiVersion: aigateway.envoyproxy.io/v1beta1
@@ -466,3 +500,87 @@ spec:
     name: vllm-internal
     kind: Backend
     group: gateway.envoyproxy.io
+---
+# A real model on this machine, through its OpenAI-compatible API.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: local
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ${LOCAL_LLM_HOST:-localhost}
+        port: ${LOCAL_LLM_PORT:-12434}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: local
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: ${LOCAL_LLM_PREFIX:-/engines/v1}
+  headerMutation:
+    remove: [x-stargate-backend]
+  backendRef:
+    name: local
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+# OpenRouter over TLS, authenticated with $OPENROUTER_API_KEY.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: openrouter
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: openrouter.ai
+        port: 443
+  tls:
+    sni: openrouter.ai
+    wellKnownCACertificates: System
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: openrouter
+  namespace: default
+spec:
+  schema:
+    name: OpenAI
+    prefix: /api/v1
+  headerMutation:
+    remove: [x-stargate-backend]
+  backendRef:
+    name: openrouter
+    kind: Backend
+    group: gateway.envoyproxy.io
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: openrouter-key
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: openrouter
+  type: APIKey
+  apiKey:
+    secretRef:
+      name: openrouter-key
+      namespace: default
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openrouter-key
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: ${OPENROUTER_API_KEY:-not-set}

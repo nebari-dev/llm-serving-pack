@@ -197,32 +197,52 @@ export function OverviewPage() {
   )
 }
 
+/** GET /gateway/overhead: spec G6, from receipts. */
+type GatewayOverhead = { p50Ms: number | null; p95Ms: number | null; samples: number; windowMinutes: number; goalMs: number }
+
 function StatusStrip() {
   const now = useNow()
   const receipts = useReceipts()
   const warden = useLive(dataMode === 'api' ? '/session' : null, session, 15_000).data.warden
-  // A backend is called out when it's configured down, or failing now.
-  const degradedBackends = backends.filter((b) => b.health === 'down' || b.sync === 'failed' || b.errorRate >= 5)
+  const overhead = useLive<GatewayOverhead | null>(dataMode === 'api' ? '/gateway/overhead' : null, null, 30_000).data
+  const overGoal = overhead?.p50Ms != null && overhead.p50Ms > overhead.goalMs
+  // A backend is called out when it's down or failing now. In api mode that's
+  // observed from receipts; idle backends had no requests to judge by.
+  const live = useLive(dataMode === 'api' ? '/backends' : null, backends, 30_000).data
+  const degradedBackends = live.filter((b) => b.health === 'down' || b.health === 'degraded' || b.sync === 'failed' || b.errorRate >= 5)
+  const idle = live.filter((b) => b.health === 'idle' && !degradedBackends.includes(b)).length
   const failOpen = rules.filter((r) => r.failMode === 'open' && r.mode !== 'draft' && r.mode !== 'disabled')
   const last = receipts.reduce((m, r) => Math.max(m, r.ts), 0)
   const quiet = !last || now - last > 5 * 60_000
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border bg-header px-6 py-2.5 text-sm" aria-label="System status">
       <span className="inline-flex items-center gap-2">
-        <span className={cn('size-2 rounded-full', quiet ? 'bg-v-degraded-bar' : 'bg-v-allowed-bar')} aria-hidden="true" />
+        <span className={cn('size-2 rounded-full', quiet || overGoal ? 'bg-v-degraded-bar' : 'bg-v-allowed-bar')} aria-hidden="true" />
         Gateway{' '}
         <span className="text-muted-foreground">
           {dataMode === 'api' ? (last ? `last receipt ${ago(Math.min(last, now), now)}` : 'no receipts yet') : 'nominal · p50 overhead 2.1ms'}
+          {overhead?.p50Ms != null && (
+            <span
+              className={cn(overGoal && 'text-v-degraded-fg')}
+              title={`The gateway's own time per request (key check, Warden, Agent Router) over the last ${overhead.windowMinutes} minutes: p95 ${overhead.p95Ms}ms across ${overhead.samples.toLocaleString('en-US')} requests. Goal: ${overhead.goalMs}ms p50.`}
+            >
+              {` · p50 overhead ${overhead.p50Ms}ms`}
+              {overGoal && ` (goal ${overhead.goalMs}ms)`}
+            </span>
+          )}
         </span>
       </span>
       <span className="inline-flex flex-wrap items-center gap-2">
         Providers
         {degradedBackends.map((b) => (
           <StateChip key={b.name} tone={b.health === 'down' ? 'blocked' : 'degraded'}>
-            <span className="font-mono">{b.name}</span> {b.health === 'down' ? 'down, not routed' : `${b.errorRate}% errors, last hour`}
+            <span className="font-mono">{b.name}</span>{' '}
+            {b.health === 'down' ? (dataMode === 'api' ? 'down, every request failing' : 'down, not routed') : `${b.errorRate}% errors, last hour`}
           </StateChip>
         ))}
-        <span className="text-muted-foreground">{backends.length - degradedBackends.length} others nominal</span>
+        <span className="text-muted-foreground">
+          {live.length - degradedBackends.length - idle} others nominal{idle > 0 && ` · ${idle} idle`}
+        </span>
       </span>
       <span className="inline-flex items-center gap-2">
         Warden
@@ -284,81 +304,58 @@ function FeaturedChange({ change: c }: { change: Change }) {
       ]
     : []
   const comparable = !!impact && impact.before.requests >= MIN_COMPARE && impact.after.requests >= MIN_COMPARE
-  const movers = metrics.filter((m) => m.before > 0 && Math.abs((m.after - m.before) / m.before) >= 0.05)
-  // Every metric here is better when it goes down.
-  const allBetter = movers.every((m) => m.after < m.before)
-  const moved = movers.map((m) => `${m.label.toLowerCase()} ${m.after < m.before ? '−' : '+'}${Math.abs(Math.round(((m.after - m.before) / m.before) * 100))}%`)
   const w = impact?.windowMinutes ?? 40
   return (
-    <article className="grid gap-5 rounded-md border border-border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <MonitorCog className="size-3.5" aria-hidden="true" />
-          <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span> · {ago(c.ts)} · {c.actor}
-        </div>
+    <article className="flex flex-col gap-3 rounded-md border border-border p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <p className="text-base leading-6">
-          {c.action} <span className="font-mono font-medium">{c.target}</span> at <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span>.
+          {c.action} <span className="font-mono font-medium">{c.target}</span>
         </p>
-        {comparable && (
-          <p className={cn('text-base leading-6 font-medium', !moved.length ? 'text-muted-foreground-strong' : allBetter ? toneText.allowed : 'text-foreground')}>
-            {moved.length ? `${moved.join(', ')}.` : 'Nothing moved by 5% or more.'}
+        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+          <MonitorCog className="size-3.5" aria-hidden="true" />
+          {c.actor} · <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span> ({ago(c.ts)})
+        </span>
+      </div>
+      {comparable ? (
+        <>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            {metrics.map((m) => {
+              const pct = m.before > 0 ? ((m.after - m.before) / m.before) * 100 : 0
+              return (
+                <div key={m.label} className="flex flex-col gap-0.5">
+                  <dt className="text-xs text-muted-foreground">{m.label}</dt>
+                  <dd className="flex items-baseline gap-2">
+                    <span className="num font-mono text-base">{m.fmt(m.after)}</span>
+                    {Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">steady</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
+                  </dd>
+                  <dd className="num font-mono text-xs text-muted-foreground">was {m.fmt(m.before)}</dd>
+                </div>
+              )
+            })}
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            Whole tenant, {w} minutes before vs after ({int(impact!.before.requests + impact!.after.requests)} requests), not only what this change touched.
           </p>
-        )}
+        </>
+      ) : (
         <p className="text-sm text-muted-foreground">
           {!loaded
             ? 'Comparing traffic either side of the change…'
             : !impact
               ? 'No traffic comparison for this change.'
-              : comparable
-                ? `Compared over ${w} minutes either side of the change, ${int(impact.before.requests + impact.after.requests)} requests across the tenant.`
-                : `Too little traffic to compare yet: ${int(impact.before.requests)} requests in the ${w} minutes before, ${int(impact.after.requests)} after.`}
+              : `Too little traffic to compare yet: ${int(impact.before.requests)} requests in the ${w} minutes before, ${int(impact.after.requests)} after.`}
         </p>
-        <div className="mt-auto flex flex-wrap gap-2 pt-2">
-          <Button variant="outline" size="sm" render={<Link to={`/traffic?since=${Math.round(c.ts)}`} />}>
-            Receipts after the change
-          </Button>
-          {c.targetKind === 'Route' && (
-            <Button variant="ghost" size="sm" render={<Link to="/routing" />}>
-              View route
-            </Button>
-          )}
-        </div>
-      </div>
-      {comparable && (
-        <table className="w-full self-start text-sm">
-          <caption className="sr-only">Before and after the change</caption>
-          <thead>
-            <tr className="border-b border-border text-xs text-muted-foreground">
-              <th className="py-1 text-left font-medium">Metric</th>
-              <th className="py-1 text-right font-medium">{w}m before</th>
-              <th className="py-1 text-right font-medium">{w}m after</th>
-              <th className="w-36 py-1 pl-4 text-left font-medium">Change</th>
-            </tr>
-          </thead>
-          <tbody>
-            {metrics.map((m) => {
-              const pct = m.before > 0 ? ((m.after - m.before) / m.before) * 100 : 0
-              const max = Math.max(m.before, m.after) || 1
-              return (
-                <tr key={m.label} className="border-b border-border last:border-0">
-                  <td className="py-2">{m.label}</td>
-                  <td className="num py-2 text-right font-mono text-muted-foreground">{m.fmt(m.before)}</td>
-                  <td className="num py-2 text-right font-mono">{m.fmt(m.after)}</td>
-                  <td className="py-2 pl-4">
-                    <div className="flex items-center gap-2">
-                      <div className="flex w-16 flex-col gap-0.5" aria-hidden="true">
-                        <span className="h-1 rounded-full bg-border-strong" style={{ width: `${(m.before / max) * 100}%` }} />
-                        <span className="h-1 rounded-full bg-foreground" style={{ width: `${(m.after / max) * 100}%` }} />
-                      </div>
-                      {Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">no change</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
       )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" render={<Link to={`/traffic?since=${Math.round(c.ts)}`} />}>
+          Receipts after the change
+        </Button>
+        {c.targetKind === 'Route' && (
+          <Button variant="ghost" size="sm" render={<Link to="/routing" />}>
+            View route
+          </Button>
+        )}
+      </div>
     </article>
   )
 }

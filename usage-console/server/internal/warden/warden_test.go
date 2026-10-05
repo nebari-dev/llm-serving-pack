@@ -302,7 +302,10 @@ func TestSameVerdictAsDevgateway(t *testing.T) {
 	seen := map[string]int{}
 	for range 2000 {
 		req := gen.Next(r)
-		dev := gateway.Admit(snap, gateway.Input{Secret: req.Secret, Region: req.Region, Req: req.Body, Now: time.Now()}, r)
+		// A fixed clock inside every seeded key's validity: the key check, not
+		// Warden, refuses expired keys.
+		now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+		dev := gateway.Admit(snap, gateway.Input{Secret: req.Secret, Region: req.Region, Req: req.Body, Now: now}, r)
 		want := "allowed"
 		switch {
 		case dev.Reject != nil:

@@ -13,7 +13,9 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
+import { dataMode, type Receipt } from '@/data/catalog'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
+import { LiveOnboardingPage } from './onboarding-live'
 
 // §7.5.1 Onboarding. "The migration is a base URL and a key swap. The
 // onboarding must be shorter than the migration." One page; each step reveals
@@ -83,11 +85,11 @@ const GATEWAY_URL = 'https://gw.acme.dev/v1'
 const GATEWAY_KEY = 'ngw_live_7f3a91c4e0b2d8f6a1c5e7b9d3f02a64'
 const LANG_KEY = 'gw:onboarding-lang'
 
-type Lang = 'python' | 'typescript' | 'curl'
+export type Lang = 'python' | 'typescript' | 'curl'
 
 type TestState = { kind: 'idle' } | { kind: 'testing' } | { kind: 'ok'; ms: number } | { kind: 'error'; message: string }
 
-function Step({ n, title, done, children }: { n: number; title: string; done?: boolean; children: ReactNode }) {
+export function Step({ n, title, done, children }: { n: number; title: string; done?: boolean; children: ReactNode }) {
   return (
     <section
       id={`onb-step-${n}`}
@@ -154,12 +156,16 @@ function snippets(p: (typeof providers)[number]): Record<Lang, { diff: string; c
   }
 }
 
-function copy(text: string, what: string) {
+export function copy(text: string, what: string) {
   void navigator.clipboard?.writeText(text)
   toast.add({ title: `${what} copied`, type: 'success' })
 }
 
 export function OnboardingPage() {
+  return dataMode === 'api' ? <LiveOnboardingPage /> : <MockOnboardingPage />
+}
+
+function MockOnboardingPage() {
   const [providerId, setProviderId] = useState<ProviderId>('openai')
   const [secret, setSecret] = useState('')
   const [test, setTest] = useState<TestState>({ kind: 'idle' })
@@ -340,8 +346,8 @@ export function OnboardingPage() {
   )
 }
 
-type StepStatus = 'done' | 'current' | 'waiting' | 'upcoming'
-type StepInfo = { n: number; title: string; hint: string; status: StepStatus }
+export type StepStatus = 'done' | 'current' | 'waiting' | 'upcoming'
+export type StepInfo = { n: number; title: string; hint: string; status: StepStatus }
 
 /**
  * Where-am-I map beside the steps: numbered circles joined by a rail.
@@ -349,7 +355,7 @@ type StepInfo = { n: number; title: string; hint: string; status: StepStatus }
  * waiting on the outside world a dashed ring. Reached steps scroll into view;
  * upcoming ones are inert until the previous step completes.
  */
-function StepMap({ steps }: { steps: StepInfo[] }) {
+export function StepMap({ steps }: { steps: StepInfo[] }) {
   const doneCount = steps.filter((s) => s.status === 'done').length
   const go = (n: number) => {
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -427,7 +433,7 @@ function StepMap({ steps }: { steps: StepInfo[] }) {
   )
 }
 
-function readLang(): Lang {
+export function readLang(): Lang {
   try {
     const v = localStorage.getItem(LANG_KEY)
     if (v === 'python' || v === 'typescript' || v === 'curl') return v
@@ -491,7 +497,6 @@ function GatewayKeyStep({ provider }: { provider: (typeof providers)[number] }) 
 }
 
 function FirstRequestStep({ receiptId, onLand }: { receiptId: string | null; onLand: (id: string) => void }) {
-  const { openReceipt } = useApp()
   const rows = useReceipts()
 
   const land = () => {
@@ -528,6 +533,12 @@ function FirstRequestStep({ receiptId, onLand }: { receiptId: string | null; onL
     )
   }
 
+  return <FirstRequest r={r} />
+}
+
+/** Step 3, done: the first request's receipt in brief. */
+export function FirstRequest({ r }: { r: Receipt }) {
+  const { openReceipt } = useApp()
   return (
     <Step n={3} title="Your first request" done>
       <div role="status" className="flex flex-col gap-4">

@@ -76,7 +76,9 @@ for w in "${what[@]}"; do
         esac
         wait_down 1975
       fi
-      nohup "$AIGW" run aigw/config.yaml >>"$LOGS/aigw.log" 2>&1 &
+      # server/.env (gitignored) holds upstream settings aigw substitutes into
+      # its config: OPENROUTER_API_KEY, LOCAL_LLM_PORT and the rest.
+      ( [ -f .env ] && set -a && . ./.env; nohup "$AIGW" run aigw/config.yaml >>"$LOGS/aigw.log" 2>&1 & )
       wait_up 1975 aigw ;;
     *) echo "unknown part: $w (want api, warden, ingest or aigw)" >&2; exit 2 ;;
   esac

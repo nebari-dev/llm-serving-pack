@@ -197,22 +197,62 @@ retire-old-secret-now are in.
 
 ## 7. Cross-cutting
 
-- **Decide: auth and roles.** Every write acts as `dev@localhost`, and
-  §5.2's roles aren't enforced. Before this leaves dev: who may publish
-  rules, change prices, delete budgets?
+- **Auth and roles (decided 2026-10-05, not built).** Every write still acts
+  as `dev@localhost` and no role is enforced yet.
+  - Roles are the spec's (§5.2): `owner | admin | editor | viewer | finance |
+    security`. They come from Keycloak groups in the OIDC token (the `groups`
+    claim, as llm-serving-pack uses in realm `nebari`), not from roles
+    assigned in Stargate. `users.role` is a cache of the last token, not the
+    source.
+  - Dev mode keeps `dev@localhost` as `owner`.
+  - Who may do what:
+
+    | Action | Roles |
+    |---|---|
+    | Read everything | viewer and up (every role) |
+    | Draft rules | editor, security |
+    | Publish or roll back rules; kill switch; capture | security, admin |
+    | Change prices; accept or dismiss price proposals | finance, admin |
+    | Create, edit or delete budgets | finance, admin |
+    | Aliases and routing | editor, admin |
+    | Own keys: create, revoke, rotate, extend, finish | the key's owner |
+    | Anyone else's keys | admin |
+    | Assign roles (Keycloak group mapping) | owner |
+
+    `owner` can do everything. A denied write is a 403 naming the roles
+    that may do it (spec §7.6 "Permission denied"), and the console shows
+    those controls disabled with that reason.
 - **If-Match is required (decided 2026-09-30).** Updating or deleting an
   alias, budget or rule without `If-Match` is a 428; a stale one is a 409
   with the current resource. Creating an alias with `PUT` takes
   `If-None-Match: *`. Dry runs don't need it. Key writes (revoke, rotate,
-  extend, finish), price writes and the kill switch don't carry an etag yet,
-  so they don't require it.
-- **No database-backed Go tests.** SQL only runs in the api-mode suite
-  against the live stack. That's where the ambiguous-column bug in the rule
-  drafts query surfaced. I recommend a Postgres + Timescale test harness
-  (testcontainers or the compose DBs) for the store package.
+  extend, finish) and the kill switch don't carry an etag. They are toggles
+  that give the same result if repeated, so they don't need one (decided
+  2026-10-05).
+  - Price writes will require `If-Match` too (decided 2026-10-05, not
+    built). Two editors changing the same rate concurrently has happened.
+- **Database-backed Go tests (decided 2026-10-05, not built).** SQL currently
+  runs only in the api-mode suite against the live stack. That's where the
+  ambiguous-column bug in the rule drafts query surfaced.
+  - The store package gets a harness on testcontainers-go with the
+    TimescaleDB image, running the real migrations.
+  - Tests skip when Docker isn't available, so `go test ./...` still works
+    without it. The harness runs in CI, and doesn't depend on the dev
+    stack's compose databases.
 - **The api-mode suite writes to the live dev database.** It creates keys
   (revoked afterwards), budgets, rules and a scheduled price (all removed
   afterwards). Revoked test keys accumulate in the Keys list.
+  - Decided 2026-10-05; built the same day, with one change: the suite needs
+    the whole request path (key check, Warden, Agent Router, ingest), not
+    just a database, so it runs against a second stack rather than the
+    testcontainers harness. `server/scripts/test-stack.sh` (`make
+    test-stack`) creates `stargate_test` and `receipts_test` in the dev
+    compose containers, migrates and backfills them, and runs stargate-api
+    (:9080/:9082), Warden (:9083/:9084) and ingest (:9317) on them, with
+    Agent Router in Docker on :2975 (two can't share a host: it binds fixed
+    internal ports). `npm run test:api` targets it, and the suite refuses
+    any control plane whose environment isn't `test`. The Keys list will
+    not hide test keys; it keeps showing the real state of the database.
 - Config writes reach Warden at once: the control plane calls Warden's
   `POST /reload` before responding. If Warden is unreachable, the write
   still succeeds and Warden catches up on its next 5s tick.

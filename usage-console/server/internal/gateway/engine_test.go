@@ -47,9 +47,13 @@ func (f *fixedUp) Call(_ context.Context, backend string, req fakellm.ChatReques
 	return Result{Status: 200, Content: f.content, Usage: u, Duration: 300 * time.Millisecond}
 }
 
+// demoNow is a fixed clock inside every seeded key's validity, so expiry dates
+// in the demo data don't fail tests as the calendar moves on.
+var demoNow = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+
 func run(t *testing.T, s *Snapshot, in Input, up Upstream) *model.Receipt {
 	t.Helper()
-	in.Now = time.Now()
+	in.Now = demoNow
 	d := Admit(s, in, rand.New(rand.NewPCG(1, 2)))
 	if d.Reject != nil {
 		return d.Finish(s, nil, Result{}, nil, time.Now())
@@ -316,7 +320,7 @@ func TestGeneratedMixProducesEveryVerdict(t *testing.T) {
 	const n = 5000
 	for i := 0; i < n; i++ {
 		req := gen.Next(r)
-		d := Admit(s, Input{Secret: req.Secret, Region: req.Region, Req: req.Body, Now: time.Now()}, r)
+		d := Admit(s, Input{Secret: req.Secret, Region: req.Region, Req: req.Body, Now: demoNow}, r)
 		var rc *model.Receipt
 		if d.Reject != nil {
 			rc = d.Finish(s, nil, Result{}, nil, time.Now())

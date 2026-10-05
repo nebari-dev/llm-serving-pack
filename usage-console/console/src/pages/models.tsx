@@ -1,4 +1,5 @@
-import { ArrowRight, Download, Plus } from 'lucide-react'
+import { ArrowRight, Download, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
@@ -10,6 +11,7 @@ import { toast } from '@/components/ui/toast'
 import { backends, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
+import { AliasDialog, DeleteAliasDialog, type LiveAlias } from './alias-dialogs'
 import { PricingLive } from './pricing-live'
 
 // §7.4 Models → Catalog · Aliases · Pricing. §5.2 model_catalog,
@@ -31,6 +33,9 @@ export function ModelsPage() {
     next.set('tab', t)
     setParams(next, { replace: true })
   }
+  const [creating, setCreating] = useState(false)
+  // Bumped after a create so the aliases table refetches.
+  const [aliasNonce, setAliasNonce] = useState(0)
 
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-0">
@@ -39,7 +44,7 @@ export function ModelsPage() {
         description="What clients can ask for, what it resolves to, and what it costs."
         actions={
           tab === 'aliases' ? (
-            <Button disabled={live} title={live ? "Alias writes aren't connected yet: the control plane can't create aliases." : undefined}>
+            <Button onClick={live ? () => setCreating(true) : undefined}>
               <Plus /> New alias
             </Button>
           ) : undefined
@@ -57,7 +62,15 @@ export function ModelsPage() {
         <CatalogTab />
       </TabsPanel>
       <TabsPanel value="aliases">
-        <AliasesTab />
+        <AliasesTab nonce={aliasNonce} />
+        {creating && (
+          <AliasDialog
+            onClose={(saved) => {
+              setCreating(false)
+              if (saved) setAliasNonce((n) => n + 1)
+            }}
+          />
+        )}
       </TabsPanel>
       <TabsPanel value="pricing">
         {live ? <PricingLive /> : <PricingTab />}
@@ -99,11 +112,11 @@ function CatalogTab() {
               <td className={cn(td, 'num text-right font-mono')}>{ctx(m.context)}</td>
               <td className={td}>
                 <span className="flex gap-1">
-                  {seedModalities?.[m.id]?.map((x) => (
+                  {(live ? m.modalities : seedModalities?.[m.id])?.map((x) => (
                     <span key={x} className="rounded-sm border border-border px-1.5 text-xs leading-5 text-muted-foreground-strong">
                       {x}
                     </span>
-                  )) ?? <span className="text-xs text-muted-foreground">—</span>}
+                  )) ?? <span className="text-xs text-muted-foreground">{live ? 'Unknown' : '—'}</span>}
                 </span>
               </td>
               <td className={cn(td, 'font-mono text-xs')}>
@@ -113,7 +126,9 @@ function CatalogTab() {
                   .join(', ')}
               </td>
               <td className={cn(td, 'pr-6')}>
-                {!seedDeprecations ? (
+                {live ? (
+                  <LiveStatus m={m} />
+                ) : !seedDeprecations ? (
                   <span className="text-xs text-muted-foreground">—</span>
                 ) : seedDeprecations[m.id] ? (
                   <StateChip tone="degraded">Deprecated {seedDeprecations[m.id]}</StateChip>
@@ -125,10 +140,29 @@ function CatalogTab() {
           ))}
         </tbody>
       </table>
-      {!seedModalities && (
-        <p className="px-6 py-3 text-xs text-muted-foreground">Not connected yet: the catalog doesn’t store modalities or deprecation dates.</p>
+      {live && (
+        <p className="px-6 py-3 text-xs text-muted-foreground">
+          Modalities and retirement dates come from LiteLLM’s entries for the backends serving each model, refreshed by the daily price sync. Unknown: no backend
+          has an entry.
+        </p>
       )}
     </div>
+  )
+}
+
+/** Api mode: retirement dates per backend, flagged within 30 days. */
+function LiveStatus({ m }: { m: (typeof models)[number] }) {
+  if (!m.deprecations?.length) return <span className="text-xs text-muted-foreground">{m.modalities ? 'Available' : 'Unknown'}</span>
+  const today = new Date().toISOString().slice(0, 10)
+  const soon = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10)
+  return (
+    <span className="flex flex-col items-start gap-1">
+      {m.deprecations.map((d) => (
+        <StateChip key={d.backend} tone={d.date <= soon ? (d.date < today ? 'blocked' : 'degraded') : 'neutral'}>
+          {d.date < today ? 'Retired' : 'Retires'} {d.date} on <span className="font-mono">{d.backend}</span>
+        </StateChip>
+      ))}
+    </span>
   )
 }
 
@@ -152,8 +186,25 @@ function LiveBlendedCost({ model, pricing }: { model: string; pricing: PricingVi
   )
 }
 
-function AliasesTab() {
-  const { data: aliases, loaded } = useLive<AliasView[]>(live ? '/aliases' : null, seedAliases, 60_000)
+function AliasesTab({ nonce }: { nonce: number }) {
+  const { data: aliases, loaded, reload } = useLive<AliasView[]>(live ? '/aliases' : null, seedAliases, 60_000)
+  useEffect(() => {
+    if (nonce) reload()
+  }, [nonce, reload])
+  const [editing, setEditing] = useState<LiveAlias | null>(null)
+  const [deleting, setDeleting] = useState<LiveAlias | null>(null)
+  // What this tab's own writes returned, shown until the refetch lands, so a
+  // follow-up edit or delete carries the new etag (null: deleted).
+  const [written, setWritten] = useState<Map<string, LiveAlias | null>>(new Map())
+  useEffect(() => setWritten(new Map()), [aliases])
+  const rows = aliases.flatMap((a) => (written.has(a.alias) ? (written.get(a.alias) ? [written.get(a.alias)!] : []) : [a]))
+  const done = (alias: string, now: LiveAlias | null | undefined) => {
+    setEditing(null)
+    setDeleting(null)
+    if (now === undefined) return
+    setWritten((m) => new Map(m).set(alias, now))
+    reload()
+  }
   const { data: pricing } = useLive<PricingView | null>(live ? '/pricing' : null, null, 300_000)
   return (
     <>
@@ -170,11 +221,16 @@ function AliasesTab() {
               <th className={th}>When</th>
               <th className={th}>Owner</th>
               <th className={cn(th, 'text-right')}>Requests, 24h</th>
-              <th className={cn(th, 'pr-6 text-right')}>Blended cost / 1M</th>
+              <th className={cn(th, !live && 'pr-6', 'text-right')}>Blended cost / 1M</th>
+              {live && (
+                <th className={cn(th, 'pr-6')}>
+                  <span className="sr-only">Actions</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
-            {aliases.map((a) => {
+            {rows.map((a) => {
               const m = modelById[a.target] as (typeof models)[number] | undefined
               const rates = seedRates?.[a.target]
               return (
@@ -196,7 +252,7 @@ function AliasesTab() {
                     )}
                   </td>
                   <td className={cn(td, 'num text-right font-mono')}>{a.requests24h.toLocaleString('en-US')}</td>
-                  <td className={cn(td, 'pr-6 text-right')}>
+                  <td className={cn(td, !live && 'pr-6', 'text-right')}>
                     {!m ? (
                       <span className="text-xs text-muted-foreground">Not in catalog</span>
                     ) : live ? (
@@ -205,12 +261,24 @@ function AliasesTab() {
                       rates && <Money value={blended(rates.inPerM, rates.outPerM)} />
                     )}
                   </td>
+                  {live && (
+                    <td className={cn(td, 'pr-6')}>
+                      <div className="flex justify-end gap-1">
+                        <Button variant="ghost" size="xs" aria-label={`Edit ${a.alias}`} onClick={() => setEditing(a as LiveAlias)}>
+                          <Pencil /> Edit
+                        </Button>
+                        <Button variant="ghost" size="xs" aria-label={`Delete ${a.alias}`} onClick={() => setDeleting(a as LiveAlias)}>
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               )
             })}
-            {loaded && aliases.length === 0 && (
+            {loaded && rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-6 py-6 text-center text-sm text-muted-foreground">
+                <td colSpan={live ? 8 : 7} className="px-6 py-6 text-center text-sm text-muted-foreground">
                   No aliases yet.
                 </td>
               </tr>
@@ -218,10 +286,12 @@ function AliasesTab() {
           </tbody>
         </table>
       </div>
+      {editing && <AliasDialog alias={editing} onClose={(saved) => done(editing.alias, saved ?? undefined)} />}
+      {deleting && <DeleteAliasDialog alias={deleting} onClose={(deleted) => done(deleting.alias, deleted ? null : undefined)} />}
       <Section>
         {live ? (
           <p className="text-sm text-muted-foreground">
-            An exact alias wins over a <code className="font-mono">*</code> pattern. Requests count what the client asked for, including ones a policy or fallback later sent elsewhere.
+            An exact alias wins over a <code className="font-mono">*</code> pattern. Every create, retarget and delete writes an audit row. Requests count what the client asked for, including ones a policy or fallback later sent elsewhere.
           </p>
         ) : (
           <p className="text-sm text-muted-foreground">

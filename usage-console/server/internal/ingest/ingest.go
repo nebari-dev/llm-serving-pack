@@ -52,6 +52,7 @@ const (
 	attrDeniedSecID = "stargate.denied_secret_id"
 	attrDeniedKeyID = "stargate.denied_key_id"
 	attrDeniedModel = "stargate.denied_model"
+	attrOverhead    = "stargate.overhead_us"
 	attrPolicy      = "stargate.policy"
 )
 
@@ -69,10 +70,11 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		return n
 	}
 
-	reqID := strings.ReplaceAll(get(attrRequestID), "-", "")
-	if len(reqID) < 12 {
+	id := ReceiptID(get(attrRequestID))
+	if id == "" {
 		return nil, errors.New("record has no x-request-id")
 	}
+	reqID := strings.ReplaceAll(get(attrRequestID), "-", "")
 	start, err := time.Parse(time.RFC3339Nano, get(attrStart))
 	if err != nil {
 		return nil, fmt.Errorf("start_time: %w", err)
@@ -80,7 +82,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 
 	rc := &model.Receipt{
 		// Derived from the request id so a redelivered record upserts the same row.
-		ID: reqID[:8] + "-" + reqID[8:12], TenantID: s.Tenant, TraceID: traceID(get(attrTraceparent), reqID),
+		ID: id, TenantID: s.Tenant, TraceID: traceID(get(attrTraceparent), reqID),
 		SessionID: get(attrSession), TS: start.UnixMilli(), DurationMS: num(attrDuration),
 		KeyName: "unauthenticated", RequestedModel: get(attrReqModel), ResolvedModel: get(attrRespModel),
 		RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "skipped",
@@ -88,8 +90,17 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		CacheWriteTokens: num(attrCacheWrite), CostUSD: new(float64), // nothing billed unless served
 		Status: num(attrStatus), Redactions: []model.Redaction{}, Rules: []model.RuleEval{},
 	}
-	if rc.ResolvedModel == "" {
-		rc.ResolvedModel = rc.RequestedModel
+	// A real upstream may name the model its own way (OpenRouter's
+	// "openai/gpt-5-mini", a GGUF path from a local runner). Only a catalog
+	// model counts as what served the request; otherwise it's the requested
+	// one after aliases, and the trace keeps the upstream's name.
+	upstreamName := ""
+	if _, ok := s.Models[rc.ResolvedModel]; !ok {
+		upstreamName, rc.ResolvedModel = rc.ResolvedModel, s.Resolve(rc.RequestedModel)
+	}
+	if v := get(attrOverhead); v != "" {
+		n, _ := strconv.Atoi(v)
+		rc.OverheadUS = &n
 	}
 	if fb := get(attrFirstByte); fb != "" {
 		n, _ := strconv.Atoi(fb)
@@ -139,6 +150,9 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		policy = p.Trace
 	}
 	route := model.TraceStep{Step: "Route selected", Input: "requested " + rc.RequestedModel, Outcome: rc.ResolvedModel + " via " + rc.Backend, State: "ok"}
+	if upstreamName != "" && upstreamName != rc.ResolvedModel {
+		route.Outcome += " (upstream calls it " + upstreamName + ")"
+	}
 	if attempts := num(attrAttempts); attempts > 1 {
 		route.Outcome += fmt.Sprintf(" after %d attempts", attempts)
 		route.State = "warn"
@@ -191,6 +205,17 @@ func withPolicy(rc *model.Receipt, p gateway.Policy) bool {
 	rc.ResolvedModel, rc.Backend, rc.Provider, rc.Region = b.ResolvedModel, b.Backend, b.Provider, b.Region
 	rc.InputTokens, rc.ResponseHash, rc.TTFTMS = b.InputTokens, "—", nil
 	return true
+}
+
+// ReceiptID is the receipt id for a request id: derived from it, so a
+// redelivered record upserts the same row and a caller that set the request
+// id knows which receipt to look for. "" if it's too short.
+func ReceiptID(requestID string) string {
+	r := strings.ReplaceAll(requestID, "-", "")
+	if len(r) < 12 {
+		return ""
+	}
+	return r[:8] + "-" + r[8:12]
 }
 
 // KeyID is the key the key check resolved for a record, admitted or blocked,
