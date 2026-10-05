@@ -12,7 +12,7 @@ import (
 
 // Identity headers ExtAuthz puts on an admitted request. The access log
 // records them and receipt-ingest turns them back into the receipt's key,
-// team and project. aigw/config.yaml strips any the caller sends.
+// team and project. aigw/base.yaml strips any the caller sends.
 const (
 	HeaderKeyID   = "X-Stargate-Key-Id"
 	HeaderTeam    = "X-Stargate-Team"

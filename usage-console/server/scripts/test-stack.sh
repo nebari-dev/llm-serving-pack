@@ -15,7 +15,10 @@
 #   warden        :9083 ext_proc, :9084 admin
 #   ingest        :9317 OTLP
 #   gateway       :2975, Agent Router in Docker (two can't share a host: it binds
-#                 fixed internal ports), reaching the above via host.docker.internal
+#                 fixed internal ports), reaching the above via host.docker.internal.
+#                 It runs tmp/aigw-test/config.yaml, written from aigw/base.yaml and
+#                 the test db's routing; the api applies routing there and
+#                 restarts the container.
 #   trafficgen    0.5 rps into :2975
 #
 # fake-openai (:8090) and the local model server are shared with the dev
@@ -27,7 +30,8 @@ BIN=${BIN:-bin}
 LOGS=${LOGS:-tmp}
 IMAGE=${AIGW_IMAGE:-envoyproxy/ai-gateway-cli:v1.1.0}
 CONTAINER=stargate-test-aigw
-mkdir -p "$BIN" "$LOGS"
+AIGW_DIR=tmp/aigw-test
+mkdir -p "$BIN" "$LOGS" "$AIGW_DIR"
 
 export STARGATE_CONFIG_DB=postgres://stargate:stargate@localhost:5433/stargate_test?sslmode=disable
 export STARGATE_RECEIPTS_DB=postgres://stargate:stargate@localhost:5434/receipts_test?sslmode=disable
@@ -63,7 +67,9 @@ up() {
   "$BIN/stargate-api" migrate >>"$LOGS/test-stargate-api.log" 2>&1
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \
-      -gateway http://localhost:2975 -environment test >>"$LOGS/test-stargate-api.log" 2>&1 &
+      -gateway http://localhost:2975 -environment test \
+      -aigw-config "$AIGW_DIR/config.yaml" -aigw-restart "docker restart $CONTAINER" -aigw-log "docker logs --tail 30 $CONTAINER 2>&1" \
+      >>"$LOGS/test-stargate-api.log" 2>&1 &
     wait_up 9080 stargate-api
   fi
   # The api seeds the demo tenant on first start; then give it a week of history.
@@ -80,11 +86,12 @@ up() {
     wait_up 9317 receipt-ingest
   fi
 
+  [ -f "$AIGW_DIR/config.yaml" ] || "$BIN/stargate-api" routing write -o "$AIGW_DIR/config.yaml" >>"$LOGS/test-stargate-api.log" 2>&1
   if [ -z "$(docker ps -q -f name="^$CONTAINER$")" ]; then
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
     local envfile=()
     [ -f .env ] && envfile=(--env-file .env)
-    docker run -d --name "$CONTAINER" -p 2975:1975 -v "$PWD/aigw:/config:ro" ${envfile[@]+"${envfile[@]}"} \
+    docker run -d --name "$CONTAINER" -p 2975:1975 -v "$PWD/$AIGW_DIR:/config:ro" ${envfile[@]+"${envfile[@]}"} \
       -e STARGATE_HOST=host.docker.internal -e LOCAL_LLM_HOST=host.docker.internal \
       -e STARGATE_AUTHZ_PORT=9082 -e STARGATE_WARDEN_PORT=9083 -e STARGATE_OTLP_PORT=9317 \
       "$IMAGE" run /config/config.yaml >/dev/null
@@ -119,6 +126,7 @@ case "${1:-up}" in
     down
     psql_in configdb stargate "DROP DATABASE IF EXISTS stargate_test"
     psql_in receiptsdb receipts "DROP DATABASE IF EXISTS receipts_test"
+    rm -f "$AIGW_DIR/config.yaml"
     up ;;
   *) echo "usage: $0 up|down|restart|reset" >&2; exit 2 ;;
 esac

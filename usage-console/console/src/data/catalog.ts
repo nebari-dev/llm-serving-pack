@@ -9,6 +9,55 @@ import { ago } from '@/lib/format'
 import * as mock from './mock'
 import type { ApiKey, Backend, Budget, Change, Degradation, Model, PairPrice, PolicyRule, PricingView, RateName, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
 
+// ---- routing (api mode, §4.4) ----------------------------------------------
+// Routes are desired state in the control plane; each compiles to one rule of
+// the gateway's AIGatewayRoute. GET /routing diffs the compiled config against
+// what the gateway runs, and POST /routing/apply puts it in front of it.
+
+export interface RouteTarget {
+  backend: string
+  /** Replaces the requested model (modelNameOverride); empty passes it through. */
+  model?: string
+  /** Splits traffic between targets; only with more than one. */
+  weight?: number
+}
+
+export interface LiveRoute {
+  name: string
+  /** Any of models (exact names, or one "prefix*" or "*"), and every header. */
+  match: { models: string[]; headers: { name: string; value: string }[] }
+  targets: RouteTarget[]
+  /** Tried in order when the targets fail. */
+  fallback: RouteTarget[]
+  captureContent?: boolean
+  /** synced: the gateway runs it as it is; pending: not applied yet; failed: the last apply didn't take. */
+  sync: 'synced' | 'pending' | 'failed' | 'not_reconciled'
+  etag: string
+  /** The AIGatewayRoute rule it compiles to. */
+  yaml: string
+}
+
+export interface RoutingChange {
+  kind: string
+  name: string
+  change: 'added' | 'changed' | 'removed'
+  /** The resource's YAML, each line prefixed "+", "-" or " ". */
+  diff: string
+}
+
+export interface RoutingPlan {
+  /** Where an apply goes, in the applier's words. */
+  target: string
+  canApply: boolean
+  reason?: string
+  /** Names this plan (desired and running); apply sends it as If-Match. */
+  etag: string
+  changes: RoutingChange[]
+  /** The desired routing as YAML, for Export. */
+  yaml: string
+  lastApply?: { at: number; actor: string; ok: boolean; error?: string; changes: Omit<RoutingChange, 'diff'>[] }
+}
+
 export type * from './mock'
 
 export const dataMode: 'api' | 'mock' = import.meta.env.VITE_DATA === 'api' ? 'api' : 'mock'
@@ -20,7 +69,9 @@ export let teams: Team[] = mock.teams
 export let models: Model[] = mock.models
 export let modelById: Record<string, Model> = mock.modelById
 export let backends: Backend[] = mock.backends
-export let routes: Route[] = mock.routes
+/** Mock-mode routes; api mode's are liveRoutes, in the reconciler's shape. */
+export const routes: Route[] = mock.routes
+export let liveRoutes: LiveRoute[] = []
 export let keys: ApiKey[] = mock.keys
 export let keyById: Record<string, ApiKey> = mock.keyById
 export let budgets: Budget[] = mock.budgets
@@ -100,7 +151,7 @@ export async function hydrate() {
     api<Team[]>('/teams'),
     api<Model[]>('/models'),
     api<Backend[]>('/backends'),
-    api<Route[]>('/routes'),
+    api<LiveRoute[]>('/routes'),
     api<WireKey[]>('/keys'),
     api<Budget[]>('/budgets'),
     api<PolicyRule[]>('/rules'),
@@ -114,7 +165,7 @@ export async function hydrate() {
   models = m
   modelById = index(m, (x) => x.id)
   backends = b
-  routes = r
+  liveRoutes = r
   keys = k.map(fromWire)
   keyById = index(keys, (x) => x.id)
   budgets = bu

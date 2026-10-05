@@ -104,20 +104,43 @@ var LiteLLMKeys = map[[2]string]string{
 var Aliases = map[string]string{"summarize-*": "gpt-5-mini"}
 
 var Backends = []model.Backend{
-	{Name: "openai-prod", Provider: "OpenAI", Region: "us-east", Provenance: "console", Sync: "synced", Models: []string{"gpt-5-mini", "gpt-5.5"}, Health: "healthy", P50: 412, ErrorRate: 0.2},
-	{Name: "anthropic-prod", Provider: "Anthropic", Region: "us-east", Provenance: "console", Sync: "applying", Models: []string{"claude-sonnet-5", "claude-opus-4-1"}, Health: "degraded", P50: 980, ErrorRate: 3.1},
-	{Name: "bedrock-eu", Provider: "Bedrock", Region: "eu-central", Provenance: "git", Sync: "synced", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/bedrock-eu.yaml", Models: []string{"claude-haiku-4-5", "claude-sonnet-5"}, Health: "healthy", P50: 640, ErrorRate: 0.4},
-	{Name: "vllm-internal", Provider: "Self-hosted", Region: "eu-private", Provenance: "git", Sync: "drift", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/vllm-internal.yaml", Models: []string{"llama-3.3-70b"}, Health: "healthy", P50: 220, ErrorRate: 0.1, CaptureContent: true},
-	{Name: "local", Provider: "Self-hosted", Region: "local", Provenance: "console", Sync: "synced", Models: []string{"smollm2"}, Health: "healthy"},
-	{Name: "openrouter", Provider: "OpenRouter", Region: "global", Provenance: "console", Sync: "synced", Models: []string{"gpt-4o-mini"}, Health: "healthy"},
+	{Name: "openai-prod", Provider: "OpenAI", Region: "us-east", Provenance: "console", Sync: "synced", Models: []string{"gpt-5-mini", "gpt-5.5"}, Health: "healthy", P50: 412, ErrorRate: 0.2, Endpoint: fake("openai-prod")},
+	{Name: "anthropic-prod", Provider: "Anthropic", Region: "us-east", Provenance: "console", Sync: "applying", Models: []string{"claude-sonnet-5", "claude-opus-4-1"}, Health: "degraded", P50: 980, ErrorRate: 3.1, Endpoint: fake("anthropic-prod")},
+	{Name: "bedrock-eu", Provider: "Bedrock", Region: "eu-central", Provenance: "git", Sync: "synced", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/bedrock-eu.yaml", Models: []string{"claude-haiku-4-5", "claude-sonnet-5"}, Health: "healthy", P50: 640, ErrorRate: 0.4, Endpoint: fake("bedrock-eu")},
+	{Name: "vllm-internal", Provider: "Self-hosted", Region: "eu-private", Provenance: "git", Sync: "drift", Source: "github.com/acme/platform-gitops/blob/main/gateway/backends/vllm-internal.yaml", Models: []string{"llama-3.3-70b"}, Health: "healthy", P50: 220, ErrorRate: 0.1, CaptureContent: true, Endpoint: fake("vllm-internal")},
+	{Name: "local", Provider: "Self-hosted", Region: "local", Provenance: "console", Sync: "synced", Models: []string{"smollm2"}, Health: "healthy",
+		Endpoint: &model.BackendEndpoint{Schema: "OpenAI", Prefix: "${LOCAL_LLM_PREFIX:-/engines/v1}", Host: "${LOCAL_LLM_HOST:-localhost}", Port: "${LOCAL_LLM_PORT:-12434}"}},
+	{Name: "openrouter", Provider: "OpenRouter", Region: "global", Provenance: "console", Sync: "synced", Models: []string{"gpt-4o-mini"}, Health: "healthy",
+		Endpoint: &model.BackendEndpoint{Schema: "OpenAI", Prefix: "/api/v1", Host: "openrouter.ai", Port: "443", TLS: true, APIKeyEnv: "OPENROUTER_API_KEY"}},
+	// No endpoint: the gateway has never reached it, so it's never compiled.
 	{Name: "azure-openai-eu", Provider: "Azure", Region: "eu-west", Provenance: "adopted", Sync: "failed", Models: []string{"gpt-5-mini"}, Health: "down", P50: 0, ErrorRate: 100},
 }
 
+// fake is a backend served by cmd/fake-openai, which tells backends apart by
+// path prefix.
+func fake(name string) *model.BackendEndpoint {
+	return &model.BackendEndpoint{Schema: "OpenAI", Prefix: "/" + name + "/v1", Host: "${STARGATE_HOST:-localhost}", Port: "8090"}
+}
+
+// Routes are the gateway's routing as aigw/config.yaml had it before the
+// console owned it (2026-10-05).
 var Routes = []model.Route{
-	{Name: "default", Match: "model = *", Targets: []model.RouteTarget{{Model: "claude-sonnet-5", Backend: "anthropic-prod", Weight: 100}}, Fallback: []string{"bedrock-eu", "openai-prod"}, Provenance: "console", Sync: "synced"},
-	{Name: "cheap-summarize", Match: "model = summarize-*", Targets: []model.RouteTarget{{Model: "gpt-5-mini", Backend: "openai-prod", Weight: 100}}, Fallback: []string{"vllm-internal"}, Provenance: "console", Sync: "synced"},
-	{Name: "eu-private", Match: "header x-data-region = eu", Targets: []model.RouteTarget{{Model: "llama-3.3-70b", Backend: "vllm-internal", Weight: 80}, {Model: "claude-haiku-4-5", Backend: "bedrock-eu", Weight: 20}}, Fallback: []string{}, Provenance: "git", Sync: "drift", CaptureContent: true},
-	{Name: "research-frontier", Match: "key.team = research", Targets: []model.RouteTarget{{Model: "claude-opus-4-1", Backend: "anthropic-prod", Weight: 100}}, Fallback: []string{"openai-prod"}, Provenance: "console", Sync: "applying"},
+	{Name: "gpt-5", Match: models("gpt-5-mini", "gpt-5.5"), Targets: to("openai-prod", "")},
+	{Name: "summarize", Match: models("summarize-*"), Targets: to("openai-prod", "gpt-5-mini")},
+	{Name: "claude-sonnet-5", Match: models("claude-sonnet-5"), Targets: to("anthropic-prod", ""), Fallback: to("bedrock-eu", "")},
+	{Name: "claude-opus-4-1", Match: models("claude-opus-4-1"), Targets: to("anthropic-prod", ""), Fallback: to("openai-prod", "gpt-5.5")},
+	{Name: "claude-haiku-4-5", Match: models("claude-haiku-4-5"), Targets: to("bedrock-eu", "")},
+	{Name: "llama-3.3-70b", Match: models("llama-3.3-70b"), Targets: to("vllm-internal", "")},
+	{Name: "smollm2", Match: models("smollm2"), Targets: to("local", "${LOCAL_LLM_MODEL:-ai/smollm2:360M-Q4_K_M}")},
+	{Name: "gpt-4o-mini", Match: models("gpt-4o-mini"), Targets: to("openrouter", "openai/gpt-4o-mini")},
+}
+
+func models(ms ...string) model.RouteMatch {
+	return model.RouteMatch{Models: ms, Headers: []model.HeaderMatch{}}
+}
+
+func to(backend, as string) []model.RouteTarget {
+	return []model.RouteTarget{{Backend: backend, Model: as}}
 }
 
 func date(s string) *string { return &s }

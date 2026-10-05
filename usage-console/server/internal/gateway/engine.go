@@ -150,27 +150,27 @@ func (s *Snapshot) backend(name string) (model.Backend, bool) {
 	return model.Backend{}, false
 }
 
-// routeFor picks the route whose match applies, falling back to "default".
-// Only the simple match forms the demo routes use are understood.
+// routeFor picks the route the gateway would: the one with the most header
+// conditions that all hold, then the first in rule order. The dev gateway
+// knows only the key's team (x-stargate-team) and x-data-region.
 func (s *Snapshot) routeFor(requested, team, region string) *model.Route {
-	var def *model.Route
+	known := map[string]string{"x-stargate-team": team, "x-data-region": region}
+	var best *model.Route
 	for i := range s.Routes {
 		r := &s.Routes[i]
-		lhs, rhs, ok := strings.Cut(r.Match, " = ")
-		if !ok {
-			continue
+		ok := slices.ContainsFunc(r.Match.Models, func(m string) bool {
+			return m == requested || m == "*" || strings.HasSuffix(m, "*") && strings.HasPrefix(requested, strings.TrimSuffix(m, "*"))
+		})
+		for _, h := range r.Match.Headers {
+			if v, k := known[h.Name]; !k || v != h.Value {
+				ok = false
+			}
 		}
-		switch {
-		case lhs == "model" && rhs == "*":
-			def = r
-		case lhs == "model" && strings.HasSuffix(rhs, "*") && strings.HasPrefix(requested, strings.TrimSuffix(rhs, "*")),
-			lhs == "model" && rhs == requested,
-			lhs == "header x-data-region" && rhs == region,
-			lhs == "key.team" && rhs == team:
-			return r
+		if ok && (best == nil || len(r.Match.Headers) > len(best.Match.Headers)) {
+			best = r
 		}
 	}
-	return def
+	return best
 }
 
 // substitute picks the model a fallback backend should serve in place of m:
@@ -522,10 +522,14 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 		}
 	}
 	if rt := s.routeFor(in.Req.Model, k.Team, in.Region); rt != nil && !d.rerouted {
-		for _, name := range rt.Fallback {
-			if b, ok := s.backend(name); ok && !seen[name] && b.Health != "down" {
-				d.Candidates = append(d.Candidates, Candidate{b, s.substitute(b, resolved)})
-				seen[name] = true
+		for _, t := range rt.Fallback {
+			if b, ok := s.backend(t.Backend); ok && !seen[t.Backend] && b.Health != "down" {
+				m := t.Model
+				if m == "" {
+					m = s.substitute(b, resolved)
+				}
+				d.Candidates = append(d.Candidates, Candidate{b, m})
+				seen[t.Backend] = true
 			}
 		}
 	}

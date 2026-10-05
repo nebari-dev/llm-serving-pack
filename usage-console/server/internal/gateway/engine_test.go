@@ -149,10 +149,11 @@ func TestOverloadFallsBack(t *testing.T) {
 	}
 }
 
-func TestOpusFallbackSubstitutesSameFamily(t *testing.T) {
+// The claude-opus-4-1 route falls back to openai-prod as gpt-5.5.
+func TestOpusFallsBackAsItsRouteSays(t *testing.T) {
 	up := &fixedUp{statuses: []int{529}}
 	rc := run(t, DemoSnapshot(), Input{Secret: secret("k2"), Req: chat("claude-opus-4-1", "hi")}, up)
-	if rc.Backend != "bedrock-eu" || rc.ResolvedModel != "claude-sonnet-5" {
+	if rc.Backend != "openai-prod" || rc.ResolvedModel != "gpt-5.5" {
 		t.Fatalf("got %s/%s; calls %v", rc.Backend, rc.ResolvedModel, up.calls)
 	}
 }

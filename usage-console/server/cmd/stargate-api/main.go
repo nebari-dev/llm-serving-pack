@@ -4,6 +4,9 @@
 //	stargate-api serve     migrate, seed the demo tenant if missing, serve
 //	stargate-api migrate   apply migrations only
 //	stargate-api backfill  synthesize history into the receipts db
+//	stargate-api routing write [-o path]
+//	                       write aigw's config: aigw/base.yaml plus the routing
+//	                       compiled from Postgres (what the first apply would)
 package main
 
 import (
@@ -16,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -24,13 +28,14 @@ import (
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/routing"
 	"github.com/jbouder/stargate/server/internal/store"
 	"github.com/jbouder/stargate/server/internal/traffic"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: stargate-api serve|migrate|backfill [flags]")
+		fmt.Fprintln(os.Stderr, "usage: stargate-api serve|migrate|backfill|routing [flags]")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -56,6 +61,8 @@ func main() {
 		serve(ctx, st, os.Args[2:])
 	case "backfill":
 		backfill(ctx, st, os.Args[2:])
+	case "routing":
+		writeRouting(ctx, st, os.Args[2:])
 	default:
 		log.Fatalf("unknown command %q", os.Args[1])
 	}
@@ -70,6 +77,10 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	litellm := fs.String("litellm-url", api.LiteLLMURL, "LiteLLM's price file, which the daily price sync reads")
 	gatewayURL := fs.String("gateway", "http://localhost:1975", "the gateway callers use, shown on onboarding and used for its test request")
 	warden := fs.String("warden", "", "Warden's admin URL (e.g. http://localhost:8084), for the console's degradation banner; empty when Warden isn't in the path")
+	aigwBase := fs.String("aigw-base", "aigw/base.yaml", "aigw's infrastructure config, which applied routing is appended to")
+	aigwConfig := fs.String("aigw-config", "", "the config file aigw runs (e.g. tmp/aigw/config.yaml); empty: routing isn't applied anywhere")
+	aigwRestart := fs.String("aigw-restart", "", "shell command that restarts aigw on -aigw-config (e.g. 'scripts/restart.sh aigw'); empty: routing can't be applied")
+	aigwLog := fs.String("aigw-log", "", "shell command printing the end of aigw's log, quoted when an apply fails (e.g. 'tail -n 20 tmp/aigw.log')")
 	fs.Parse(args)
 
 	// Loads are serialized so a slow periodic one can't overwrite a newer one.
@@ -108,12 +119,47 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
 	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", ConfigChanged: reload, WardenURL: *warden, Environment: *environment, LiteLLMURL: *litellm, GatewayURL: *gatewayURL}
+	if *aigwConfig != "" {
+		srv.Routing = &routing.LocalApplier{Base: *aigwBase, Path: *aigwConfig, Restart: *aigwRestart, Log: *aigwLog, Ready: routing.HTTPReady(*gatewayURL, 90*time.Second)}
+	}
 	go srv.FinishRotations(ctx)
 	go srv.RunPriceSync(ctx)
 	go srv.PriceLater(ctx)
 
 	go listen(ctx, "ext_authz", *authzAddr, &gateway.ExtAuthz{Snap: &snap})
 	listen(ctx, "stargate-api", *addr, logRequests(srv.Handler()))
+}
+
+// writeRouting writes aigw's whole config from Postgres, for a gateway's first
+// start; after that the console's applies rewrite it.
+func writeRouting(ctx context.Context, st *store.Store, args []string) {
+	if len(args) == 0 || args[0] != "write" {
+		log.Fatal("usage: stargate-api routing write [-base aigw/base.yaml] [-o tmp/aigw/config.yaml]")
+	}
+	fs := flag.NewFlagSet("routing write", flag.ExitOnError)
+	base := fs.String("base", "aigw/base.yaml", "aigw's infrastructure config")
+	out := fs.String("o", "tmp/aigw/config.yaml", "where to write the config")
+	fs.Parse(args[1:])
+	bs, err := st.Backends(ctx, demo.Tenant)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rs, err := st.Routes(ctx, demo.Tenant)
+	if err != nil {
+		log.Fatal(err)
+	}
+	a := &routing.LocalApplier{Base: *base, Path: *out}
+	b, err := a.Config(routing.Compile(bs, rs))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(*out, b, 0o644); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("wrote %s: %d routes, %d backends", *out, len(rs), len(bs))
 }
 
 func listen(ctx context.Context, name, addr string, h http.Handler) {

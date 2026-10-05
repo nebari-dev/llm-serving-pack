@@ -22,7 +22,7 @@ trafficgen ──► Agent Router :1975 ─────────────�
                   │  ├─► stargate-api :8082
                   │  │  ext_proc: budgets · rules · redact · reroute
                   │  └─► warden :8083
-                  │  routing · retries · failover (aigw/config.yaml)
+                  │  routing · retries · failover (tmp/aigw/config.yaml)
                   ▼  access log over OTLP/gRPC (+ Warden's decision)
             receipt-ingest :4317 ──► receipts db ── NOTIFY ──► stargate-api ──► console
 ```
@@ -55,7 +55,7 @@ Warden has to run before Agent Router's own ext_proc. That processor reads the
 model to route on and keeps a copy of the body, which it replays on retries,
 model overrides and streamed requests. A redaction made after it would be
 undone. By default Agent Router puts its filter first, but it goes after a
-buffer filter that follows the other ext_procs, so `aigw/config.yaml` moves
+buffer filter that follows the other ext_procs, so `aigw/base.yaml` moves
 the buffer filter behind Warden. Check the order after upgrading Agent Router:
 `curl 'localhost:<envoy admin>/config_dump?resource=dynamic_listeners'` should
 list `ext_authz → ext_proc/warden → buffer → ext_proc/aigateway → router`.
@@ -114,8 +114,17 @@ make restart WHAT="api warden ingest aigw" AIGW=~/bin/aigw   # everything but th
 `scripts/restart.sh` builds into `bin/`, finds each process by its listening
 port (api :8080, warden :8083, ingest :4317, aigw :1975), stops it by pid and
 starts the new build in the background, logging to `tmp/<name>.log`. Restart
-`aigw` after editing `aigw/config.yaml`, and `ingest` after changing what it
-reads from the access log.
+`ingest` after changing what it reads from the access log.
+
+aigw runs `tmp/aigw/config.yaml` (gitignored): `aigw/base.yaml`, the
+infrastructure, plus the routing compiled from Postgres (`internal/routing`).
+`restart.sh aigw` writes it with `stargate-api routing write` the first time.
+After that the console's Routing page rewrites it: route edits save to
+Postgres, and "Apply" diffs the compiled routing against the file, writes it
+and runs `restart.sh aigw`, putting the old file back if aigw doesn't answer
+again. After editing `aigw/base.yaml`, delete `tmp/aigw/config.yaml` and
+restart `aigw`, or apply from the console. The test stack does the same with
+`tmp/aigw-test/config.yaml` and `docker restart`.
 
 Never stop these with `pkill -f`: `make dev-aigw` runs everything under one
 shell whose command line matches every command, and its `trap 'kill 0'`
@@ -127,12 +136,12 @@ shell, so Ctrl-C on `make dev-aigw` leaves it running; stop it by port, e.g.
 
 | | |
 |---|---|
-| `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. Also `migrate`, and `backfill -days N -per-day N`. |
+| `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. With `-aigw-config` and `-aigw-restart`, applies routing to aigw. Also `migrate`, `backfill -days N -per-day N`, and `routing write -o path`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
 | `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
 | `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`, and `POST /reload`, which the API calls after every config write. |
-| `aigw/config.yaml` | Agent Router config: the ext_authz key check, Warden's ext_proc and the filter order it needs, routes for every demo model plus Warden's backend hints, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. |
+| `aigw/base.yaml` | Agent Router's infrastructure config: the ext_authz key check, Warden's ext_proc and the filter order it needs, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. Routing (the AIGatewayRoute with Warden's backend hints, and each backend) is compiled onto it from Postgres. |
 | `cmd/trafficgen` | Poisson traffic at `-rps`, with the mockup's mix of keys, PII, secrets and EU requests. |
 
 DB URLs come from `STARGATE_CONFIG_DB` and `STARGATE_RECEIPTS_DB`. The

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jbouder/stargate/server/internal/demo"
+	"github.com/jbouder/stargate/server/internal/model"
 )
 
 // Seed loads the demo tenant into the config db. It is a no-op if the tenant
@@ -39,8 +40,15 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		b.Queue(`INSERT INTO model_aliases (tenant_id, alias, target) VALUES ($1,$2,$3)`, t, alias, target)
 	}
 	for i, x := range demo.Backends {
-		b.Queue(`INSERT INTO backends VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13)`,
-			x.Name, t, i, x.Provider, x.Region, x.Provenance, x.Sync, x.Source, x.Models, x.Health, x.P50, x.ErrorRate, x.CaptureContent)
+		var e model.BackendEndpoint
+		if x.Endpoint != nil {
+			e = *x.Endpoint
+		}
+		b.Queue(`INSERT INTO backends (name, tenant_id, ordinal, provider, region, provenance, sync_state, source_ref, models, health, p50_ms, error_rate, capture_content,
+		                               schema, prefix, host, port, tls, api_key_env)
+		         VALUES ($1,$2,$3,$4,$5,$6,$7,NULLIF($8,''),$9,$10,$11,$12,$13,NULLIF($14,''),NULLIF($15,''),NULLIF($16,''),NULLIF($17,''),$18,NULLIF($19,''))`,
+			x.Name, t, i, x.Provider, x.Region, x.Provenance, x.Sync, x.Source, x.Models, x.Health, x.P50, x.ErrorRate, x.CaptureContent,
+			e.Schema, e.Prefix, e.Host, e.Port, e.TLS, e.APIKeyEnv)
 	}
 	for _, p := range demo.SeedPrices(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
 		b.Queue(`INSERT INTO model_pricing VALUES ($1,$2,$3,$4,$5,$6,$7,'seed','seed','seed','seed','seed',$8,NULL)`,
@@ -50,9 +58,10 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		b.Queue(`INSERT INTO price_sources VALUES ($1,$2,$3)`, pair[0], pair[1], key)
 	}
 	for i, x := range demo.Routes {
-		targets, _ := json.Marshal(x.Targets)
-		b.Queue(`INSERT INTO routes VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			x.Name, t, i, x.Match, targets, x.Fallback, x.Provenance, x.Sync, x.CaptureContent)
+		normalizeRoute(&x)
+		m, tg, f := marshalRoute(x)
+		b.Queue(`INSERT INTO routes (tenant_id, name, ordinal, match, targets, fallback, capture_content) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+			t, x.Name, i, m, tg, f, x.CaptureContent)
 	}
 	for _, x := range demo.Budgets {
 		b.Queue(`INSERT INTO budgets VALUES ($1,$2,$3,$4,$5,$6,$7)`, x.ID, t, x.ScopeType, x.Scope, x.Period, x.CapUSD, x.OnExceed)

@@ -7,7 +7,7 @@ export type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
 export type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
 export type Provenance = 'console' | 'git' | 'adopted'
 /** not_reconciled: api mode before a reconciler exists (§4.4); nothing is applied or observed. */
-export type SyncState = 'synced' | 'applying' | 'failed' | 'drift' | 'not_reconciled'
+export type SyncState = 'synced' | 'applying' | 'failed' | 'drift' | 'not_reconciled' | 'pending' | 'no_endpoint'
 
 export interface Team {
   id: string
@@ -340,6 +340,10 @@ export interface Backend {
   /** Settled requests in the last hour (api mode only). */
   requests1h?: number
   captureContent?: boolean
+  /** Where the gateway reaches it (api mode); absent for a backend it can't. */
+  endpoint?: BackendEndpoint
+  /** The gateway resources it compiles to (api mode). */
+  yaml?: string
 }
 
 export const backends: Backend[] = [
@@ -349,6 +353,17 @@ export const backends: Backend[] = [
   { name: 'vllm-internal', provider: 'Self-hosted', region: 'eu-private', provenance: 'git', sync: 'drift', source: 'github.com/acme/platform-gitops/blob/main/gateway/backends/vllm-internal.yaml', models: ['llama-3.3-70b'], health: 'healthy', p50: 220, errorRate: 0.1, captureContent: true },
   { name: 'azure-openai-eu', provider: 'Azure', region: 'eu-west', provenance: 'adopted', sync: 'failed', models: ['gpt-5-mini'], health: 'down', p50: 0, errorRate: 100 },
 ]
+
+/** A backend's desired state; host and port may be aigw ${VAR:-default}s. */
+export interface BackendEndpoint {
+  schema: string
+  prefix: string
+  host: string
+  port: string
+  tls?: boolean
+  /** The environment variable holding the provider key the gateway sends. */
+  apiKeyEnv?: string
+}
 
 export interface Route {
   name: string

@@ -39,8 +39,13 @@ ingest:
 warden:
 	go run ./cmd/warden
 
-aigw:
-	$(AIGW) run aigw/config.yaml
+# aigw runs tmp/aigw/config.yaml: aigw/base.yaml plus the console's routing.
+# It's written from Postgres the first time; the console's applies rewrite it.
+tmp/aigw/config.yaml:
+	go run ./cmd/stargate-api routing write -o $@
+
+aigw: tmp/aigw/config.yaml
+	$(AIGW) run tmp/aigw/config.yaml
 
 # Runs api, gateway, fake upstream and traffic together; Ctrl-C stops all.
 dev: migrate
@@ -57,14 +62,15 @@ test:
 # Same, with the real request path: Agent Router in front of the fake upstream,
 # checking keys against stargate-api's ext_authz (:8082) and budgets and rules
 # with Warden's ext_proc (:8083), its access log feeding receipt-ingest.
-dev-aigw: migrate
+dev-aigw: migrate tmp/aigw/config.yaml
 	@command -v $(AIGW) >/dev/null || { echo "aigw not found; install it or pass AIGW=/path/to/aigw"; exit 1; }
 	@trap 'kill 0' INT TERM; \
 	go run ./cmd/fake-openai & \
-	go run ./cmd/stargate-api serve -warden http://localhost:8084 & \
+	go run ./cmd/stargate-api serve -warden http://localhost:8084 -aigw-config tmp/aigw/config.yaml \
+	  -aigw-restart "AIGW=$$(command -v $(AIGW)) scripts/restart.sh aigw" -aigw-log "tail -n 30 tmp/aigw.log" & \
 	go run ./cmd/receipt-ingest & \
 	go run ./cmd/warden & \
-	sleep 2; $(AIGW) run aigw/config.yaml & \
+	sleep 2; $(AIGW) run tmp/aigw/config.yaml & \
 	sleep 4; go run ./cmd/trafficgen -gateway http://localhost:1975 & \
 	wait
 

@@ -166,11 +166,37 @@ when stale; 428 without it on an update or delete). Open questions are in
   - Exit test: the api-mode suite builds a rule in the builder, publishes it
     enforcing, sees the gateway refuse with `policy_blocked`, merges a stale
     draft, rolls back from Versions, disables and deletes it.
-- [x] Routes and backends: read-only (decided 2026-09-30). Route config
-  doesn't reach Agent Router's routing, so there's nothing for an apply to
-  change yet. The API reports sync as `not_reconciled`, and in api mode the
-  Routing page drops the edit, apply, adopt and YAML paths and the mockup's
-  specs, reconcile events and failovers (decisions §6).
+- [x] Routes and backends: desired state, the route editor, and apply to
+  the local gateway (2026-10-05; replaces the read-only decision of
+  2026-09-30, decisions §6).
+  - Backend: config migration 009 rebuilds `routes` in the gateway's shape
+    (match `{models, headers}`, targets `{backend, model?, weight?}`, an
+    ordered fallback) from what `aigw/config.yaml` had by hand, adds
+    endpoint columns to `backends`, and `routing_applies`. The seeded routes
+    (default, cheap-summarize, eu-private, research-frontier) are gone.
+    `internal/routing` compiles routes and backends to the AIGatewayRoute,
+    Backend, AIServiceBackend and provider-key resources, diffs them against
+    the running config, and applies through an `Applier`. The local one
+    writes `tmp/aigw/config.yaml` (`aigw/base.yaml` + routing) and runs
+    `restart.sh aigw`, rolling back if aigw doesn't answer within 90s.
+    `GET/POST /routes`, `PUT/DELETE /routes/{name}` (audit rows, If-Match,
+    `?dryRun=true` returns the rule), `GET /routing` (diff, plan etag,
+    export YAML, last apply), `POST /routing/apply` (If-Match: the plan's
+    etag; 502 with aigw's error after a rollback). Sync is `synced`,
+    `pending` or `failed` per route and backend, and `no_endpoint` for a
+    backend with no endpoint. Compiling the seed reproduces the hand-written
+    config except Warden's reroute hint for `local` and `openrouter`, which
+    it lacked.
+  - Console: api mode renders `pages/routing-live.tsx`. Routes list with
+    sync, a route editor (models, header conditions, weighted targets with
+    model overrides, ordered fallback, Preview YAML from a dry run, stale
+    edit refused with "Load the current version"), delete, an apply bar
+    with the CRD diff before applying, and Export YAML. Backends show
+    endpoint, sync and their generated YAML; editing them isn't connected.
+  - Exit test: the api-mode suite creates a route matching `x-stargate-team`,
+    applies it to the test gateway (Docker), and sees a support key's
+    gpt-5.5 land on vllm-internal as llama-3.3-70b; the UI test creates,
+    applies, edits against a stale etag and deletes a route.
 - [x] Budgets: create, edit and delete on Spend (2026-09-30). The gateway
   enforces every budget whose scope covers a key (its team, project or the
   key itself); the strictest over-cap one decides. Keys no longer name a
@@ -243,8 +269,18 @@ when stale; 428 without it on an update or delete). Open questions are in
 
 ## 3. New systems
 
-- [ ] Replay: run Warden's evaluator over stored receipts. Needs content
-  capture, or a replay over hashes/metadata only.
+- [ ] Replay: run Warden's evaluator over stored receipts, to see what a new
+  rule would have caught. Needs content capture, or a replay over
+  hashes/metadata only. Until it exists, publish's dry run can't tell you
+  much.
+- [ ] Projects table (§5.2), so project budgets can exist before keys
+  (decided 2026-10-05).
+- [ ] Throttle answers 429 with Retry-After; key-scoped budgets match by key
+  ID (decided 2026-10-05).
+- [ ] Policies as §5.2 has them: versioning and matching per policy
+  (decided 2026-10-05).
+- [ ] More than one action per rule, with §5.3's ordering (decided
+  2026-10-05, later).
 - [ ] Rule version history (policy_rules keeps only a version number).
 - [ ] False-positive review queue.
 - [x] Detector hit counts computed from receipts (2026-10-02). `GET /detectors`
@@ -264,10 +300,13 @@ when stale; 428 without it on an update or delete). Open questions are in
     receipt. "Send a test request for me" is `POST /gateway/test`: one small
     request through the gateway, in its own `X-Session-Id` (Envoy replaces a
     caller's x-request-id, which receipt ids derive from). Adding a provider
-    and its credentials stays not connected: backends come from
-    `server/aigw/config.yaml`.
+    and its credentials stays not connected: backends are desired state in
+    Postgres, with no editor yet.
 - [ ] Members and auth (OIDC), sign-out.
-- [ ] Routing reconciler: drift, adopt, reconcile events.
+- [ ] Routing reconciler: drift, adopt, provenance, reconcile events over
+  SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership
+  questions are answered: docs/llm-serving-pack-survey.md). Backend editing
+  and provider credentials. Content capture per route compiles to nothing yet.
 - [ ] Signed receipt export, and revealing content with an audit row.
 - [ ] Traffic sampling (§7.5.3): above a rate threshold the stream sends 1 in
   N, with the rate in the header. Today the stream only counts and reports
@@ -300,5 +339,6 @@ when stale; 428 without it on an update or delete). Open questions are in
     `pricedLater`.
   - Cache writes count on receipts (Agent Router's `CacheCreationInputToken`)
     and bill at their own rate.
-- [ ] Redaction rehydration (§4.5 step 5): seeded rules say "rehydrate on
-  return", but nothing restores redacted values in responses.
+- [ ] Redaction rehydration (§4.5 step 5): a vault for redacted values and
+  the response-side swap in Warden (decided 2026-10-05: build it). Seeded
+  rules say "rehydrate on return", but nothing restores them yet.

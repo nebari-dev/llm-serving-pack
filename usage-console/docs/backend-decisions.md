@@ -94,18 +94,19 @@ Agent Router (api-mode test).
 - **Decided 2026-09-30: `api_keys.budget_id` is dropped** (migration 005).
   Keys don't name a budget; the key form lists the budgets that will cover
   the new key, and budgets are managed on Spend.
-- **Decide: projects are free text on keys.** §5.2 has a
-  `projects(id, team_id, name)` table. Today a project budget needs at least
-  one active key in that project, so you can't set a budget before the keys
-  exist. Do we make projects real?
-- **Decide: what should "throttle" do?** Requests over a throttle cap are
-  admitted and marked; nothing slows down. Options: a per-key rate limit
-  (Envoy's `BackendTrafficPolicy`) while over cap, or reject a fraction with
-  429 and Retry-After.
+- **Decided 2026-10-05: projects become a table (not built).** §5.2's
+  `projects(id, team_id, name)`, so a project budget can be set up before
+  any key in it exists. Today projects are free text on keys and a project
+  budget needs an active key in the project.
+- **Decided 2026-10-05: "throttle" rejects with "try again later" (not
+  built).** Over a throttle cap the gateway answers 429 with Retry-After,
+  instead of admitting and marking. Still to settle when it's built: every
+  request over cap, or a fraction.
+- **Decided 2026-10-05: a key-scoped budget matches by key ID (not built).**
+  It matched by key name, which a rename or a reused name would break.
 - **Defaults I picked:**
   - One budget per scope, enforced by a unique index.
   - Monthly budgets only, since spend is month to date.
-  - A key-scoped budget matches by key name.
 - **Overshoot.** Warden reads spend from its 5s snapshot of
   `receipts_daily`, so a key can overspend by up to about 5s of traffic plus
   ingest lag, plus whatever is in flight. Fine for monthly caps; not a hard
@@ -120,26 +121,25 @@ reports the change and says replay isn't connected.
 
 - **Console builder follows the engine (decided 2026-09-30).** In api mode the
   Guardrails builder offers one all-of list of conditions and one action, and
-  says the rest isn't connected. The three decisions below are still open;
-  answering "several actions" or "nested groups" means engine work first.
-- **Decide: one action per rule.** The engine applies only `then[0]`, so
-  writes allow exactly one action. §5.3 shows several (redact and reroute).
-  Support several, with §5.3's ordering semantics?
+  says the rest isn't connected. Several actions means engine work first.
+- **Decided 2026-10-05: more than one action per rule, later.** The engine
+  applies only `then[0]` and writes allow one action; §5.3 shows several
+  (redact and reroute), with its ordering semantics. Not first in line.
 - **Decide: reordering.** New rules go last. Rule order decides the outcome
   (first block wins), and there's no write to reorder. Should a reorder be
   its own audited, versioned change?
-- **Decide: rules vs. policies.** §5.2 versions *policies* (groups of
-  rules); this versions each rule. Per-rule matches what Guardrails shows.
-  OK to keep?
-- **Redaction "rehydrate on return" isn't implemented.** The seed rules'
-  details say it, but there's no vault or response-path rehydration
-  (§4.5 step 5). Either build it (Warden response path) or change the seed
-  text. Until then the Guardrails page states something that doesn't
-  happen.
+- **Decided 2026-10-05: follow §5.2's policies (not built).** Versioning
+  and matching move to policies (groups of rules) as §5.2 has them, instead
+  of each rule versioned on its own.
+- **Decided 2026-10-05: build rehydration (not built).** A vault for the
+  values Warden redacts, and the response-side swap in Warden that puts them
+  back (§4.5 step 5). Until then the seed rules' "rehydrate on return"
+  states something that doesn't happen.
 - History before migration 004 wasn't kept: seeded rules have only their
   current version, with `publishedAt`/`publishedBy` null.
-- Replay (§7.5.7) is still a new system; it's what publish's dry run should
-  return.
+- Replay (§7.5.7), re-running past traffic against a new rule to see what
+  it would have caught, doesn't exist yet. It's what publish's dry run should
+  return; until it does, the dry run can't tell you much.
 
 ## 4. Aliases
 
@@ -173,21 +173,26 @@ retire-old-secret-now are in.
 
 ## 6. Not built, by decision
 
-- **Routes and backends stay read-only (decided 2026-09-30).** Route config
-  in Postgres only feeds the dev gateway's candidates and Warden's reroute
-  hints. Real routing is Agent Router's `aigw/config.yaml` (static
-  `AIGatewayRoute`), and there's no reconciler (§4.4), so an "apply" would
-  change nothing on the real path. `GET /backends` and `GET /routes` report
-  every sync state as `not_reconciled` instead of the seeded ones, and in
-  api mode the Routing page has no edit, apply, adopt or YAML paths. It
-  doesn't show the mockup's backend specs, reconcile events or failover
-  log either; it links to fallback receipts instead. The reconciler
-  (generate and apply `AIGatewayRoute`, or regenerate `config.yaml`
-  locally) is its own project.
-  - Still seed values in api mode: provenance (Console/Git/Adopted, and
-    Git source links), backend health, and p50/errors for a backend that
-    served fewer than 5 requests in the last hour. The page says health is
-    as configured; provenance isn't labelled yet.
+- **Routes and backends: desired state, applied locally (2026-10-05).** This
+  replaces the read-only decision of 2026-09-30. Routes and backends in
+  Postgres are the desired state, and `internal/routing` compiles them to
+  the gateway's resources. Edits save at once, with an audit row and
+  If-Match. The gateway changes only on an explicit apply: one review of the
+  CRD diff against what it runs, then one restart (user's choice: save, then
+  apply all). The local applier writes `tmp/aigw/config.yaml`, which is
+  `aigw/base.yaml` (infrastructure, checked in) plus the compiled routing,
+  and restarts aigw, rolling back on failure (user's choice: split base and
+  generated rather than rewrite the checked-in file).
+  - Held until the llm-serving-pack ownership questions are answered: drift,
+    adopt, provenance (the seeded Console/Git/Adopted values are no longer
+    shown in api mode), and a Kubernetes applier. The survey's direction is
+    that Stargate only writes AIGatewayRoutes it owns.
+  - Not built: editing backends, provider credentials, per-route content
+    capture (the column stays; nothing compiles it).
+  - Rule order: the gateway tries rules with more header matches first;
+    among equals, in rule order. A new route goes ahead of any catch-all
+    (`*` with no headers), and two routes can't claim the same model with
+    the same headers.
 - **Detector thresholds are on hold (decided 2026-09-30).** The detectors
   are regexes (`gateway/detect.go`) with no confidence score, so a
   threshold would change nothing. They wait for real detectors

@@ -193,46 +193,6 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
 
   // No reconciler exists (§4.4), so routing is read-only and nothing claims a
   // sync state, a reconcile event or a failover it didn't observe.
-  it('shows routing read-only, with no reconciler and no fixture states', async () => {
-    const [bs, rs] = await Promise.all([catalog.api<{ sync: string }[]>('/backends'), catalog.api<{ sync: string }[]>('/routes')])
-    expect(new Set([...bs, ...rs].map((x) => x.sync))).toEqual(new Set(['not_reconciled']))
-    const page = async (tab: string, act2?: () => Promise<void>) => {
-      window.history.pushState({}, '', `/routing?tab=${tab}`)
-      const r = render(<App />)
-      await act(async () => {
-        await new Promise((ok) => setTimeout(ok, 300))
-      })
-      await act2?.()
-      const text = document.body.textContent ?? ''
-      r.unmount()
-      return text
-    }
-    const fixtures = ['Synced', 'Applying', 'Drift detected', 'Reconcile failed', 'Pending apply', 'Recent reconcile events', '529 overloaded', 'timeout after 60s', 'Endpoint', 'Replicas']
-
-    const routesText = await page('routes', async () => {
-      expect(screen.queryByRole('button', { name: /Edit route/ })).toBeNull()
-      expect(screen.getByRole('button', { name: /Add provider/ })).toHaveProperty('disabled', true)
-    })
-    expect(routesText).toContain('No reconciler')
-    expect(routesText).toContain('Read-only: there’s no reconciler to apply route changes yet.')
-    for (const s of fixtures) expect(routesText).not.toContain(s)
-
-    const backendsText = await page('backends', async () => {
-      await act(async () => {
-        fireEvent.click(screen.getAllByRole('button', { name: catalog.backends[0].name })[0])
-        await new Promise((ok) => setTimeout(ok, 200))
-      })
-      expect(screen.queryByRole('button', { name: /Review changes|Apply changes|Adopt into console/ })).toBeNull()
-      expect(screen.queryByRole('button', { name: /View generated YAML/ })).toBeNull()
-    })
-    expect(backendsText).toContain('No reconciler')
-    for (const s of fixtures) expect(backendsText).not.toContain(s)
-
-    const fallbackText = await page('fallback')
-    for (const s of ['Recent failovers', '529 overloaded', 'backend not reconciled']) expect(fallbackText).not.toContain(s)
-    expect(fallbackText).toContain('Fallback chains')
-  })
-
   it('reports backend health, p50 and errors from receipts, never the seed', async () => {
     type B = { name: string; health: string; p50: number; errorRate: number; requests1h: number }
     const bs = await catalog.api<B[]>('/backends')
@@ -551,7 +511,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     for (const c of r.aggregates) expect(c.dropAfterDays).toBeNull()
     expect(r.oldestReceiptAt).toBeLessThan(Date.now())
 
-    const capturing = catalog.routes.filter((x) => x.captureContent).map((x) => x.name)
+    const capturing = catalog.liveRoutes.filter((x) => x.captureContent).map((x) => x.name)
     window.history.pushState({}, '', '/settings')
     render(<App />)
     await act(async () => {
@@ -561,7 +521,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(text).toContain('30 days')
     expect(text).toContain('Never dropped')
     for (const name of capturing) expect(text).toContain(name)
-    expect(text).toContain(`On for ${capturing.length} route`)
+    expect(text).toContain(capturing.length ? `On for ${capturing.length} route` : 'Off on every route.')
     // Warden's snapshot comes from /session, not the mockup's pods.
     expect(text).toMatch(/Warden config snapshot.*cache age \d/)
     // What has no backend yet says so instead of showing the mockup.
@@ -945,6 +905,245 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 60_000)
+
+  type LiveRoute = import('@/data/catalog').LiveRoute
+  type RoutingPlan = import('@/data/catalog').RoutingPlan
+  /** Applies whatever is pending, so a test starts from the gateway running the desired routing. */
+  const applyPending = async () => {
+    const plan = await catalog.api<RoutingPlan>('/routing')
+    if (plan.changes.length) await send('POST', '/routing/apply', {}, plan.etag)
+  }
+  /** Deletes the named routes if they're still there, then applies. */
+  const dropRoutes = async (...names: string[]) => {
+    for (const r of await catalog.api<LiveRoute[]>('/routes')) {
+      if (names.includes(r.name)) await send('DELETE', `/routes/${r.name}`, undefined, r.etag)
+    }
+    await applyPending()
+  }
+
+  it('edits routes as desired state with audit rows and If-Match, diffs them against what the gateway runs, and applies them', async () => {
+    type C = import('@/data/catalog').Change
+    type Rc = { backend: string; resolvedModel: string; requestedModel: string }
+    const name = `api-mode-${Date.now().toString(36)}`
+    // A support key's gpt-5.5 goes to vllm-internal instead of openai-prod: two
+    // header matches outrank the gpt-5 route's one.
+    const route = {
+      name,
+      match: { models: ['gpt-5.5'], headers: [{ name: 'x-stargate-team', value: 'support' }] },
+      targets: [{ backend: 'vllm-internal', model: 'llama-3.3-70b' }],
+      fallback: [{ backend: 'bedrock-eu', model: 'claude-haiku-4-5' }],
+    }
+    await applyPending()
+    let keyId = ''
+    try {
+      const before = await catalog.api<RoutingPlan>('/routing')
+      expect(before).toMatchObject({ canApply: true, changes: [] })
+      expect(before.yaml).toContain('kind: AIGatewayRoute')
+      // Seeded routing is what the gateway runs.
+      for (const r of await catalog.api<LiveRoute[]>('/routes')) expect(r.sync).toBe('synced')
+
+      const dry = await send<{ dryRun: boolean; yaml: string }>('POST', '/routes?dryRun=true', route)
+      expect(dry.dryRun).toBe(true)
+      expect(dry.yaml).toContain('value: support')
+      expect(dry.yaml).toContain('modelNameOverride: claude-haiku-4-5')
+      expect(dry.yaml).toContain('priority: 1')
+      expect((await catalog.api<LiveRoute[]>('/routes')).some((r) => r.name === name)).toBe(false)
+
+      expect(await status(send('POST', '/routes', { ...route, targets: [{ backend: 'azure-openai-eu' }] }))).toBe(400)
+      expect(await status(send('POST', '/routes', { ...route, match: { models: ['gpt-5.5'], headers: [] } }))).toBe(400) // the gpt-5 route has it
+      const made = await send<LiveRoute>('POST', '/routes', route)
+      expect(made).toMatchObject({ name, sync: 'pending' })
+      expect(made.yaml).toContain('value: support')
+      expect(await status(send('POST', '/routes', route))).toBe(409)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
+        action: 'Created route', targetKind: 'Route', actor: catalog.session.actor.email,
+        target: `${name} · gpt-5.5 if x-stargate-team = support → vllm-internal as llama-3.3-70b, then bedrock-eu`,
+      })
+
+      expect(await status(send('PUT', `/routes/${name}`, route))).toBe(428)
+      const moved = await send<LiveRoute>('PUT', `/routes/${name}`, { ...route, fallback: [] }, made.etag)
+      expect(moved.etag).not.toBe(made.etag)
+      expect(await status(send('PUT', `/routes/${name}`, route, made.etag))).toBe(409)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed route', target: `${name} · gpt-5.5 if x-stargate-team = support → vllm-internal as llama-3.3-70b` })
+
+      const plan = await catalog.api<RoutingPlan>('/routing')
+      expect(plan.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual(['changed AIGatewayRoute/aigw-run'])
+      expect(plan.changes[0].diff).toMatch(/^\+\s+value: support$/m)
+      expect(plan.changes[0].diff).not.toMatch(/^-/m)
+
+      expect(await status(send('POST', '/routing/apply', {}))).toBe(428)
+      expect(await status(send('POST', '/routing/apply', {}, '"not-the-plan"'))).toBe(409)
+      const applied = await send<{ ok: boolean; changes: unknown[] }>('POST', '/routing/apply', {}, plan.etag)
+      expect(applied.ok).toBe(true)
+      expect((await catalog.api<LiveRoute[]>('/routes')).find((r) => r.name === name)?.sync).toBe('synced')
+      expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
+      expect((await catalog.api<RoutingPlan>('/routing')).lastApply).toMatchObject({ ok: true, actor: catalog.session.actor.email })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Applied routing', targetKind: 'Routing', target: '1 change: changed AIGatewayRoute aigw-run' })
+
+      // The gateway now routes by it.
+      const made2 = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+        name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east', 'eu-private'], expiresAt: '2027-01-01',
+      })
+      keyId = made2.key.id
+      let res: Response | undefined
+      for (let i = 0; i < 20 && res?.status !== 200; i++) {
+        if (i) await new Promise((ok) => setTimeout(ok, 1000)) // the key check reloads every 5s
+        res = await fetch(`${gateway}/v1/chat/completions`, {
+          method: 'POST', headers: { Authorization: `Bearer ${made2.secret}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }),
+        })
+      }
+      expect(res?.status).toBe(200)
+      await waitFor(async () => {
+        const [rc] = await catalog.api<Rc[]>(`/receipts?key=${keyId}&limit=1`)
+        expect(rc).toMatchObject({ requestedModel: 'gpt-5.5', backend: 'vllm-internal', resolvedModel: 'llama-3.3-70b' })
+      }, { timeout: 20_000, interval: 1000 })
+    } finally {
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`, {}).catch(() => {})
+      await dropRoutes(name)
+    }
+    expect((await catalog.api<LiveRoute[]>('/routes')).some((r) => r.name === name)).toBe(false)
+    expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
+  }, 180_000)
+
+  it('creates, applies, edits and deletes a route on Routing, with the diff before apply and a stale edit refused', async () => {
+    type C = import('@/data/catalog').Change
+    const name = `ui-route-${Date.now().toString(36)}`
+    await applyPending()
+    window.history.pushState({}, '', '/routing?tab=routes')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const applyBar = () => screen.getByRole('region', { name: 'Apply to gateway' })
+    try {
+      // What's running is the desired routing: nothing to apply, and nothing the reconciler can't back up.
+      expect(applyBar().textContent).toContain('The gateway runs this routing')
+      expect(within(applyBar()).getByRole('button', { name: /Review and apply/ })).toHaveProperty('disabled', true)
+      expect(screen.getAllByText('gpt-4o-mini').length).toBeGreaterThan(0)
+      const text = document.body.textContent ?? ''
+      for (const s of ['No reconciler', 'Drift detected', 'Recent reconcile events', '529 overloaded', 'Adopt into console', 'research-frontier']) expect(text).not.toContain(s)
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /New route/ }))
+      })
+      let d = await formDialog()
+      fireEvent.change(within(d).getByLabelText('Name'), { target: { value: name } })
+      fireEvent.change(within(d).getByLabelText('Models'), { target: { value: 'claude-haiku-4-5' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: /Add condition/ }))
+      })
+      fireEvent.change(within(d).getByLabelText('Header 1'), { target: { value: 'x-stargate-team' } })
+      fireEvent.change(within(d).getByLabelText('Header 1 value'), { target: { value: 'ui-test-team' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('combobox', { name: 'Target 1 backend' }))
+      })
+      await act(async () => {
+        choose(await screen.findByRole('option', { name: 'vllm-internal' }))
+      })
+      fireEvent.change(within(d).getByLabelText('Target 1 model'), { target: { value: 'llama-3.3-70b' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: /Preview YAML/ }))
+      })
+      await waitFor(() => expect(within(d).getByText(/value: ui-test-team/)).toBeTruthy())
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Create route' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.getByRole('heading', { name })).toBeTruthy(), { timeout: 5000 })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created route', target: `${name} · claude-haiku-4-5 if x-stargate-team = ui-test-team → vllm-internal as llama-3.3-70b` })
+      const row = () => screen.getByRole('heading', { name }).closest('li')!
+      await waitFor(() => expect(row().textContent).toContain('Pending apply'))
+      await waitFor(() => expect(applyBar().textContent).toContain('1 change not applied'))
+
+      // Review the CRD diff, then apply it.
+      await act(async () => {
+        fireEvent.click(within(applyBar()).getByRole('button', { name: /Review and apply 1 change/ }))
+      })
+      d = await formDialog()
+      expect(d.textContent).toContain('AIGatewayRoute/aigw-run')
+      expect(d.textContent).toContain('value: ui-test-team')
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Apply to gateway' }))
+      })
+      await waitFor(() => expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull(), { timeout: 90_000 })
+      await waitFor(() => expect(applyBar().textContent).toContain('The gateway runs this routing'), { timeout: 10_000 })
+      await waitFor(() => expect(row().textContent).toContain('Synced'))
+
+      // Someone else edits it after the editor opened: saving is refused, then reload shows theirs.
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Edit ${name}` }))
+      })
+      d = await formDialog()
+      const theirs = (await catalog.api<LiveRoute[]>('/routes')).find((x) => x.name === name)!
+      await send('PUT', `/routes/${name}`, { ...theirs, targets: [{ backend: 'bedrock-eu' }] }, theirs.etag)
+      fireEvent.change(within(d).getByLabelText('Target 1 model'), { target: { value: 'claude-sonnet-5' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save' }))
+      })
+      await waitFor(() => expect(d.textContent).toContain('This route changed since you opened it'))
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Load the current version' }))
+      })
+      await waitFor(() => expect(within(d).getByRole('combobox', { name: 'Target 1 backend' }).textContent).toContain('bedrock-eu'))
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Cancel' }))
+      })
+      await formDialogClosed()
+      // The list picks up their version.
+      await waitFor(() => expect(row().textContent).toContain('via bedrock-eu'))
+
+      // Delete it: it leaves the list, and the gateway still runs it until the next apply.
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: `Delete ${name}` }))
+      })
+      d = await formDialog()
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Delete route' }))
+      })
+      await formDialogClosed()
+      await waitFor(() => expect(screen.queryByRole('heading', { name })).toBeNull(), { timeout: 5000 })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted route' })
+      await waitFor(() => expect(applyBar().textContent).toContain('1 change not applied'))
+    } finally {
+      r.unmount()
+      await dropRoutes(name)
+    }
+  }, 240_000)
+
+  it('shows each backend’s endpoint, its generated YAML and whether the gateway runs it on Routing', async () => {
+    type B = { name: string; sync: string; endpoint?: { host: string; port: string } }
+    await applyPending()
+    const bs = await catalog.api<B[]>('/backends')
+    expect(bs.find((b) => b.name === 'openai-prod')).toMatchObject({ sync: 'synced', endpoint: { host: '${STARGATE_HOST:-localhost}', port: '8090' } })
+    expect(bs.find((b) => b.name === 'azure-openai-eu')).toMatchObject({ sync: 'no_endpoint' })
+    expect(bs.find((b) => b.name === 'azure-openai-eu')?.endpoint).toBeUndefined()
+
+    window.history.pushState({}, '', '/routing?tab=backends')
+    const r = render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    try {
+      expect(document.body.textContent).toContain('No endpoint')
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: 'openrouter' })[0])
+        await new Promise((ok) => setTimeout(ok, 200))
+      })
+      const text = document.body.textContent ?? ''
+      expect(text).toContain('openrouter.ai:443')
+      expect(text).toContain('OPENROUTER_API_KEY')
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /View generated YAML/ }))
+      })
+      const d = await formDialog()
+      expect(d.textContent).toContain('kind: AIServiceBackend')
+      expect(d.textContent).toContain('kind: BackendSecurityPolicy')
+      for (const s of ['Adopt into console', 'Drift detected', 'Replicas']) expect(document.body.textContent).not.toContain(s)
+    } finally {
+      r.unmount()
+    }
+  })
 
   it('drafts, publishes, enforces, rolls back and deletes a rule, with versions and audit rows', async () => {
     type V = { id: string; name: string; mode: string; version: number; failMode: string; etag: string; draft: { description: string } | null }

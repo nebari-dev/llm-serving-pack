@@ -9,7 +9,7 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
-import { api, dataMode, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
+import { api, dataMode, liveRoutes, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
 import { age, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
@@ -46,7 +46,7 @@ export function SettingsPage() {
   const [switching, setSwitching] = useState(false)
   const passThrough = live ? !!warden?.passthrough : mockPassThrough
   const noSwitch = !live ? null : !warden ? 'This control plane doesn’t know where Warden is, so there’s no kill switch to flip.' : !warden.connected ? 'Warden isn’t answering, so the kill switch can’t be reached.' : null
-  const capturing = routes.filter((r) => r.captureContent)
+  const capturing = (dataMode === 'api' ? liveRoutes : routes).filter((r) => r.captureContent)
 
   const setPassThrough = async (on: boolean) => {
     if (!live) {

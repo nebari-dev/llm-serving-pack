@@ -147,22 +147,59 @@ type Backend struct {
 	ErrorRate      float64  `json:"errorRate"`
 	Requests1h     int      `json:"requests1h"`
 	CaptureContent bool     `json:"captureContent,omitempty"`
+	// Endpoint is where the gateway reaches the backend; nil for one it
+	// can't (a seeded backend with no endpoint is never compiled).
+	Endpoint *BackendEndpoint `json:"endpoint,omitempty"`
+	// YAML is the gateway resources the backend compiles to (API only).
+	YAML string `json:"yaml,omitempty"`
 }
 
+// BackendEndpoint is a backend's desired state: Schema and Prefix for the
+// AIServiceBackend, Host and Port (either may be an aigw ${VAR:-default}) for
+// the Backend, and APIKeyEnv, if set, the environment variable holding the
+// provider key the gateway sends.
+type BackendEndpoint struct {
+	Schema    string `json:"schema"`
+	Prefix    string `json:"prefix"`
+	Host      string `json:"host"`
+	Port      string `json:"port"`
+	TLS       bool   `json:"tls,omitempty"`
+	APIKeyEnv string `json:"apiKeyEnv,omitempty"`
+}
+
+// RouteTarget is a backend a route sends to: Model, if set, replaces the
+// requested model (modelNameOverride), and Weight splits traffic between a
+// route's targets.
 type RouteTarget struct {
-	Model   string `json:"model"`
 	Backend string `json:"backend"`
-	Weight  int    `json:"weight"`
+	Model   string `json:"model,omitempty"`
+	Weight  int    `json:"weight,omitempty"`
 }
 
+// RouteMatch is which requests a route takes: any of Models (exact names, or
+// a single "prefix*" or "*"), and every one of Headers.
+type RouteMatch struct {
+	Models  []string      `json:"models"`
+	Headers []HeaderMatch `json:"headers"`
+}
+
+type HeaderMatch struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// Route is desired routing state (spec §4.4): it compiles to one rule of the
+// gateway's AIGatewayRoute. Fallback is tried in order when the targets fail.
 type Route struct {
 	Name           string        `json:"name"`
-	Match          string        `json:"match"`
+	Match          RouteMatch    `json:"match"`
 	Targets        []RouteTarget `json:"targets"`
-	Fallback       []string      `json:"fallback"`
-	Provenance     string        `json:"provenance"`
-	Sync           string        `json:"sync"`
+	Fallback       []RouteTarget `json:"fallback"`
 	CaptureContent bool          `json:"captureContent,omitempty"`
+	// Sync is synced when the gateway runs this route as it is, pending when
+	// it doesn't yet, failed when the last apply didn't take.
+	Sync string `json:"sync"`
+	ETag string `json:"etag,omitempty"`
 }
 
 type APIKey struct {
@@ -280,19 +317,19 @@ type Redaction struct {
 }
 
 type Receipt struct {
-	ID                string      `json:"id"`
-	TenantID          string      `json:"-"`
-	TraceID           string      `json:"traceId"`
-	SessionID         string      `json:"sessionId,omitempty"`
-	TS                int64       `json:"ts"` // epoch ms
-	DurationMS        int         `json:"durationMs"`
-	TTFTMS            *int        `json:"ttftMs,omitempty"`
-	OverheadUS        *int        `json:"overheadUs,omitempty"` // the gateway's own time before the upstream call
-	KeyID             string      `json:"keyId"`
-	KeyName           string      `json:"keyName"`
+	ID         string `json:"id"`
+	TenantID   string `json:"-"`
+	TraceID    string `json:"traceId"`
+	SessionID  string `json:"sessionId,omitempty"`
+	TS         int64  `json:"ts"` // epoch ms
+	DurationMS int    `json:"durationMs"`
+	TTFTMS     *int   `json:"ttftMs,omitempty"`
+	OverheadUS *int   `json:"overheadUs,omitempty"` // the gateway's own time before the upstream call
+	KeyID      string `json:"keyId"`
+	KeyName    string `json:"keyName"`
 	// SecretID is which of the key's secrets authenticated the request (the
 	// first 12 hex of its hash); empty when not recorded.
-	SecretID string `json:"secretId,omitempty"`
+	SecretID          string      `json:"secretId,omitempty"`
 	Team              string      `json:"team"`
 	Project           string      `json:"project"`
 	Actor             string      `json:"actor,omitempty"`
@@ -307,8 +344,8 @@ type Receipt struct {
 	CachedInputTokens int         `json:"cachedInputTokens"`
 	OutputTokens      int         `json:"outputTokens"`
 	ReasoningTokens   int         `json:"reasoningTokens"`
-	CacheWriteTokens  int         `json:"cacheWriteTokens"` // input tokens written to the provider's prompt cache
-	CostUSD           *float64    `json:"costUsd"`          // nil when the (model, backend) had no price: unknown, not $0
+	CacheWriteTokens  int         `json:"cacheWriteTokens"`    // input tokens written to the provider's prompt cache
+	CostUSD           *float64    `json:"costUsd"`             // nil when the (model, backend) had no price: unknown, not $0
 	CostBasis         *CostBasis  `json:"costBasis,omitempty"` // the price row this receipt was costed with (§5.1)
 	Verdict           string      `json:"verdict"`
 	InboundVerdict    string      `json:"inboundVerdict"`       // allowed | stripped | blocked | skipped (not inspected)

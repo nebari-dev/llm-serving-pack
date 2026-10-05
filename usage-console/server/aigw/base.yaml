@@ -1,0 +1,266 @@
+# Agent Router (Envoy AI Gateway) standalone config for `aigw run`: the
+# infrastructure half. Same CRDs as a Kubernetes install.
+#
+# Routing (the AIGatewayRoute, and each backend's Backend, AIServiceBackend and
+# provider key) is the console's: routes and backends live in Postgres, and
+# stargate-api compiles them onto the end of this file, writing the whole
+# config to tmp/aigw/config.yaml. That's the file aigw runs:
+#
+#   bin/stargate-api routing write              # base + routing from Postgres
+#   aigw run tmp/aigw/config.yaml               # listens on :1975, admin/metrics on :1064
+#
+# The console's Routing page applies route changes by rewriting that file and
+# restarting aigw (scripts/restart.sh aigw), rolling back if aigw doesn't come
+# back. Edit this file for infrastructure, then `make restart WHAT=aigw`.
+#
+# The access log goes over OTLP to cmd/receipt-ingest (:4317), which writes a
+# receipt per request. Filters run in this order (verify with the admin
+# config_dump after upgrading Agent Router; see the EnvoyProxy's filterOrder):
+#
+#   ext_authz (stargate-api :8082)  key + model allowlist, identity headers
+#   ext_proc  (warden :8083)        budgets, rules: block, redact, reroute
+#   buffer
+#   ext_proc  (Agent Router)        reads the model, picks the route, translates
+#   router
+#
+# Six of the demo backends are served by cmd/fake-openai. Two go to real
+# upstreams, set from the environment (server/.env):
+#
+# local        an OpenAI-compatible server on this machine. Defaults to Docker
+#              Model Runner (docker desktop enable model-runner --tcp=12434;
+#              docker model pull ai/smollm2:360M-Q4_K_M). For Ollama set
+#              LOCAL_LLM_PORT=11434 LOCAL_LLM_PREFIX=/v1
+#              LOCAL_LLM_MODEL=smollm2:360m; for llama.cpp's llama-server,
+#              LOCAL_LLM_PORT=8080 LOCAL_LLM_PREFIX=/v1.
+# openrouter   with $OPENROUTER_API_KEY. Unset, OpenRouter answers 401 and the
+#              receipts say so.
+#
+# aigw substitutes ${VAR:-default} from the environment when it loads the file.
+# The control plane's own services default to localhost on the dev ports;
+# scripts/test-stack.sh runs a second copy in Docker against the test
+# databases with STARGATE_HOST=host.docker.internal and the 9xxx ports.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  # Warden has to run before Agent Router's own ext_proc: that one reads the
+  # model to route on and keeps the body it replays on retries, overrides and
+  # streamed requests, so a redaction or reroute made after it would be undone.
+  # Agent Router inserts its filter ahead of the first ext_proc, unless a
+  # buffer filter comes later, in which case it goes right after the buffer.
+  # Moving the buffer after ext_proc (Warden) puts Agent Router after Warden.
+  filterOrder:
+    - name: envoy.filters.http.buffer
+      after: envoy.filters.http.ext_proc
+  logging:
+    level:
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        # LLM requests, plus those the key check or Warden refused (both run
+        # before Agent Router extracts the model, and both answer with the key).
+        - matches:
+            - "request.headers['x-ai-eg-model'] != '' || response.headers['x-stargate-key-id'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+            # Field names are what internal/ingest reads; keep them in sync.
+            - type: OpenTelemetry
+              openTelemetry:
+                host: ${STARGATE_HOST:-localhost}
+                port: ${STARGATE_OTLP_PORT:-4317}
+                resources:
+                  service.name: agent-router
+          format:
+            type: JSON
+            json:
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.provider.name: "%DYNAMIC_METADATA(io.envoy.ai_gateway:backend_name)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.cached_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              gen_ai.usage.cache_creation_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cache_creation_input_token)%"
+              session.id: "%DYNAMIC_METADATA(io.envoy.ai_gateway:session.id)%"
+              start_time: "%START_TIME%"
+              request.path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
+              response_code: "%RESPONSE_CODE%"
+              duration: "%DURATION%"
+              response_duration: "%RESPONSE_DURATION%"
+              # What the gateway adds before the provider sees the request: from
+              # the whole request in hand to the first byte sent upstream (key
+              # check, Warden, Agent Router), for spec G6's 10ms p50.
+              stargate.overhead_us: "%COMMON_DURATION(DS_RX_END:US_TX_BEG:us)%"
+              response_flags: "%RESPONSE_FLAGS%"
+              upstream_cluster: "%UPSTREAM_CLUSTER%"
+              upstream_request_attempt_count: "%UPSTREAM_REQUEST_ATTEMPT_COUNT%"
+              x-request-id: "%REQ(X-REQUEST-ID)%"
+              stargate.key_id: "%REQ(X-STARGATE-KEY-ID)%"
+              stargate.team: "%REQ(X-STARGATE-TEAM)%"
+              stargate.project: "%REQ(X-STARGATE-PROJECT)%"
+              stargate.secret_id: "%REQ(X-STARGATE-SECRET-ID)%"
+              stargate.denied_key_id: "%RESP(X-STARGATE-KEY-ID)%"
+              stargate.denied_model: "%RESP(X-STARGATE-MODEL)%"
+              stargate.denied_secret_id: "%RESP(X-STARGATE-SECRET-ID)%"
+              # Warden's decision as JSON (gateway.Policy).
+              stargate.policy: "%DYNAMIC_METADATA(io.stargate.warden:policy)%"
+              traceparent: "%REQ(TRACEPARENT)%"
+---
+# Retry 5xx (anthropic-prod returns 529 when "overloaded"). Retries stay on the
+# same priority until passive health checking ejects the backend; only then does
+# traffic fail over to the next priority. The HTTPRoute is generated from the
+# console's AIGatewayRoute (routing.RouteName) and shares its name.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: provider-fallback
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: aigw-run
+  retry:
+    numRetries: 2
+    perRetry:
+      backOff:
+        baseInterval: 50ms
+        maxInterval: 1s
+    retryOn:
+      httpStatusCodes: [500, 502, 503, 529]
+      triggers: [connect-failure, retriable-status-codes]
+  # Adds the buffer filter the EnvoyProxy's filterOrder moves after Warden.
+  requestBuffer:
+    limit: 50Mi
+  healthCheck:
+    passive:
+      consecutive5XxErrors: 3
+      interval: 1s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+---
+# Envoy Gateway's default 32KiB buffer is too small for LLM bodies (spec §13).
+# The identity headers are the key check's to set and the backend hint is
+# Warden's, so drop any the caller sends before a filter sees them. Warden
+# reads x-ai-eg-original-path as proof it ran after Agent Router, so that goes
+# too.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-traffic
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    bufferLimit: 50Mi
+  headers:
+    earlyRequestHeaders:
+      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id, x-stargate-backend, x-ai-eg-original-path]
+---
+# Key check: every request goes to stargate-api's ext_authz service (:8082)
+# with its body, since the model lives there. 401 for a bad key, 403 for a model
+# the key may not call; on 200 the identity headers are added and the caller's
+# Authorization is removed, so the provider never sees it.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: key-check
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  extAuth:
+    bodyToExtAuth:
+      maxRequestBytes: 52428800
+    http:
+      backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: stargate-authz
+          port: ${STARGATE_AUTHZ_PORT:-8082}
+      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id]
+---
+# Warden: budgets and policy rules, after the key check. Headers and the whole
+# body go to it; nothing from the response yet. messageTimeout sits above
+# Warden's own 50ms deadline so Warden's per-rule fail mode is what applies;
+# if Warden itself is unreachable the request fails closed (failOpen: false).
+# Its decision comes back as dynamic metadata for the access log.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyExtensionPolicy
+metadata:
+  name: warden
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  extProc:
+    - backendRefs:
+        - group: gateway.envoyproxy.io
+          kind: Backend
+          name: warden
+          port: ${STARGATE_WARDEN_PORT:-8083}
+      messageTimeout: 250ms
+      failOpen: false
+      processingMode:
+        request:
+          body: Buffered
+      metadata:
+        writableNamespaces: [io.stargate.warden]
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: warden
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ${STARGATE_HOST:-localhost}
+        port: ${STARGATE_WARDEN_PORT:-8083}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: stargate-authz
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ${STARGATE_HOST:-localhost}
+        port: ${STARGATE_AUTHZ_PORT:-8082}

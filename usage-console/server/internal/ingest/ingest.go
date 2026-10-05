@@ -1,6 +1,6 @@
 // Package ingest turns Agent Router access-log records into receipts (spec
 // §4.6). The gateway ships one OTLP log record per LLM request, with the
-// attributes named in aigw/config.yaml; the control plane's config fills in
+// attributes named in aigw/base.yaml; the control plane's config fills in
 // what the gateway doesn't know (provider, region, pricing).
 //
 // Keys are checked by stargate-api's ext_authz service, which passes the key,

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/routing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
@@ -45,7 +46,11 @@ type Server struct {
 	// GatewayURL is the gateway callers use (http://localhost:1975), shown on
 	// onboarding and used for its test request. Empty when unknown.
 	GatewayURL string
-	syncMu     sync.Mutex
+	// Routing puts the desired routing in front of the gateway; nil when
+	// there's no gateway to apply to (routes are then not_reconciled).
+	Routing routing.Applier
+	syncMu  sync.Mutex
+	applyMu sync.Mutex
 }
 
 func (s *Server) configChanged() {
@@ -98,6 +103,8 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, 400, errBody("bad_request", err.Error()))
 			case errors.As(err, new(unavailable)):
 				writeJSON(w, 503, errBody("unavailable", err.Error()))
+			case errors.As(err, new(applyFailed)):
+				writeJSON(w, 502, errBody("apply_failed", err.Error()))
 			case err != nil:
 				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 				writeJSON(w, 500, errBody("internal", "internal error"))
@@ -121,6 +128,11 @@ func (s *Server) Handler() http.Handler {
 	h("DELETE "+p+"/pricing/{model}/{backend}/{at}", s.cancelPrice)
 	h("GET "+p+"/backends", s.backends)
 	h("GET "+p+"/routes", s.routes)
+	h("POST "+p+"/routes", s.createRoute)
+	h("PUT "+p+"/routes/{name}", s.updateRoute)
+	h("DELETE "+p+"/routes/{name}", s.deleteRoute)
+	h("GET "+p+"/routing", s.routingPlan)
+	h("POST "+p+"/routing/apply", s.applyRouting)
 	h("GET "+p+"/keys", s.keys)
 	h("POST "+p+"/keys", s.createKey)
 	h("POST "+p+"/keys/{id}/revoke", s.revokeKey)
@@ -191,6 +203,11 @@ type unavailable string
 
 func (u unavailable) Error() string { return string(u) }
 
+// applyFailed is a gateway that didn't take an apply (502), in its own words.
+type applyFailed string
+
+func (a applyFailed) Error() string { return string(a) }
+
 func errBody(code, msg string) map[string]any {
 	return map[string]any{"error": map[string]any{"code": code, "message": msg}}
 }
@@ -248,37 +265,13 @@ func withFacts(ms []model.Model, facts []store.PairFacts) []model.Model {
 	return out
 }
 
-func (s *Server) routes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	rs, err := s.Store.Routes(r.Context(), t)
-	return notReconciledRoutes(rs), err
-}
-
-// NotReconciled is every backend's and route's sync state until a reconciler
-// exists (§4.4). The sync_state column holds seed values nothing observed,
-// so the API doesn't pass them on.
-const NotReconciled = "not_reconciled"
-
-func notReconciledBackends(bs []model.Backend) []model.Backend {
-	for i := range bs {
-		bs[i].Sync = NotReconciled
-	}
-	return bs
-}
-
-func notReconciledRoutes(rs []model.Route) []model.Route {
-	for i := range rs {
-		rs[i].Sync = NotReconciled
-	}
-	return rs
-}
-
 func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500))
 }
 
 // backends reports what receipts show, not what was seeded: health from the
-// banner's window, p50 and error rate from the last hour. Sync state is
-// NotReconciled.
+// banner's window, p50 and error rate from the last hour. Sync is whether the
+// gateway runs the backend as it is (withBackendSync).
 func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	bs, err := s.Store.Backends(r.Context(), t)
 	if err != nil {
@@ -305,7 +298,17 @@ func (s *Server) backends(_ http.ResponseWriter, r *http.Request, t string) (any
 		}
 		bs[i] = observedBackend(bs[i], f, h)
 	}
-	return notReconciledBackends(bs), nil
+	running, failed, ok, err := s.observed(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		for i := range bs {
+			bs[i].Sync = NotReconciled
+		}
+		return bs, nil
+	}
+	return withBackendSync(bs, running, failed), nil
 }
 
 // observedBackend replaces a backend's seeded health, p50 and error rate with

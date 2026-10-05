@@ -50,25 +50,22 @@ func (s *Store) Aliases(ctx context.Context, tenant string) (map[string]string, 
 
 func (s *Store) Backends(ctx context.Context, tenant string) ([]model.Backend, error) {
 	rows, _ := s.Config.Query(ctx, `
-		SELECT name, provider, region, provenance, sync_state, coalesce(source_ref, ''), models, health, p50_ms, error_rate::float8, capture_content
+		SELECT name, provider, region, provenance, sync_state, coalesce(source_ref, ''), models, health, p50_ms, error_rate::float8, capture_content,
+		       schema, coalesce(prefix, ''), host, port, tls, coalesce(api_key_env, '')
 		FROM backends WHERE tenant_id = $1 ORDER BY ordinal`, tenant)
 	return collect(rows, func(r pgx.Rows) (model.Backend, error) {
 		var b model.Backend
-		return b, r.Scan(&b.Name, &b.Provider, &b.Region, &b.Provenance, &b.Sync, &b.Source, &b.Models, &b.Health, &b.P50, &b.ErrorRate, &b.CaptureContent)
-	})
-}
-
-func (s *Store) Routes(ctx context.Context, tenant string) ([]model.Route, error) {
-	rows, _ := s.Config.Query(ctx, `
-		SELECT name, match, targets, fallback, provenance, sync_state, capture_content
-		FROM routes WHERE tenant_id = $1 ORDER BY ordinal`, tenant)
-	return collect(rows, func(r pgx.Rows) (model.Route, error) {
-		var x model.Route
-		var targets []byte
-		if err := r.Scan(&x.Name, &x.Match, &targets, &x.Fallback, &x.Provenance, &x.Sync, &x.CaptureContent); err != nil {
-			return x, err
+		var schema, host, port *string
+		var e model.BackendEndpoint
+		if err := r.Scan(&b.Name, &b.Provider, &b.Region, &b.Provenance, &b.Sync, &b.Source, &b.Models, &b.Health, &b.P50, &b.ErrorRate, &b.CaptureContent,
+			&schema, &e.Prefix, &host, &port, &e.TLS, &e.APIKeyEnv); err != nil {
+			return b, err
 		}
-		return x, json.Unmarshal(targets, &x.Targets)
+		if host != nil {
+			e.Schema, e.Host, e.Port = *schema, *host, *port
+			b.Endpoint = &e
+		}
+		return b, nil
 	})
 }
 

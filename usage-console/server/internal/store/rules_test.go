@@ -25,7 +25,9 @@ func TestValidateRule(t *testing.T) {
 		{"route to model", func(r *RuleContent) { r.Then = []model.Action{{Action: "route to", Detail: "gpt-5-mini"}} }, ""},
 		{"route to region", func(r *RuleContent) { r.Then = []model.Action{{Action: "route to", Detail: "eu-private"}} }, ""},
 		{"redact", func(r *RuleContent) { r.Then = []model.Action{{Action: "redact"}} }, ""},
-		{"equals alias", func(r *RuleContent) { r.When = []model.Cond{{Field: "header x-data-region", Op: "equals", Value: []string{"eu"}}} }, ""},
+		{"equals alias", func(r *RuleContent) {
+			r.When = []model.Cond{{Field: "header x-data-region", Op: "equals", Value: []string{"eu"}}}
+		}, ""},
 		{"name", func(r *RuleContent) { r.Name = "No Secrets" }, "name must be lowercase letters, digits and dashes"},
 		{"no name", func(r *RuleContent) { r.Name = "" }, "name must be lowercase letters, digits and dashes"},
 		{"fail mode", func(r *RuleContent) { r.FailMode = "maybe" }, "failMode must be open or closed"},

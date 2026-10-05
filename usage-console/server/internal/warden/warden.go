@@ -7,7 +7,7 @@
 // AIGatewayRoute matches on.
 //
 // It must run before Agent Router's own ext_proc, which reads the model and
-// keeps a copy of the body it replays on retries; aigw/config.yaml orders the
+// keeps a copy of the body it replays on retries; aigw/base.yaml orders the
 // filters so it does. The decision goes back as dynamic metadata, which the
 // access log records and receipt-ingest lays over the gateway's own fields.
 //
@@ -46,9 +46,9 @@ const (
 	// must list it as writable and the access log reads it from there.
 	MetadataNamespace = "io.stargate.warden"
 	MetadataKey       = "policy"
-	// HeaderBackend is the routing hint for a reroute. The AIGatewayRoute has
-	// a rule per backend that matches it, and aigw/config.yaml strips any the
-	// caller sends.
+	// HeaderBackend is the routing hint for a reroute. The compiled
+	// AIGatewayRoute has a rule per backend that matches it (routing.HintHeader),
+	// and aigw/base.yaml strips any the caller sends.
 	HeaderBackend = "x-stargate-backend"
 )
 
@@ -163,7 +163,7 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	if _, ok := h[headerAfterAgentRouter]; ok {
 		// Agent Router would route on the old model and replay the body it
 		// kept, undoing redactions, so nothing Warden decides would hold.
-		log.Printf("warden: running after Agent Router's ext_proc; check the filter order in aigw/config.yaml")
+		log.Printf("warden: running after Agent Router's ext_proc; check the filter order in aigw/base.yaml")
 		return s.failMode(snap, keyID, "", "Warden runs after Agent Router's ext_proc")
 	}
 	var cr fakellm.ChatRequest

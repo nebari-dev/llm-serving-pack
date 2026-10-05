@@ -7,11 +7,14 @@
 #   make restart WHAT="api warden ingest aigw"
 #
 #   api     stargate-api (:8080 REST, :8082 ext_authz), started as `serve -warden
-#           http://localhost:8084`
+#           http://localhost:8084`, applying the console's routing to aigw by
+#           rewriting tmp/aigw/config.yaml and running `restart.sh aigw`
 #   warden  Warden (:8083 ext_proc, :8084 admin)
 #   ingest  receipt-ingest (:4317)
-#   aigw    Agent Router (:1975); needed after editing aigw/config.yaml.
-#           Uses $AIGW (default: aigw on PATH).
+#   aigw    Agent Router (:1975) on tmp/aigw/config.yaml, written from
+#           aigw/base.yaml and Postgres's routing the first time; needed after
+#           editing aigw/base.yaml (then delete tmp/aigw/config.yaml first, or
+#           apply from the console). Uses $AIGW (default: aigw on PATH).
 #
 # Run `make migrate` first if you added a migration.
 #
@@ -27,6 +30,7 @@ cd "$(dirname "$0")/.."
 BIN=${BIN:-bin}
 LOGS=${LOGS:-tmp}
 AIGW=${AIGW:-aigw}
+AIGW_CONFIG=tmp/aigw/config.yaml
 mkdir -p "$BIN" "$LOGS"
 
 what=("$@")
@@ -53,7 +57,12 @@ for w in "${what[@]}"; do
     api)
       go build -o "$BIN/stargate-api" ./cmd/stargate-api
       stop_port 8080; wait_down 8080; wait_down 8082
-      nohup "$BIN/stargate-api" serve -warden http://localhost:8084 >>"$LOGS/stargate-api.log" 2>&1 &
+      # The api applies routing by restarting aigw through this script, so it
+      # needs aigw's path; without one it can diff routing but not apply it.
+      restart_aigw=""
+      if aigw_path=$(command -v "$AIGW"); then restart_aigw="AIGW=$aigw_path scripts/restart.sh aigw"; fi
+      nohup "$BIN/stargate-api" serve -warden http://localhost:8084 \
+        -aigw-config "$AIGW_CONFIG" -aigw-restart "$restart_aigw" -aigw-log "tail -n 30 $LOGS/aigw.log" >>"$LOGS/stargate-api.log" 2>&1 &
       wait_up 8080 stargate-api; wait_up 8082 stargate-api ;;
     warden)
       go build -o "$BIN/warden" ./cmd/warden
@@ -78,7 +87,11 @@ for w in "${what[@]}"; do
       fi
       # server/.env (gitignored) holds upstream settings aigw substitutes into
       # its config: OPENROUTER_API_KEY, LOCAL_LLM_PORT and the rest.
-      ( [ -f .env ] && set -a && . ./.env; nohup "$AIGW" run aigw/config.yaml >>"$LOGS/aigw.log" 2>&1 & )
+      if [ ! -f "$AIGW_CONFIG" ]; then
+        [ -x "$BIN/stargate-api" ] || go build -o "$BIN/stargate-api" ./cmd/stargate-api
+        "$BIN/stargate-api" routing write -o "$AIGW_CONFIG"
+      fi
+      ( [ -f .env ] && set -a && . ./.env; nohup "$AIGW" run "$AIGW_CONFIG" >>"$LOGS/aigw.log" 2>&1 & )
       wait_up 1975 aigw ;;
     *) echo "unknown part: $w (want api, warden, ingest or aigw)" >&2; exit 2 ;;
   esac

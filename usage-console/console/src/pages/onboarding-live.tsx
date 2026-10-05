@@ -156,8 +156,8 @@ export function LiveOnboardingPage() {
               ))}
             </RadioGroup>
             <p className="mt-3 text-xs text-muted-foreground">
-              Adding a provider and its credentials isn’t connected yet: backends come from the gateway’s config (
-              <span className="font-mono">server/aigw/config.yaml</span>).
+              Adding a provider and its credentials isn’t connected yet: backends are the control plane’s desired state, seeded from the gateway’s original config, and
+              can’t be edited from the console.
             </p>
 
             {backend && (
