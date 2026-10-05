@@ -264,6 +264,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
               {r.redactions.map((x) => (
                 <span key={x.type} className="rounded-sm border border-v-redacted-border bg-v-redacted-bg px-1.5 font-mono text-xs leading-5 text-v-redacted-fg">
                   {x.count}× {x.type}
+                  {x.rehydrated ? ` · ${x.rehydrated} restored in the response` : ''}
                 </span>
               ))}
               <span className="text-xs text-muted-foreground">Types and counts only — matched values are never stored.</span>

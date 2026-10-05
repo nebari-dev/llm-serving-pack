@@ -137,10 +137,18 @@ reports the change and says replay isn't connected.
 - **Decided 2026-10-05: follow §5.2's policies (not built).** Versioning
   and matching move to policies (groups of rules) as §5.2 has them, instead
   of each rule versioned on its own.
-- **Decided 2026-10-05: build rehydration (not built).** A vault for the
+- **Decided 2026-10-05: build rehydration (built).** A vault for the
   values Warden redacts, and the response-side swap in Warden that puts them
-  back (§4.5 step 5). Until then the seed rules' "rehydrate on return"
-  states something that doesn't happen.
+  back (§4.5 step 5). The vault is in memory on the request's ext_proc
+  stream, so no table and no TTL beyond the stream. Warden now sees the
+  response body (streamed), and skips it when there's nothing to restore.
+  See console-real-data.md.
+- **Decide: what rehydrates.** Per rule, as §5.3's `"rehydrate": true`: only
+  a redact action whose detail says "rehydrate on return". "No rehydrate",
+  or saying nothing, keeps placeholders in the response; the builder's
+  switch starts off. Values are restored only in the reply's choices
+  (message and delta text, tool-call arguments), not in headers. A compressed
+  reply isn't restored, and the receipt says so. Confirm these defaults.
 - History before migration 004 wasn't kept: seeded rules have only their
   current version, with `publishedAt`/`publishedBy` null.
 - Replay (§7.5.7), re-running past traffic against a new rule to see what

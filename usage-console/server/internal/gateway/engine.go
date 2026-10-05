@@ -110,6 +110,9 @@ type Decision struct {
 	Receipt    *model.Receipt // nil when the caller isn't identified
 	Req        fakellm.ChatRequest
 	Candidates []Candidate
+	// Vault holds what redactions by rules that rehydrate on return replaced,
+	// for the response to put back.
+	Vault *Vault
 
 	start       time.Time
 	requested   string
@@ -479,6 +482,8 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	// reroute is last-write-wins. Monitor-mode rules only record "would".
 	msgs := slices.Clone(in.Req.Messages)
 	var outcomes []string
+	d.Vault = &Vault{}
+	names := newPlaceholders(promptText(msgs))
 	for _, rule := range s.Rules {
 		if rule.Mode == "draft" || rule.Mode == "disabled" {
 			continue
@@ -518,9 +523,16 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 					d.blockedBy = fmt.Sprintf("blocked by %s v%d on entity %q", rule.Name, rule.Version, ent)
 					return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s v%d matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", rule.Name, rule.Version, ent))
 				case "redact":
+					back := strings.Contains(act.Detail, RehydrateOnReturn)
 					for ent, n := range found {
 						for i := range msgs {
-							msgs[i].Content = redact(ent, msgs[i].Content)
+							msgs[i].Content = redact(ent, msgs[i].Content, func(label, m string) string {
+								ph := names.For(label, m)
+								if back {
+									d.Vault.put(ph, m, ent)
+								}
+								return ph
+							})
 						}
 						rc.Redactions = append(rc.Redactions, model.Redaction{Type: ent, Count: n})
 						outcomes = append(outcomes, fmt.Sprintf("redacted %d %s", n, ent))

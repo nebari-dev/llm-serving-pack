@@ -148,3 +148,27 @@ func Simulate(backend string, req ChatRequest, r *rand.Rand) Plan {
 		Usage:    u,
 	}
 }
+
+// Echo answers with the last user message as it arrived, so a check through
+// the gateway can see what the provider was sent. It never fails, and it
+// streams in four-character chunks, so a placeholder spans several.
+func Echo(req ChatRequest) Plan {
+	last := ""
+	for _, m := range req.Messages {
+		if m.Role == "user" {
+			last = m.Content
+		}
+	}
+	text := []rune("You said: " + last)
+	var chunks []string
+	for i := 0; i < len(text); i += 4 {
+		chunks = append(chunks, string(text[i:min(i+4, len(text))]))
+	}
+	var u Usage
+	for _, m := range req.Messages {
+		u.PromptTokens += EstimateTokens(m.Content) + 4
+	}
+	u.CompletionTokens = EstimateTokens(string(text))
+	u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	return Plan{Status: 200, TTFT: 20 * time.Millisecond, Duration: 60 * time.Millisecond, Chunks: chunks, Usage: u}
+}

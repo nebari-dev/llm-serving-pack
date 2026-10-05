@@ -162,8 +162,9 @@ when stale; 428 without it on an update or delete). Open questions are in
   - The builder matches the engine (user's choice, 2026-09-30): one list of
     conditions that must all match, and one action. Groups, "any of", regex,
     the response field and a second action aren't offered, and the page says
-    why. The stored "rehydrate on return" text is kept and flagged as not
-    built. Replay says it isn't connected. Reordering isn't connected.
+    why. A redact action has a "Rehydrate on return" switch (off for a new
+    one), which Warden honours (rehydration, below). Replay says it isn't
+    connected. Reordering isn't connected.
   - Exit test: the api-mode suite builds a rule in the builder, publishes it
     enforcing, sees the gateway refuse with `policy_blocked`, merges a stale
     draft, rolls back from Versions, disables and deletes it.
@@ -364,6 +365,27 @@ when stale; 428 without it on an update or delete). Open questions are in
     `pricedLater`.
   - Cache writes count on receipts (Agent Router's `CacheCreationInputToken`)
     and bill at their own rate.
-- [ ] Redaction rehydration (§4.5 step 5): a vault for redacted values and
-  the response-side swap in Warden (decided 2026-10-05: build it). Seeded
-  rules say "rehydrate on return", but nothing restores them yet.
+- [x] Redaction rehydration (§4.5 step 5, 2026-10-05, decisions §3).
+  - Engine: placeholders are numbered per request, not per message, and the
+    same value always gets the same one; a placeholder the caller typed is
+    skipped. Redactions by a rule whose action says "rehydrate on return"
+    go into a vault; any other redaction ("no rehydrate", or nothing said)
+    keeps its placeholders in the response.
+  - Warden: the vault lives on the request's ext_proc stream, in memory,
+    and goes with it (no table). `aigw/base.yaml` now sends Warden the
+    response (`response.body: Streamed`, `allowModeOverride`); with an empty
+    vault Warden tells Envoy to skip the body. It sees the reply after
+    Agent Router's translation, so it's OpenAI's schema: a JSON body is held
+    whole and its choices' strings restored; SSE events go out as they
+    complete, and a placeholder streamed over several deltas is held back
+    until it's whole (content and tool-call arguments). content-length is
+    dropped. A compressed or non-chat body isn't touched, and the receipt
+    says why.
+  - Receipts: each redaction carries `rehydrated` (a count, inside the
+    existing JSON column, no migration), and the trace ends with
+    "Placeholders rehydrated". The receipt drawer shows the count.
+  - devgateway (the dev stand-in) doesn't rehydrate.
+  - Exit test: the api-mode suite sends an email through the gateway to
+    fake-openai in echo mode (`X-Fake-Echo`): the provider receives
+    `[EMAIL_1]`, the caller gets the address back, JSON and streamed, the
+    receipts count it; with the rule's rehydrate off, the placeholder stays.

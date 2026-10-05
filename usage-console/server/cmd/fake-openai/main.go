@@ -1,6 +1,7 @@
 // fake-openai serves OpenAI-compatible chat completions for every demo
 // backend at /{backend}/v1/chat/completions, sleeping through the simulated
-// latency and streaming chunks when asked. Like a real provider, it rejects a
+// latency and streaming chunks when asked. With an X-Fake-Echo header it
+// repeats the prompt instead (fakellm.Echo). Like a real provider, it rejects a
 // Stargate API key: the gateway must never forward the caller's credentials.
 package main
 
@@ -11,6 +12,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -43,6 +45,13 @@ func handle(w http.ResponseWriter, req *http.Request) {
 	}
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	p := fakellm.Simulate(req.PathValue("backend"), cr, r)
+	if req.Header.Get("X-Fake-Echo") != "" {
+		// For checks through the gateway: reply with the prompt as it arrived,
+		// and say so in a header too, which nothing on the way back rewrites
+		// (Warden restores redacted values in the body).
+		p = fakellm.Echo(cr)
+		w.Header().Set("X-Fake-Received", url.QueryEscape(p.Content()))
+	}
 	ctx := req.Context()
 	sleep := func(d time.Duration) bool {
 		select {

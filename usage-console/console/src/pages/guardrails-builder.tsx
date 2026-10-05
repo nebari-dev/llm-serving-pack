@@ -306,6 +306,12 @@ function ApiActionRow({ draft, vocab, onChange }: { draft: Draft; vocab: RuleVoc
         {a.type === 'reroute' && (
           <StrSelect label="Route target" value={a.to} options={vocab.targets.map((t) => ({ value: t, label: t }))} onChange={(to) => onChange({ ...a, to })} className="font-mono" />
         )}
+        {a.type === 'redact' && (
+          <label className="ml-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground-strong">
+            <Switch checked={a.rehydrate} onCheckedChange={(rehydrate) => onChange({ ...a, rehydrate })} />
+            Rehydrate on return
+          </label>
+        )}
       </div>
       <p className="text-xs text-muted-foreground">
         {a.type === 'block' && 'Callers get a 403 naming the rule, and the entity when a prompt condition matched one.'}
@@ -316,9 +322,11 @@ function ApiActionRow({ draft, vocab, onChange }: { draft: Draft; vocab: RuleVoc
       {a.type === 'redact' && !found.length && (
         <p className="text-xs font-medium text-v-degraded-fg">Add a “Prompt contains entity” condition: redact removes what it finds.</p>
       )}
-      {a.type === 'redact' && a.rehydrate && (
-        <p className="text-xs text-v-degraded-fg">
-          This rule’s stored text says “rehydrate on return”. Rehydration isn’t built yet, so placeholders stay in the response.
+      {a.type === 'redact' && found.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {a.rehydrate
+            ? 'The provider sees only placeholders; Warden puts the values back in the response, streamed or not, and the receipt counts them.'
+            : 'Placeholders stay in the response.'}
         </p>
       )}
       <p className="text-xs text-muted-foreground">One action per rule: the engine runs a rule’s first action only.</p>
@@ -334,7 +342,7 @@ function ActionRow({ a, onChange, onRemove }: { a: Action; onChange: (a: Action)
         <>
           <ValueChips label="entity" values={a.entities} suggestions={entityOptions} onChange={(entities) => onChange({ ...a, entities })} />
           <label className="ml-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground-strong">
-            <Switch checked={a.rehydrate} onCheckedChange={(rehydrate) => onChange({ ...a, rehydrate })} aria-label="Rehydrate placeholders in the response" />
+            <Switch checked={a.rehydrate} onCheckedChange={(rehydrate) => onChange({ ...a, rehydrate })} />
             Rehydrate on return
           </label>
         </>

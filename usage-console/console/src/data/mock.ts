@@ -153,7 +153,8 @@ export interface Receipt {
   inboundVerdict: InboundVerdict
   /** How Warden handled the request; absent when nothing evaluated policy. */
   policyMode?: 'enforced' | 'passthrough' | 'fail-open' | 'fail-closed'
-  redactions: { type: string; count: number }[]
+  /** rehydrated: how many came back in the response (api mode; absent when none did). */
+  redactions: { type: string; count: number; rehydrated?: number }[]
   rules: RuleEval[]
   status: number
   errorCode?: string

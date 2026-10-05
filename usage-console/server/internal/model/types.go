@@ -327,6 +327,9 @@ type RuleEval struct {
 type Redaction struct {
 	Type  string `json:"type"`
 	Count int    `json:"count"`
+	// Rehydrated is how many placeholders of this type the response had put
+	// back (a rule that rehydrates on return, §4.5 step 5).
+	Rehydrated int `json:"rehydrated,omitempty"`
 }
 
 type Receipt struct {

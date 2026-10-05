@@ -69,9 +69,13 @@ the engine hasn't answered at all, or panicked, the request fails closed when
 any enforced rule does, and fails open otherwise. The kill switch is
 `curl -XPOST 'localhost:8084/passthrough?on=true'` (or start with
 `-passthrough`). It lets requests through unpoliced and marks each receipt that
-way. `GET :8084/metrics` exports the snapshot age. The response path (inbound
-detection, cutting streams, rehydration) isn't on this path yet, so nothing
-here is `truncated`.
+way. `GET :8084/metrics` exports the snapshot age.
+
+On the way back, Warden rehydrates: when a redacting rule says "rehydrate on
+return", the values it replaced (kept in memory on the request's ext_proc
+stream, never stored) go back into the reply, JSON or streamed, and the
+receipt counts them. Inbound detection and cutting streams aren't on this
+path yet, so nothing here is `truncated`.
 
 ## Run it
 

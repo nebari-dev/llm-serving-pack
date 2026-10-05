@@ -3,7 +3,6 @@ package gateway
 import (
 	"regexp"
 	"slices"
-	"strconv"
 )
 
 // Entity detectors named the way policy rules refer to them ("contains
@@ -60,19 +59,18 @@ func find(entity, text string) int {
 	return n
 }
 
-// redact replaces every valid match with a numbered placeholder.
-func redact(entity, text string) string {
+// redact replaces every valid match with the placeholder name gives it
+// (placeholders.For: "[EMAIL_1]" and so on).
+func redact(entity, text string, name func(label, match string) string) string {
 	d, ok := detectors[entity]
 	if !ok {
 		return text
 	}
-	i := 0
 	return d.re.ReplaceAllStringFunc(text, func(m string) string {
 		if d.valid != nil && !d.valid(m) {
 			return m
 		}
-		i++
-		return "[" + d.label + "_" + strconv.Itoa(i) + "]"
+		return name(d.label, m)
 	})
 }
 

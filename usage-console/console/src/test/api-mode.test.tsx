@@ -1415,7 +1415,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       // What the engine doesn't do is stated, not simulated.
       await screen.findByText(/Replay isn’t connected yet/)
       const builder = screen.getByRole('region', { name: 'Rule builder' })
-      await waitFor(() => expect(builder.textContent).toContain('Rehydration isn’t built yet'), { timeout: 5000 })
+      // r1 rehydrates on return, and Warden does it.
+      await waitFor(() => expect(builder.textContent).toContain('Warden puts the values back in the response'), { timeout: 5000 })
+      expect(within(builder).getByRole('switch', { name: 'Rehydrate on return' }).getAttribute('aria-checked')).toBe('true')
       expect(within(builder).queryByRole('button', { name: /Group/ })).toBeNull()
       expect(builder.textContent).toContain('Groups and “any of” aren’t connected yet')
 
@@ -1529,6 +1531,87 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 120_000)
+
+  // §4.5 step 5 through the real gateway. fake-openai echoes the prompt it
+  // received (X-Fake-Echo) in the reply and in X-Fake-Received, which Warden
+  // doesn't touch: the provider sees the placeholder, the caller gets the
+  // address back, in a JSON reply and a streamed one (four-character chunks,
+  // so the placeholder spans events). Only a rule that says so rehydrates.
+  it('rehydrates redacted values in the response through the gateway, JSON and streamed, when the rule says so', async () => {
+    type V = { id: string; mode: string; version: number; etag: string }
+    type R = { redactions: { type: string; count: number; rehydrated?: number }[]; trace: { step: string; outcome: string }[] }
+    const name = `api-mode-rehydrate-${Date.now().toString(36)}`
+    // The security team: seeded no-pii-out (r1) skips it, so this test's rule is the one that redacts.
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name, team: 'security', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    const email = 'jordan.lee@example.com'
+    const ask = async (stream: boolean) => {
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', 'X-Fake-Echo': '1' },
+        body: JSON.stringify({ model: 'gpt-5-mini', stream, messages: [{ role: 'user', content: `Write to ${email} today` }] }),
+      })
+      const text = await res.text()
+      expect(res.status, text).toBe(200)
+      const received = decodeURIComponent((res.headers.get('x-fake-received') ?? '').replace(/\+/g, ' '))
+      let reply = ''
+      if (stream) {
+        for (const line of text.split('\n')) {
+          if (!line.startsWith('data: ') || line.trim() === 'data: [DONE]') continue
+          reply += (JSON.parse(line.slice(6)) as { choices: { delta: { content?: string } }[] }).choices[0]?.delta.content ?? ''
+        }
+      } else reply = (JSON.parse(text) as { choices: { message: { content: string } }[] }).choices[0].message.content
+      return { received, reply }
+    }
+    const rule = (rehydrate: boolean) => ({
+      name, description: 'api-mode rehydration test', failMode: 'closed',
+      when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
+      then: [{ action: 'redact', detail: rehydrate ? 'email · rehydrate on return' : 'email' }],
+    })
+    let id = ''
+    try {
+      const made = await send<V>('POST', '/rules', rule(true))
+      id = made.id
+      const v1 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'enforce' }, made.etag)
+      expect(v1).toMatchObject({ mode: 'enforce', version: 1 })
+      for (const stream of [false, true]) {
+        const { received, reply } = await ask(stream)
+        expect(received).toBe('You said: Write to [EMAIL_1] today') // the provider never saw the address
+        expect(reply).toBe(`You said: Write to ${email} today`) // the caller gets it back
+      }
+      // Each receipt counts what came back, after the upstream call.
+      await waitFor(async () => {
+        const rs = await catalog.api<R[]>(`/receipts?limit=10&key=${key.id}`)
+        expect(rs.length).toBe(2)
+        for (const r of rs) {
+          expect(r.redactions).toEqual([{ type: 'email', count: 1, rehydrated: 1 }])
+          expect(r.trace.at(-1)).toMatchObject({ step: 'Placeholders rehydrated', outcome: 'restored 1 email' })
+        }
+      }, { timeout: 15_000, interval: 1000 })
+
+      // Without "rehydrate on return" the placeholder stays in the reply.
+      const drafted = await send<V>('PUT', `/rules/${id}/draft`, rule(false), v1.etag)
+      const v2 = await send<V>('POST', `/rules/${id}/publish`, undefined, drafted.etag)
+      expect(v2).toMatchObject({ mode: 'enforce', version: 2 })
+      for (const stream of [false, true]) {
+        const { received, reply } = await ask(stream)
+        expect(received).toBe('You said: Write to [EMAIL_1] today')
+        expect(reply).toBe('You said: Write to [EMAIL_1] today')
+      }
+
+      const v3 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'disabled' }, v2.etag)
+      await send('DELETE', `/rules/${id}`, undefined, v3.etag)
+      id = ''
+    } finally {
+      if (id) {
+        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === id)?.etag
+        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/rules/${id}`, undefined, await etagNow()).catch(() => {})
+      }
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 90_000)
 
   it('reorders rules on Guardrails against the order the author saw, with an audit row', async () => {
     type R = { id: string; name: string; ordinal: number }

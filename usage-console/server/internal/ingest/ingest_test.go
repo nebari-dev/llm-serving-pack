@@ -212,6 +212,27 @@ func TestReceiptTakesWardensDecision(t *testing.T) {
 	}
 }
 
+// Rehydration happens on the way back, so its step follows the upstream call,
+// and the count stays on the redaction.
+func TestReceiptPutsRehydrationAfterTheUpstreamCall(t *testing.T) {
+	p := `{"mode":"enforced","verdict":"redacted","rules":[],"redactions":[{"type":"email","count":2,"rehydrated":1}],` +
+		`"trace":[{"step":"Budget checked","state":"ok"},{"step":"Rules evaluated","state":"warn"},{"step":"Placeholders rehydrated","outcome":"restored 1 email","state":"ok"}]}`
+	rc, err := Receipt(snap, record(map[string]string{"stargate.key_id": "k1", "stargate.team": "support", "stargate.project": "p", "stargate.policy": p}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var steps []string
+	for _, s := range rc.Trace {
+		steps = append(steps, s.Step)
+	}
+	if got := strings.Join(steps, " › "); got != "Identity resolved › Budget checked › Rules evaluated › Route selected › Upstream called › Placeholders rehydrated" {
+		t.Errorf("trace = %s", got)
+	}
+	if len(rc.Redactions) != 1 || rc.Redactions[0].Rehydrated != 1 {
+		t.Errorf("redactions = %+v", rc.Redactions)
+	}
+}
+
 func TestReceiptBlockedByWarden(t *testing.T) {
 	p := `{"mode":"enforced","verdict":"blocked","requestedModel":"gpt-5-mini","rules":[],"redactions":[],` +
 		`"trace":[{"step":"Budget checked","state":"fail"},{"step":"Rules evaluated","state":"skip"}],` +

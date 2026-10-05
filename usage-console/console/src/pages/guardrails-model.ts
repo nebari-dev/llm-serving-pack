@@ -205,7 +205,8 @@ export function fromContent(c: RuleContent, ruleId: string | null): Draft {
 
 /**
  * The draft as the server stores it. A redact's detail names what it removes;
- * a stored "rehydrate on return" is kept as written, though nothing does it yet.
+ * "rehydrate on return" on it is what tells Warden to put the values back in
+ * the response (gateway.RehydrateOnReturn).
  */
 export function toContent(d: Draft): RuleContent {
   return {

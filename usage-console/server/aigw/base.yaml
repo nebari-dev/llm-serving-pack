@@ -18,7 +18,8 @@
 # config_dump after upgrading Agent Router; see the EnvoyProxy's filterOrder):
 #
 #   ext_authz (stargate-api :8082)  key + model allowlist, identity headers
-#   ext_proc  (warden :8083)        budgets, rules: block, redact, reroute
+#   ext_proc  (warden :8083)        budgets, rules: block, redact, reroute;
+#                                   rehydrates the response
 #   buffer
 #   ext_proc  (Agent Router)        reads the model, picks the route, translates
 #   router
@@ -215,10 +216,18 @@ spec:
       headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id]
 ---
 # Warden: budgets and policy rules, after the key check. Headers and the whole
-# body go to it; nothing from the response yet. messageTimeout sits above
-# Warden's own 50ms deadline so Warden's per-rule fail mode is what applies;
-# if Warden itself is unreachable the request fails closed (failOpen: false).
-# Its decision comes back as dynamic metadata for the access log.
+# body go to it. messageTimeout sits above Warden's own 50ms deadline so
+# Warden's per-rule fail mode is what applies; if Warden itself is unreachable
+# the request fails closed (failOpen: false). Its decision comes back as
+# dynamic metadata for the access log.
+#
+# The response comes back through it to rehydrate redacted values (§4.5 step
+# 5). Response filters run in reverse, so Warden sees it after Agent Router has
+# translated it to OpenAI's schema. The body streams (Streamed, not Buffered,
+# which would hold an SSE reply to the end); Warden holds back only a partial
+# placeholder. When the request left nothing to restore, Warden answers the
+# response headers with a mode override (allowModeOverride) so Envoy doesn't
+# send the body at all.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: EnvoyExtensionPolicy
 metadata:
@@ -240,6 +249,9 @@ spec:
       processingMode:
         request:
           body: Buffered
+        response:
+          body: Streamed
+        allowModeOverride: true
       metadata:
         writableNamespaces: [io.stargate.warden]
 ---

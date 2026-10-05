@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -184,7 +185,16 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	default:
 		rc.CostUSD, rc.CostBasis = s.Cost(rc.ResolvedModel, rc.Backend, gateway.TokensOf(rc))
 	}
-	rc.Trace = append(append([]model.TraceStep{identity}, policy...), route, up)
+	// Warden's steps are the request's, except rehydration: that's the response.
+	var after []model.TraceStep
+	policy = slices.DeleteFunc(slices.Clone(policy), func(t model.TraceStep) bool {
+		if t.Step == gateway.StepRehydrated {
+			after = append(after, t)
+			return true
+		}
+		return false
+	})
+	rc.Trace = append(append(append([]model.TraceStep{identity}, policy...), route, up), after...)
 	return rc, nil
 }
 
