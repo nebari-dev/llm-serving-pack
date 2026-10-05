@@ -371,7 +371,14 @@ Same semantics as `LLMModel`: set `public: true` or list `groups` (see [spec.acc
 | `status.endpoints.external` | string | Shared external endpoint URL when that endpoint is enabled. |
 | `status.endpoints.internal` | string | Shared internal endpoint URL when that endpoint is enabled. |
 | `status.providerHostname` | string | Resolved upstream address (e.g. the regional Bedrock runtime endpoint). Display clients such as the key-manager and the `kubectl get` Provider column read this; only the operator resolves provider backends. |
-| `status.conditions` | []Condition | `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady` (type, status, reason, message). |
+| `status.conditions` | []Condition | `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`, and `UpstreamCredentialResolved` for Secret-backed credentials (type, status, reason, message). |
+
+`UpstreamCredentialResolved` is informational and does not block `Ready`.
+`SecretNotFound` means the referenced Secret is absent; `APIKeyMissing` means its
+`apiKey` entry is absent or empty. `Resolved` confirms a non-empty entry, not that
+the provider accepts it. A read failure reports `Unknown` with `LookupFailed`
+and schedules a one-minute retry. Workload identity has no upstream credential
+Secret, so this condition is omitted and any previous Secret condition is removed.
 
 > **Naming constraint:** an LLMModel and a PassthroughModel cannot share a name in the same namespace (both derive the `<name>-api-keys` Secret). Only one catch-all PassthroughModel per gateway is supported.
 

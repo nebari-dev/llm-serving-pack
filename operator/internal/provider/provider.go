@@ -28,6 +28,15 @@ type Resolved struct {
 	SecurityPolicy map[string]interface{}
 }
 
+// UsesCredentialSecret reports whether the selected credential uses an API-key
+// Secret. It applies backend defaults without validating unrelated provider fields.
+func UsesCredentialSecret(p llmv1alpha1.ProviderSpec) bool {
+	if p.Credential != nil {
+		return p.Credential.Type == llmv1alpha1.CredentialAPIKey
+	}
+	return p.Backend == nil || p.Backend.Type == llmv1alpha1.BackendOpenAI
+}
+
 // Resolve dispatches to a backend variant, then validates the shared address.
 // An omitted backend preserves the legacy OpenAI-compatible configuration.
 func Resolve(p llmv1alpha1.ProviderSpec) (*Resolved, error) {
