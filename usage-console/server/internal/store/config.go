@@ -71,11 +71,8 @@ func (s *Store) Backends(ctx context.Context, tenant string) ([]model.Backend, e
 
 // Budgets returns caps only; spend is filled in from the receipts db.
 func (s *Store) Budgets(ctx context.Context, tenant string) ([]model.Budget, error) {
-	rows, _ := s.Config.Query(ctx, `SELECT id, scope, scope_type, period, cap_usd::float8, on_exceed FROM budgets WHERE tenant_id = $1 ORDER BY id`, tenant)
-	return collect(rows, func(r pgx.Rows) (model.Budget, error) {
-		var b model.Budget
-		return b, r.Scan(&b.ID, &b.Scope, &b.ScopeType, &b.Period, &b.CapUSD, &b.OnExceed)
-	})
+	rows, _ := s.Config.Query(ctx, `SELECT `+budgetCols+` FROM budgets WHERE tenant_id = $1 ORDER BY id`, tenant)
+	return collect(rows, func(r pgx.Rows) (model.Budget, error) { return scanBudget(r) })
 }
 
 // KeyRecord is an API key plus the credential material the gateway needs.
@@ -86,12 +83,14 @@ type KeyRecord struct {
 	RotateUntil *time.Time
 }
 
-const keyCols = `id, name, prefix, team_id, project, allowed_models, allowed_regions,
-	to_char(expires_at, 'YYYY-MM-DD'), status, hash, coalesce(next_hash, ''), rotate_until`
+// keyCols reads a key with its project's name, which receipts carry. A
+// subquery rather than a join, so RETURNING can use it too.
+const keyCols = `id, name, prefix, team_id, (SELECT p.name FROM projects p WHERE p.id = api_keys.project_id), project_id,
+	allowed_models, allowed_regions, to_char(expires_at, 'YYYY-MM-DD'), status, hash, coalesce(next_hash, ''), rotate_until`
 
 func scanKey(r pgx.Row) (KeyRecord, error) {
 	var k KeyRecord
-	err := r.Scan(&k.ID, &k.Name, &k.Prefix, &k.Team, &k.Project, &k.AllowedModels, &k.AllowedRegions,
+	err := r.Scan(&k.ID, &k.Name, &k.Prefix, &k.Team, &k.Project, &k.ProjectID, &k.AllowedModels, &k.AllowedRegions,
 		&k.ExpiresAt, &k.Status, &k.Hash, &k.NextHash, &k.RotateUntil)
 	return k, err
 }
@@ -119,7 +118,7 @@ func (s *Store) Rules(ctx context.Context, tenant string) ([]model.PolicyRule, e
 func (s *Store) Changes(ctx context.Context, tenant string, limit int) ([]model.Change, error) {
 	rows, _ := s.Config.Query(ctx, `
 		SELECT id, ts, actor, action, target, target_kind, coalesce(effect, ''), coalesce(effect_tone, ''), source
-		FROM audit_log WHERE tenant_id = $1 ORDER BY ts DESC LIMIT $2`, tenant, limit)
+		FROM audit_log WHERE tenant_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`, tenant, limit)
 	return collect(rows, func(r pgx.Rows) (model.Change, error) {
 		var c model.Change
 		var id int64
@@ -133,8 +132,10 @@ func (s *Store) Changes(ctx context.Context, tenant string, limit int) ([]model.
 // ---- key mutations ------------------------------------------------------
 
 type NewKey struct {
-	Name           string   `json:"name"`
-	Team           string   `json:"team"`
+	Name string `json:"name"`
+	Team string `json:"team"`
+	// Project is a project of Team, by name. One the team doesn't have yet is
+	// created along with the key.
 	Project        string   `json:"project"`
 	AllowedModels  []string `json:"allowedModels"`
 	AllowedRegions []string `json:"allowedRegions"`
@@ -174,11 +175,15 @@ func (s *Store) CreateKey(ctx context.Context, tenant, actor string, in NewKey) 
 		return KeyRecord{}, "", err
 	}
 	defer tx.Rollback(ctx)
+	p, _, err := ensureProject(ctx, tx, tenant, actor, in.Team, in.Project)
+	if err != nil {
+		return KeyRecord{}, "", err
+	}
 	k, err := scanKey(tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, expires_at, status)
+		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'active')
 		RETURNING `+keyCols,
-		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.Project, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
+		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, p.ID, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
 	if err != nil {
 		return KeyRecord{}, "", err
 	}

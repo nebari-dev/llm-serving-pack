@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -57,5 +58,34 @@ func TestGrouperUsesTheCatalog(t *testing.T) {
 	}
 	if label, sub := g.label("support", "team"); label != "Support" || sub != "CC-1" {
 		t.Errorf("team label %q sub %q", label, sub)
+	}
+}
+
+// A budget's spend is keyed the way its scope is: team id, key id, project id.
+func TestBudgetScopesOfACell(t *testing.T) {
+	g := grouper{keys: map[string]model.APIKey{"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk", ProjectID: "p1a2b3c4d"}}}
+	got := g.budgetScopes(store.SpendCell{Team: "support", KeyID: "k1"})
+	if want := "team:support,key:k1,project:p1a2b3c4d"; strings.Join(got, ",") != want {
+		t.Errorf("got %v, want %s", got, want)
+	}
+	if got := g.budgetScopes(store.SpendCell{Team: "support", KeyID: "gone"}); strings.Join(got, ",") != "team:support" {
+		t.Errorf("unknown key: %v", got)
+	}
+}
+
+func TestBudgetScopeNames(t *testing.T) {
+	g := grouper{keys: map[string]model.APIKey{"k1": {ID: "k1", Name: "support-bot", Project: "helpdesk", ProjectID: "p1a2b3c4d"}}}
+	projects := map[string]string{"p1a2b3c4d": "helpdesk", "pnew": "launch"}
+	for _, c := range []struct{ scopeType, scope, want string }{
+		{"team", "support", "support"},
+		{"key", "k1", "support-bot"},
+		{"key", "k9", "k9"}, // a key that's gone shows its id
+		{"project", "p1a2b3c4d", "helpdesk"},
+		{"project", "pnew", "launch"}, // no keys yet
+		{"project", "pgone", "pgone"},
+	} {
+		if got := g.scopeName(model.Budget{ScopeType: c.scopeType, Scope: c.scope}, projects); got != c.want {
+			t.Errorf("%s %s: got %q, want %q", c.scopeType, c.scope, got, c.want)
+		}
 	}
 }

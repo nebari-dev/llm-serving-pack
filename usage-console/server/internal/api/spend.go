@@ -134,6 +134,33 @@ func (s *Server) grouper(ctx context.Context, t string) (grouper, error) {
 	return g, nil
 }
 
+// budgetScopes are the budget scopes a cell's spend counts toward: its team,
+// and its key and the key's project, by id as budgets name them.
+func (g grouper) budgetScopes(c store.SpendCell) []string {
+	ids := []string{"team:" + c.Team}
+	if k, ok := g.keys[c.KeyID]; ok {
+		ids = append(ids, "key:"+k.ID, "project:"+k.ProjectID)
+	}
+	return ids
+}
+
+// scopeName is how the console shows a budget's scope: a key's or project's
+// name (projects maps id to name, for projects with no keys yet), the id
+// when it's gone, and a team's id as it is.
+func (g grouper) scopeName(b model.Budget, projects map[string]string) string {
+	switch b.ScopeType {
+	case "key":
+		if k, ok := g.keys[b.Scope]; ok {
+			return k.Name
+		}
+	case "project":
+		if n, ok := projects[b.Scope]; ok {
+			return n
+		}
+	}
+	return b.Scope
+}
+
 // notRouted groups requests refused before routing. The dev gateway records
 // their backend as "" and receipt-ingest as "—".
 const notRouted = "(not routed)"
@@ -397,21 +424,22 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 	if err != nil {
 		return nil, err
 	}
-	// A budget's scope is a team id, a key name or a project name.
-	scope := func(c store.SpendCell) []string {
-		ids := []string{"team:" + c.Team}
-		if k, ok := g.keys[c.KeyID]; ok {
-			ids = append(ids, "key:"+k.Name, "project:"+k.Project)
-		}
-		return ids
+	ps, err := s.Store.Projects(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	projects := make(map[string]string, len(ps))
+	for _, p := range ps {
+		projects[p.ID] = p.Name
 	}
 	now := time.Now().UTC()
-	p, per, err := s.projection(ctx, t, now, scope)
+	p, per, err := s.projection(ctx, t, now, g.budgetScopes)
 	if err != nil {
 		return nil, err
 	}
 	for i := range bs {
 		b := &bs[i]
+		b.ScopeName = g.scopeName(*b, projects)
 		v := per[b.ScopeType+":"+b.Scope]
 		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
 		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))

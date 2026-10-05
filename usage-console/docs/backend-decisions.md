@@ -94,16 +94,22 @@ Agent Router (api-mode test).
 - **Decided 2026-09-30: `api_keys.budget_id` is dropped** (migration 005).
   Keys don't name a budget; the key form lists the budgets that will cover
   the new key, and budgets are managed on Spend.
-- **Decided 2026-10-05: projects become a table (not built).** §5.2's
-  `projects(id, team_id, name)`, so a project budget can be set up before
-  any key in it exists. Today projects are free text on keys and a project
-  budget needs an active key in the project.
-- **Decided 2026-10-05: "throttle" rejects with "try again later" (not
-  built).** Over a throttle cap the gateway answers 429 with Retry-After,
-  instead of admitting and marking. Still to settle when it's built: every
-  request over cap, or a fraction.
-- **Decided 2026-10-05: a key-scoped budget matches by key ID (not built).**
-  It matched by key name, which a rename or a reused name would break.
+- **Decided 2026-10-05: projects become a table (built, migration 011).**
+  §5.2's `projects(id, team_id, name)`, so a project budget can be set up
+  before any key in it exists. Keys reference one of their team's projects;
+  a project budget names it by id. Defaults I picked, to confirm: names are
+  unique per team (two teams may each have "helpdesk", as free text
+  allowed), new names are slugs, there's no rename or delete, and
+  `POST /keys` creates a project it doesn't find on the key's team. Spend
+  and rules still group and match projects by name, so same-named projects
+  on two teams share a row there.
+- **Decided 2026-10-05: "throttle" rejects with "try again later" (built).**
+  Over a throttle cap the gateway answers 429 `budget_throttled` with
+  `Retry-After: 5` for a share of requests: half at the cap, rising
+  linearly to all of them at 120% (user's choice). The rest are admitted.
+- **Decided 2026-10-05: a key-scoped budget matches by key ID (built,
+  migration 010).** It matched by key name, which a rename or a reused name
+  would break. The API adds `scopeName` for display.
 - **Defaults I picked:**
   - One budget per scope, enforced by a unique index.
   - Monthly budgets only, since spend is month to date.

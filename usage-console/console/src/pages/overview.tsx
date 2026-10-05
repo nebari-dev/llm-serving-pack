@@ -5,7 +5,7 @@ import { Delta, Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { type ActivityView, backends, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
+import { type ActivityView, backends, budgetLabel, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
 import { age, ago, clock, int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
@@ -374,7 +374,7 @@ function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary:
         tone: exceeded ? ('blocked' as const) : ('degraded' as const),
         what: (
           <>
-            Budget <span className="font-mono">{b.scope}</span> at {pct}% of <Money value={b.capUsd} precision="whole" />
+            Budget <span className="font-mono">{budgetLabel(b)}</span> at {pct}% of <Money value={b.capUsd} precision="whole" />
           </>
         ),
         detail: exceeded

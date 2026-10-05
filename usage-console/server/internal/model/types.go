@@ -9,6 +9,14 @@ type Team struct {
 	CostCenter string `json:"costCenter"`
 }
 
+// Project groups a team's keys (§5.2). Names are unique within a team; a
+// project budget names the project by id.
+type Project struct {
+	ID   string `json:"id"`
+	Team string `json:"team"`
+	Name string `json:"name"`
+}
+
 // Model is a catalog entry. Prices are per (model, backend): see Pricing.
 type Model struct {
 	ID       string `json:"id"`
@@ -207,7 +215,8 @@ type APIKey struct {
 	Name           string   `json:"name"`
 	Prefix         string   `json:"prefix"`
 	Team           string   `json:"team"`
-	Project        string   `json:"project"`
+	Project        string   `json:"project"` // the project's name, which receipts carry
+	ProjectID      string   `json:"projectId"`
 	AllowedModels  []string `json:"allowedModels"`
 	AllowedRegions []string `json:"allowedRegions"`
 	ExpiresAt      *string  `json:"expiresAt"`
@@ -235,8 +244,12 @@ type KeyRotation struct {
 }
 
 type Budget struct {
-	ID           string  `json:"id"`
-	Scope        string  `json:"scope"`
+	ID string `json:"id"`
+	// Scope is a team id, a project id or a key id.
+	Scope string `json:"scope"`
+	// ScopeName is what to show for it: the team id, the project's or the
+	// key's name (the id when the key is gone).
+	ScopeName    string  `json:"scopeName,omitempty"`
 	ScopeType    string  `json:"scopeType"`
 	Period       string  `json:"period"`
 	CapUSD       float64 `json:"capUsd"`

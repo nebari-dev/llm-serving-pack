@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgets, dataMode, syncBudgets, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { type Budget, budgetLabel, budgets, dataMode, syncBudgets, throttleShare, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
 import { int, money } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
@@ -499,8 +499,9 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
 
 /**
  * What the budget does at its cap, in words (§7.5.5). Api mode says only what
- * the gateway does: block returns 429, while throttle and warn admit the
- * request and record the budget step in its receipt.
+ * the gateway does: block returns 429; throttle refuses a share of requests
+ * with 429 and Retry-After (half at the cap, all at 120% of it); warn admits
+ * the request and records the budget step in its receipt.
  */
 function enforcement(b: Budget) {
   const pct = b.currentUsd / b.capUsd
@@ -512,11 +513,11 @@ function enforcement(b: Budget) {
         b.onExceed === 'block'
           ? 'Blocking new requests.'
           : b.onExceed === 'throttle'
-            ? 'Throttling isn’t enforced yet: requests are admitted and their receipts record the budget over cap.'
+            ? `Throttling: ${Math.round(throttleShare(b) * 100)}% of new requests get 429 budget_throttled with Retry-After, rising to all of them at ${capMoney(Math.round(b.capUsd * 120) / 100)}.`
             : 'Warn only: requests are admitted and their receipts record the budget over cap.'
       return {
         tone: b.onExceed === 'block' ? ('blocked' as const) : ('degraded' as const),
-        chip: b.onExceed === 'block' ? 'Blocking' : 'Over cap',
+        chip: b.onExceed === 'block' ? 'Blocking' : b.onExceed === 'throttle' ? 'Throttling' : 'Over cap',
         words: `Over cap by ${money(b.currentUsd - b.capUsd)}. ${what}`,
       }
     }
@@ -524,7 +525,7 @@ function enforcement(b: Budget) {
       b.onExceed === 'block'
         ? `Blocks new requests at ${cap}`
         : b.onExceed === 'throttle'
-          ? `Throttles at ${cap}, though throttling isn’t enforced yet: requests over it are admitted and marked`
+          ? `Throttles at ${cap}: half of new requests get 429 with Retry-After, all of them at ${capMoney(Math.round(b.capUsd * 120) / 100)}`
           : `Marks requests over ${cap} in their receipts, no enforcement`
     const risk = b.projectedUsd > b.capUsd ? ' Projected to cross before period end.' : ''
     return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
@@ -584,8 +585,8 @@ function BudgetTable({
           return (
             <TableRow key={b.id}>
               <TableCell className="py-2">
-                <Link to={`/traffic?${b.scopeType}=${encodeURIComponent(b.scope)}`} className="font-mono text-[0.8125rem] hover:underline">
-                  {b.scope}
+                <Link to={`/traffic?${b.scopeType}=${encodeURIComponent(budgetLabel(b))}`} className="font-mono text-[0.8125rem] hover:underline">
+                  {budgetLabel(b)}
                 </Link>
                 <div className="text-xs text-muted-foreground">{b.scopeType} · monthly</div>
               </TableCell>
@@ -620,10 +621,10 @@ function BudgetTable({
                 </div>
               </TableCell>
               <TableCell className="py-2 text-right whitespace-nowrap">
-                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${b.scope}`} title="Edit cap or action" onClick={() => onEdit(b)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${budgetLabel(b)}`} title="Edit cap or action" onClick={() => onEdit(b)}>
                   <Pencil />
                 </Button>
-                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${b.scope}`} title="Delete budget" onClick={() => onDelete(b)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${budgetLabel(b)}`} title="Delete budget" onClick={() => onDelete(b)}>
                   <Trash2 />
                 </Button>
               </TableCell>

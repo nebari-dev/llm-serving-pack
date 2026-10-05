@@ -66,14 +66,17 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 	for _, x := range demo.Budgets {
 		b.Queue(`INSERT INTO budgets VALUES ($1,$2,$3,$4,$5,$6,$7)`, x.ID, t, x.ScopeType, x.Scope, x.Period, x.CapUSD, x.OnExceed)
 	}
+	for _, p := range demo.Projects {
+		b.Queue(`INSERT INTO projects (id, tenant_id, team_id, name) VALUES ($1,$2,$3,$4)`, p.ID, t, p.Team, p.Name)
+	}
 	for _, k := range demo.Keys {
 		var revokedAt *time.Time
 		if k.Status == "revoked" {
 			revokedAt = &now
 		}
-		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project, allowed_models, allowed_regions, expires_at, status, revoked_at)
+		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status, revoked_at)
 		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.Project, k.AllowedModels, k.AllowedRegions, k.ExpiresAt, k.Status, revokedAt)
+			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.ProjectID, k.AllowedModels, k.AllowedRegions, k.ExpiresAt, k.Status, revokedAt)
 	}
 	for _, r := range demo.Rules {
 		when, _ := json.Marshal(r.When)

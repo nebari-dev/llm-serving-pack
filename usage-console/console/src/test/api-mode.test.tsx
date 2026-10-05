@@ -76,6 +76,12 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(catalog.trafficSeries).toHaveLength(48)
     expect(catalog.spendSeries).toHaveLength(30)
     expect(catalog.keys.find((k) => k.id === 'k1')?.lastUsed).toMatch(/ago$/)
+    // Keys reference a project of their own team (§5.2); seeded ones have one each.
+    const k1 = catalog.keys.find((k) => k.id === 'k1')!
+    expect(catalog.projects.find((p) => p.id === k1.projectId)).toMatchObject({ team: 'support', name: 'helpdesk' })
+    for (const k of catalog.keys) expect(catalog.projects.find((p) => p.id === k.projectId)).toMatchObject({ team: k.team, name: k.project })
+    // The seeded key budget names batch-summarize by id.
+    expect(catalog.budgets.find((b) => b.id === 'b3')).toMatchObject({ scopeType: 'key', scope: 'k3', scopeName: 'batch-summarize' })
   })
 
   const routes = ['/', '/traffic', '/spend', '/models', '/routing', '/guardrails', '/keys', '/keys?key=k1', '/activity', '/settings', '/onboarding', '/guardrails?rule=r3', '/routing?tab=backends']
@@ -637,21 +643,26 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   })
 
   const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
-  /** Spends past a cent with long gpt-5.5 prompts until Warden (reloading every 5s from the aggregates) refuses one. */
-  const spendUntilRefused = async (secret: string) => {
+  /**
+   * Spends past a cent with long gpt-5.5 prompts until Warden (reloading every
+   * 5s from the aggregates) refuses one with `want`. Returns the code and the
+   * refusal's Retry-After header.
+   */
+  const spendUntil = async (secret: string, want: 'budget_exceeded' | 'budget_throttled') => {
     const prompt = 'Summarize the following incident log. '.repeat(500)
-    // The fake upstream also answers some requests 429; only Warden's carry budget_exceeded.
+    // The fake upstream also answers some requests 429; only Warden's carry a budget code.
     for (let i = 0; i < 40; i++) {
       const res = await fetch(`${gateway}/v1/chat/completions`, {
         method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
       })
       const code = res.status === 429 ? ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code : undefined
-      if (code === 'budget_exceeded') return code
+      if (code === want) return { code, retryAfter: res.headers.get('retry-after') }
       await new Promise((ok) => setTimeout(ok, 1000))
     }
-    return ''
+    return { code: '', retryAfter: null }
   }
+  const spendUntilRefused = async (secret: string) => (await spendUntil(secret, 'budget_exceeded')).code
   const testKey = (name: string) =>
     send<{ key: { id: string }; secret: string }>('POST', '/keys', {
       name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
@@ -727,19 +738,23 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     let id = ''
     let etag = ''
     try {
-      const draft = { scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block' }
+      // A key budget names the key by id; the API gives its name alongside, for display.
+      const draft = { scopeType: 'key', scope: key.id, capUsd: 0.01, onExceed: 'block' }
       const dry = await send<{ dryRun: boolean; budget: B; covers: string[]; overCap: boolean }>('POST', '/budgets?dryRun=true', draft)
-      expect(dry).toMatchObject({ dryRun: true, covers: [name], overCap: false, budget: { scope: name, currentUsd: 0 } })
-      expect((await catalog.api<B[]>('/budgets')).some((b) => b.scope === name)).toBe(false)
+      expect(dry).toMatchObject({ dryRun: true, covers: [name], overCap: false, budget: { scope: key.id, scopeName: name, currentUsd: 0 } })
+      expect((await catalog.api<B[]>('/budgets')).some((b) => b.scope === key.id)).toBe(false)
 
       const made = await send<B>('POST', '/budgets', draft)
       etag = made.etag
       id = made.id
-      expect(made).toMatchObject({ scopeType: 'key', scope: name, capUsd: 0.01, onExceed: 'block', period: 'monthly' })
+      expect(made).toMatchObject({ scopeType: 'key', scope: key.id, scopeName: name, capUsd: 0.01, onExceed: 'block', period: 'monthly' })
+      expect((await catalog.api<B[]>('/budgets')).find((b) => b.id === id)).toMatchObject({ scope: key.id, scopeName: name })
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `key ${name} · $0.01 monthly, block`, targetKind: 'Budget' })
       expect(await status(send('POST', '/budgets', draft))).toBe(409) // one budget per scope
       for (const bad of [{ ...draft, period: 'weekly' }, { ...draft, capUsd: 0 }, { ...draft, scopeType: 'team', scope: 'nobody' }, { ...draft, onExceed: 'explode' }])
         expect(await status(send('POST', '/budgets', { ...bad, scope: bad.scope + (bad.scopeType === 'key' ? '-x' : '') }))).toBe(400)
+      // The key's name isn't a scope any more (it could be renamed or reused).
+      expect(await status(send('POST', '/budgets?dryRun=true', { ...draft, scope: name }))).toBe(400)
 
       expect(await status(send('PATCH', `/budgets/${id}`, { capUsd: 1000 }))).toBe(428)
       const raised = await send<B>('PATCH', `/budgets/${id}`, { capUsd: 1000 }, made.etag)
@@ -767,7 +782,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     type R = { verdict: string; errorCode?: string; trace: { step: string; input: string }[] }
     const name = `api-mode-ui-budget-${Date.now().toString(36)}`
     const { key, secret } = await testKey(name)
-    const mine = async () => (await catalog.api<B[]>('/budgets')).find((b) => b.scope === name)
+    // The form picks the key by name and sends its id.
+    const mine = async () => (await catalog.api<B[]>('/budgets')).find((b) => b.scopeType === 'key' && b.scope === key.id)
     try {
       window.history.pushState({}, '', '/spend')
       render(<App />)
@@ -789,7 +805,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Create budget' }))
       await formDialogClosed()
       const made = await mine()
-      expect(made).toMatchObject({ scopeType: 'key', capUsd: 0.01, onExceed: 'block', period: 'monthly' })
+      expect(made).toMatchObject({ scopeType: 'key', scope: key.id, scopeName: name, capUsd: 0.01, onExceed: 'block', period: 'monthly' })
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `key ${name} · $0.01 monthly, block` })
       const table = screen.getByRole('table', { name: 'Budgets' })
       await waitFor(() => expect(table.textContent).toContain(name), { timeout: 5000 })
@@ -832,6 +848,152 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 120_000)
+
+  // Throttle (decided 2026-10-05): over the cap Warden refuses a share of
+  // requests with 429 budget_throttled and Retry-After, half at the cap and
+  // all of them from 120% of it. A cent cap is soon far past 120% with long
+  // gpt-5.5 requests, so refusals come within a few Warden reloads.
+  it('throttles over a throttle cap with 429 budget_throttled and Retry-After, and says so on Spend', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type R = { id: string; verdict: string; status: number; errorCode?: string; trace: { step: string; input: string; outcome: string }[] }
+    const name = `api-mode-throttle-${Date.now().toString(36)}`
+    const { key, secret } = await testKey(name)
+    let b: B | undefined
+    try {
+      b = await send<B>('POST', '/budgets', { scopeType: 'key', scope: key.id, capUsd: 0.01, onExceed: 'throttle' })
+      expect(await spendUntil(secret, 'budget_throttled')).toEqual({ code: 'budget_throttled', retryAfter: '5' })
+      let refused: R | undefined
+      for (let i = 0; i < 20 && !refused; i++) {
+        refused = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=blocked`)).find((r) => r.errorCode === 'budget_throttled')
+        if (!refused) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(refused).toMatchObject({ status: 429, errorCode: 'budget_throttled' })
+      const step = refused!.trace.find((s) => s.step === 'Budget checked')!
+      expect(step.input).toMatch(new RegExp(`^key budget ${name} · \\$\\d+\\.\\d\\d of \\$0\\.01$`))
+      expect(step.outcome).toMatch(/^over cap · throttled \d+%, refused$/)
+
+      window.history.pushState({}, '', '/spend')
+      render(<App />)
+      const table = await screen.findByRole('table', { name: 'Budgets' })
+      await waitFor(() => expect(table.textContent).toContain(name), { timeout: 5000 })
+      const row = within(table).getByRole('link', { name }).closest('tr')!
+      await waitFor(() => expect(row.textContent).toMatch(/Throttling: \d+% of new requests get 429 budget_throttled with Retry-After/), { timeout: 5000 })
+      expect(document.body.textContent).not.toContain('isn’t enforced')
+
+      // A receipt says what refused it.
+      window.history.pushState({}, '', `/traffic?receipt=${refused!.id}`)
+      cleanup()
+      render(<App />)
+      await waitFor(() => expect(document.body.textContent).toContain('A budget over its cap throttled this request'), { timeout: 5000 })
+    } finally {
+      if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 120_000)
+
+  // Projects are a table (§5.2, decided 2026-10-05): a project budget can be
+  // set up before any key is in it, and names it by id.
+  it('creates projects with audit rows and caps one before it has keys', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type C = import('@/data/catalog').Change
+    type P = import('@/data/catalog').Project
+    type K = { id: string; name: string; team: string; project: string; projectId: string }
+    const name = `amt-proj-${Date.now().toString(36)}`
+    let b: B | undefined
+    const keys: string[] = []
+    try {
+      const p = await send<P>('POST', '/projects', { team: 'support', name })
+      expect(p).toMatchObject({ team: 'support', name })
+      expect((await catalog.api<P[]>('/projects')).find((x) => x.id === p.id)).toEqual(p)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created project', target: `support / ${name}`, targetKind: 'Project' })
+      expect(await status(send('POST', '/projects', { team: 'support', name }))).toBe(409)
+      for (const bad of [{ team: 'support', name: 'Has Spaces' }, { team: 'support', name: '' }, { team: 'nobody', name: name + '-x' }, { name: name + '-y' }])
+        expect(await status(send('POST', '/projects', bad))).toBe(400)
+
+      // No keys yet: the budget covers none, and shows the project's name.
+      const draft = { scopeType: 'project', scope: p.id, capUsd: 5, onExceed: 'warn' }
+      expect(await send('POST', '/budgets?dryRun=true', draft)).toMatchObject({ covers: [], budget: { scope: p.id, scopeName: name, currentUsd: 0 } })
+      b = await send<B>('POST', '/budgets', draft)
+      expect(b).toMatchObject({ scope: p.id, scopeName: name })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `project ${name} · $5 monthly, warn` })
+      expect(await status(send('POST', '/budgets?dryRun=true', { ...draft, scope: name }))).toBe(400) // by id, not name
+
+      // A key in the project joins it; the same name on another team is another project.
+      const inIt = await send<{ key: K }>('POST', '/keys', { name: `${name}-k`, team: 'support', project: name, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
+      keys.push(inIt.key.id)
+      expect(inIt.key).toMatchObject({ team: 'support', project: name, projectId: p.id })
+      const elsewhere = await send<{ key: K }>('POST', '/keys', { name: `${name}-w`, team: 'web', project: name, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
+      keys.push(elsewhere.key.id)
+      expect(elsewhere.key.projectId).not.toBe(p.id)
+      expect((await catalog.api<C[]>('/changes')).slice(0, 2)).toMatchObject([
+        { action: 'Created key', target: `${name}-w` },
+        { action: 'Created project', target: `web / ${name}` },
+      ])
+      expect(await send('PATCH', `/budgets/${b.id}?dryRun=true`, { capUsd: 6 })).toMatchObject({ covers: [`${name}-k`] })
+      expect(await status(send('POST', '/keys', { name: `${name}-bad`, team: 'support', project: 'Not A Slug', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }))).toBe(400)
+    } finally {
+      if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
+      for (const id of keys) await send('POST', `/keys/${id}/revoke`).catch(() => {})
+    }
+  })
+
+  it('adds a project and its budget from Spend, and picks a team’s project on the key form', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type C = import('@/data/catalog').Change
+    type P = import('@/data/catalog').Project
+    const name = `amt-ui-proj-${Date.now().toString(36)}`
+    const mine = async () => (await catalog.api<B[]>('/budgets')).find((b) => b.scopeType === 'project' && b.scopeName === name)
+    let keyId = ''
+    try {
+      window.history.pushState({}, '', '/spend')
+      render(<App />)
+      await act(async () => {})
+      const add = await screen.findByRole('button', { name: 'Add budget' })
+      await waitFor(() => expect(add).toHaveProperty('disabled', false))
+      fireEvent.click(add)
+      const dialog = await formDialog()
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Project/ }))
+      expect(dialog.textContent).toContain('A project can have a budget before it has keys.')
+      fireEvent.click(within(dialog).getByRole('button', { name: 'New project…' }))
+      fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: name } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Create project' }))
+      await waitFor(() => expect(within(dialog).getByRole('combobox', { name: 'Project' }).textContent).toContain(name), { timeout: 5000 })
+      const p = (await catalog.api<P[]>('/projects')).find((x) => x.name === name)!
+      expect(p.team).toBe(catalog.teams[0].id)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created project', target: `${p.team} / ${name}` })
+      fireEvent.change(within(dialog).getByLabelText('Monthly cap (USD)'), { target: { value: '5' } })
+      fireEvent.click(within(dialog).getByRole('radio', { name: /^Warn/ }))
+      await waitFor(() => expect(dialog.textContent).toContain('Covers no active keys yet.'), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Create budget' }))
+      await formDialogClosed()
+      expect(await mine()).toMatchObject({ scope: p.id, capUsd: 5, onExceed: 'warn' })
+      const table = screen.getByRole('table', { name: 'Budgets' })
+      await waitFor(() => expect(table.textContent).toContain(name), { timeout: 5000 })
+
+      // The key form lists the team's projects; the new key joins this one.
+      cleanup()
+      window.history.pushState({}, '', '/keys')
+      render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /Create key/ }))
+      const form = await formDialog()
+      fireEvent.change(within(form).getByLabelText('Name'), { target: { value: `${name}-k`.slice(0, 40) } })
+      const picker = within(form).getByRole('combobox', { name: 'Project' })
+      await waitFor(() => expect(picker).toHaveProperty('disabled', false))
+      fireEvent.click(picker)
+      choose(await screen.findByRole('option', { name }))
+      await waitFor(() => expect(form.textContent).toContain(`project budget ${name}`), { timeout: 5000 })
+      fireEvent.click(within(form).getByRole('radio', { name: '30 days' }))
+      fireEvent.click(within(form).getByRole('button', { name: 'Create key' }))
+      await waitFor(() => expect(document.body.textContent).toContain('Copy your new secret'), { timeout: 5000 })
+      const k = (await catalog.api<{ id: string; name: string; projectId: string }[]>('/keys')).find((x) => x.name === `${name}-k`.slice(0, 40))!
+      keyId = k.id
+      expect(k.projectId).toBe(p.id)
+    } finally {
+      const b = await mine()
+      if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`).catch(() => {})
+    }
+  }, 60_000)
 
   it('splits a rotation’s traffic by secret, extends its overlap and retires the old secret', async () => {
     type K = { id: string; status: string; rotation?: { endsAt: number | null; oldSecretRequests: number | null; newSecretRequests: number | null } | null }

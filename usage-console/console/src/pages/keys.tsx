@@ -8,7 +8,7 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgets, dataMode, fromWire, governingBudget, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleShare, fromWire, governingBudget, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
 import { clock, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
@@ -174,7 +174,7 @@ export function KeysPage() {
                   <TableCell className="py-1.5 text-sm">
                     {budget ? (
                       <span className="font-mono text-xs">
-                        {budget.scope}
+                        {budgetLabel(budget)}
                         {budget.currentUsd > budget.capUsd && <span className="ml-1.5 font-sans text-v-blocked-fg">over cap</span>}
                       </span>
                     ) : (
@@ -242,8 +242,13 @@ function budgetWords(b: (typeof budgets)[number]) {
   const over = b.currentUsd > b.capUsd
   const cap = `$${int(b.capUsd)}`
   if (dataMode === 'api') {
-    if (over) return b.onExceed === 'block' ? 'Over cap · blocking new requests' : 'Over cap · requests admitted and marked'
-    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap} (not enforced yet)` : `Marks requests over ${cap}`
+    if (over)
+      return b.onExceed === 'block'
+        ? 'Over cap · blocking new requests'
+        : b.onExceed === 'throttle'
+          ? `Over cap · refusing ${Math.round(throttleShare(b) * 100)}% of new requests (429, retry later)`
+          : 'Over cap · requests admitted and marked'
+    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Marks requests over ${cap}`
   }
   if (over) return `Over cap · ${b.onExceed === 'throttle' ? 'throttling' : b.onExceed === 'block' ? 'blocking' : 'warning'} new requests`
   return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Warns at ${cap}`
@@ -336,7 +341,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
               <dd className="flex flex-col gap-1.5 pt-1">
                 <span className="text-sm">
                   <Money value={budget.currentUsd} /> of <Money value={budget.capUsd} precision="whole" />{' '}
-                  <span className="font-mono text-xs text-muted-foreground">{budget.scope}</span>
+                  <span className="font-mono text-xs text-muted-foreground">{budgetLabel(budget)}</span>
                 </span>
                 <Meter value={budget.currentUsd} cap={budget.capUsd} projected={budget.projectedUsd} />
                 <Link to="/spend#budgets" className="text-xs text-muted-foreground hover:text-foreground hover:underline">

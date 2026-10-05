@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -173,25 +174,114 @@ func TestBudgetBlock(t *testing.T) {
 	if rc.Verdict != "blocked" || rc.ErrorCode != "budget_exceeded" {
 		t.Fatalf("got %s %s", rc.Verdict, rc.ErrorCode)
 	}
-	s.Spend.ByTeam["support"] = 99_999 // throttle: admitted with a warning
-	rc = run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
-	if rc.Verdict != "allowed" || rc.Trace[1].State != "warn" {
-		t.Fatalf("throttle: got %s, budget step %+v", rc.Verdict, rc.Trace[1])
+}
+
+// roll is a rand source whose every draw is v, so Float64 is about v/2^64:
+// 0 always falls under a throttle's share, max never does.
+type roll uint64
+
+func (r roll) Uint64() uint64 { return uint64(r) }
+
+func runRoll(t *testing.T, s *Snapshot, in Input, r roll) *model.Receipt {
+	t.Helper()
+	in.Now = demoNow
+	d := Admit(s, in, rand.New(r))
+	if d.Reject != nil {
+		return d.Finish(s, nil, Result{}, nil, time.Now())
+	}
+	c, res, failed := Execute(context.Background(), d, &fixedUp{}, nil)
+	return d.Finish(s, c, res, failed, time.Now())
+}
+
+func TestThrottleShare(t *testing.T) {
+	for _, c := range []struct{ spent, cap, want float64 }{
+		{0, 100, 0},
+		{99.99, 100, 0},
+		{100, 100, 0.5}, // at the cap: half
+		{110, 100, 0.75},
+		{120, 100, 1}, // 120% of the cap: every request
+		{500, 100, 1},
+		{1, 0, 1}, // no cap to share out
+	} {
+		if got := ThrottleShare(c.spent, c.cap); math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("ThrottleShare(%v, %v) = %v, want %v", c.spent, c.cap, got, c.want)
+		}
+	}
+}
+
+func TestThrottleRefusesAShareWithRetryAfter(t *testing.T) {
+	s := DemoSnapshot()
+	s.Spend.ByTeam["support"] = 13_200 // b1 throttles at $12,000: 110% refuses 75%
+	d := Admit(s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi"), Now: demoNow}, rand.New(roll(0)))
+	if d.Reject == nil || d.Reject.Status != 429 || d.Reject.Code != "budget_throttled" || d.Reject.RetryAfter != ThrottleRetryAfter {
+		t.Fatalf("reject %+v", d.Reject)
+	}
+	if want := "Team budget support is over its $12000 monthly cap and throttled: 75% of requests are refused. Retry after 5s, or ask a finance admin to raise the cap."; d.Reject.Message != want {
+		t.Errorf("message %q", d.Reject.Message)
+	}
+	rc := d.Finish(s, nil, Result{}, nil, time.Now())
+	if rc.Verdict != "blocked" || rc.ErrorCode != "budget_throttled" || rc.Status != 429 {
+		t.Fatalf("refused: %s %s %d", rc.Verdict, rc.ErrorCode, rc.Status)
+	}
+	if b := rc.Trace[1]; b.Outcome != "over cap · throttled 75%, refused" || b.State != "fail" {
+		t.Errorf("refused budget step %+v", b)
+	}
+
+	rc = runRoll(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, roll(math.MaxUint64))
+	if rc.Verdict != "allowed" || rc.Trace[1].Outcome != "over cap · throttled 75%, admitted" || rc.Trace[1].State != "warn" {
+		t.Fatalf("admitted: %s, budget step %+v", rc.Verdict, rc.Trace[1])
+	}
+
+	// From 120% of the cap nothing gets through, whatever the roll.
+	s.Spend.ByTeam["support"] = 14_400
+	if rc = runRoll(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, roll(math.MaxUint64)); rc.ErrorCode != "budget_throttled" {
+		t.Fatalf("at 120%%: %s %s", rc.Verdict, rc.ErrorCode)
+	}
+}
+
+// The share refused follows the spend: about half just over the cap.
+func TestThrottleRefusesAboutTheShare(t *testing.T) {
+	s := DemoSnapshot()
+	s.Spend.ByTeam["support"] = 12_000
+	r := rand.New(rand.NewPCG(3, 4))
+	refused := 0
+	const n = 2000
+	for range n {
+		if d := Admit(s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi"), Now: demoNow}, r); d.Reject != nil {
+			refused++
+		}
+	}
+	if share := float64(refused) / n; share < 0.45 || share > 0.55 {
+		t.Fatalf("refused %.2f at the cap, want about 0.5", share)
+	}
+}
+
+func TestBlockStillRefusesEverything(t *testing.T) {
+	s := DemoSnapshot()
+	s.Spend.ByTeam["agents"] = 40_000 // b2 blocks from exactly its cap
+	if rc := runRoll(t, s, Input{Secret: secret("k2"), Req: chat("claude-sonnet-5", "hi")}, roll(math.MaxUint64)); rc.ErrorCode != "budget_exceeded" {
+		t.Fatalf("got %s %s", rc.Verdict, rc.ErrorCode)
 	}
 }
 
 // withProjectBudget adds a project budget no key points at: budgets apply by
-// scope, not by the key's budget_id.
-func withProjectBudget(s *Snapshot, project, onExceed string, cap float64) {
-	s.Budgets["bp"] = model.Budget{ID: "bp", Scope: project, ScopeType: "project", Period: "monthly", CapUSD: cap, OnExceed: onExceed}
+// scope, not by the key's budget_id. A project budget names the project's id.
+func withProjectBudget(s *Snapshot, team, project, onExceed string, cap float64) {
+	s.Budgets["bp"] = model.Budget{ID: "bp", Scope: demo.ProjectID(demo.Tenant, team, project), ScopeType: "project", Period: "monthly", CapUSD: cap, OnExceed: onExceed}
 }
 
 func TestProjectBudgetBlocks(t *testing.T) {
 	s := DemoSnapshot()
-	withProjectBudget(s, "helpdesk", "block", 500)
+	withProjectBudget(s, "support", "helpdesk", "block", 500)
 	// Project spend is every key in it, revoked ones included, as /budgets counts it.
-	other := &store.KeyRecord{APIKey: model.APIKey{ID: "k8", Name: "helpdesk-old", Team: "support", Project: "helpdesk", Status: "revoked"}, Hash: "h-k8"}
+	other := &store.KeyRecord{APIKey: model.APIKey{ID: "k8", Name: "helpdesk-old", Team: "support", Project: "helpdesk",
+		ProjectID: demo.ProjectID(demo.Tenant, "support", "helpdesk"), Status: "revoked"}, Hash: "h-k8"}
 	s.KeyBy[other.Hash] = other
+	// Another team's project of the same name is another project.
+	elsewhere := &store.KeyRecord{APIKey: model.APIKey{ID: "k9", Name: "web-helpdesk", Team: "web", Project: "helpdesk",
+		ProjectID: demo.ProjectID(demo.Tenant, "web", "helpdesk"), Status: "active"}, Hash: "h-k9"}
+	s.KeyBy[elsewhere.Hash] = elsewhere
+	s.Spend.ByKey["k9"] = 10_000
 	s.Spend.ByKey["k1"], s.Spend.ByKey["k8"] = 300, 300
 	rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
 	if rc.Verdict != "blocked" || rc.Status != 429 || rc.ErrorCode != "budget_exceeded" {
@@ -211,7 +301,7 @@ func TestProjectBudgetBlocks(t *testing.T) {
 
 func TestProjectSpendCountsRotatingKeyOnce(t *testing.T) {
 	s := DemoSnapshot()
-	withProjectBudget(s, "assistant", "block", 1_000)
+	withProjectBudget(s, "web", "assistant", "block", 1_000)
 	for _, k := range s.KeyBy {
 		if k.ID == "k4" {
 			k.NextHash = "h-k4-next"
@@ -239,12 +329,28 @@ func TestStrictestOverCapBudgetWins(t *testing.T) {
 	for i := 0; i < 20; i++ { // budgets are a map; the verdict mustn't depend on its order
 		s := DemoSnapshot()
 		s.Spend.ByTeam["support"] = 13_000 // b1: throttle
-		withProjectBudget(s, "helpdesk", "block", 500)
+		withProjectBudget(s, "support", "helpdesk", "block", 500)
 		s.Spend.ByKey["k1"] = 13_000
 		rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
 		if rc.Verdict != "blocked" || !strings.HasPrefix(rc.ErrorDetail, "Project budget helpdesk") {
 			t.Fatalf("got %s %q", rc.Verdict, rc.ErrorDetail)
 		}
+	}
+}
+
+// A key budget names the key's id; traces and messages show its name.
+func TestKeyBudgetMatchesByID(t *testing.T) {
+	s := DemoSnapshot()
+	s.Budgets["bk"] = model.Budget{ID: "bk", Scope: "k1", ScopeType: "key", Period: "monthly", CapUSD: 100, OnExceed: "block"}
+	s.Spend.ByKey["k1"] = 150
+	rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.ErrorCode != "budget_exceeded" || rc.Trace[1].Input != "key budget support-bot · $150 of $100" {
+		t.Fatalf("got %s, budget step %+v", rc.ErrorCode, rc.Trace[1])
+	}
+	// A scope holding the key's name, as key budgets did before, covers nothing.
+	s.Budgets["bk"] = model.Budget{ID: "bk", Scope: "support-bot", ScopeType: "key", Period: "monthly", CapUSD: 100, OnExceed: "block"}
+	if rc = run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.Verdict == "blocked" {
+		t.Fatalf("a key name matched: %s", rc.ErrorDetail)
 	}
 }
 

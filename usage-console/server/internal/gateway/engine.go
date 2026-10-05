@@ -76,6 +76,28 @@ type Reject struct {
 	Status  int
 	Code    string
 	Message string
+	// RetryAfter, when set, is the Retry-After header in seconds: a throttled
+	// request may go through if the caller tries again.
+	RetryAfter int
+}
+
+// ThrottleRetryAfter is the Retry-After a throttled refusal carries, in
+// seconds: about Warden's snapshot reload, after which spend (and the
+// share refused) may have moved.
+const ThrottleRetryAfter = 5
+
+// ThrottleShare is the share of requests a throttle budget refuses at a
+// month-to-date spend: none under the cap, half at it, rising linearly to
+// all of them at 120% of it (share = 0.5 + 2.5 × (spent − cap)/cap, capped
+// at 1).
+func ThrottleShare(spent, cap float64) float64 {
+	if cap <= 0 {
+		return 1
+	}
+	if spent < cap {
+		return 0
+	}
+	return min(1, 0.5+2.5*(spent-cap)/cap)
 }
 
 type Candidate struct {
@@ -352,14 +374,26 @@ func (s *Snapshot) governingBudget(k *store.KeyRecord) (model.Budget, float64, b
 	return best, bestSpent, found
 }
 
-// projectSpend is month-to-date spend over every key in the project, revoked
-// ones included, on the same basis as GET /budgets. KeyBy holds a rotating
-// key under both secrets, so each key counts once.
-func (s *Snapshot) projectSpend(project string) float64 {
+// budgetName is how traces and messages name a budget covering k: by the
+// key's or project's name, not the id its scope holds.
+func budgetName(b model.Budget, k *store.KeyRecord) string {
+	switch b.ScopeType {
+	case "key":
+		return k.Name
+	case "project":
+		return k.Project
+	}
+	return b.Scope
+}
+
+// projectSpend is month-to-date spend over every key in the project (by id),
+// revoked ones included, on the same basis as GET /budgets. KeyBy holds a
+// rotating key under both secrets, so each key counts once.
+func (s *Snapshot) projectSpend(projectID string) float64 {
 	seen := map[string]bool{}
 	var usd float64
 	for _, k := range s.KeyBy {
-		if k.Project == project && !seen[k.ID] {
+		if k.ProjectID == projectID && !seen[k.ID] {
 			seen[k.ID] = true
 			usd += s.Spend.ByKey[k.ID]
 		}
@@ -397,16 +431,28 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	// Budget (§5.2): spend is month to date from the aggregates.
 	d.budgetStep = model.TraceStep{Step: "Budget checked", Input: "no budget applies", Outcome: "skipped", MS: 0.1, State: "skip"}
 	if b, spent, ok := s.governingBudget(k); ok {
-		d.budgetStep.Input = fmt.Sprintf("%s budget %s · %s of %s", b.ScopeType, b.Scope, money(spent), money(b.CapUSD))
+		name := budgetName(b, k)
+		d.budgetStep.Input = fmt.Sprintf("%s budget %s · %s of %s", b.ScopeType, name, money(spent), money(b.CapUSD))
 		d.budgetStep.Outcome, d.budgetStep.State = "within cap", "ok"
 		if spent >= b.CapUSD {
+			scope := strings.ToUpper(b.ScopeType[:1]) + b.ScopeType[1:]
 			switch b.OnExceed {
 			case "block":
 				d.budgetStep.Outcome, d.budgetStep.State = "over cap · blocked", "fail"
 				return d.block(429, "budget_exceeded", fmt.Sprintf("%s budget %s is over its %s monthly cap. Ask a finance admin to raise it.",
-					strings.ToUpper(b.ScopeType[:1])+b.ScopeType[1:], b.Scope, money(b.CapUSD)))
+					scope, name, money(b.CapUSD)))
 			case "throttle":
-				d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttle active, admitted", "warn"
+				// Refuse a share that grows with the overspend; the rest go through.
+				share := ThrottleShare(spent, b.CapUSD)
+				pct := fmt.Sprintf("%.0f%%", math.Round(share*100))
+				if r.Float64() < share {
+					d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttled "+pct+", refused", "fail"
+					d.block(429, "budget_throttled", fmt.Sprintf("%s budget %s is over its %s monthly cap and throttled: %s of requests are refused. Retry after %ds, or ask a finance admin to raise the cap.",
+						scope, name, money(b.CapUSD), pct, ThrottleRetryAfter))
+					d.Reject.RetryAfter = ThrottleRetryAfter
+					return d
+				}
+				d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttled "+pct+", admitted", "warn"
 			default:
 				d.budgetStep.Outcome, d.budgetStep.State = "over cap · warning only", "warn"
 			}

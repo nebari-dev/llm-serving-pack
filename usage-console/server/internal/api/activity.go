@@ -308,6 +308,12 @@ func spendCrossings(cum0 float64, pts []spendPoint, cap float64, levels []float6
 	return out
 }
 
+// budgetCounts is whether a team and key's spend counts toward a budget, as
+// the gateway covers keys: the team, or the key or its project by id.
+func (g grouper) budgetCounts(b model.Budget, c store.ScopeSpend) bool {
+	return slices.Contains(g.budgetScopes(store.SpendCell{Team: c.Team, KeyID: c.KeyID}), b.ScopeType+":"+b.Scope)
+}
+
 // budgetEvents reports when each budget's month-to-date spend crossed 80%
 // and 100% of its cap, in the months overlapping [since, now]. Crossings are
 // found hourly, then pinned to their 5-minute bucket. The cap is today's: an
@@ -321,19 +327,7 @@ func (s *Server) budgetEvents(ctx context.Context, t string, since, now time.Tim
 	if err != nil {
 		return nil, err
 	}
-	in := func(b model.Budget, c store.ScopeSpend) bool {
-		switch b.ScopeType {
-		case "team":
-			return c.Team == b.Scope
-		case "key":
-			k, ok := g.keys[c.KeyID]
-			return ok && k.Name == b.Scope
-		case "project":
-			k, ok := g.keys[c.KeyID]
-			return ok && k.Project == b.Scope
-		}
-		return false
-	}
+	in := g.budgetCounts
 	points := func(b model.Budget, cs []store.ScopeSpend, from, to time.Time) []spendPoint {
 		var out []spendPoint
 		for _, c := range cs {
@@ -372,9 +366,9 @@ func (s *Server) budgetEvents(ctx context.Context, t string, since, now time.Tim
 				}
 				e := TrafficEvent{ID: fmt.Sprintf("budget:%s:%g:%d", b.ID, c.Level, start.UnixMilli()), TS: at.UnixMilli(), Tone: "degraded", To: "/spend"}
 				if c.Level >= 1 {
-					e.Kind, e.Title = "budget_cap", fmt.Sprintf("Budget %q reached its cap", b.Scope)
+					e.Kind, e.Title = "budget_cap", fmt.Sprintf("Budget %q reached its cap", b.ScopeName)
 				} else {
-					e.Kind, e.Title = "budget_80", fmt.Sprintf("Budget %q reached %d%% of its cap", b.Scope, int(c.Level*100))
+					e.Kind, e.Title = "budget_80", fmt.Sprintf("Budget %q reached %d%% of its cap", b.ScopeName, int(c.Level*100))
 				}
 				e.Detail = fmt.Sprintf("%s spend this month passed %s of its %s %s cap. Measured against today's cap.",
 					strings.ToUpper(b.ScopeType[:1])+b.ScopeType[1:], dollars(c.Level*b.CapUSD), dollars(b.CapUSD), b.Period)

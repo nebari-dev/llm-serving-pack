@@ -22,6 +22,7 @@ import { VerdictBadge } from './verdict'
 const failures: Record<string, { title: string; refused: boolean }> = {
   policy_blocked: { title: 'This request was blocked by a rule.', refused: true },
   budget_exceeded: { title: 'This request was blocked by a budget.', refused: true },
+  budget_throttled: { title: 'A budget over its cap throttled this request. The caller may retry after the Retry-After delay.', refused: true },
   model_not_allowed: { title: "This key isn't allowed to call this model.", refused: true },
   policy_unavailable: { title: "Policy couldn't be evaluated, so the request failed closed.", refused: true },
   policy_deadline: { title: "A rule couldn't be evaluated in time, so the request failed closed.", refused: true },

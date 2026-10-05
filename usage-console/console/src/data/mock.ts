@@ -15,12 +15,21 @@ export interface Team {
   costCenter: string
 }
 
+/** A team's project (§5.2). Names are unique within a team; budgets name it by id. */
+export interface Project {
+  id: string
+  team: string
+  name: string
+}
+
 export interface ApiKey {
   id: string
   name: string
   prefix: string
   team: string
+  /** The project's name, as receipts carry it. */
   project: string
+  projectId: string
   allowedModels: string[]
   allowedRegions: string[]
   expiresAt: string | null
@@ -382,7 +391,7 @@ export const routes: Route[] = [
   { name: 'research-frontier', match: 'key.team = research', targets: [{ model: 'claude-opus-4-1', backend: 'anthropic-prod', weight: 100 }], fallback: ['openai-prod'], provenance: 'console', sync: 'applying' },
 ]
 
-type SeedKey = Omit<ApiKey, 'hourly24h'>
+type SeedKey = Omit<ApiKey, 'hourly24h' | 'projectId'>
 
 const seedKeys: SeedKey[] = [
   { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
@@ -406,13 +415,22 @@ function hourly(k: SeedKey) {
   })
 }
 
-export const keys: ApiKey[] = seedKeys.map((k) => ({ ...k, hourly24h: hourly(k) }))
+/** A mock project's id. The control plane derives its own (demo.ProjectID). */
+export const mockProjectId = (team: string, name: string) => `p-${team}-${name}`
+
+export const keys: ApiKey[] = seedKeys.map((k) => ({ ...k, projectId: mockProjectId(k.team, k.project), hourly24h: hourly(k) }))
+
+/** The seeded keys' projects, one per team and name. */
+export const projects: Project[] = [...new Map(keys.map((k) => [k.projectId, { id: k.projectId, team: k.team, name: k.project }])).values()]
 
 export const keyById = Object.fromEntries(keys.map((k) => [k.id, k]))
 
 export interface Budget {
   id: string
+  /** A team id, a project id or a key id. */
   scope: string
+  /** What to show for the scope: a key's or project's name. See budgetLabel. */
+  scopeName?: string
   scopeType: 'team' | 'key' | 'project'
   period: 'monthly'
   capUsd: number
@@ -425,9 +443,26 @@ export interface Budget {
   etag?: string
 }
 
-/** Whether a budget applies to a key: its team, its project, or the key itself. */
-export function budgetCovers(b: Budget, k: { team: string; project: string; name: string }) {
-  return b.scopeType === 'team' ? b.scope === k.team : b.scopeType === 'project' ? b.scope === k.project : b.scope === k.name
+/**
+ * The share of new requests a throttle budget refuses with 429 and
+ * Retry-After, as the gateway computes it: none under the cap, half at it,
+ * rising linearly to all of them at 120% of it.
+ */
+export function throttleShare(b: Pick<Budget, 'currentUsd' | 'capUsd'>) {
+  if (b.capUsd <= 0) return 1
+  if (b.currentUsd < b.capUsd) return 0
+  return Math.min(1, 0.5 + (2.5 * (b.currentUsd - b.capUsd)) / b.capUsd)
+}
+
+/** A budget's scope as people read it: the key's or project's name, not its id. */
+export const budgetLabel = (b: Pick<Budget, 'scope' | 'scopeName'>) => b.scopeName || b.scope
+
+/** The key fields a budget matches on. A key not created yet has no id. */
+export type BudgetKey = { id: string; team: string; projectId: string }
+
+/** Whether a budget applies to a key: its team, its project, or the key itself (both by id). */
+export function budgetCovers(b: Budget, k: BudgetKey) {
+  return b.scopeType === 'team' ? b.scope === k.team : b.scopeType === 'project' ? b.scope === k.projectId : b.scope === k.id
 }
 
 /**
@@ -435,7 +470,7 @@ export function budgetCovers(b: Budget, k: { team: string; project: string; name
  * budget covering the key, the strictest over its cap (block, then throttle,
  * then warn), else the one nearest its cap.
  */
-export function governingBudget(k: { team: string; project: string; name: string }, list: Budget[]): Budget | undefined {
+export function governingBudget(k: BudgetKey, list: Budget[]): Budget | undefined {
   const severity = { warn: 1, throttle: 2, block: 3 }
   const rank = (b: Budget) => (b.currentUsd >= b.capUsd ? severity[b.onExceed] : 0)
   const ratio = (b: Budget) => (b.capUsd > 0 ? b.currentUsd / b.capUsd : 0)
@@ -447,7 +482,7 @@ export function governingBudget(k: { team: string; project: string; name: string
 export const budgets: Budget[] = [
   { id: 'b1', scope: 'support', scopeType: 'team', period: 'monthly', capUsd: 12_000, currentUsd: 13_480.22, onExceed: 'throttle', projectedUsd: 16_950, trailingDailyUsd: 0 },
   { id: 'b2', scope: 'agents', scopeType: 'team', period: 'monthly', capUsd: 40_000, currentUsd: 33_104.9, onExceed: 'block', projectedUsd: 42_600, trailingDailyUsd: 0 },
-  { id: 'b3', scope: 'batch-summarize', scopeType: 'key', period: 'monthly', capUsd: 8_000, currentUsd: 3_412.07, onExceed: 'warn', projectedUsd: 4_420, trailingDailyUsd: 0 },
+  { id: 'b3', scope: 'k3', scopeName: 'batch-summarize', scopeType: 'key', period: 'monthly', capUsd: 8_000, currentUsd: 3_412.07, onExceed: 'warn', projectedUsd: 4_420, trailingDailyUsd: 0 },
   { id: 'b4', scope: 'web', scopeType: 'team', period: 'monthly', capUsd: 15_000, currentUsd: 9_870.5, onExceed: 'block', projectedUsd: 12_760, trailingDailyUsd: 0 },
   { id: 'b5', scope: 'research', scopeType: 'team', period: 'monthly', capUsd: 20_000, currentUsd: 17_210.0, onExceed: 'warn', projectedUsd: 22_300, trailingDailyUsd: 0 },
 ]
@@ -540,7 +575,7 @@ function budgetStep(b: Budget | undefined): TraceStep {
   const usd = (n: number) => (n < 100 ? `$${n.toFixed(2)}` : `$${Math.round(n)}`)
   const over = b.currentUsd >= b.capUsd
   const outcome = !over ? 'within cap' : b.onExceed === 'block' ? 'over cap · blocked' : b.onExceed === 'throttle' ? 'over cap · throttle active, admitted' : 'over cap · warning only'
-  return { step: 'Budget checked', input: `${b.scopeType} budget ${b.scope} · ${usd(b.currentUsd)} of ${usd(b.capUsd)}`, outcome, ms: 0.1, state: !over ? 'ok' : b.onExceed === 'block' ? 'fail' : 'warn' }
+  return { step: 'Budget checked', input: `${b.scopeType} budget ${budgetLabel(b)} ·${usd(b.currentUsd)} of ${usd(b.capUsd)}`, outcome, ms: 0.1, state: !over ? 'ok' : b.onExceed === 'block' ? 'fail' : 'warn' }
 }
 
 function cost(m: MockModel, inTok: number, cached: number, out: number, reasoning: number) {

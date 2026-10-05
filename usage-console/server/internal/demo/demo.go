@@ -156,13 +156,38 @@ var Keys = []model.APIKey{
 	{ID: "k7", Name: "legacy-intranet", Prefix: "ngw_live_77aa", Team: "web", Project: "intranet", AllowedModels: []string{"gpt-5-mini"}, AllowedRegions: []string{"us-east"}, ExpiresAt: date("2026-08-30"), Status: "revoked"},
 }
 
+// ProjectID is a project's id from its tenant, team and name. Config
+// migration 011 derives the same ids in SQL for the projects it makes from
+// existing keys, so a seeded database and a migrated one agree.
+func ProjectID(tenant, team, name string) string {
+	return "p" + HashSecret(tenant + "/" + team + "/" + name)[:8]
+}
+
+// Project is a seeded project.
+type Project = model.Project
+
+// Projects are the seeded keys' projects, one per (team, name).
+var Projects []Project
+
+func init() {
+	seen := map[string]bool{}
+	for i := range Keys {
+		k := &Keys[i]
+		k.ProjectID = ProjectID(Tenant, k.Team, k.Project)
+		if !seen[k.ProjectID] {
+			seen[k.ProjectID] = true
+			Projects = append(Projects, Project{ID: k.ProjectID, Team: k.Team, Name: k.Project})
+		}
+	}
+}
+
 // KeyWeights is the share of generated traffic per key (mock.ts keyWeights).
 var KeyWeights = map[string]int{"k1": 30, "k2": 22, "k3": 10, "k4": 30, "k5": 5, "k6": 3, "k8": 3}
 
 var Budgets = []model.Budget{
 	{ID: "b1", Scope: "support", ScopeType: "team", Period: "monthly", CapUSD: 12_000, OnExceed: "throttle"},
 	{ID: "b2", Scope: "agents", ScopeType: "team", Period: "monthly", CapUSD: 40_000, OnExceed: "block"},
-	{ID: "b3", Scope: "batch-summarize", ScopeType: "key", Period: "monthly", CapUSD: 8_000, OnExceed: "warn"},
+	{ID: "b3", Scope: "k3", ScopeName: "batch-summarize", ScopeType: "key", Period: "monthly", CapUSD: 8_000, OnExceed: "warn"},
 	{ID: "b4", Scope: "web", ScopeType: "team", Period: "monthly", CapUSD: 15_000, OnExceed: "block"},
 	{ID: "b5", Scope: "research", ScopeType: "team", Period: "monthly", CapUSD: 20_000, OnExceed: "warn"},
 }

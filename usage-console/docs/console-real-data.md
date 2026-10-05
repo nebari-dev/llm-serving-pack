@@ -57,8 +57,9 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     Traffic with `?since&until`.
   - Projection: month to date plus the trailing 7-day average × days left in
     the UTC month, basis stated. Budgets use the same basis.
-  - Budget enforcement words say only what the gateway does. Throttle isn't
-    enforced (requests are admitted and marked), and the invented "since" and
+  - Budget enforcement words say only what the gateway does: block refuses,
+    throttle refuses a share of requests with 429 and Retry-After (stated,
+    from the budget's spend), warn admits and marks. The invented "since" and
     rate are gone.
   - The surge callout is hidden (the spec has no surge rule), and so is
     savings, which needs per-request output length and alias writes. Both
@@ -87,8 +88,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     left, not a share. The traffic split per secret isn't shown, because
     receipts don't record which secret was used. "Extend overlap" and
     "Retire old secret now" are disabled until the key-rotation writes land.
-  - Budget wording matches Spend's (throttle isn't enforced). The invented
-    "rotation reminders every 90 days" is gone.
+  - Budget wording matches Spend's. The invented "rotation reminders every
+    90 days" is gone.
 - [x] **Activity.** One `GET /activity?range` serves the changes in the
   range and the traffic events, all from `receipts_5m`.
   - Before/after per change, across the tenant: up to an hour of complete
@@ -204,12 +205,12 @@ when stale; 428 without it on an update or delete). Open questions are in
   - Backend: `POST /budgets`, `PATCH`/`DELETE /budgets/{id}`, with
     `?dryRun=true`.
   - Console: "Add budget" and per-row edit and delete. Scope is team,
-    project or key (projects come from active keys, decisions §2); the
-    scope is fixed once made. What happens at the cap has no default. The
+    project or key, picked by name and sent by id (key and project, decisions
+    §2); the scope is fixed once made. "New project…" adds a project there. What happens at the cap has no default. The
     form shows the dry run as you type: keys covered, spend this month, and
     a warning when the budget is already over the new cap. A stale edit or
     delete (409) shows both versions and asks: keep theirs, or save mine
-    over theirs (§6). Throttle is offered with its caveat (not enforced).
+    over theirs (§6).
   - Exit test (§11): the api-mode suite sets a $0.01 block cap through the
     form, drives the gateway until Warden refuses with `budget_exceeded`,
     and finds the blocked receipt with the budget in its trace.
@@ -273,10 +274,34 @@ when stale; 428 without it on an update or delete). Open questions are in
   rule would have caught. Needs content capture, or a replay over
   hashes/metadata only. Until it exists, publish's dry run can't tell you
   much.
-- [ ] Projects table (§5.2), so project budgets can exist before keys
-  (decided 2026-10-05).
-- [ ] Throttle answers 429 with Retry-After; key-scoped budgets match by key
-  ID (decided 2026-10-05).
+- [x] Projects table (§5.2), so project budgets can exist before keys
+  (decided 2026-10-05, decisions §2).
+  - Config migration 011 makes each team's free-text project names on keys
+    its projects (`projects(id, tenant_id, team_id, name)`, names unique per
+    team), points keys at theirs by `project_id` (same team, enforced), names
+    project budgets by project id, and drops `api_keys.project`. Receipts
+    still carry the project's name, so Spend, Traffic and rules are as before.
+  - `GET /projects`; `POST /projects {team, name}` with an audit row ("Created
+    project"), 409 on a name the team has. `POST /keys` still takes the
+    project by name within the key's team, and creates a missing one (with
+    its own audit row). Budgets return `scopeName`, the project's name.
+  - Console: the key form picks one of the team's projects or "New
+    project…"; the budget form lists every project with its team and can add
+    one, then cap it with no keys in it.
+- [x] Throttle answers 429 with Retry-After; key-scoped budgets match by key
+  ID (decided 2026-10-05, decisions §2).
+  - Over a throttle cap Warden refuses `0.5 + 2.5 × (spent − cap)/cap` of
+    requests (half at the cap, all from 120% of it) with 429
+    `budget_throttled` and `Retry-After: 5`; the rest are admitted and the
+    trace says the share. Receipts show `blocked` with that code. Block is
+    unchanged. The draw is the engine's injected rand, so tests fix it.
+  - Config migration 010 points key budgets at the key with their name (an
+    active one first). The API returns `scopeName` (the key's name), and
+    audit targets and traces use it. Activity's budget events match by id too.
+  - Exit tests (api-mode, not yet run): a cent throttle cap answers
+    `budget_throttled` with Retry-After 5 and Spend says so; projects are
+    created, audited and capped before a key exists, from the API and from
+    Spend and the key form.
 - [ ] Policies as §5.2 has them: versioning and matching per policy
   (decided 2026-10-05).
 - [ ] More than one action per rule, with §5.3's ordering (decided

@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/fakellm"
@@ -67,6 +68,9 @@ func (g *Server) chat(w http.ResponseWriter, req *http.Request) {
 		if rc := d.Finish(snap, nil, Result{}, nil, time.Now()); rc != nil {
 			g.save(req.Context(), rc)
 			w.Header().Set("X-Stargate-Receipt", rc.ID)
+		}
+		if d.Reject.RetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(d.Reject.RetryAfter))
 		}
 		writeErr(w, d.Reject.Status, d.Reject.Code, d.Reject.Message)
 		return

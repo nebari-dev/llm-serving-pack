@@ -115,6 +115,8 @@ func (s *Server) Handler() http.Handler {
 	}
 	const p = "/api/v1/{tenant}"
 	h("GET "+p+"/teams", s.teams)
+	h("GET "+p+"/projects", s.projects)
+	h("POST "+p+"/projects", s.createProject)
 	h("GET "+p+"/models", s.models)
 	h("GET "+p+"/aliases", s.aliases)
 	h("PUT "+p+"/aliases/{alias}", s.putAlias)
@@ -413,6 +415,9 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 		return nil, badRequest("name, team and project are required")
 	case len(in.AllowedModels) == 0:
 		return nil, badRequest("at least one allowed model is required")
+	}
+	if err := s.checkKeyProject(r.Context(), t, in.Team, in.Project); err != nil {
+		return nil, err
 	}
 	k, secret, err := s.Store.CreateKey(r.Context(), t, s.DevActor, in)
 	if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.Code == "23503" {

@@ -200,7 +200,7 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	p := d.Policy(snap, s.now())
 	md := metadata(p)
 	if d.Reject != nil {
-		return reject(d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md)
+		return reject(d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md, d.Reject.RetryAfter)
 	}
 
 	common := &extprocv3.CommonResponse{}
@@ -239,7 +239,7 @@ func (s *Server) failMode(snap *gateway.Snapshot, keyID, requested, reason strin
 		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", len(snap.Rules)), Outcome: outcome, State: "fail"}},
 		Blocked: &gateway.PolicyBlock{Status: 503, ErrorCode: "policy_unavailable", ErrorDetail: "Policy couldn't be evaluated (" + reason + ") and fails closed.",
 			ResolvedModel: snap.Resolve(requested), Backend: "—", Provider: "—", Region: "—"}}
-	return reject(503, p.Blocked.ErrorCode, p.Blocked.ErrorDetail, keyID, metadata(p))
+	return reject(503, p.Blocked.ErrorCode, p.Blocked.ErrorDetail, keyID, metadata(p), 0)
 }
 
 // unpoliced lets the request through untouched, saying why in the receipt.
@@ -283,12 +283,16 @@ func rewrite(body []byte, req fakellm.ChatRequest, rerouted bool) ([]byte, error
 }
 
 // reject answers the caller directly. keyID goes on the response the way the
-// key check's 403 does, so the access log records the refusal.
-func reject(code int, errCode, msg, keyID string, md *structpb.Struct) *extprocv3.ProcessingResponse {
+// key check's 403 does, so the access log records the refusal. retryAfter,
+// in seconds, is set for a refusal worth retrying (a throttle); 0 omits it.
+func reject(code int, errCode, msg, keyID string, md *structpb.Struct, retryAfter int) *extprocv3.ProcessingResponse {
 	body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": errCode, "message": msg}})
 	hm := &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{setHeader("content-type", "application/json")}}
 	if keyID != "" {
 		hm.SetHeaders = append(hm.SetHeaders, setHeader(gateway.HeaderKeyID, keyID))
+	}
+	if retryAfter > 0 {
+		hm.SetHeaders = append(hm.SetHeaders, setHeader("retry-after", strconv.Itoa(retryAfter)))
 	}
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ImmediateResponse{ImmediateResponse: &extprocv3.ImmediateResponse{

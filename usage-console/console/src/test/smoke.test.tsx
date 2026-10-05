@@ -69,7 +69,7 @@ describe('routes render', () => {
 // Mock mode keeps the budget form working on the fixtures, with no backend.
 describe('budgets on Spend', () => {
   it('adds, edits and deletes a budget', async () => {
-    const k = keys.find((x) => x.status !== 'revoked' && !budgets.some((b) => b.scopeType === 'key' && b.scope === x.name))!
+    const k = keys.find((x) => x.status !== 'revoked' && !budgets.some((b) => b.scopeType === 'key' && b.scope === x.id))!
     window.history.pushState({}, '', '/spend')
     render(<App />)
     await act(async () => {})
@@ -91,13 +91,33 @@ describe('budgets on Spend', () => {
     fireEvent.change(within(dialog).getByLabelText('Monthly cap (USD)'), { target: { value: '300' } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }))
     await formDialogClosed()
-    expect(budgets.find((b) => b.scope === k.name)?.capUsd).toBe(300)
+    expect(budgets.find((b) => b.scope === k.id)?.capUsd).toBe(300)
 
     fireEvent.click(within(table).getByRole('button', { name: `Delete budget ${k.name}` }))
     dialog = await formDialog()
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete budget' }))
     await formDialogClosed()
-    expect(budgets.some((b) => b.scope === k.name)).toBe(false)
+    expect(budgets.some((b) => b.scope === k.id)).toBe(false)
     expect(table.textContent).not.toContain(k.name)
+  })
+
+  it('caps a new project before it has keys', async () => {
+    window.history.pushState({}, '', '/spend')
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }))
+    const dialog = await formDialog()
+    fireEvent.click(within(dialog).getByRole('radio', { name: /^Project/ }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New project…' }))
+    fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'smoke-launch' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create project' }))
+    await waitFor(() => expect(within(dialog).getByRole('combobox', { name: 'Project' }).textContent).toContain('smoke-launch'))
+    fireEvent.change(within(dialog).getByLabelText('Monthly cap (USD)'), { target: { value: '100' } })
+    fireEvent.click(within(dialog).getByRole('radio', { name: /^Block/ }))
+    await waitFor(() => expect(dialog.textContent).toContain('Covers no active keys yet.'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create budget' }))
+    await formDialogClosed()
+    expect(budgets.find((b) => b.scopeType === 'project' && b.scopeName === 'smoke-launch')?.scope).toMatch(/^p-/)
+    expect(screen.getByRole('table', { name: 'Budgets' }).textContent).toContain('smoke-launch')
   })
 })

@@ -7,7 +7,7 @@
 // or at import time after hydrate(), see the fetched values.
 import { ago } from '@/lib/format'
 import * as mock from './mock'
-import type { ApiKey, Backend, Budget, Change, Degradation, Model, PairPrice, PolicyRule, PricingView, RateName, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
+import type { ApiKey, Backend, Budget, BudgetKey, Change, Degradation, Model, PairPrice, PolicyRule, PricingView, Project, RateName, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
 
 // ---- routing (api mode, §4.4) ----------------------------------------------
 // Routes are desired state in the control plane; each compiles to one rule of
@@ -76,8 +76,12 @@ export let keys: ApiKey[] = mock.keys
 export let keyById: Record<string, ApiKey> = mock.keyById
 export let budgets: Budget[] = mock.budgets
 /** The budget that decides a key's requests (the gateway's rule); see mock.governingBudget. */
-export const governingBudget = (k: { team: string; project: string; name: string }) => mock.governingBudget(k, budgets)
-export const coveringBudgets = (k: { team: string; project: string; name: string }) => budgets.filter((b) => mock.budgetCovers(b, k))
+export const governingBudget = (k: BudgetKey) => mock.governingBudget(k, budgets)
+export const coveringBudgets = (k: BudgetKey) => budgets.filter((b) => mock.budgetCovers(b, k))
+export const budgetLabel = mock.budgetLabel
+export const throttleShare = mock.throttleShare
+/** Every team's projects, keys or not. Forms re-read GET /projects when they open. */
+export let projects: Project[] = mock.projects
 export let rules: PolicyRule[] = mock.rules
 /** Mock-mode Detectors fixtures; api mode reads GET /detectors on the tab. */
 export const detectors: Detector[] = mock.detectors
@@ -147,8 +151,9 @@ const index = <T,>(xs: T[], id: (x: T) => string) => Object.fromEntries(xs.map((
 /** Loads the catalog from the control plane. A no-op in mock mode. */
 export async function hydrate() {
   if (dataMode !== 'api') return
-  const [t, m, b, r, k, bu, ru, rc, ts, ss, ch, se] = await Promise.all([
+  const [t, pr, m, b, r, k, bu, ru, rc, ts, ss, ch, se] = await Promise.all([
     api<Team[]>('/teams'),
+    api<Project[]>('/projects'),
     api<Model[]>('/models'),
     api<Backend[]>('/backends'),
     api<LiveRoute[]>('/routes'),
@@ -162,6 +167,7 @@ export async function hydrate() {
     api<Session>('/session'),
   ])
   teams = t
+  projects = pr
   models = m
   modelById = index(m, (x) => x.id)
   backends = b
@@ -197,14 +203,25 @@ function mockSecret() {
   return 'ngw_live_' + Array.from({ length: 40 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')
 }
 
+/** Records a project the catalog hasn't seen (one a key creation made). */
+const storeProject = (p: Project) => {
+  if (!projects.some((x) => x.id === p.id)) projects = [...projects, p]
+}
+
+/** The key's team's project by name; one the team doesn't have is created with the key (and audited). */
 export async function createKey(input: NewKeyInput): Promise<{ key: ApiKey; secret: string }> {
   if (dataMode === 'api') {
     const res = await api<{ key: WireKey; secret: string }>('/keys', { method: 'POST', body: JSON.stringify(input) })
-    return { key: fromWire(res.key), secret: res.secret }
+    const key = fromWire(res.key)
+    storeProject({ id: key.projectId, team: key.team, name: key.project })
+    return { key, secret: res.secret }
   }
   const secret = mockSecret()
+  const projectId = mock.mockProjectId(input.team, input.project)
+  storeProject({ id: projectId, team: input.team, name: input.project })
   const key: ApiKey = {
     ...input,
+    projectId,
     id: 'k' + Math.random().toString(36).slice(2, 7),
     prefix: secret.slice(0, 13),
     lastUsed: 'never',
@@ -243,6 +260,18 @@ export async function finishRotation(k: ApiKey): Promise<ApiKey> {
   return { ...k, status: 'active', rotation: undefined }
 }
 
+/** Adds a project to a team, so it can have a budget before it has keys. A name the team has is a 409. */
+export async function createProject(team: string, name: string): Promise<Project> {
+  let p: Project
+  if (dataMode === 'api') p = await api<Project>('/projects', { method: 'POST', body: JSON.stringify({ team, name }) })
+  else {
+    if (projects.some((x) => x.team === team && x.name === name)) throw new ApiError(409, 'conflict', `team ${team} already has a project named ${name}`)
+    p = { id: mock.mockProjectId(team, name), team, name }
+  }
+  storeProject(p)
+  return p
+}
+
 // ---- budgets ---------------------------------------------------------------
 // Api mode writes through the control plane (audited, If-Match on edit and
 // delete, dryRun for the preview). Mock mode edits the fixtures in memory.
@@ -270,7 +299,14 @@ function mockPreview(b: Budget): BudgetPreview {
   return { budget: b, covers: covers.sort(), overCap: b.currentUsd >= b.capUsd }
 }
 
-const blankBudget = (input: BudgetInput): Budget => ({ ...input, id: '', period: 'monthly', currentUsd: 0, projectedUsd: 0, trailingDailyUsd: 0 })
+/** Mock mode's name for a scope, as the control plane fills in scopeName. */
+function mockScopeName(input: BudgetInput) {
+  if (input.scopeType === 'key') return keys.find((k) => k.id === input.scope)?.name
+  if (input.scopeType === 'project') return projects.find((p) => p.id === input.scope)?.name
+  return undefined
+}
+
+const blankBudget = (input: BudgetInput): Budget => ({ ...input, scopeName: mockScopeName(input), id: '', period: 'monthly', currentUsd: 0, projectedUsd: 0, trailingDailyUsd: 0 })
 
 /** The preview of creating `input`, or of editing `existing` to it. */
 export async function previewBudget(input: BudgetInput, existing?: Budget): Promise<BudgetPreview> {

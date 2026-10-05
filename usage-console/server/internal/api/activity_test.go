@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
@@ -189,5 +190,32 @@ func TestOneStrayFailureIsNotAFailingBackend(t *testing.T) {
 	blip := store.ActivityBucket{Requests: 7, Errors: 1}
 	if evs := backendEvents(buckets(t0, "anthropic-prod", ok, ok, blip, ok, ok, ok), t0); len(evs) != 0 {
 		t.Fatalf("a single 5xx in 21 requests raised an event: %+v", evs)
+	}
+}
+
+// Budget events count a scope's spend the way the gateway covers keys: key
+// and project by id.
+func TestBudgetEventScopesByID(t *testing.T) {
+	g := grouper{keys: map[string]model.APIKey{
+		"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk", ProjectID: "p1"},
+		"k9": {ID: "k9", Name: "web-helpdesk", Team: "web", Project: "helpdesk", ProjectID: "p9"},
+	}}
+	c := store.ScopeSpend{Team: "support", KeyID: "k1"}
+	other := store.ScopeSpend{Team: "web", KeyID: "k9"}
+	for _, x := range []struct {
+		b     model.Budget
+		c     store.ScopeSpend
+		count bool
+	}{
+		{model.Budget{ScopeType: "team", Scope: "support"}, c, true},
+		{model.Budget{ScopeType: "key", Scope: "k1"}, c, true},
+		{model.Budget{ScopeType: "key", Scope: "support-bot"}, c, false},
+		{model.Budget{ScopeType: "project", Scope: "p1"}, c, true},
+		{model.Budget{ScopeType: "project", Scope: "p1"}, other, false}, // same name, other team
+		{model.Budget{ScopeType: "project", Scope: "helpdesk"}, c, false},
+	} {
+		if got := g.budgetCounts(x.b, x.c); got != x.count {
+			t.Errorf("%s %s on %s: got %v", x.b.ScopeType, x.b.Scope, x.c.KeyID, got)
+		}
 	}
 }

@@ -13,8 +13,8 @@ import (
 	"github.com/jbouder/stargate/server/internal/model"
 )
 
-// BudgetScopes is what a budget may cover: team ids, and the names and
-// projects of active keys.
+// BudgetScopes is what a budget may cover: team ids, project ids (a project
+// needs no keys yet), and the ids of active keys.
 type BudgetScopes struct {
 	Teams, Keys, Projects map[string]bool
 }
@@ -28,13 +28,20 @@ func (s *Store) BudgetScopes(ctx context.Context, tenant string) (BudgetScopes, 
 	for _, t := range teams {
 		out.Teams[t.ID] = true
 	}
+	projects, err := s.Projects(ctx, tenant)
+	if err != nil {
+		return out, err
+	}
+	for _, p := range projects {
+		out.Projects[p.ID] = true
+	}
 	keys, err := s.Keys(ctx, tenant)
 	if err != nil {
 		return out, err
 	}
 	for _, k := range keys {
 		if k.Status != "revoked" {
-			out.Keys[k.Name], out.Projects[k.Project] = true, true
+			out.Keys[k.ID] = true
 		}
 	}
 	return out, nil
@@ -50,11 +57,11 @@ func ValidateBudget(b model.Budget, scopes BudgetScopes) error {
 		}
 	case "key":
 		if !scopes.Keys[b.Scope] {
-			return fmt.Errorf("no active key named %q", b.Scope)
+			return fmt.Errorf("no active key with id %q", b.Scope)
 		}
 	case "project":
 		if !scopes.Projects[b.Scope] {
-			return fmt.Errorf("no active key is in project %q", b.Scope)
+			return fmt.Errorf("no project with id %q", b.Scope)
 		}
 	default:
 		return errors.New("scopeType must be team, project or key")
@@ -115,14 +122,33 @@ func budgetChange(was, now model.Budget) (action, target string) {
 	default:
 		return "", ""
 	}
-	return action, now.Scope + " " + strings.Join(parts, " · ")
+	return action, scopeName(now) + " " + strings.Join(parts, " · ")
 }
 
-const budgetCols = `id, scope, scope_type, period, cap_usd::float8, on_exceed`
+// scopeName is a budget's scope as people read it: a key's or project's
+// name rather than its id, when known.
+func scopeName(b model.Budget) string {
+	if b.ScopeName != "" {
+		return b.ScopeName
+	}
+	return b.Scope
+}
+
+// budgetTarget is the audit target for a budget being created or deleted.
+func budgetTarget(b model.Budget) string {
+	return fmt.Sprintf("%s %s · %s monthly", b.ScopeType, scopeName(b), usd(b.CapUSD))
+}
+
+// budgetCols reads a budget with its scope's name: the key's or project's
+// (the id itself when it's gone), or the team id.
+const budgetCols = `id, scope, scope_type, period, cap_usd::float8, on_exceed, coalesce(CASE scope_type
+	WHEN 'key' THEN (SELECT k.name FROM api_keys k WHERE k.tenant_id = budgets.tenant_id AND k.id = budgets.scope)
+	WHEN 'project' THEN (SELECT p.name FROM projects p WHERE p.tenant_id = budgets.tenant_id AND p.id = budgets.scope)
+	END, scope)`
 
 func scanBudget(r pgx.Row) (model.Budget, error) {
 	var b model.Budget
-	err := r.Scan(&b.ID, &b.Scope, &b.ScopeType, &b.Period, &b.CapUSD, &b.OnExceed)
+	err := r.Scan(&b.ID, &b.Scope, &b.ScopeType, &b.Period, &b.CapUSD, &b.OnExceed, &b.ScopeName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return b, ErrNotFound
 	}
@@ -147,7 +173,7 @@ func (s *Store) CreateBudget(ctx context.Context, tenant, actor string, b model.
 	if err != nil {
 		return b, uniqueConflict(err)
 	}
-	target := fmt.Sprintf("%s %s · %s monthly, %s", b.ScopeType, b.Scope, usd(b.CapUSD), b.OnExceed)
+	target := budgetTarget(b) + ", " + b.OnExceed
 	if err := audit(ctx, tx, tenant, actor, "Created budget", target, "Budget", b.ID, nil, b); err != nil {
 		return b, err
 	}
@@ -201,7 +227,7 @@ func (s *Store) DeleteBudget(ctx context.Context, tenant, actor, id, ifMatch str
 	if _, err := tx.Exec(ctx, `DELETE FROM budgets WHERE tenant_id = $1 AND id = $2`, tenant, id); err != nil {
 		return err
 	}
-	target := fmt.Sprintf("%s %s · %s monthly", was.ScopeType, was.Scope, usd(was.CapUSD))
+	target := budgetTarget(was)
 	if err := audit(ctx, tx, tenant, actor, "Deleted budget", target, "Budget", id, was, nil); err != nil {
 		return err
 	}
@@ -214,15 +240,17 @@ func withVersion(b model.Budget) model.Budget {
 }
 
 // BudgetCovers is whether a budget applies to a key: its team, its project,
-// or the key itself. The gateway enforces every budget that covers a key.
+// or the key itself, the last two by id (a key's name can change hands, and
+// a project's name repeats across teams). The gateway enforces every budget
+// that covers a key.
 func BudgetCovers(b model.Budget, k model.APIKey) bool {
 	switch b.ScopeType {
 	case "team":
 		return b.Scope == k.Team
 	case "project":
-		return b.Scope == k.Project
+		return b.Scope == k.ProjectID
 	case "key":
-		return b.Scope == k.Name
+		return b.Scope == k.ID
 	}
 	return false
 }

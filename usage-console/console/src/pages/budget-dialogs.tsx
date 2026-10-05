@@ -12,14 +12,19 @@ import {
   type Budget,
   type BudgetInput,
   type BudgetPreview,
+  budgetLabel,
   budgets as catalogBudgets,
   createBudget,
+  createProject,
   dataMode,
   deleteBudget,
   fromWire,
   keys as catalogKeys,
   previewBudget,
+  type Project,
+  projects as catalogProjects,
   teams,
+  throttleShare,
   updateBudget,
   type WireKey,
 } from '@/data/catalog'
@@ -42,8 +47,8 @@ type OnExceed = Budget['onExceed']
 
 const scopeTypes: { value: ScopeType; label: string; description: string }[] = [
   { value: 'team', label: 'Team', description: 'Every key on the team.' },
-  { value: 'project', label: 'Project', description: 'Every key naming the project.' },
-  { value: 'key', label: 'Key', description: 'One key, by name.' },
+  { value: 'project', label: 'Project', description: 'Every key in the project, now or later.' },
+  { value: 'key', label: 'Key', description: 'One key.' },
 ]
 
 const actions: { value: OnExceed; label: string; description: string }[] = [
@@ -52,7 +57,7 @@ const actions: { value: OnExceed; label: string; description: string }[] = [
     value: 'throttle',
     label: 'Throttle',
     description: api
-      ? 'Throttling isn’t enforced yet: requests over the cap are admitted and their receipts record it.'
+      ? 'Over the cap, a share of new requests get 429 budget_throttled with Retry-After: half at the cap, rising to all of them at 120% of it.'
       : 'Requests over the cap are throttled to 10 requests/min.',
   },
   {
@@ -72,19 +77,83 @@ function parseCap(s: string): number | null {
   return n > 0 && n < 1e12 ? n : null
 }
 
-/** The scopes a budget can name: teams, and the projects and names of active keys. */
+type ScopeOption = { value: string; label: string; detail?: string }
+
+/**
+ * The scopes a budget can name, by id: teams, projects (keys or not) and
+ * active keys. Projects and keys show by name; a project also shows its team,
+ * since two teams can each have one of the same name.
+ */
 function useScopes(open: boolean) {
   const live = useLive<WireKey[] | null>(open && api ? '/keys' : null, null, 60_000)
+  const liveProjects = useLive<Project[]>(open && api ? '/projects' : null, catalogProjects, 60_000)
   const active = (live.data ? live.data.map(fromWire) : catalogKeys).filter((k) => k.status !== 'revoked')
-  return {
-    loaded: !api || live.loaded,
+  const teamName = (id: string) => teams.find((t) => t.id === id)?.name ?? id
+  const byName = (a: ScopeOption, b: ScopeOption) => a.label.localeCompare(b.label) || (a.detail ?? '').localeCompare(b.detail ?? '')
+  const scopes: Record<ScopeType, ScopeOption[]> = {
     team: teams.map((t) => ({ value: t.id, label: t.name })),
-    project: [...new Set(active.map((k) => k.project))].sort().map((p) => ({ value: p, label: p })),
-    key: active
-      .map((k) => k.name)
-      .sort()
-      .map((n) => ({ value: n, label: n })),
+    project: liveProjects.data.map((p) => ({ value: p.id, label: p.name, detail: teamName(p.team) })).sort(byName),
+    key: active.map((k) => ({ value: k.id, label: k.name })).sort(byName),
   }
+  return { loaded: !api || (live.loaded && liveProjects.loaded), reloadProjects: liveProjects.reload, ...scopes }
+}
+
+/** Adds a project from the budget form, so it can have a budget before it has keys. */
+function NewProject({ onCreated, onCancel }: { onCreated: (p: Project) => void; onCancel: () => void }) {
+  const [team, setTeam] = useState(teams[0]?.id ?? '')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const valid = /^[a-z0-9][a-z0-9_-]{0,62}$/.test(name)
+  const create = async () => {
+    if (!valid || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const p = await createProject(team, name)
+      toast.add({ title: 'Project created', description: `${name} on ${teams.find((t) => t.id === team)?.name ?? team}.${api ? ' Recorded in the audit log.' : ''}`, type: 'success' })
+      onCreated(p)
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 409 ? 'That team already has a project by this name; choose it above.' : errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+      <div className="grid grid-cols-2 gap-3">
+        <Field>
+          <FieldLabel>Team</FieldLabel>
+          <Select items={teams.map((t) => ({ value: t.id, label: t.name }))} value={team} onValueChange={(v) => v && setTeam(v as string)}>
+            <SelectTrigger aria-label="Project team">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {teams.map((t) => (
+                <SelectItem key={t.id} value={t.id}>
+                  {t.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field invalid={!!name && !valid}>
+          <FieldLabel>Project name</FieldLabel>
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="launch" className="font-mono" autoComplete="off" />
+          {!!name && !valid && <FieldError match>Up to 63 lowercase letters, digits, - or _, starting with a letter or digit.</FieldError>}
+        </Field>
+      </div>
+      {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" type="button" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button size="sm" type="button" disabled={!valid || busy} onClick={() => void create()}>
+          Create project
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function errorText(e: unknown) {
@@ -125,7 +194,9 @@ function PreviewPanel({ preview, loading, error, input, edit }: { preview: Budge
           <AlertDescription>
             {input.onExceed === 'block'
               ? 'Covered keys get 429 budget_exceeded on their next request after you save.'
-              : 'Requests stay admitted; their receipts record the budget over cap.'}
+              : input.onExceed === 'throttle' && api
+                ? `Covered keys get 429 budget_throttled, with Retry-After, on ${Math.round(throttleShare(b) * 100)}% of new requests after you save.`
+                : 'Requests stay admitted; their receipts record the budget over cap.'}
           </AlertDescription>
         </Alert>
       )}
@@ -183,6 +254,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState<Budget | null>(null)
   const [preview, setPreview] = useState<{ for: string; data: BudgetPreview | null; error: string }>({ for: '', data: null, error: '' })
+  const [addingProject, setAddingProject] = useState(false)
   const scopes = useScopes(true)
 
   const capUsd = parseCap(cap)
@@ -219,7 +291,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
       const audit = api ? ' Recorded in the audit log.' : ''
       toast.add({
         title: target ? 'Budget saved' : 'Budget created',
-        description: `${saved.scopeType} ${saved.scope} · ${capMoney(saved.capUsd)} monthly, ${actionLabel(saved.onExceed).toLowerCase()} at the cap.${audit}`,
+        description: `${saved.scopeType} ${budgetLabel(saved)} · ${capMoney(saved.capUsd)} monthly, ${actionLabel(saved.onExceed).toLowerCase()} at the cap.${audit}`,
         type: 'success',
       })
       onSaved()
@@ -250,7 +322,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
           }}
         >
           <DialogHeader>
-            <DialogTitle>{base ? `Edit budget: ${base.scope}` : 'Add budget'}</DialogTitle>
+            <DialogTitle>{base ? `Edit budget: ${budgetLabel(base)}` : 'Add budget'}</DialogTitle>
             <DialogDescription>
               A monthly cap in UTC, on month-to-date spend. Every budget covering a key applies, and the strictest one over its cap decides.
             </DialogDescription>
@@ -258,7 +330,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
           <div className="-mx-6 flex min-h-0 flex-col gap-4 overflow-y-auto px-6">
             {base ? (
               <p className="text-sm">
-                <span className="text-muted-foreground">Scope</span> {base.scopeType} <span className="font-mono">{base.scope}</span> · monthly.{' '}
+                <span className="text-muted-foreground">Scope</span> {base.scopeType} <span className="font-mono">{budgetLabel(base)}</span> · monthly.{' '}
                 <span className="text-muted-foreground">To cap another scope, add a budget there.</span>
               </p>
             ) : (
@@ -271,6 +343,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
                     onValueChange={(v) => {
                       setScopeType(v as ScopeType)
                       setScope('')
+                      setAddingProject(false)
                     }}
                   >
                     {scopeTypes.map((s) => (
@@ -284,7 +357,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
                   <FieldLabel>{scopeLabel}</FieldLabel>
                   <Select items={options} value={scope || null} onValueChange={(v) => setScope((v as string) ?? '')}>
                     <SelectTrigger aria-label={scopeLabel} className={cn(scopeType !== 'team' && 'font-mono')} disabled={!scopes.loaded || !options.length}>
-                      <SelectValue placeholder={options.length ? `Choose a ${scopeLabel.toLowerCase()}` : `No ${scopeType === 'team' ? 'teams' : 'active keys'}`} />
+                      <SelectValue placeholder={options.length ? `Choose a ${scopeLabel.toLowerCase()}` : `No ${scopeType === 'team' ? 'teams' : scopeType === 'project' ? 'projects' : 'active keys'}`} />
                     </SelectTrigger>
                     <SelectContent>
                       {options.map((o) => {
@@ -292,15 +365,33 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
                         return (
                           <SelectItem key={o.value} value={o.value} disabled={has} className={cn(scopeType !== 'team' && 'font-mono')}>
                             {o.label}
+                            {o.detail && <span className="font-sans text-xs text-muted-foreground">{o.detail}</span>}
                             {has && <span className="ml-auto font-sans text-xs text-muted-foreground">has a budget</span>}
                           </SelectItem>
                         )
                       })}
                     </SelectContent>
                   </Select>
-                  {scopeType === 'project' && <FieldDescription>Projects come from active keys: a project needs a key before it can have a budget.</FieldDescription>}
+                  {scopeType === 'project' && !addingProject && (
+                    <FieldDescription>
+                      A project can have a budget before it has keys.{' '}
+                      <button type="button" className="underline hover:text-foreground" onClick={() => setAddingProject(true)}>
+                        New project…
+                      </button>
+                    </FieldDescription>
+                  )}
                   {tried && !scope && <FieldError match>Choose what this budget applies to.</FieldError>}
                 </Field>
+                {scopeType === 'project' && addingProject && (
+                  <NewProject
+                    onCancel={() => setAddingProject(false)}
+                    onCreated={(p) => {
+                      scopes.reloadProjects()
+                      setScope(p.id)
+                      setAddingProject(false)
+                    }}
+                  />
+                )}
               </>
             )}
 
@@ -378,7 +469,7 @@ export function DeleteBudgetDialog({ budget, onClose, onDeleted }: { budget: Bud
     setError('')
     try {
       await deleteBudget(target)
-      toast.add({ title: 'Budget deleted', description: `${target.scopeType} ${target.scope}.${api ? ' Recorded in the audit log.' : ''}`, type: 'success' })
+      toast.add({ title: 'Budget deleted', description: `${target.scopeType} ${budgetLabel(target)}.${api ? ' Recorded in the audit log.' : ''}`, type: 'success' })
       onDeleted()
       onClose()
     } catch (e) {
@@ -398,7 +489,7 @@ export function DeleteBudgetDialog({ budget, onClose, onDeleted }: { budget: Bud
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            Delete the {target.scopeType} budget on <span className="font-mono">{target.scope}</span>?
+            Delete the {target.scopeType} budget on <span className="font-mono">{budgetLabel(target)}</span>?
           </DialogTitle>
           <DialogDescription render={<div />} className="flex flex-col gap-2">
             <span className="text-foreground">
