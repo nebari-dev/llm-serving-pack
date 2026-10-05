@@ -1746,8 +1746,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(p.litellmKey ?? '').toBe('')
       expect(Object.values(p.rates).some((r) => r?.source === 'seed')).toBe(false)
     }
-    // The sync audits as itself.
-    const synced = (await catalog.api<C[]>('/changes?limit=500')).filter((c) => c.targetKind === 'Pricing' && c.actor === 'LiteLLM sync')
+    // The sync audits as itself. Filtered by kind: the test db's audit log keeps every run's rows.
+    expect((await catalog.api<C[]>('/changes?limit=5&kind=Pricing')).every((c) => c.targetKind === 'Pricing')).toBe(true)
+    const synced = (await catalog.api<C[]>('/changes?limit=500&kind=Pricing')).filter((c) => c.actor === 'LiteLLM sync')
     expect(synced.length).toBeGreaterThan(0)
     expect(synced.some((c) => c.action === 'Retired model price' && /^llama-3\.3-70b on vllm-internal /.test(c.target))).toBe(true)
     // Spend says how many requests it leaves out for having no price.

@@ -115,10 +115,11 @@ func (s *Store) Rules(ctx context.Context, tenant string) ([]model.PolicyRule, e
 	})
 }
 
-func (s *Store) Changes(ctx context.Context, tenant string, limit int) ([]model.Change, error) {
+// Changes is the newest audit rows, of every kind or only of kind.
+func (s *Store) Changes(ctx context.Context, tenant string, limit int, kind string) ([]model.Change, error) {
 	rows, _ := s.Config.Query(ctx, `
 		SELECT id, ts, actor, action, target, target_kind, coalesce(effect, ''), coalesce(effect_tone, ''), source
-		FROM audit_log WHERE tenant_id = $1 ORDER BY ts DESC, id DESC LIMIT $2`, tenant, limit)
+		FROM audit_log WHERE tenant_id = $1 AND ($3 = '' OR target_kind = $3) ORDER BY ts DESC, id DESC LIMIT $2`, tenant, limit, kind)
 	return collect(rows, func(r pgx.Rows) (model.Change, error) {
 		var c model.Change
 		var id int64

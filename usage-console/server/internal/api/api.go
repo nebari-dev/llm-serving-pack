@@ -268,7 +268,7 @@ func withFacts(ms []model.Model, facts []store.PairFacts) []model.Model {
 }
 
 func (s *Server) changes(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500))
+	return s.Store.Changes(r.Context(), t, intParam(r, "limit", 50, 1, 500), r.URL.Query().Get("kind"))
 }
 
 // backends reports what receipts show, not what was seeded: health from the

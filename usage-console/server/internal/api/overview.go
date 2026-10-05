@@ -127,7 +127,7 @@ type ChangeImpact struct {
 
 func (s *Server) changeImpact(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	ctx := r.Context()
-	changes, err := s.Store.Changes(ctx, t, 500)
+	changes, err := s.Store.Changes(ctx, t, 500, "")
 	if err != nil {
 		return nil, err
 	}

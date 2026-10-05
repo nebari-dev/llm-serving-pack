@@ -393,7 +393,7 @@ func (s *Server) activity(_ http.ResponseWriter, r *http.Request, t string) (any
 	_, d := rangeDuration(r)
 	now := time.Now().UTC()
 	since := now.Add(-d)
-	all, err := s.Store.Changes(ctx, t, 500)
+	all, err := s.Store.Changes(ctx, t, 500, "")
 	if err != nil {
 		return nil, err
 	}
