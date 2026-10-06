@@ -283,6 +283,7 @@ Configures the vLLM serving layer. All fields optional.
 | `spec.serving.tensorParallelism` | integer | `gpu.count` | Tensor parallelism degree. Defaults to the GPU count when not set. |
 | `spec.serving.dataParallelism` | integer | `1` | Data parallelism degree. |
 | `spec.serving.vllmArgs` | []string | - | Additional CLI arguments passed directly to vLLM. |
+| `spec.serving.kvCacheOffload.cpuMemoryGiB` | int32 | - | Opt-in native CPU KV-cache budget per data-parallel engine, shared across its tensor-parallel ranks. Must be positive. The operator adds this budget times `dataParallelism` to baseline memory requests and limits. Requires both baseline memory values and a compatible GPU serving image. See [CPU KV-cache offload](/kv-cache-offload/). |
 | `spec.serving.monitoring.enabled` | boolean | chart default | Create a `PodMonitor` for Prometheus scraping. Overrides `defaults.monitoring.enabled`. |
 
 ### spec.endpoints
