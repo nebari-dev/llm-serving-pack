@@ -145,16 +145,16 @@ func (s *Server) Handler() http.Handler {
 	h("POST "+p+"/budgets", s.createBudget)
 	h("PATCH "+p+"/budgets/{id}", s.updateBudget)
 	h("DELETE "+p+"/budgets/{id}", s.deleteBudget)
-	h("GET "+p+"/rules", s.rules)
 	h("GET "+p+"/rules/vocabulary", s.ruleVocabulary)
-	h("POST "+p+"/rules", s.createRule)
-	h("PUT "+p+"/rules/order", s.reorderRules)
-	h("PUT "+p+"/rules/{id}/draft", s.saveRuleDraft)
-	h("DELETE "+p+"/rules/{id}/draft", s.discardRuleDraft)
-	h("POST "+p+"/rules/{id}/publish", s.publishRule)
-	h("POST "+p+"/rules/{id}/rollback", s.rollbackRule)
-	h("GET "+p+"/rules/{id}/versions", s.ruleVersions)
-	h("DELETE "+p+"/rules/{id}", s.deleteRule)
+	h("GET "+p+"/policies", s.policies)
+	h("POST "+p+"/policies", s.createPolicy)
+	h("PUT "+p+"/policies/order", s.reorderPolicies)
+	h("PUT "+p+"/policies/{id}/draft", s.savePolicyDraft)
+	h("DELETE "+p+"/policies/{id}/draft", s.discardPolicyDraft)
+	h("POST "+p+"/policies/{id}/publish", s.publishPolicy)
+	h("POST "+p+"/policies/{id}/rollback", s.rollbackPolicy)
+	h("GET "+p+"/policies/{id}/versions", s.policyVersions)
+	h("DELETE "+p+"/policies/{id}", s.deletePolicy)
 	h("GET "+p+"/detectors", s.detectors)
 	h("GET "+p+"/detectors/hits", s.detectorHits)
 	h("POST "+p+"/detectors/hits/verdict", s.setVerdict)
@@ -604,28 +604,6 @@ func (s *Server) keyView(ctx context.Context, t string, k store.KeyRecord) (mode
 	}
 	out := withUsage(k.APIKey, usage[k.ID])
 	out.Rotation = rotationOf(k, starts, bySecret)
-	return out, nil
-}
-
-func (s *Server) rules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	rs, err := s.Store.Rules(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	counts, err := s.Store.RuleCounts(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	drafts, err := s.Store.RuleDrafts(r.Context(), t)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]store.RuleView, len(rs))
-	for i := range rs {
-		c := counts[rs[i].ID]
-		rs[i].Fired24h, rs[i].Baseline7d = c.Last24h, int(math.Round(float64(c.Last7d)/7))
-		out[i] = store.NewRuleView(rs[i], drafts[rs[i].ID])
-	}
 	return out, nil
 }
 

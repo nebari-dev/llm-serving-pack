@@ -59,7 +59,7 @@ func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapsho
 	for _, b := range budgets {
 		s.Budgets[b.ID] = b
 	}
-	if s.Rules, err = st.Rules(ctx, tenant); err != nil {
+	if s.Policies, err = st.Policies(ctx, tenant); err != nil {
 		return nil, err
 	}
 	if s.Spend, err = st.MonthToDate(ctx, tenant); err != nil {
@@ -86,7 +86,7 @@ func (c *Current) Store(s *Snapshot) { c.p.Store(s) }
 // DemoSnapshot is the seeded demo config without a database, for tests.
 func DemoSnapshot() *Snapshot {
 	s := &Snapshot{Tenant: demo.Tenant, KeyBy: map[string]*store.KeyRecord{}, Models: map[string]model.Model{}, Prices: map[Pair][]store.PriceRow{}, Budgets: map[string]model.Budget{},
-		Aliases: maps.Clone(demo.Aliases), Backends: slices.Clone(demo.Backends), Routes: slices.Clone(demo.Routes), Rules: slices.Clone(demo.Rules),
+		Aliases: maps.Clone(demo.Aliases), Backends: slices.Clone(demo.Backends), Routes: slices.Clone(demo.Routes), Policies: slices.Clone(demo.Policies),
 		Spend: store.MonthSpend{ByTeam: map[string]float64{}, ByKey: map[string]float64{}}}
 	for _, k := range demo.Keys {
 		rec := &store.KeyRecord{APIKey: k, Hash: demo.HashSecret(demo.DevSecret(k.Prefix))}

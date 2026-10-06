@@ -250,8 +250,8 @@ func TestDeadlineFailsClosed(t *testing.T) {
 
 func TestDeadlineFailsOpenWhenEveryRuleDoes(t *testing.T) {
 	snap := gateway.DemoSnapshot()
-	for i := range snap.Rules {
-		snap.Rules[i].FailMode = "open"
+	for i := range snap.Policies {
+		snap.Policies[i].FailMode = "open"
 	}
 	w := newServer(snap)
 	w.Deadline, w.evaluate = 10*time.Millisecond, slow(200*time.Millisecond)
@@ -279,8 +279,8 @@ func TestRuleReachedAfterDeadlineUsesItsFailMode(t *testing.T) {
 	if p := d.Policy(snap, time.Now()); p.Mode != "fail-closed" || p.RequestedModel != "gpt-5-mini" {
 		t.Errorf("policy mode %q, model %q", p.Mode, p.RequestedModel)
 	}
-	for i := range snap.Rules {
-		snap.Rules[i].FailMode = "open"
+	for i := range snap.Policies {
+		snap.Policies[i].FailMode = "open"
 	}
 	d = gateway.AdmitKey(snap, k, in, rand.New(rand.NewPCG(1, 2)))
 	if d.Reject != nil || !strings.Contains(d.Receipt.Rules[0].Action, "fails open") {

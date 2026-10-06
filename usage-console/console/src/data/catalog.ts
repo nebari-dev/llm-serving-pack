@@ -101,7 +101,10 @@ export const throttleRate = mock.throttleRate
 export const THROTTLE_PER_MINUTE = mock.THROTTLE_PER_MINUTE
 /** Every team's projects, keys or not. Forms re-read GET /projects when they open. */
 export let projects: Project[] = mock.projects
-export let rules: PolicyRule[] = mock.rules
+/** Policies in order (GET /policies), for Overview and the command palette. Mock mode shows each fixture rule as a policy. */
+export let policies: PolicySummary[] = mock.rules
+/** Mock-mode Guardrails fixtures: rules as the mockup shows them. */
+export const ruleFixtures: PolicyRule[] = mock.rules
 /** Mock-mode Detectors fixtures; api mode reads GET /detectors on the tab. */
 export const detectors: Detector[] = mock.detectors
 export let seedReceipts: Receipt[] = mock.seedReceipts
@@ -341,7 +344,7 @@ export async function hydrate() {
     api<LiveRoute[]>('/routes'),
     api<WireKey[]>('/keys'),
     api<Budget[]>('/budgets'),
-    api<PolicyRule[]>('/rules'),
+    api<PolicySummary[]>('/policies'),
     api<Receipt[]>('/receipts?limit=240'),
     api<SeriesPoint[]>('/series/traffic?range=24h'),
     api<SpendPoint[]>('/series/spend?days=30'),
@@ -356,7 +359,7 @@ export async function hydrate() {
   keys = k.map(fromWire)
   keyById = index(keys, (x) => x.id)
   budgets = bu
-  rules = ru
+  policies = ru
   seedReceipts = rc
   trafficSeries = ts
   spendSeries = ss
@@ -580,22 +583,41 @@ export async function deleteBudget(b: Budget): Promise<void> {
   budgets = budgets.filter((x) => x.id !== b.id)
 }
 
-// ---- rules -----------------------------------------------------------------
-// Api mode only: the Guardrails builder saves drafts, publishes versions and
-// rolls back through the control plane. Mock mode keeps the page's own state.
+// ---- policies --------------------------------------------------------------
+// Api mode only: a policy is an ordered list of rules with one mode and one
+// fail mode (§5.2). The Guardrails page saves a policy's draft, publishes it
+// as a version and rolls it back through the control plane. Mock mode keeps
+// the page's own state.
 
-/** What an author writes; mode and version come from publishing. */
-export interface RuleContent {
+/** What Overview and the palette read of a policy. Mock fixtures (one rule each) fit it too. */
+export type PolicySummary = Pick<PolicyRule, 'id' | 'ordinal' | 'name' | 'description' | 'mode' | 'failMode' | 'version' | 'fired24h' | 'baseline7d'>
+/** One rule of a policy: conditions that must all hold, and its actions (§5.3). A new rule has no id until saved. */
+export interface PolicyRuleContent {
+  id?: string
   name: string
-  description: string
-  failMode: 'open' | 'closed'
   when: PolicyRule['when']
   then: PolicyRule['then']
 }
-/** A rule as GET /rules shows it: the live version, any saved draft, and the ETag covering both. */
-export type RuleView = PolicyRule & { draft: (RuleContent & { updatedAt: number; updatedBy: string }) | null; etag: string }
+/** What an author writes; mode and version come from publishing. */
+export interface PolicyContent {
+  name: string
+  description: string
+  failMode: 'open' | 'closed'
+  rules: PolicyRuleContent[]
+}
 /**
- * An engine detector (GET /detectors): how it matches, the live rules using it, its last 24h from receipts,
+ * A policy as GET /policies shows it: the live version (its rules in order),
+ * any saved draft, the ETag covering both, and the reroute conflicts of what's
+ * being authored (§5.3: the last reroute wins).
+ */
+export type PolicyView = PolicySummary & {
+  rules: (PolicyRuleContent & { id: string })[]
+  draft: (PolicyContent & { updatedAt: number; updatedBy: string }) | null
+  etag: string
+  warnings: string[]
+}
+/**
+ * An engine detector (GET /detectors): how it matches, the rules of live policies using it, its last 24h from receipts,
  * and reviewers' verdicts on its hits from the last 30 days. A custom entity carries its registry row.
  */
 export interface DetectorView {
@@ -604,7 +626,7 @@ export interface DetectorView {
   pattern: string
   placeholder: string
   custom: boolean
-  usedBy: { rule: string; version: number; mode: PolicyRule['mode']; action: string }[]
+  usedBy: { rule: string; policy: string; version: number; mode: PolicyRule['mode']; action: string }[]
   redactedRequests24h: number
   redactedMatches24h: number
   blocked24h: number
@@ -676,17 +698,18 @@ export interface RuleVocabulary {
   fields: string[]
   targets: string[]
 }
-export interface RuleVersion extends RuleContent {
+export interface PolicyVersion extends PolicyContent {
   version: number
   mode: PolicyRule['mode']
   publishedAt: number | null
   publishedBy: string | null
 }
 export type PublishMode = 'monitor' | 'enforce' | 'disabled'
-/** What a publish would leave live (§6 dryRun). Replay isn't connected, and `note` says so. */
-export interface RulePublishPlan {
-  rule: PolicyRule
+/** What a publish would leave live (§6 dryRun), with its reroute conflicts. Replay isn't connected, and `note` says so. */
+export interface PolicyPublishPlan {
+  policy: PolicySummary & { rules: PolicyRuleContent[] }
   changes: { field: string; from: unknown; to: unknown }[]
+  warnings: string[]
   note: string
 }
 
@@ -696,18 +719,19 @@ const json = (method: string, body?: unknown, etag?: string): RequestInit => ({
   headers: etag ? { 'If-Match': etag } : {},
 })
 
-/** Keeps the catalog's rules (read by Overview) in step with a fresh GET /rules. */
-export function syncRules(list: RuleView[]) {
-  rules = list
+/** Keeps the catalog's policies (read by Overview) in step with a fresh GET /policies. */
+export function syncPolicies(list: PolicyView[]) {
+  policies = list
 }
 
-export const createRule = (c: RuleContent) => api<RuleView>('/rules', json('POST', c))
-/** Rule order decides outcomes: `from` is the order the caller saw (a 409 if it moved), `to` the one they want. */
-export const reorderRules = (from: string[], to: string[]) => api<RuleView[]>('/rules/order', json('PUT', { from, to }))
-/** Saves over `r` as the caller last saw it; a 409 ApiError carries the rule as it is now. */
-export const saveRuleDraft = (r: RuleView, c: RuleContent) => api<RuleView>(`/rules/${r.id}/draft`, json('PUT', c, r.etag))
-export const discardRuleDraft = (r: RuleView) => api<RuleView>(`/rules/${r.id}/draft`, json('DELETE', undefined, r.etag))
-export const planPublish = (r: RuleView, mode: PublishMode) => api<RulePublishPlan>(`/rules/${r.id}/publish?dryRun=true`, json('POST', { mode }, r.etag))
-export const publishRule = (r: RuleView, mode: PublishMode) => api<RuleView>(`/rules/${r.id}/publish`, json('POST', { mode }, r.etag))
-export const rollbackRule = (r: RuleView, version: number) => api<RuleView>(`/rules/${r.id}/rollback`, json('POST', { version }, r.etag))
-export const deleteRule = (r: RuleView) => api<{ id: string }>(`/rules/${r.id}`, json('DELETE', undefined, r.etag))
+export const createPolicy = (c: PolicyContent) => api<PolicyView>('/policies', json('POST', c))
+/** Policy order decides outcomes: `from` is the order the caller saw (a 409 if it moved), `to` the one they want. */
+export const reorderPolicies = (from: string[], to: string[]) => api<PolicyView[]>('/policies/order', json('PUT', { from, to }))
+/** Saves over `p` as the caller last saw it; a 409 ApiError carries the policy as it is now. */
+export const savePolicyDraft = (p: PolicyView, c: PolicyContent) => api<PolicyView>(`/policies/${p.id}/draft`, json('PUT', c, p.etag))
+export const discardPolicyDraft = (p: PolicyView) => api<PolicyView>(`/policies/${p.id}/draft`, json('DELETE', undefined, p.etag))
+export const planPublish = (p: PolicyView, mode: PublishMode) => api<PolicyPublishPlan>(`/policies/${p.id}/publish?dryRun=true`, json('POST', { mode }, p.etag))
+export const publishPolicy = (p: PolicyView, mode: PublishMode) => api<PolicyView>(`/policies/${p.id}/publish`, json('POST', { mode }, p.etag))
+export const rollbackPolicy = (p: PolicyView, version: number) => api<PolicyView>(`/policies/${p.id}/rollback`, json('POST', { version }, p.etag))
+export const deletePolicy = (p: PolicyView) => api<{ id: string }>(`/policies/${p.id}`, json('DELETE', undefined, p.etag))
+

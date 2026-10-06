@@ -421,23 +421,25 @@ func (s *Store) MonthToDate(ctx context.Context, tenant string) (MonthSpend, err
 	return ms, rows.Err()
 }
 
-type RuleCounts struct{ Last24h, Last7d int }
+type PolicyCounts struct{ Last24h, Last7d int }
 
-// RuleCounts counts matched rule evaluations. It reads raw receipts because
+// PolicyCounts counts, by policy, the requests where one of its rules
+// matched. Receipts from before policies have no policyId; their ruleId is
+// the policy's id (config migration 045). It reads raw receipts because
 // continuous aggregates can't unnest jsonb arrays.
-func (s *Store) RuleCounts(ctx context.Context, tenant string) (map[string]RuleCounts, error) {
+func (s *Store) PolicyCounts(ctx context.Context, tenant string) (map[string]PolicyCounts, error) {
 	rows, _ := s.Receipts.Query(ctx, `
-		SELECT e->>'ruleId',
-		       count(*) FILTER (WHERE r.ts > now() - interval '24 hours')::int,
-		       count(*)::int
+		SELECT coalesce(e->>'policyId', e->>'ruleId'),
+		       count(DISTINCT r.id) FILTER (WHERE r.ts > now() - interval '24 hours')::int,
+		       count(DISTINCT r.id)::int
 		FROM receipts r, jsonb_array_elements(r.rules) e
 		WHERE r.tenant_id = $1 AND r.ts > now() - interval '7 days' AND (e->>'matched')::boolean
 		GROUP BY 1`, tenant)
-	out := map[string]RuleCounts{}
+	out := map[string]PolicyCounts{}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		var c RuleCounts
+		var c PolicyCounts
 		if err := rows.Scan(&id, &c.Last24h, &c.Last7d); err != nil {
 			return nil, err
 		}

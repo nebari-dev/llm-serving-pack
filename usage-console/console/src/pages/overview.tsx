@@ -5,7 +5,7 @@ import { Delta, Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { type ActivityView, backends, budgetLabel, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
+import { type ActivityView, backends, budgetLabel, budgets, type Change, type ChangeImpact, changes, dataMode, policies, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
 import { age, ago, clock, int, money, perRequest, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
@@ -75,7 +75,7 @@ export function OverviewPage() {
   const { current, previous } = summary
   const span = rangeLabel(range).replace('last ', '')
   const since = `vs previous ${span}`
-  const hotRule = rules
+  const hotRule = policies
     .filter((r) => r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
     .sort((a, b) => b.fired24h / b.baseline7d - a.fired24h / a.baseline7d)[0]
   const delta = (now: number, before: number, goodWhen: 'up' | 'down') => {
@@ -223,7 +223,7 @@ function StatusStrip() {
   const live = useLive(dataMode === 'api' ? '/backends' : null, backends, 30_000).data
   const degradedBackends = live.filter((b) => b.health === 'down' || b.health === 'degraded' || b.sync === 'failed' || b.errorRate >= 5)
   const idle = live.filter((b) => b.health === 'idle' && !degradedBackends.includes(b)).length
-  const failOpen = rules.filter((r) => r.failMode === 'open' && r.mode !== 'draft' && r.mode !== 'disabled')
+  const failOpen = policies.filter((r) => r.failMode === 'open' && r.mode !== 'draft' && r.mode !== 'disabled')
   const last = receipts.reduce((m, r) => Math.max(m, r.ts), 0)
   const quiet = !last || now - last > 5 * 60_000
   return (
@@ -272,7 +272,7 @@ function StatusStrip() {
       </span>
       <span className="inline-flex items-center gap-2">
         Fail modes
-        <span className="text-muted-foreground">{rules.length - failOpen.length} fail-closed</span>
+        <span className="text-muted-foreground">{policies.length - failOpen.length} fail-closed</span>
         {failOpen.map((r) => (
           <StateChip key={r.id} tone="degraded">
             <span className="font-mono">{r.name}</span> fail-open
@@ -426,18 +426,18 @@ function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary:
       action: 'Set a price',
       to: '/models?tab=pricing',
     })),
-    ...rules
+    ...policies
       .filter((r) => r.mode !== 'draft' && r.mode !== 'disabled' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
       .map((r) => ({
         id: `rule-${r.id}`,
         tone: 'degraded' as const,
         what: (
           <>
-            Rule <span className="font-mono">{r.name}</span> fired {int(r.fired24h)} times, baseline {int(r.baseline7d)}
+            {dataMode === 'api' ? 'Policy' : 'Rule'} <span className="font-mono">{r.name}</span> fired {int(r.fired24h)} times, baseline {int(r.baseline7d)}
           </>
         ),
         detail: `In the last 24 hours, against a daily average of ${int(r.baseline7d)} over the week before.`,
-        action: 'Open rule',
+        action: dataMode === 'api' ? 'Open policy' : 'Open rule',
         to: `/guardrails?rule=${r.id}`,
       })),
     ...degradations

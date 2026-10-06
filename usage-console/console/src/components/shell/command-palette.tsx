@@ -2,7 +2,7 @@ import { Boxes, FileText, KeyRound, Route, ShieldCheck } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { backends, keys, models, rules } from '@/data/catalog'
+import { backends, dataMode, keys, models, policies } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp } from '@/state/app-state'
 
@@ -38,7 +38,7 @@ export function CommandPalette() {
     const add = (items: Result[]) => out.push(...items.filter((i) => !needle || i.label.toLowerCase().includes(needle) || i.hint.toLowerCase().includes(needle)))
     add(keys.map((k) => ({ id: 'k' + k.id, label: k.name, hint: `Key · ${k.prefix}… · ${k.team}`, icon: KeyRound, run: () => navigate(`/keys?key=${k.id}`) })))
     add(models.map((m) => ({ id: 'm' + m.id, label: m.id, hint: `Model · ${m.provider}`, icon: Boxes, run: () => navigate(`/traffic?model=${m.id}`) })))
-    add(rules.map((r) => ({ id: 'p' + r.id, label: r.name, hint: `Rule · v${r.version} · ${r.mode}`, icon: ShieldCheck, run: () => navigate(`/guardrails?rule=${r.id}`) })))
+    add(policies.map((r) => ({ id: 'p' + r.id, label: r.name, hint: `${dataMode === 'api' ? 'Policy' : 'Rule'} · v${r.version} · ${r.mode}`, icon: ShieldCheck, run: () => navigate(`/guardrails?rule=${r.id}`) })))
     add(backends.map((b) => ({ id: 'b' + b.name, label: b.name, hint: `Backend · ${b.provider}`, icon: Route, run: () => navigate('/routing') })))
     return out.slice(0, 12)
   }, [q, navigate, openReceipt])

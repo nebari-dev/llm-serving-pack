@@ -55,9 +55,9 @@ func TestPlaceholderSkipsOneThePromptAlreadyHas(t *testing.T) {
 // rehydrate" (r4) keeps its placeholders in the response.
 func TestOnlyRehydratingRulesFillTheVault(t *testing.T) {
 	s := DemoSnapshot()
-	for i := range s.Rules {
-		if s.Rules[i].ID == "r4" {
-			s.Rules[i].Mode = "enforce"
+	for i := range s.Policies {
+		if s.Policies[i].ID == "r4" {
+			s.Policies[i].Mode = "enforce"
 		}
 	}
 	d := admitMsgs(t, s, "k1", "card 4111 1111 1111 1111, mail a@b.com")

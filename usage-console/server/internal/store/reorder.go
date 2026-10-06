@@ -8,13 +8,13 @@ import (
 	"strings"
 )
 
-// ErrBadOrder is a new order that isn't the current rules, each once.
+// ErrBadOrder is a new order that isn't the current policies, each once.
 type ErrBadOrder struct{ error }
 
 // ErrSameOrder is a reorder that moves nothing.
 var ErrSameOrder = errors.New("that is the order already in effect")
 
-// planReorder checks a reorder against the current order (rule ids by
+// planReorder checks a reorder against the current order (policy ids by
 // ordinal): `from` is the order its author saw, `to` the one they want.
 // It returns the moves, as the audit row's target.
 func planReorder(cur, from, to []string, names map[string]string) (string, error) {
@@ -22,12 +22,12 @@ func planReorder(cur, from, to []string, names map[string]string) (string, error
 		return "", ErrConflict
 	}
 	if len(to) != len(cur) {
-		return "", ErrBadOrder{fmt.Errorf("the new order has %d rules; there are %d", len(to), len(cur))}
+		return "", ErrBadOrder{fmt.Errorf("the new order has %d policies; there are %d", len(to), len(cur))}
 	}
 	seen := map[string]bool{}
 	for _, id := range to {
 		if seen[id] || !slices.Contains(cur, id) {
-			return "", ErrBadOrder{fmt.Errorf("the new order must list each current rule once (%s)", id)}
+			return "", ErrBadOrder{fmt.Errorf("the new order must list each current policy once (%s)", id)}
 		}
 		seen[id] = true
 	}
@@ -43,15 +43,15 @@ func planReorder(cur, from, to []string, names map[string]string) (string, error
 	return strings.Join(moves, ", "), nil
 }
 
-// ReorderRules sets every rule's ordinal from `to`, if the order is still
+// ReorderPolicies sets every policy's ordinal from `to`, if the order is still
 // `from`, with an audit row.
-func (s *Store) ReorderRules(ctx context.Context, tenant, actor string, from, to []string) error {
+func (s *Store) ReorderPolicies(ctx context.Context, tenant, actor string, from, to []string) error {
 	tx, err := s.Config.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	rows, _ := tx.Query(ctx, `SELECT id, name FROM policy_rules WHERE tenant_id = $1 ORDER BY ordinal FOR UPDATE`, tenant)
+	rows, _ := tx.Query(ctx, `SELECT id, name FROM policies WHERE tenant_id = $1 ORDER BY ordinal FOR UPDATE`, tenant)
 	var cur []string
 	names := map[string]string{}
 	for rows.Next() {
@@ -70,10 +70,10 @@ func (s *Store) ReorderRules(ctx context.Context, tenant, actor string, from, to
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE policy_rules p SET ordinal = o.n FROM unnest($2::text[]) WITH ORDINALITY AS o(id, n) WHERE p.tenant_id = $1 AND p.id = o.id`, tenant, to); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE policies p SET ordinal = o.n FROM unnest($2::text[]) WITH ORDINALITY AS o(id, n) WHERE p.tenant_id = $1 AND p.id = o.id`, tenant, to); err != nil {
 		return err
 	}
-	if err := audit(ctx, tx, tenant, actor, "Reordered rules", moves, "Policy", "", cur, to); err != nil {
+	if err := audit(ctx, tx, tenant, actor, "Reordered policies", moves, "Policy", "", cur, to); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

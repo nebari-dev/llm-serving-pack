@@ -79,10 +79,19 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'dev@localhost')`,
 			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.ProjectID, k.AllowedModels, k.AllowedRegions, k.ExpiresAt, k.Status, revokedAt)
 	}
-	for _, r := range demo.Rules {
-		when, _ := json.Marshal(r.When)
-		then, _ := json.Marshal(r.Then)
-		b.Queue(`INSERT INTO policy_rules VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, r.ID, t, r.Ordinal, r.Name, r.Description, r.Mode, r.FailMode, r.Version, when, then)
+	// Each seeded policy's current version is all its history, as migration
+	// 045 leaves a database whose rules predate versions.
+	for _, p := range demo.Policies {
+		b.Queue(`INSERT INTO policies (id, tenant_id, ordinal, name, description, mode, fail_mode, version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			p.ID, t, p.Ordinal, p.Name, p.Description, p.Mode, p.FailMode, p.Version)
+		for i, r := range p.Rules {
+			when, _ := json.Marshal(r.When)
+			then, _ := json.Marshal(r.Then)
+			b.Queue(`INSERT INTO policy_rules (policy_id, id, ordinal, name, "when", "then") VALUES ($1,$2,$3,$4,$5,$6)`, p.ID, r.ID, i+1, r.Name, when, then)
+		}
+		rules, _ := json.Marshal(p.Rules)
+		b.Queue(`INSERT INTO policy_versions (tenant_id, policy_id, version, name, description, mode, fail_mode, rules) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			t, p.ID, p.Version, p.Name, p.Description, p.Mode, p.FailMode, rules)
 	}
 	for _, d := range demo.Detectors {
 		b.Queue(`INSERT INTO detectors VALUES ($1,$2,$3,$4,$5,$6,$7)`, d.ID, t, d.Name, d.Kind, d.Threshold, d.Hits24h, d.FP)

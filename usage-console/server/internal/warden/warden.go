@@ -353,21 +353,22 @@ func skipBody(md *structpb.Struct) *extprocv3.ProcessingResponse {
 }
 
 // failMode decides a request Warden couldn't evaluate. It can't tell which
-// rules would have matched, so it fails closed if any enforced rule does.
+// policies would have matched, so it fails closed if any enforcing policy
+// does (§4.5: fail mode is per policy).
 func (s *Server) failMode(snap *gateway.Snapshot, api, keyID, requested, reason string) *extprocv3.ProcessingResponse {
-	var closed *model.PolicyRule
-	for i, r := range snap.Rules {
-		if r.Mode == "enforce" && r.FailMode == "closed" {
-			closed = &snap.Rules[i]
+	var closed *model.Policy
+	for i, p := range snap.Policies {
+		if p.Mode == "enforce" && p.FailMode == "closed" {
+			closed = &snap.Policies[i]
 			break
 		}
 	}
 	if closed == nil {
-		return s.unpoliced(snap, "fail-open", requested, reason+" · every enforced rule fails open")
+		return s.unpoliced(snap, "fail-open", requested, reason+" · every enforced policy fails open")
 	}
 	outcome := fmt.Sprintf("%s · %s v%d fails closed", reason, closed.Name, closed.Version)
 	p := gateway.Policy{Mode: "fail-closed", Verdict: "blocked", RequestedModel: requested, Rules: []model.RuleEval{}, Redactions: []model.Redaction{},
-		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", len(snap.Rules)), Outcome: outcome, State: "fail"}},
+		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", snap.RuleCount()), Outcome: outcome, State: "fail"}},
 		Blocked: &gateway.PolicyBlock{Status: 503, ErrorCode: "policy_unavailable", ErrorDetail: "Policy couldn't be evaluated (" + reason + ") and fails closed.",
 			ResolvedModel: snap.Resolve(requested), Backend: "—", Provider: "—", Region: "—"}}
 	return reject(api, 503, p.Blocked.ErrorCode, p.Blocked.ErrorDetail, keyID, metadata(p), 0)
@@ -376,7 +377,7 @@ func (s *Server) failMode(snap *gateway.Snapshot, api, keyID, requested, reason 
 // unpoliced lets the request through untouched, saying why in the receipt.
 func (s *Server) unpoliced(snap *gateway.Snapshot, mode, requested, why string) *extprocv3.ProcessingResponse {
 	p := gateway.Policy{Mode: mode, Verdict: "allowed", RequestedModel: requested, Rules: []model.RuleEval{}, Redactions: []model.Redaction{},
-		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", len(snap.Rules)), Outcome: why, State: "warn"}}}
+		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", snap.RuleCount()), Outcome: why, State: "warn"}}}
 	return &extprocv3.ProcessingResponse{
 		Response:        &extprocv3.ProcessingResponse_RequestBody{RequestBody: &extprocv3.BodyResponse{}},
 		DynamicMetadata: metadata(p),

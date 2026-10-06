@@ -23,13 +23,13 @@ func TestRuleVocabularyIsWhatValidateRuleAccepts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
-	ok := func(c store.RuleContent) {
+	ok := func(c model.PolicyRule) {
 		t.Helper()
 		if err := store.ValidateRule(c, env); err != nil {
 			t.Errorf("%+v: %v", c, err)
 		}
 	}
-	base := store.RuleContent{Name: "r", FailMode: "closed", Then: []model.Action{{Action: "block"}}}
+	base := model.PolicyRule{Name: "r", Then: []model.Action{{Action: "block"}}}
 	for _, e := range got.Entities {
 		c := base
 		c.When = []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{e}}}
@@ -45,5 +45,22 @@ func TestRuleVocabularyIsWhatValidateRuleAccepts(t *testing.T) {
 		c.When = []model.Cond{{Field: "team", Op: "is", Value: []string{"x"}}}
 		c.Then = []model.Action{{Action: "route to", Detail: to}}
 		ok(c)
+	}
+}
+
+// A publish's dry run lists what changes on the policy, its rules as one
+// field: they're versioned together.
+func TestPolicyChangesTreatRulesAsOne(t *testing.T) {
+	r := model.PolicyRule{ID: "r1", Name: "a", When: []model.Cond{{Field: "team", Op: "is", Value: []string{"web"}}}, Then: []model.Action{{Action: "block"}}}
+	cur := model.Policy{ID: "p1", Name: "p", Mode: "monitor", FailMode: "closed", Version: 3, Rules: []model.PolicyRule{r}}
+	next := cur
+	next.Mode, next.Version = "enforce", 4
+	next.Rules = []model.PolicyRule{r, {ID: "r2", Name: "b", When: r.When, Then: []model.Action{{Action: "route to", Detail: "eu-private"}}}}
+	var fields []string
+	for _, c := range policyChanges(cur, next) {
+		fields = append(fields, c.Field)
+	}
+	if want := []string{"mode", "rules", "version"}; !reflect.DeepEqual(fields, want) {
+		t.Fatalf("changes %v, want %v", fields, want)
 	}
 }

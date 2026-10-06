@@ -98,7 +98,7 @@ func (s *Server) degradations(_ http.ResponseWriter, r *http.Request, t string) 
 		switch m.Mode {
 		case "fail-open":
 			d.Kind, d.Title = "policy_fail_open", "Policy is running fail-open."
-			d.Detail = fmt.Sprintf("%s in the last %d minutes passed without rules: Warden couldn't decide in time and every enforced rule fails open.", requests(m.Count), int(degradationWindow.Minutes()))
+			d.Detail = fmt.Sprintf("%s in the last %d minutes passed without rules: Warden couldn't decide in time and every enforced policy fails open.", requests(m.Count), int(degradationWindow.Minutes()))
 		case "fail-closed":
 			d.Kind, d.Title = "policy_fail_closed", "Policy is failing closed."
 			d.Detail = fmt.Sprintf("%s in the last %d minutes were refused with 503 because Warden couldn't evaluate them in time.", requests(m.Count), int(degradationWindow.Minutes()))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"reflect"
 	"slices"
@@ -12,9 +13,11 @@ import (
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
-// Rule writes (§7.5.7): a new rule starts as an unpublished draft; edits go
-// to a draft and reach Warden only when published as the next version.
-// Published versions are immutable, and rollback republishes an old one.
+// Policy writes (§5.2, §7.5.7): a policy is an ordered list of rules with
+// one mode and one fail mode. A new policy starts as an unpublished draft;
+// edits go to a draft and reach Warden only when published as the next
+// version. Published versions are immutable, and rollback republishes an
+// old one.
 
 func (s *Server) ruleEnv(ctx context.Context, t string) (store.RuleEnv, error) {
 	var env store.RuleEnv
@@ -73,8 +76,34 @@ func (s *Server) ruleVocabulary(_ http.ResponseWriter, r *http.Request, t string
 	return ruleVocabulary(env), nil
 }
 
-func (s *Server) ruleContent(r *http.Request, t string) (store.RuleContent, error) {
-	var c store.RuleContent
+// policies is every policy in order: live version, draft, ETag, reroute
+// warnings, and how often its rules matched (24h, and the 7-day daily mean).
+func (s *Server) policies(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	ps, err := s.Store.Policies(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := s.Store.PolicyCounts(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	drafts, err := s.Store.PolicyDrafts(r.Context(), t)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.PolicyView, len(ps))
+	for i := range ps {
+		c := counts[ps[i].ID]
+		ps[i].Fired24h, ps[i].Baseline7d = c.Last24h, int(math.Round(float64(c.Last7d)/7))
+	}
+	for i := range ps {
+		out[i] = store.NewPolicyView(ps[i], drafts[ps[i].ID], ps)
+	}
+	return out, nil
+}
+
+func (s *Server) policyContent(r *http.Request, t string) (store.PolicyContent, error) {
+	var c store.PolicyContent
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		return c, badRequest("invalid JSON body")
 	}
@@ -85,13 +114,13 @@ func (s *Server) ruleContent(r *http.Request, t string) (store.RuleContent, erro
 	if err != nil {
 		return c, err
 	}
-	if err := store.ValidateRule(c, env); err != nil {
+	if err := store.ValidatePolicy(c, env); err != nil {
 		return c, badRequest(err.Error())
 	}
 	return c, nil
 }
 
-// publishErr turns a publish that can't go ahead into a 409 with its reason.
+// publishErr turns a write that can't go ahead into a 409 with its reason.
 func publishErr(err error) error {
 	var pe store.ErrPublish
 	if errors.As(err, &pe) {
@@ -100,29 +129,12 @@ func publishErr(err error) error {
 	return err
 }
 
-func (s *Server) createRule(w http.ResponseWriter, r *http.Request, t string) (any, error) {
-	c, err := s.ruleContent(r, t)
+func (s *Server) createPolicy(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	c, err := s.policyContent(r, t)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.CreateRule(r.Context(), t, actor(r), c)
-	if err != nil {
-		return nil, err
-	}
-	w.Header().Set("ETag", v.ETag)
-	return v, nil
-}
-
-func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
-	m, err := ifMatch(r)
-	if err != nil {
-		return nil, err
-	}
-	c, err := s.ruleContent(r, t)
-	if err != nil {
-		return nil, err
-	}
-	v, err := s.Store.SaveDraft(r.Context(), t, actor(r), r.PathValue("id"), m, c)
+	v, err := s.Store.CreatePolicy(r.Context(), t, actor(r), c)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +142,29 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request, t string)
 	return v, nil
 }
 
-func (s *Server) discardRuleDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+func (s *Server) savePolicyDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	m, err := ifMatch(r)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.DiscardDraft(r.Context(), t, actor(r), r.PathValue("id"), m)
+	c, err := s.policyContent(r, t)
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.Store.SavePolicyDraft(r.Context(), t, actor(r), r.PathValue("id"), m, c)
+	if err != nil {
+		return nil, err
+	}
+	w.Header().Set("ETag", v.ETag)
+	return v, nil
+}
+
+func (s *Server) discardPolicyDraft(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+	m, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
+	v, err := s.Store.DiscardPolicyDraft(r.Context(), t, actor(r), r.PathValue("id"), m)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -143,41 +172,44 @@ func (s *Server) discardRuleDraft(w http.ResponseWriter, r *http.Request, t stri
 	return v, nil
 }
 
-// RulePublishDryRun is what a publish would change (§6 dryRun). The replay
-// against recorded traffic (§7.5.7) isn't connected yet, and says so.
-type RulePublishDryRun struct {
-	DryRun  bool             `json:"dryRun"`
-	Rule    model.PolicyRule `json:"rule"`
-	Changes []RuleChange     `json:"changes"`
-	Replay  *struct{}        `json:"replay"`
-	Note    string           `json:"note"`
+// PolicyPublishDryRun is what a publish would change (§6 dryRun), with the
+// reroute conflicts it would have against the other enforcing policies
+// (§5.3). The replay against recorded traffic (§7.5.7) isn't connected yet,
+// and says so.
+type PolicyPublishDryRun struct {
+	DryRun   bool           `json:"dryRun"`
+	Policy   model.Policy   `json:"policy"`
+	Changes  []PolicyChange `json:"changes"`
+	Warnings []string       `json:"warnings"`
+	Replay   *struct{}      `json:"replay"`
+	Note     string         `json:"note"`
 }
 
-type RuleChange struct {
+type PolicyChange struct {
 	Field string `json:"field"`
 	From  any    `json:"from"`
 	To    any    `json:"to"`
 }
 
-func ruleChanges(cur, next model.PolicyRule) []RuleChange {
-	out := []RuleChange{}
+func policyChanges(cur, next model.Policy) []PolicyChange {
+	out := []PolicyChange{}
 	for _, f := range []struct {
 		name     string
 		from, to any
 	}{
 		{"name", cur.Name, next.Name}, {"description", cur.Description, next.Description}, {"mode", cur.Mode, next.Mode},
-		{"failMode", cur.FailMode, next.FailMode}, {"when", cur.When, next.When}, {"then", cur.Then, next.Then}, {"version", cur.Version, next.Version},
+		{"failMode", cur.FailMode, next.FailMode}, {"rules", cur.Rules, next.Rules}, {"version", cur.Version, next.Version},
 	} {
 		if !reflect.DeepEqual(f.from, f.to) {
-			out = append(out, RuleChange{f.name, f.from, f.to})
+			out = append(out, PolicyChange{f.name, f.from, f.to})
 		}
 	}
 	return out
 }
 
-// publishRule takes {mode?, failMode?}: it publishes the draft, or just a new
-// mode or fail mode, as the next version. ?dryRun=true shows the change.
-func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+// publishPolicy takes {mode?, failMode?}: it publishes the draft, or just a
+// new mode or fail mode, as the next version. ?dryRun=true shows the change.
+func (s *Server) publishPolicy(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	var in struct {
 		Mode     string `json:"mode"`
 		FailMode string `json:"failMode"`
@@ -195,18 +227,18 @@ func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (
 	}
 	id := r.PathValue("id")
 	if dryRun(r) {
-		cur, next, err := s.Store.PlanPublish(r.Context(), t, id, r.Header.Get("If-Match"), in.Mode, in.FailMode)
+		cur, next, warnings, err := s.Store.PlanPublish(r.Context(), t, id, r.Header.Get("If-Match"), in.Mode, in.FailMode)
 		if err != nil {
 			return nil, publishErr(err)
 		}
-		return RulePublishDryRun{DryRun: true, Rule: next, Changes: ruleChanges(cur, next),
-			Note: "Replay against recorded traffic isn't connected yet, so this shows the rule change only."}, nil
+		return PolicyPublishDryRun{DryRun: true, Policy: next, Changes: policyChanges(cur, next), Warnings: warnings,
+			Note: "Replay against recorded traffic isn't connected yet, so this shows the policy change only."}, nil
 	}
 	m, err := ifMatch(r)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.Publish(r.Context(), t, actor(r), id, m, in.Mode, in.FailMode)
+	v, err := s.Store.PublishPolicy(r.Context(), t, actor(r), id, m, in.Mode, in.FailMode)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -215,9 +247,9 @@ func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (
 	return v, nil
 }
 
-// rollbackRule takes {version}: that version's content and mode go live as
-// the next version.
-func (s *Server) rollbackRule(w http.ResponseWriter, r *http.Request, t string) (any, error) {
+// rollbackPolicy takes {version}: that version's rules, fail mode and mode
+// go live as the next version.
+func (s *Server) rollbackPolicy(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	m, err := ifMatch(r)
 	if err != nil {
 		return nil, err
@@ -228,7 +260,7 @@ func (s *Server) rollbackRule(w http.ResponseWriter, r *http.Request, t string) 
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Version < 1 {
 		return nil, badRequest("version is required")
 	}
-	v, err := s.Store.Rollback(r.Context(), t, actor(r), r.PathValue("id"), m, in.Version)
+	v, err := s.Store.RollbackPolicy(r.Context(), t, actor(r), r.PathValue("id"), m, in.Version)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -237,31 +269,32 @@ func (s *Server) rollbackRule(w http.ResponseWriter, r *http.Request, t string) 
 	return v, nil
 }
 
-func (s *Server) ruleVersions(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	return s.Store.RuleVersions(r.Context(), t, r.PathValue("id"))
+func (s *Server) policyVersions(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	return s.Store.PolicyVersions(r.Context(), t, r.PathValue("id"))
 }
 
-func (s *Server) deleteRule(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+func (s *Server) deletePolicy(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	m, err := ifMatch(r)
 	if err != nil {
 		return nil, err
 	}
 	id := r.PathValue("id")
-	if err := s.Store.DeleteRule(r.Context(), t, actor(r), id, m); err != nil {
+	if err := s.Store.DeletePolicy(r.Context(), t, actor(r), id, m); err != nil {
 		return nil, publishErr(err)
 	}
 	s.configChanged()
 	return map[string]string{"id": id}, nil
 }
 
-// reorderRules takes {"from": [ids], "to": [ids]}: the order the caller saw
-// and the one they want. Order decides outcomes, so a stale "from" is a 409.
-func (s *Server) reorderRules(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+// reorderPolicies takes {"from": [ids], "to": [ids]}: the order the caller
+// saw and the one they want. Order decides outcomes, so a stale "from" is a
+// 409.
+func (s *Server) reorderPolicies(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	var in struct{ From, To []string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		return nil, badRequest("invalid JSON body")
 	}
-	err := s.Store.ReorderRules(r.Context(), t, actor(r), in.From, in.To)
+	err := s.Store.ReorderPolicies(r.Context(), t, actor(r), in.From, in.To)
 	var bad store.ErrBadOrder
 	switch {
 	case errors.As(err, &bad):
@@ -269,10 +302,10 @@ func (s *Server) reorderRules(_ http.ResponseWriter, r *http.Request, t string) 
 	case errors.Is(err, store.ErrSameOrder):
 		return nil, badRequest(err.Error())
 	case errors.Is(err, store.ErrConflict):
-		return nil, conflict("the rules were reordered or changed since you loaded them")
+		return nil, conflict("the policies were reordered or changed since you loaded them")
 	case err != nil:
 		return nil, err
 	}
 	s.configChanged()
-	return s.rules(nil, r, t)
+	return s.policies(nil, r, t)
 }

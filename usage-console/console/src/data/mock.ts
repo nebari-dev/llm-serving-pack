@@ -124,6 +124,10 @@ export interface TraceStep {
 export interface RuleEval {
   ruleId: string
   name: string
+  /** The rule's policy (api mode). Receipts from before policies lack them; their rule id is the policy's. */
+  policyId?: string
+  policy?: string
+  /** The policy's version. */
   version: number
   matched: boolean
   action: string

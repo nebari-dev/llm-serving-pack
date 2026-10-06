@@ -316,18 +316,31 @@ type Action struct {
 	Detail string `json:"detail"`
 }
 
+// Policy is a named, ordered list of rules (spec §5.2), versioned, published
+// and rolled back as a unit. Mode is the policy's status: "draft" (never
+// published), "enforce" or "monitor" (§5.2's active), or "disabled". Fail
+// mode is the policy's (§4.5). Policies evaluate in Ordinal order, and each
+// one's rules in list order (§5.3).
+type Policy struct {
+	ID          string       `json:"id"`
+	Ordinal     int          `json:"ordinal"`
+	Name        string       `json:"name"`
+	Description string       `json:"description"`
+	Mode        string       `json:"mode"`
+	FailMode    string       `json:"failMode"`
+	Version     int          `json:"version"`
+	Rules       []PolicyRule `json:"rules"`
+	Fired24h    int          `json:"fired24h"`
+	Baseline7d  int          `json:"baseline7d"`
+}
+
+// PolicyRule is one rule of a policy: conditions that must all hold, and
+// the actions taken when they do (§5.3).
 type PolicyRule struct {
-	ID          string   `json:"id"`
-	Ordinal     int      `json:"ordinal"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Mode        string   `json:"mode"`
-	FailMode    string   `json:"failMode"`
-	Version     int      `json:"version"`
-	When        []Cond   `json:"when"`
-	Then        []Action `json:"then"`
-	Fired24h    int      `json:"fired24h"`
-	Baseline7d  int      `json:"baseline7d"`
+	ID   string   `json:"id"`
+	Name string   `json:"name"`
+	When []Cond   `json:"when"`
+	Then []Action `json:"then"`
 }
 
 type Detector struct {
@@ -359,13 +372,18 @@ type TraceStep struct {
 	State   string  `json:"state"` // ok | warn | fail | throttle | skip
 }
 
+// RuleEval is one rule's evaluation; Version is its policy's. Receipts from
+// before policies carry no policy fields, and their rule id is the policy's
+// id (config migration 045 made each rule a policy with the same id).
 type RuleEval struct {
-	RuleID  string  `json:"ruleId"`
-	Name    string  `json:"name"`
-	Version int     `json:"version"`
-	Matched bool    `json:"matched"`
-	Action  string  `json:"action"`
-	MS      float64 `json:"ms"`
+	RuleID   string  `json:"ruleId"`
+	Name     string  `json:"name"`
+	PolicyID string  `json:"policyId,omitempty"`
+	Policy   string  `json:"policy,omitempty"`
+	Version  int     `json:"version"`
+	Matched  bool    `json:"matched"`
+	Action   string  `json:"action"`
+	MS       float64 `json:"ms"`
 }
 
 type Redaction struct {

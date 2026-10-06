@@ -223,24 +223,67 @@ Agent Router (api-mode test).
   ingest lag, plus whatever is in flight. Fine for monthly caps; not a hard
   real-time limit.
 
-## 3. Rules
+## 3. Rules and policies
 
-Done: create, then drafts, publish (versioned, immutable), mode (enforce,
-monitor, disabled), fail mode, rollback, history, and delete for rules that
-aren't live. First publish defaults to monitor mode. Publish's `dryRun`
-reports the change and says replay isn't connected.
+Done: policies as §5.2 has them (built 2026-10-06). A policy is an ordered
+list of rules with one mode (draft, enforce, monitor, disabled) and one fail
+mode, and it's what is created, drafted, published (versioned, immutable),
+rolled back, reordered and deleted (when not live). First publish defaults to
+monitor mode. Publish's `dryRun` reports the change and its reroute conflicts,
+and says replay isn't connected.
 
 - **Console builder follows the engine (decided 2026-09-30).** In api mode the
-  Guardrails builder offers one all-of list of conditions and one action, and
-  says the rest isn't connected. Several actions means engine work first.
-- **Decided 2026-10-05: more than one action per rule, later.** The engine
-  applies only `then[0]` and writes allow one action; §5.3 shows several
-  (redact and reroute), with its ordering semantics. Not first in line.
-- **Reordering (built 2026-10-05).** New rules go last; `PUT /rules/order`
-  moves one, checked against the order the author saw, with an audit row.
-- **Decided 2026-10-05: follow §5.2's policies (not built).** Versioning
-  and matching move to policies (groups of rules) as §5.2 has them, instead
-  of each rule versioned on its own.
+  Guardrails builder offers, per rule, one all-of list of conditions, and says
+  groups and "any of" aren't connected.
+- **Policies (decided 2026-10-05, built 2026-10-06).** Config migration 045
+  adds `policies`, `policy_versions` (a version holds the rules, in order)
+  and `policy_drafts`; `policy_rules` now holds each policy's live rules
+  (`policy_id`, `ordinal`, `name`, `when`, `then`). `policy_rule_versions`
+  and `policy_rule_drafts` are gone. API: `GET/POST /policies`,
+  `PUT /policies/order`, `PUT`/`DELETE /policies/{id}/draft`,
+  `POST /policies/{id}/publish` (`?dryRun=true`), `/rollback`,
+  `GET /policies/{id}/versions`, `DELETE /policies/{id}`; `/rules/*` is gone
+  except `GET /rules/vocabulary`. Audit rows say "Created policy", "Published
+  policy", "Reordered policies" and so on, target kind `Policy` as before.
+  A rule keeps its id across versions (new rules get one on save), and a
+  receipt's rule evaluation now names its policy (`policyId`, `policy`,
+  `version` is the policy's).
+- **Decide: how existing rules were grouped (chose: one policy per rule).**
+  Each rule became a policy of its own with the same id, name, description,
+  mode, fail mode, version and place in the order, holding the rule under
+  the same id and name. It's the only grouping that changes no decision:
+  rules had their own modes and fail modes (card-numbers is monitor,
+  cost-guard-opus fails open), which a shared policy would have to merge.
+  Each rule's version history became its policy's, version for version, so
+  rollback still reaches every old version; old receipts' `ruleId` and old
+  audit rows' target id are the policy's id, so counts and Activity still
+  line up. A database seeded after migration 004 had no version rows for its
+  seeded rules; 045 records their live version (publishedAt null), as 004
+  did. `gateway.TestMigratedPoliciesDecideAsTheRulesDid` replays 302
+  requests recorded from the engine before policies (seeded rules plus
+  monitor, disabled, draft, a second reroute, deadlines) and gets the same
+  decisions. Merging them into fewer policies is left to authors.
+- **Ordering (§5.3, built 2026-10-06).** Policies evaluate in order, and a
+  policy's rules in theirs, as one sequence: the first block wins and stops
+  everything after it, redactions accumulate, the last reroute wins.
+  Across policies is our extension of §5.3, which only speaks of rules within
+  a policy; it's what makes one-policy-per-rule behave as before. A
+  monitoring policy records "would …" for each action. Past the evaluation
+  deadline a rule takes its policy's fail mode; Warden's own fail mode (no
+  answer, panic) fails closed if any enforcing policy does. Traces and errors
+  name a rule `policy/rule vN`, or just `rule vN` when the policy has its
+  name ("Rule no-web v1 blocks this request." reads as before).
+- **More than one action per rule (decided 2026-10-05, built 2026-10-06).**
+  A rule may take several actions, at most one of each kind: redact and
+  route to together, say. Block stands alone: with others it's refused,
+  saying "block wins: a blocked request is refused, so redact and route to
+  would never run". The engine still lets a block win if one gets through.
+- **Reroute conflicts are warnings, at authoring time.** Rules in a policy
+  that both reroute, and enforcing policies before or after it that reroute
+  too, are listed on the policy (`warnings`) and in publish's dry run. Not
+  refused: last-write-wins is the rule.
+- **Decide: fail mode per policy, not per rule.** §4.5 and §5.2 put it on the
+  policy; §5.3's example shows `fail_mode` on a rule. We follow §5.2.
 - **Decided 2026-10-05: build rehydration (built).** A vault for the
   values Warden redacts, and the response-side swap in Warden that puts them
   back (§4.5 step 5). The vault is in memory on the request's ext_proc
@@ -253,9 +296,9 @@ reports the change and says replay isn't connected.
   switch starts off. Values are restored only in the reply's choices
   (message and delta text, tool-call arguments), not in headers. A compressed
   reply isn't restored, and the receipt says so. Confirm these defaults.
-- History before migration 004 wasn't kept: seeded rules have only their
+- History before migration 004 wasn't kept: seeded policies have only their
   current version, with `publishedAt`/`publishedBy` null.
-- Replay (§7.5.7), re-running past traffic against a new rule to see what
+- Replay (§7.5.7), re-running past traffic against a new policy to see what
   it would have caught, doesn't exist yet. It's what publish's dry run should
   return; until it does, the dry run can't tell you much.
 - **Custom entities (built 2026-10-06).** §5.3's registry, as regexes: a
@@ -508,8 +551,8 @@ retire-old-secret-now are in.
     | Action | Roles |
     |---|---|
     | Read everything | viewer and up (every role) |
-    | Draft rules | editor, security |
-    | Publish or roll back rules; kill switch; capture | security, admin |
+    | Draft policies (create, edit or discard a draft) | editor, security |
+    | Publish, roll back, reorder or delete policies; kill switch; capture | security, admin |
     | Change prices; accept or dismiss price proposals | admin (user, 2026-10-05: prices are shared by every tenant, so a change reprices everyone; restrict to admin when roles are built, not before) |
     | Create, edit or delete budgets | finance, admin |
     | Aliases and routing | editor, admin |

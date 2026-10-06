@@ -150,8 +150,8 @@ func TestCustomEntityRedactedByRule(t *testing.T) {
 	if s.Detectors, err = NewDetectors([]store.CustomEntity{employee()}); err != nil {
 		t.Fatal(err)
 	}
-	s.Rules = append([]model.PolicyRule{{ID: "r9", Ordinal: 0, Name: "no-employee-ids", Mode: "enforce", FailMode: "closed", Version: 1,
-		When: []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"employee ID"}}}, Then: []model.Action{{Action: "redact", Detail: "employee ID"}}}}, s.Rules...)
+	s.Policies = append([]model.Policy{policy("no-employee-ids", "enforce", "closed", 1,
+		rule("no-employee-ids", []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"employee ID"}}}, model.Action{Action: "redact", Detail: "employee ID"}))}, s.Policies...)
 	up := &fixedUp{}
 	in := Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "badge EMP-004211 left the building"), Now: demoNow}
 	d := Admit(s, in, rand.New(rand.NewPCG(1, 2)))

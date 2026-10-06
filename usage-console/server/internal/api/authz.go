@@ -51,7 +51,7 @@ type rule struct {
 var actionRules = map[Action]rule{
 	ActRead:         {nil, "to read"},
 	ActDraftRules:   {[]auth.Role{auth.Security, auth.Editor}, "to draft rules"},
-	ActPublishRules: {[]auth.Role{auth.Admin, auth.Security}, "to publish, reorder, roll back or delete rules"},
+	ActPublishRules: {[]auth.Role{auth.Admin, auth.Security}, "to publish, reorder, roll back or delete policies"},
 	ActKillSwitch:   {[]auth.Role{auth.Admin, auth.Security}, "to use the kill switch"},
 	ActCapture:      {[]auth.Role{auth.Admin, auth.Security}, "to reveal captured content"},
 	ActPrices:       {[]auth.Role{auth.Admin}, "to change prices"},
@@ -104,14 +104,15 @@ var routeActions = map[string]Action{
 	"PATCH /budgets/{id}":  ActBudgets,
 	"DELETE /budgets/{id}": ActBudgets,
 
-	"POST /rules":               ActDraftRules,
-	"PUT /rules/{id}/draft":     ActDraftRules,
-	"DELETE /rules/{id}/draft":  ActDraftRules,
-	"PUT /rules/order":          ActPublishRules,
-	"POST /rules/{id}/publish":  ActPublishRules,
-	"POST /rules/{id}/rollback": ActPublishRules,
-	// Deleting a rule stops it being enforced, like a publish.
-	"DELETE /rules/{id}": ActPublishRules,
+	// A policy's rules are drafted and published with it (§5.2).
+	"POST /policies":               ActDraftRules,
+	"PUT /policies/{id}/draft":     ActDraftRules,
+	"DELETE /policies/{id}/draft":  ActDraftRules,
+	"PUT /policies/order":          ActPublishRules,
+	"POST /policies/{id}/publish":  ActPublishRules,
+	"POST /policies/{id}/rollback": ActPublishRules,
+	// Deleting a policy stops it being enforced, like a publish.
+	"DELETE /policies/{id}": ActPublishRules,
 
 	"POST /warden/passthrough": ActKillSwitch,
 	// Content is captured only where an elevated role turned capture on

@@ -192,22 +192,31 @@ var Budgets = []model.Budget{
 	{ID: "b5", Scope: "research", ScopeType: "team", Period: "monthly", CapUSD: 20_000, OnExceed: "warn"},
 }
 
-var Rules = []model.PolicyRule{
-	{ID: "r1", Ordinal: 1, Name: "no-pii-out", Description: "Redact customer identifiers before they leave the perimeter.", Mode: "enforce", FailMode: "closed", Version: 7,
-		When: []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"email", "SSN"}}, {Field: "team", Op: "is not", Value: []string{"security"}}},
-		Then: []model.Action{{Action: "redact", Detail: "email, SSN · rehydrate on return"}}},
-	{ID: "r2", Ordinal: 2, Name: "eu-only", Description: "EU customer traffic must stay in EU regions.", Mode: "enforce", FailMode: "closed", Version: 3,
-		When: []model.Cond{{Field: "header x-data-region", Op: "equals", Value: []string{"eu"}}},
-		Then: []model.Action{{Action: "route to", Detail: "eu-private"}}},
-	{ID: "r3", Ordinal: 3, Name: "block-src", Description: "Block proprietary source code and secrets from third-party providers.", Mode: "enforce", FailMode: "closed", Version: 12,
-		When: []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"secret", "private key", "source code"}}, {Field: "provider", Op: "is not", Value: []string{"Self-hosted"}}},
-		Then: []model.Action{{Action: "block", Detail: "return 403 with rule id"}}},
-	{ID: "r4", Ordinal: 4, Name: "card-numbers", Description: "Luhn-validated card numbers are redacted everywhere.", Mode: "monitor", FailMode: "closed", Version: 1,
-		When: []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"credit card"}}},
-		Then: []model.Action{{Action: "redact", Detail: "credit card · no rehydrate"}}},
-	{ID: "r5", Ordinal: 5, Name: "cost-guard-opus", Description: "Downgrade long-context batch jobs off Opus.", Mode: "enforce", FailMode: "open", Version: 2,
-		When: []model.Cond{{Field: "model", Op: "equals", Value: []string{"claude-opus-4-1"}}, {Field: "team", Op: "is", Value: []string{"batch"}}},
-		Then: []model.Action{{Action: "route to", Detail: "gpt-5-mini"}}},
+// Policies are the seeded policies, one rule each, as config migration 045
+// makes of a database's rules: the policy takes the rule's id, name,
+// description, mode, fail mode and version, and holds the rule under the
+// same id and name.
+var Policies = []model.Policy{
+	single(1, "r1", "no-pii-out", "Redact customer identifiers before they leave the perimeter.", "enforce", "closed", 7,
+		[]model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"email", "SSN"}}, {Field: "team", Op: "is not", Value: []string{"security"}}},
+		model.Action{Action: "redact", Detail: "email, SSN · rehydrate on return"}),
+	single(2, "r2", "eu-only", "EU customer traffic must stay in EU regions.", "enforce", "closed", 3,
+		[]model.Cond{{Field: "header x-data-region", Op: "equals", Value: []string{"eu"}}},
+		model.Action{Action: "route to", Detail: "eu-private"}),
+	single(3, "r3", "block-src", "Block proprietary source code and secrets from third-party providers.", "enforce", "closed", 12,
+		[]model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"secret", "private key", "source code"}}, {Field: "provider", Op: "is not", Value: []string{"Self-hosted"}}},
+		model.Action{Action: "block", Detail: "return 403 with rule id"}),
+	single(4, "r4", "card-numbers", "Luhn-validated card numbers are redacted everywhere.", "monitor", "closed", 1,
+		[]model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"credit card"}}},
+		model.Action{Action: "redact", Detail: "credit card · no rehydrate"}),
+	single(5, "r5", "cost-guard-opus", "Downgrade long-context batch jobs off Opus.", "enforce", "open", 2,
+		[]model.Cond{{Field: "model", Op: "equals", Value: []string{"claude-opus-4-1"}}, {Field: "team", Op: "is", Value: []string{"batch"}}},
+		model.Action{Action: "route to", Detail: "gpt-5-mini"}),
+}
+
+func single(ordinal int, id, name, desc, mode, failMode string, version int, when []model.Cond, then ...model.Action) model.Policy {
+	return model.Policy{ID: id, Ordinal: ordinal, Name: name, Description: desc, Mode: mode, FailMode: failMode, Version: version,
+		Rules: []model.PolicyRule{{ID: id, Name: name, When: when, Then: then}}}
 }
 
 var Detectors = []model.Detector{

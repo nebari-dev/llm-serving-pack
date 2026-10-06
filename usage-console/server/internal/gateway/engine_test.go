@@ -427,9 +427,9 @@ func TestSmallBudgetShowsCents(t *testing.T) {
 
 func TestDisabledRuleIsSkipped(t *testing.T) {
 	s := DemoSnapshot()
-	for i := range s.Rules {
-		if s.Rules[i].Name == "block-src" {
-			s.Rules[i].Mode = "disabled"
+	for i := range s.Policies {
+		if s.Policies[i].Name == "block-src" {
+			s.Policies[i].Mode = "disabled"
 		}
 	}
 	rc := run(t, s, Input{Secret: secret("k2"), Req: chat("claude-sonnet-5", "key sk-abcdefghijklmnopqrstuvwxyz")}, &fixedUp{})
@@ -445,11 +445,16 @@ func TestDisabledRuleIsSkipped(t *testing.T) {
 
 func TestBlockWithoutEntityNamesTheRule(t *testing.T) {
 	s := DemoSnapshot()
-	s.Rules = append(s.Rules, model.PolicyRule{ID: "r9", Ordinal: 9, Name: "no-web", Mode: "enforce", FailMode: "closed", Version: 1,
-		When: []model.Cond{{Field: "team", Op: "is", Value: []string{"web"}}}, Then: []model.Action{{Action: "block"}}})
+	s.Policies = append(s.Policies, policy("no-web", "enforce", "closed", 1, rule("no-web", []model.Cond{{Field: "team", Op: "is", Value: []string{"web"}}}, blockIt)))
 	rc := run(t, s, Input{Secret: secret("k4"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
 	if rc.ErrorCode != "policy_blocked" || rc.ErrorDetail != "Rule no-web v1 blocks this request." || rc.Trace[2].Outcome != "blocked by no-web v1" {
 		t.Fatalf("got %s %q, rules step %+v", rc.ErrorCode, rc.ErrorDetail, rc.Trace[2])
+	}
+	// A rule in a policy of another name is named with its policy.
+	s.Policies[len(s.Policies)-1].Name = "web-guard"
+	rc = run(t, s, Input{Secret: secret("k4"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if rc.ErrorDetail != "Rule web-guard/no-web v1 blocks this request." || rc.Trace[2].Outcome != "blocked by web-guard/no-web v1" {
+		t.Fatalf("got %q, rules step %+v", rc.ErrorDetail, rc.Trace[2])
 	}
 }
 
@@ -512,8 +517,8 @@ func TestGeneratedMixProducesEveryVerdict(t *testing.T) {
 func TestProjectConditionMatchesByID(t *testing.T) {
 	s := DemoSnapshot()
 	helpdesk := demo.ProjectID(demo.Tenant, "support", "helpdesk")
-	s.Rules = []model.PolicyRule{{ID: "rp", Name: "helpdesk-block", Version: 1, Mode: "enforce", FailMode: "open",
-		When: []model.Cond{{Field: "project", Op: "is", Value: []string{helpdesk}}}, Then: []model.Action{{Action: "block"}}}}
+	s.Policies = []model.Policy{policy("helpdesk-block", "enforce", "open", 1,
+		rule("helpdesk-block", []model.Cond{{Field: "project", Op: "is", Value: []string{helpdesk}}}, blockIt))}
 	if rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.ErrorCode != "policy_blocked" {
 		t.Fatalf("by id: %s %s", rc.Verdict, rc.ErrorCode)
 	}
@@ -528,7 +533,7 @@ func TestProjectConditionMatchesByID(t *testing.T) {
 		t.Fatalf("same name, other team: %+v", d.Reject)
 	}
 	// A project's name isn't its id.
-	s.Rules[0].When[0].Value = []string{"Help desk"}
+	s.Policies[0].Rules[0].When[0].Value = []string{"Help desk"}
 	if rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.Verdict == "blocked" {
 		t.Fatalf("a name matched: %s", rc.ErrorDetail)
 	}

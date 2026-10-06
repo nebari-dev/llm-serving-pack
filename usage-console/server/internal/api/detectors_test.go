@@ -17,25 +17,32 @@ func TestDetectorViewsJoinLiveRulesAndReceiptCounts(t *testing.T) {
 		{Entity: "secret", Kind: "regex", Pattern: `sk-`, Placeholder: "[SECRET_1]"},
 	}
 	pii := []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"email", "SSN"}}}
-	rules := []model.PolicyRule{
-		{Name: "no-pii-out", Version: 8, Mode: "monitor", When: pii, Then: []model.Action{{Action: "redact"}}},
-		{Name: "pii-block", Version: 2, Mode: "enforce", When: append(pii, model.Cond{Field: "team", Op: "is", Value: []string{"batch"}}), Then: []model.Action{{Action: "block"}}},
+	one := func(name string, version int, mode string, when []model.Cond, then ...model.Action) model.Policy {
+		return model.Policy{Name: name, Version: version, Mode: mode, Rules: []model.PolicyRule{{Name: name, When: when, Then: then}}}
+	}
+	policies := []model.Policy{
+		one("no-pii-out", 8, "monitor", pii, model.Action{Action: "redact"}),
+		// A policy's rules each use what they name; a rule's actions are all listed.
+		{Name: "data", Version: 2, Mode: "enforce", Rules: []model.PolicyRule{
+			{Name: "pii-block", When: append(pii, model.Cond{Field: "team", Op: "is", Value: []string{"batch"}}), Then: []model.Action{{Action: "block"}}},
+			{Name: "pii-eu", When: pii[:1], Then: []model.Action{{Action: "redact"}, {Action: "route to", Detail: "eu-private"}}},
+		}},
 		// Not live: Warden skips them, so they don't use a detector.
-		{Name: "off", Version: 3, Mode: "disabled", When: pii, Then: []model.Action{{Action: "block"}}},
-		{Name: "wip", Version: 0, Mode: "draft", When: pii, Then: []model.Action{{Action: "block"}}},
+		one("off", 3, "disabled", pii, model.Action{Action: "block"}),
+		one("wip", 0, "draft", pii, model.Action{Action: "block"}),
 		// "is" on a field isn't a detector, even if a value looks like one.
-		{Name: "teams", Version: 1, Mode: "enforce", When: []model.Cond{{Field: "team", Op: "is", Value: []string{"secret"}}}, Then: []model.Action{{Action: "block"}}},
+		one("teams", 1, "enforce", []model.Cond{{Field: "team", Op: "is", Value: []string{"secret"}}}, model.Action{Action: "block"}),
 	}
 	hits := map[string]store.DetectorHits{
 		"email": {RedactedRequests: 40, RedactedMatches: 52, Blocked: 3},
 		"phone": {RedactedRequests: 9}, // no detector by that name any more
 	}
 	verdicts := map[string]store.VerdictCounts{"email": {FalsePositives: 2, Confirmed: 5}}
-	got := detectorViews(ds, nil, rules, hits, verdicts)
+	got := detectorViews(ds, nil, policies, hits, verdicts)
+	uses := []DetectorUse{{"no-pii-out", "no-pii-out", 8, "monitor", "redact"}, {"pii-block", "data", 2, "enforce", "block"}, {"pii-eu", "data", 2, "enforce", "redact + route to"}}
 	want := []DetectorView{
-		{DetectorInfo: ds[0], UsedBy: []DetectorUse{{"no-pii-out", 8, "monitor", "redact"}, {"pii-block", 2, "enforce", "block"}}},
-		{DetectorInfo: ds[1], UsedBy: []DetectorUse{{"no-pii-out", 8, "monitor", "redact"}, {"pii-block", 2, "enforce", "block"}}, RedactedRequests24h: 40, RedactedMatches24h: 52, Blocked24h: 3,
-			FalsePositives30d: 2, Confirmed30d: 5},
+		{DetectorInfo: ds[0], UsedBy: uses},
+		{DetectorInfo: ds[1], UsedBy: uses, RedactedRequests24h: 40, RedactedMatches24h: 52, Blocked24h: 3, FalsePositives30d: 2, Confirmed30d: 5},
 		{DetectorInfo: ds[2], UsedBy: []DetectorUse{}},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -87,6 +94,12 @@ func TestHitsOfAReceipt(t *testing.T) {
 	if got := hitsOf(blocked); !reflect.DeepEqual(got, []DetectorHit{{ReceiptID: "rc2", TS: ts, Entity: "secret", Action: "blocked", Count: 1, Rules: []string{"block-src v3"}}}) {
 		t.Fatalf("blocked: %+v", got)
 	}
+	// A rule of several actions counts for each; a policy names its rule.
+	multi := model.Receipt{ID: "rc4", TS: ts, Verdict: "redacted", Redactions: []model.Redaction{{Type: "email", Count: 1}},
+		Rules: []model.RuleEval{{Name: "pii", Policy: "data", PolicyID: "p1", Version: 4, Matched: true, Action: "redact + route to"}}}
+	if got := hitsOf(multi); len(got) != 1 || !reflect.DeepEqual(got[0].Rules, []string{"data/pii v4"}) {
+		t.Fatalf("multi: %+v", got)
+	}
 	// Blocked on who, not on content: no entity, no hit.
 	byTeam := model.Receipt{ID: "rc3", Verdict: "blocked", ErrorCode: "policy_blocked", ErrorDetail: "Rule no-web v1 blocks this request."}
 	if got := hitsOf(byTeam); len(got) != 0 {
@@ -108,27 +121,36 @@ func TestHitQueueJoinsVerdictsAndFilters(t *testing.T) {
 	}
 }
 
-// A custom entity can't be deleted while a rule names it, live or in a
-// draft: the rule would silently stop matching.
-func TestEntityInUseByRulesOrDrafts(t *testing.T) {
-	names := func(e string) model.Cond {
-		return model.Cond{Field: "prompt", Op: "contains entity", Value: []string{"email", e}}
+// A custom entity can't be deleted while a policy's rule names it, live (any
+// mode), in its draft, or in a published version a rollback could restore:
+// the rule would silently stop matching.
+func TestEntityInUseByPoliciesDraftsOrVersions(t *testing.T) {
+	names := func(e string) []model.PolicyRule {
+		return []model.PolicyRule{{Name: "r", When: []model.Cond{{Field: "prompt", Op: "contains entity", Value: []string{"email", e}}}}}
 	}
-	rules := []model.PolicyRule{
-		{ID: "r1", Name: "no-pii-out", When: []model.Cond{names("SSN")}},
-		{ID: "r2", Name: "hr-only", Mode: "disabled", When: []model.Cond{names("employee ID")}},
-		{ID: "r3", Name: "wip"},
+	policies := []model.Policy{
+		{ID: "p1", Name: "no-pii-out", Mode: "enforce", Rules: names("SSN")},
+		{ID: "p2", Name: "hr-only", Mode: "disabled", Rules: names("employee ID")},
+		{ID: "p3", Name: "wip", Mode: "draft"},
+		{ID: "p4", Name: "badges", Mode: "enforce", Rules: names("SSN")},
 	}
-	drafts := map[string]*store.RuleDraft{"r3": {RuleContent: store.RuleContent{Name: "wip", When: []model.Cond{names("employee ID")}}}}
-	err := entityInUse("employee ID", rules, drafts)
-	if err == nil || err.Error() != `Rules hr-only and wip (draft) name employee ID. Take it out of those rules first.` {
+	drafts := map[string]*store.PolicyDraft{"p3": {PolicyContent: store.PolicyContent{Name: "wip", Rules: names("employee ID")}}}
+	versions := map[string][]store.PolicyVersion{
+		"p4": {{Version: 3, PolicyContent: store.PolicyContent{Rules: names("SSN")}}, {Version: 2, PolicyContent: store.PolicyContent{Rules: names("employee ID")}}},
+	}
+	err := entityInUse("employee ID", policies, drafts, versions)
+	want := `Policies hr-only, wip (draft) and badges (v2) name employee ID. Take it out of those policies first. A published version counts: rolling back to it would bring the entity back.`
+	if err == nil || err.Error() != want {
 		t.Fatalf("got %v", err)
 	}
-	if err := entityInUse("badge", rules, drafts); err != nil {
+	if err := entityInUse("employee ID", policies[:2], drafts, versions); err == nil || err.Error() != `Policy hr-only names employee ID. Take it out of that policy first.` {
+		t.Fatalf("one: %v", err)
+	}
+	if err := entityInUse("badge", policies, drafts, versions); err != nil {
 		t.Fatal(err)
 	}
 	var c conflict
-	if !errors.As(entityInUse("employee ID", rules, drafts), &c) {
+	if !errors.As(entityInUse("employee ID", policies, drafts, versions), &c) {
 		t.Fatal("in use should be a 409")
 	}
 }

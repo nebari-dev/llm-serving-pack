@@ -28,10 +28,10 @@ import { useLive } from '@/state/live'
 import { modeChip } from './guardrails-model'
 
 // §7.5.7 detectors in api mode: the engine's entity detectors (built-in and
-// the tenant's custom entities, §5.3's registry), the live rules that name
-// them, what receipts recorded in the last 24 hours, and reviewers' verdicts
-// on their hits. The mockup's thresholds have no backend: these are regexes
-// with no confidence score.
+// the tenant's custom entities, §5.3's registry), the rules of live policies
+// that name them (policy/rule), what receipts recorded in the last 24 hours,
+// and reviewers' verdicts on their hits. The mockup's thresholds have no
+// backend: these are regexes with no confidence score.
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const utc = (ms: number) => new Date(ms).toISOString().slice(5, 16).replace('T', ' ') + ' UTC'
@@ -99,9 +99,9 @@ export function LiveDetectorsTab({ onEntitiesChanged }: { onEntitiesChanged?: ()
                       ) : (
                         <span className="flex flex-col gap-1">
                           {d.usedBy.map((u) => (
-                            <span key={u.rule} className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span key={`${u.policy}/${u.rule}`} className="flex flex-wrap items-center gap-1.5 text-xs">
                               <span className="font-mono">
-                                {u.rule} v{u.version}
+                                {u.policy === u.rule ? u.rule : `${u.policy}/${u.rule}`} v{u.version}
                               </span>
                               <StateChip tone="neutral" className={modeChip[u.mode].className}>
                                 {modeChip[u.mode].label}

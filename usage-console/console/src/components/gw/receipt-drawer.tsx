@@ -283,11 +283,11 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </thead>
             <tbody>
               {r.rules.map((x, i) => (
-                <tr key={x.ruleId} className={cn('border-b border-border last:border-0', !x.matched && 'text-muted-foreground')}>
+                <tr key={`${x.policyId ?? ''}/${x.ruleId}`} className={cn('border-b border-border last:border-0', !x.matched && 'text-muted-foreground')}>
                   <td className="num py-1.5 pr-2 font-mono text-xs">{i + 1}</td>
                   <td className="py-1.5 pr-2">
-                    <Link to={`/guardrails?rule=${x.ruleId}`} className="font-mono text-xs hover:underline">
-                      {x.name} v{x.version}
+                    <Link to={`/guardrails?rule=${x.policyId ?? x.ruleId}`} className="font-mono text-xs hover:underline">
+                      {x.policy && x.policy !== x.name ? `${x.policy}/${x.name}` : x.name} v{x.version}
                     </Link>
                   </td>
                   <td className="py-1.5 pr-2 text-xs">{x.matched ? 'Yes' : 'No'}</td>

@@ -79,21 +79,6 @@ func (s *Store) Keys(ctx context.Context, tenant string) ([]KeyRecord, error) {
 	return collect(rows, func(r pgx.Rows) (KeyRecord, error) { return scanKey(r) })
 }
 
-func (s *Store) Rules(ctx context.Context, tenant string) ([]model.PolicyRule, error) {
-	rows, _ := s.Config.Query(ctx, `SELECT id, ordinal, name, description, mode, fail_mode, version, "when", "then" FROM policy_rules WHERE tenant_id = $1 ORDER BY ordinal`, tenant)
-	return collect(rows, func(r pgx.Rows) (model.PolicyRule, error) {
-		var p model.PolicyRule
-		var when, then []byte
-		if err := r.Scan(&p.ID, &p.Ordinal, &p.Name, &p.Description, &p.Mode, &p.FailMode, &p.Version, &when, &then); err != nil {
-			return p, err
-		}
-		if err := json.Unmarshal(when, &p.When); err != nil {
-			return p, err
-		}
-		return p, json.Unmarshal(then, &p.Then)
-	})
-}
-
 // AccessKind is the target kind of audit rows that record someone reading
 // receipts (an export, a content reveal), not changing config.
 const AccessKind = "Receipt"

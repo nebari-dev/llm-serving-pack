@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Rule order decides outcomes (the first block wins, the last reroute wins),
+// Policy order decides outcomes (the first block wins, the last reroute wins),
 // so a reorder applies only to the order its author saw.
 func TestPlanReorder(t *testing.T) {
 	cur := []string{"r1", "r3", "r9"}

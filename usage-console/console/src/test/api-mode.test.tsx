@@ -1340,18 +1340,19 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       cleanup()
 
       // A "project is" rule names the project by id: the web project of the same name isn't in it.
-      const rule = { name: `amt-shared-${stamp}`, description: 'api-mode test', failMode: 'closed', when: [{ field: 'project', op: 'is', value: [support.id] }], then: [{ action: 'block' }] }
-      expect(await status(send('POST', '/rules', { ...rule, name: `${rule.name}-by-name`, when: [{ field: 'project', op: 'is', value: [name] }] }))).toBe(400)
-      const r0 = await send<V>('POST', '/rules', rule)
+      const rule = { name: `amt-shared-${stamp}`, when: [{ field: 'project', op: 'is', value: [support.id] }], then: [{ action: 'block' }] }
+      const policy = { name: rule.name, description: 'api-mode test', failMode: 'closed', rules: [rule] }
+      expect(await status(send('POST', '/policies', { ...policy, name: `${rule.name}-by-name`, rules: [{ ...rule, when: [{ field: 'project', op: 'is', value: [name] }] }] }))).toBe(400)
+      const r0 = await send<V>('POST', '/policies', policy)
       ruleId = r0.id
-      await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'enforce' }, r0.etag)
+      await send<V>('POST', `/policies/${ruleId}/publish`, { mode: 'enforce' }, r0.etag)
       expect((await call(made[0].secret)).status).toBe(403)
       expect((await call(made[1].secret)).status).toBe(200)
     } finally {
       if (ruleId) {
-        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === ruleId)?.etag
-        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
-        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/policies')).find((r) => r.id === ruleId)?.etag
+        await send('POST', `/policies/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/policies/${ruleId}`, undefined, await etagNow()).catch(() => {})
       }
       for (const id of keys) await send('POST', `/keys/${id}/revoke`).catch(() => {})
     }
@@ -2291,13 +2292,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       // Warden reads an Anthropic body: a redact-and-rehydrate rule redacts the
       // text block before the provider, and the reply comes back restored, whole
       // and streamed.
-      const made2 = await send<V>('POST', '/rules', {
+      const made2 = await send<V>('POST', '/policies', {
         name, description: 'api-mode Anthropic SDK test', failMode: 'closed',
-        when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
-        then: [{ action: 'redact', detail: 'email · rehydrate on return' }],
+        rules: [{
+          name,
+          when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
+          then: [{ action: 'redact', detail: 'email · rehydrate on return' }],
+        }],
       })
       ruleId = made2.id
-      await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'enforce' }, made2.etag)
+      await send<V>('POST', `/policies/${ruleId}/publish`, { mode: 'enforce' }, made2.etag)
       const ask = { system: [{ type: 'text', text: 'Be brief.' }], messages: [{ role: 'user', content: [{ type: 'text', text: `Write to ${email} today` }] }] }
       const whole = await messages(k.secret, ask)
       expect(whole.status).toBe(200)
@@ -2343,9 +2347,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       }, { timeout: 20_000, interval: 1000 })
     } finally {
       if (ruleId) {
-        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === ruleId)?.etag
-        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
-        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/policies')).find((r) => r.id === ruleId)?.etag
+        await send('POST', `/policies/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/policies/${ruleId}`, undefined, await etagNow()).catch(() => {})
       }
       if (keyId) await send('POST', `/keys/${keyId}/revoke`, {}).catch(() => {})
       await dropBackends(name)
@@ -2369,11 +2373,14 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   })
 
-  it('drafts, publishes, enforces, rolls back and deletes a rule, with versions and audit rows', async () => {
-    type V = { id: string; name: string; mode: string; version: number; failMode: string; etag: string; draft: { description: string } | null }
+  // §5.2: a policy is an ordered list of rules, versioned as a unit; §5.3: a
+  // rule may take several actions, and order decides (first block wins).
+  it('drafts, publishes, enforces, rolls back and deletes a policy of several rules, with versions and audit rows', async () => {
+    type Rule = { id: string; name: string; when: unknown; then: { action: string; detail: string }[] }
+    type V = { id: string; name: string; mode: string; version: number; failMode: string; etag: string; rules: Rule[]; warnings: string[]; draft: { description: string; rules: Rule[] } | null }
     type C = import('@/data/catalog').Change
     const gateway = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
-    const keyName = `api-mode-rule-${Date.now().toString(36)}`
+    const keyName = `api-mode-policy-${Date.now().toString(36)}`
     const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
       name: keyName, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
     })
@@ -2386,79 +2393,123 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       return { status: res.status, code: body?.error?.code, message: body?.error?.message }
     }
     const latest = async () => (await catalog.api<C[]>('/changes'))[0]
-    const name = keyName // one rule per test key, so the rule only ever matches this test's traffic
-    const rule = { name, description: 'api-mode test', failMode: 'closed', when: [{ field: 'key', op: 'is', value: [keyName] }], then: [{ action: 'block' }] }
+    const name = keyName // one policy per test key, so it only ever matches this test's traffic
+    const mine = { field: 'key', op: 'is', value: [keyName] }
+    // Two actions in one rule (§5.3): redact, and reroute.
+    const eu = { name: 'eu', when: [mine, { field: 'prompt', op: 'contains entity', value: ['email'] }], then: [{ action: 'redact', detail: 'email' }, { action: 'route to', detail: 'gpt-5-mini' }] }
+    const stop = { name: 'stop', when: [mine], then: [{ action: 'block', detail: '' }] }
+    const policy = { name, description: 'api-mode test', failMode: 'closed', rules: [eu, stop] }
     let id = ''
     try {
       for (const bad of [
-        { ...rule, name: 'Not A Slug' },
-        { ...rule, when: [{ field: 'prompt', op: 'contains entity', value: ['passport'] }] },
-        { ...rule, then: [{ action: 'redact' }] },
-        { ...rule, then: [{ action: 'route to', detail: 'mars' }] },
-      ]) expect(await status(send('POST', '/rules', bad))).toBe(400)
+        { ...policy, name: 'Not A Slug' },
+        { ...policy, rules: [] },
+        { ...policy, rules: [stop, stop] }, // rule names are unique in a policy
+        { ...policy, rules: [{ ...stop, when: [{ field: 'prompt', op: 'contains entity', value: ['passport'] }] }] },
+        { ...policy, rules: [{ ...stop, then: [{ action: 'redact', detail: '' }] }] },
+        { ...policy, rules: [{ ...stop, then: [{ action: 'route to', detail: 'mars' }] }] },
+        { ...policy, rules: [{ ...eu, then: [...eu.then, { action: 'route to', detail: 'gpt-5-mini' }] }] }, // one of each kind
+      ]) expect(await status(send('POST', '/policies', bad))).toBe(400)
+      // Block refuses the request, so it stands alone, and the refusal says what wins.
+      const why = await send('POST', '/policies', { ...policy, rules: [{ ...eu, then: [...eu.then, { action: 'block', detail: '' }] }] }).then(
+        () => '',
+        (e: Error) => e.message,
+      )
+      expect(why).toBe('rule "eu": block wins: a blocked request is refused, so redact and route to would never run. Keep block alone, or move them to another rule')
 
-      const made = await send<V>('POST', '/rules', rule)
+      const made = await send<V>('POST', '/policies', policy)
       id = made.id
-      expect(made).toMatchObject({ mode: 'draft', version: 0, draft: { description: 'api-mode test' } })
-      expect(await latest()).toMatchObject({ action: 'Created rule', target: name, targetKind: 'Policy' })
-      expect(await status(send('POST', '/rules', rule))).toBe(409) // names are unique
+      expect(made).toMatchObject({ mode: 'draft', version: 0, rules: [], draft: { description: 'api-mode test' } })
+      // Each rule gets an id that stays with it across versions.
+      expect(made.draft!.rules.map((r) => r.name)).toEqual(['eu', 'stop'])
+      expect(made.draft!.rules.every((r) => r.id)).toBe(true)
+      expect(made.draft!.rules[0].then).toEqual(eu.then)
+      expect(await latest()).toMatchObject({ action: 'Created policy', target: name, targetKind: 'Policy' })
+      expect(await status(send('POST', '/policies', policy))).toBe(409) // names are unique
 
-      const dry = await send<{ dryRun: boolean; changes: { field: string; from: unknown; to: unknown }[]; replay: null; note: string }>('POST', `/rules/${id}/publish?dryRun=true`)
-      expect(dry.changes).toEqual(expect.arrayContaining([{ field: 'mode', from: 'draft', to: 'monitor' }, { field: 'version', from: 0, to: 1 }]))
+      const dry = await send<{ dryRun: boolean; changes: { field: string; from: unknown; to: unknown }[]; warnings: string[]; replay: null; note: string }>(
+        'POST', `/policies/${id}/publish?dryRun=true`, { mode: 'enforce' },
+      )
+      expect(dry.changes).toEqual(expect.arrayContaining([{ field: 'mode', from: 'draft', to: 'enforce' }, { field: 'version', from: 0, to: 1 }]))
+      expect(dry.changes.map((c) => c.field)).toContain('rules')
+      // The seeded eu-only reroutes too, earlier in order: the later reroute wins, and authoring says so.
+      expect(dry.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Policy eu-only runs before this one and reroutes too')]))
       expect(dry.replay).toBeNull()
       expect(dry.note).toMatch(/Replay .* isn't connected yet/)
-      expect((await catalog.api<V[]>('/rules')).find((r) => r.id === id)).toMatchObject({ mode: 'draft', version: 0 })
+      expect((await catalog.api<V[]>('/policies')).find((r) => r.id === id)).toMatchObject({ mode: 'draft', version: 0 })
 
       // First publish: monitor mode by default. Traffic isn't blocked.
-      expect(await status(send('POST', `/rules/${id}/publish`))).toBe(428)
-      const v1 = await send<V>('POST', `/rules/${id}/publish`, undefined, made.etag)
+      expect(await status(send('POST', `/policies/${id}/publish`))).toBe(428)
+      const v1 = await send<V>('POST', `/policies/${id}/publish`, undefined, made.etag)
       expect(v1).toMatchObject({ mode: 'monitor', version: 1, draft: null })
-      expect(await latest()).toMatchObject({ action: 'Published rule in monitor mode', target: `${name} v1` })
+      expect(v1.rules.map((r) => [r.id, r.name])).toEqual(made.draft!.rules.map((r) => [r.id, r.name]))
+      expect(await latest()).toMatchObject({ action: 'Published policy in monitor mode', target: `${name} v1` })
       // The control plane has Warden reload before the write returns.
       expect((await call()).code).not.toBe('policy_blocked')
 
-      const v2 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'enforce' }, v1.etag)
+      const v2 = await send<V>('POST', `/policies/${id}/publish`, { mode: 'enforce' }, v1.etag)
       expect(v2).toMatchObject({ mode: 'enforce', version: 2 })
-      expect(await latest()).toMatchObject({ action: 'Published rule', target: `${name} v2` })
-      expect(await call()).toMatchObject({ status: 403, code: 'policy_blocked', message: `Rule ${name} v2 blocks this request.` })
+      expect(await latest()).toMatchObject({ action: 'Published policy', target: `${name} v2` })
+      // eu doesn't match (no email); stop does. A rule is named with its policy.
+      expect(await call()).toMatchObject({ status: 403, code: 'policy_blocked', message: `Rule ${name}/stop v2 blocks this request.` })
+      await waitFor(async () => {
+        const [rc] = await catalog.api<{ rules: { policyId: string; policy: string; name: string; version: number; matched: boolean }[] }[]>(`/receipts?limit=1&key=${key.id}`)
+        expect(rc.rules.filter((e) => e.policyId === id)).toEqual([
+          expect.objectContaining({ policy: name, name: 'eu', version: 2, matched: false }),
+          expect.objectContaining({ policy: name, name: 'stop', version: 2, matched: true }),
+        ])
+      }, { timeout: 15_000, interval: 1000 })
 
       // A draft edit doesn't touch the live version; a stale write is refused.
-      const drafted = await send<V>('PUT', `/rules/${id}/draft`, { ...rule, description: 'edited' }, v2.etag)
+      const drafted = await send<V>('PUT', `/policies/${id}/draft`, { ...policy, description: 'edited', rules: v2.rules }, v2.etag)
       expect(drafted).toMatchObject({ mode: 'enforce', version: 2, draft: { description: 'edited' } })
-      expect(await latest()).toMatchObject({ action: 'Edited rule draft', target: name })
-      expect(await status(send('PUT', `/rules/${id}/draft`, rule, v2.etag))).toBe(409)
+      expect(await latest()).toMatchObject({ action: 'Edited policy draft', target: name })
+      expect(await status(send('PUT', `/policies/${id}/draft`, policy, v2.etag))).toBe(409)
 
-      const v3 = await send<V>('POST', `/rules/${id}/rollback`, { version: 1 }, drafted.etag)
+      const v3 = await send<V>('POST', `/policies/${id}/rollback`, { version: 1 }, drafted.etag)
       expect(v3).toMatchObject({ mode: 'monitor', version: 3, draft: { description: 'edited' } })
-      expect(await latest()).toMatchObject({ action: 'Rolled back rule', target: `${name} v2 → v1 (as v3)` })
-      const versions = await catalog.api<{ version: number; mode: string; publishedBy: string }[]>(`/rules/${id}/versions`)
-      expect(versions.map((v) => [v.version, v.mode])).toEqual([[3, 'monitor'], [2, 'enforce'], [1, 'monitor']])
+      expect(v3.rules.map((r) => r.id)).toEqual(v1.rules.map((r) => r.id))
+      expect(await latest()).toMatchObject({ action: 'Rolled back policy', target: `${name} v2 → v1 (as v3)` })
+      const versions = await catalog.api<{ version: number; mode: string; publishedBy: string; rules: Rule[] }[]>(`/policies/${id}/versions`)
+      expect(versions.map((v) => [v.version, v.mode, v.rules.length])).toEqual([[3, 'monitor', 2], [2, 'enforce', 2], [1, 'monitor', 2]])
       expect(versions[0].publishedBy).toBe(catalog.session.actor.email)
 
-      expect(await status(send('DELETE', `/rules/${id}`, undefined, v3.etag))).toBe(409) // still live: disable first
-      const discarded = await send<V>('DELETE', `/rules/${id}/draft`, undefined, v3.etag)
-      expect(await latest()).toMatchObject({ action: 'Discarded rule draft', target: name })
-      const v4 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'disabled' }, discarded.etag)
-      expect(await latest()).toMatchObject({ action: 'Disabled rule', target: `${name} v4` })
-      await send('DELETE', `/rules/${id}`, undefined, v4.etag)
-      expect(await latest()).toMatchObject({ action: 'Deleted rule', target: name })
-      expect((await catalog.api<V[]>('/rules')).some((r) => r.id === id)).toBe(false)
-      expect((await catalog.api<unknown[]>(`/rules/${id}/versions`)).length).toBe(4) // history outlives the rule
+      expect(await status(send('DELETE', `/policies/${id}`, undefined, v3.etag))).toBe(409) // still live: disable first
+      const discarded = await send<V>('DELETE', `/policies/${id}/draft`, undefined, v3.etag)
+      expect(await latest()).toMatchObject({ action: 'Discarded policy draft', target: name })
+      const v4 = await send<V>('POST', `/policies/${id}/publish`, { mode: 'disabled' }, discarded.etag)
+      expect(await latest()).toMatchObject({ action: 'Disabled policy', target: `${name} v4` })
+      await send('DELETE', `/policies/${id}`, undefined, v4.etag)
+      expect(await latest()).toMatchObject({ action: 'Deleted policy', target: name })
+      expect((await catalog.api<V[]>('/policies')).some((r) => r.id === id)).toBe(false)
+      expect((await catalog.api<unknown[]>(`/policies/${id}/versions`)).length).toBe(4) // history outlives the policy
       id = ''
     } finally {
       if (id) {
-        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === id)?.etag
-        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
-        await send('DELETE', `/rules/${id}`, undefined, await etagNow()).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/policies')).find((r) => r.id === id)?.etag
+        await send('POST', `/policies/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/policies/${id}`, undefined, await etagNow()).catch(() => {})
       }
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 90_000)
 
-  it('authors a rule in the Guardrails builder, publishes it, sees it block, merges a stale draft, rolls back and deletes it', async () => {
-    type V = { id: string; name: string; mode: string; version: number; etag: string; when: unknown; then: unknown; draft: { description: string } | null }
+  // The migrated seed: each rule became a policy of its own, same id, name and version (config migration 045).
+  it('lists the seeded rules as policies of one rule each, with their versions', async () => {
+    type V = { id: string; name: string; version: number; rules: { id: string; name: string }[] }
+    const ps = await catalog.api<V[]>('/policies')
+    const r1 = ps.find((p) => p.id === 'r1')
+    expect(r1).toMatchObject({ name: 'no-pii-out', rules: [{ id: 'r1', name: 'no-pii-out' }] })
+    const versions = await catalog.api<{ version: number; rules: unknown[] }[]>('/policies/r1/versions')
+    expect(versions[0]).toMatchObject({ version: r1!.version })
+    expect(versions[0].rules).toHaveLength(1)
+  })
+
+  it('authors a policy in the Guardrails builder, publishes it, sees it block, merges a stale draft, rolls back and deletes it', async () => {
+    type Rule = { id: string; name: string; when: unknown; then: { action: string; detail: string }[] }
+    type V = { id: string; name: string; mode: string; version: number; etag: string; rules: Rule[]; draft: { description: string; rules: Rule[] } | null }
     type C = import('@/data/catalog').Change
-    const name = `api-mode-ui-rule-${Date.now().toString(36)}`
+    const name = `api-mode-ui-policy-${Date.now().toString(36)}`
     const { key, secret } = await testKey(name)
     const call = async () => {
       const res = await fetch(`${gateway}/v1/chat/completions`, {
@@ -2467,40 +2518,75 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       })
       return ((await res.json().catch(() => null)) as { error?: { code?: string } } | null)?.error?.code
     }
-    const mine = async () => (await catalog.api<V[]>('/rules')).find((r) => r.name === name)
+    const mine = async () => (await catalog.api<V[]>('/policies')).find((r) => r.name === name)
     const latest = async () => (await catalog.api<C[]>('/changes'))[0]
     const settle = () => act(async () => { await new Promise((ok) => setTimeout(ok, 300)) })
+    /** Sets a rule's first condition to "Key is <name>". */
+    const keyIs = async (rule: HTMLElement, i = 0) => {
+      fireEvent.click(within(rule).getAllByRole('combobox', { name: 'Field' })[i])
+      choose(await screen.findByRole('option', { name: 'Key' }))
+      const value = within(rule).getByLabelText('Add Key value')
+      fireEvent.change(value, { target: { value: name } })
+      fireEvent.keyDown(value, { key: 'Enter' })
+    }
     try {
       window.history.pushState({}, '', '/guardrails?rule=r1')
       render(<App />)
       await act(async () => {})
       // What the engine doesn't do is stated, not simulated.
       await screen.findByText(/Replay isn’t connected yet/)
-      const builder = screen.getByRole('region', { name: 'Rule builder' })
-      // r1 rehydrates on return, and Warden does it.
+      const builder = screen.getByRole('region', { name: 'Policy builder' })
+      // r1 (a policy of one rule since migration 045) rehydrates on return, and Warden does it.
       await waitFor(() => expect(builder.textContent).toContain('Warden puts the values back in the response'), { timeout: 5000 })
-      expect(within(builder).getByRole('switch', { name: 'Rehydrate on return' }).getAttribute('aria-checked')).toBe('true')
+      const seeded = within(builder).getByRole('region', { name: 'Rule 1' })
+      expect(within(seeded).getByRole('switch', { name: 'Rehydrate on return' }).getAttribute('aria-checked')).toBe('true')
+      expect(within(builder).queryByRole('region', { name: 'Rule 2' })).toBeNull()
       expect(within(builder).queryByRole('button', { name: /Group/ })).toBeNull()
       expect(builder.textContent).toContain('Groups and “any of” aren’t connected yet')
 
-      fireEvent.click(screen.getByRole('button', { name: 'New rule' }))
+      fireEvent.click(screen.getByRole('button', { name: 'New policy' }))
       await settle()
-      fireEvent.change(within(builder).getByLabelText('Rule name'), { target: { value: name } })
+      fireEvent.change(within(builder).getByLabelText('Policy name'), { target: { value: name } })
       fireEvent.change(within(builder).getByLabelText('Description'), { target: { value: 'api-mode UI test' } })
-      fireEvent.click(within(builder).getByRole('combobox', { name: 'Field' }))
-      choose(await screen.findByRole('option', { name: 'Key' }))
-      const value = within(builder).getByLabelText('Add Key value')
-      fireEvent.change(value, { target: { value: name } })
-      fireEvent.keyDown(value, { key: 'Enter' })
-      expect(within(builder).getByRole('combobox', { name: 'Action' }).textContent).toContain('Block request')
+      // Rule 1: Key is <name> → block.
+      const first = within(builder).getByRole('region', { name: 'Rule 1' })
+      fireEvent.change(within(first).getByLabelText('Rule name'), { target: { value: 'stop' } })
+      await keyIs(first)
+      expect(within(first).getByRole('combobox', { name: 'Action' }).textContent).toContain('Block request')
+      // Block stands alone: adding another action says what wins, and the draft can't be saved.
+      fireEvent.click(within(first).getByRole('button', { name: 'Add Route to action' }))
+      expect(first.textContent).toContain('Block wins: a blocked request is refused, so route to would never run.')
       fireEvent.click(within(builder).getByRole('radio', { name: /Block \(fail-closed\)/ }))
+      expect(screen.getByRole('button', { name: 'Save draft' })).toHaveProperty('disabled', true)
+      fireEvent.click(within(first).getByRole('button', { name: 'Remove Route to action' }))
+      expect(first.textContent).not.toContain('Block wins')
+
+      // Rule 2: Key is <name> and the prompt has an email → redact and route (two actions, §5.3).
+      fireEvent.click(within(builder).getByRole('button', { name: 'Add rule' }))
+      const second = within(builder).getByRole('region', { name: 'Rule 2' })
+      fireEvent.change(within(second).getByLabelText('Rule name'), { target: { value: 'eu' } })
+      fireEvent.click(within(second).getByRole('combobox', { name: 'Add Prompt value' }))
+      choose(await screen.findByRole('option', { name: 'email' }))
+      fireEvent.click(within(second).getByRole('button', { name: 'Condition' }))
+      await keyIs(second, 1)
+      fireEvent.click(within(second).getByRole('combobox', { name: 'Action' }))
+      choose(await screen.findByRole('option', { name: 'Redact entities' }))
+      fireEvent.click(within(second).getByRole('button', { name: 'Add Route to action' }))
+      expect(within(second).getAllByRole('combobox', { name: 'Action' })).toHaveLength(2)
+      expect(second.textContent).not.toContain('would never run')
+      // Order is the policy's, and moves with the draft: eu first.
+      fireEvent.click(within(second).getByRole('button', { name: 'Move eu up' }))
+      expect(within(within(builder).getByRole('region', { name: 'Rule 1' })).getByLabelText<HTMLInputElement>('Rule name').value).toBe('eu')
+
       expect(await mine()).toBeUndefined()
       fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
       await waitFor(async () => expect(await mine()).toMatchObject({ mode: 'draft', version: 0, draft: { description: 'api-mode UI test' } }), { timeout: 5000 })
-      expect(await latest()).toMatchObject({ action: 'Created rule', target: name })
+      expect(await latest()).toMatchObject({ action: 'Created policy', target: name })
       const made = (await mine())!
-      expect(made.when).toEqual([{ field: 'key', op: 'is', value: [name] }])
-      expect(made.then).toEqual([{ action: 'block', detail: '' }])
+      expect(made.draft!.rules.map((r) => r.name)).toEqual(['eu', 'stop'])
+      expect(made.draft!.rules[0].when).toEqual([{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }])
+      expect(made.draft!.rules[0].then.map((a) => a.action)).toEqual(['redact', 'route to'])
+      expect(made.draft!.rules[1]).toMatchObject({ when: [{ field: 'key', op: 'is', value: [name] }], then: [{ action: 'block', detail: '' }] })
 
       // Publish shows the server's dry run first, then enforces.
       const publish = screen.getByRole('button', { name: 'Publish…' })
@@ -2514,7 +2600,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       fireEvent.click(within(dialog).getByRole('button', { name: 'Publish and enforce' }))
       await formDialogClosed()
       expect(await mine()).toMatchObject({ mode: 'enforce', version: 1, draft: null })
-      expect(await latest()).toMatchObject({ action: 'Published rule', target: `${name} v1` })
+      expect(await latest()).toMatchObject({ action: 'Published policy', target: `${name} v1` })
       expect(await call()).toBe('policy_blocked')
 
       // A mode change alone is a new version.
@@ -2532,63 +2618,64 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await settle()
       fireEvent.change(within(builder).getByLabelText('Description'), { target: { value: 'mine' } })
       const v2 = (await mine())!
-      await send('PUT', `/rules/${v2.id}/draft`, { name, description: 'theirs', failMode: 'closed', when: v2.when, then: v2.then }, v2.etag)
+      await send('PUT', `/policies/${v2.id}/draft`, { name, description: 'theirs', failMode: 'closed', rules: v2.rules }, v2.etag)
       fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
-      const merge = (await screen.findByText('This rule changed since you opened it', {}, { timeout: 5000 })).closest<HTMLElement>('[data-slot="alert"]')!
+      const merge = (await screen.findByText('This policy changed since you opened it', {}, { timeout: 5000 })).closest<HTMLElement>('[data-slot="alert"]')!
       expect(merge.textContent).toContain('theirs')
       expect(merge.textContent).toContain('mine')
       fireEvent.click(within(merge).getByRole('button', { name: 'Save mine over theirs' }))
       await waitFor(async () => expect((await mine())?.draft?.description).toBe('mine'), { timeout: 5000 })
-      expect(await latest()).toMatchObject({ action: 'Edited rule draft', target: name })
+      expect(await latest()).toMatchObject({ action: 'Edited policy draft', target: name })
       await settle()
       fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }))
       dialog = await formDialog()
       fireEvent.click(within(dialog).getByRole('button', { name: 'Discard draft' }))
       await formDialogClosed()
       expect((await mine())?.draft).toBeNull()
-      expect(await latest()).toMatchObject({ action: 'Discarded rule draft', target: name })
+      expect(await latest()).toMatchObject({ action: 'Discarded policy draft', target: name })
 
       // Versions: the real history, and rollback publishes v1 again as v3.
       fireEvent.click(screen.getByRole('tab', { name: 'Versions' }))
       await settle()
       const history = await screen.findByRole('list', { name: `Versions of ${name}` }, { timeout: 5000 })
       await waitFor(() => expect(within(history).getAllByRole('button').length).toBe(2), { timeout: 5000 })
+      expect(history.textContent).toContain('2 rules')
       fireEvent.click(within(history).getByRole('button', { name: /^v1/ }))
       fireEvent.click(await screen.findByRole('button', { name: 'Roll back to v1' }))
       dialog = await formDialog()
       fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back to v1' }))
       await formDialogClosed()
       expect(await mine()).toMatchObject({ mode: 'enforce', version: 3 })
-      expect(await latest()).toMatchObject({ action: 'Rolled back rule', target: `${name} v2 → v1 (as v3)` })
+      expect(await latest()).toMatchObject({ action: 'Rolled back policy', target: `${name} v2 → v1 (as v3)` })
       expect(await call()).toBe('policy_blocked')
       await waitFor(() => expect(within(history).getAllByRole('button').length).toBe(3), { timeout: 5000 })
 
-      // Only a rule that isn't live can be deleted: disable it, then delete.
-      fireEvent.click(screen.getByRole('tab', { name: 'Rules' }))
+      // Only a policy that isn't live can be deleted: disable it, then delete.
+      fireEvent.click(screen.getByRole('tab', { name: 'Policies' }))
       await settle()
-      // A live rule can't be deleted, and the page says why before anyone clicks.
-      expect(screen.getByRole('button', { name: 'Delete rule' })).toHaveProperty('disabled', true)
-      expect(screen.getByRole('region', { name: 'Rule builder' }).textContent).toContain('To delete it, disable it first')
+      // A live policy can't be deleted, and the page says why before anyone clicks.
+      expect(screen.getByRole('button', { name: 'Delete policy' })).toHaveProperty('disabled', true)
+      expect(screen.getByRole('region', { name: 'Policy builder' }).textContent).toContain('To delete it, disable it first')
       fireEvent.click(screen.getByRole('button', { name: 'Publish…' }))
       dialog = await formDialog()
       fireEvent.click(within(dialog).getByRole('radio', { name: /^Disabled/ }))
       await waitFor(() => expect(dialog.textContent).toMatch(/Mode\s*enforce\s*→\s*disabled/), { timeout: 5000 })
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Disable rule' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Disable policy' }))
       await formDialogClosed()
       expect(await mine()).toMatchObject({ mode: 'disabled', version: 4 })
-      fireEvent.click(await screen.findByRole('button', { name: 'Delete rule' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete policy' }))
       dialog = await formDialog()
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete rule' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete policy' }))
       await formDialogClosed()
       expect(await mine()).toBeUndefined()
-      expect(await latest()).toMatchObject({ action: 'Deleted rule', target: name })
-      await waitFor(() => expect(screen.getByRole('navigation', { name: 'Rules' }).textContent).not.toContain(name), { timeout: 5000 })
+      expect(await latest()).toMatchObject({ action: 'Deleted policy', target: name })
+      await waitFor(() => expect(screen.getByRole('navigation', { name: 'Policies' }).textContent).not.toContain(name), { timeout: 5000 })
     } finally {
       const r = await mine()
       if (r) {
         const etagNow = async () => (await mine())?.etag
-        if (r.version > 0) await send('POST', `/rules/${r.id}/publish`, { mode: 'disabled' }, r.etag).catch(() => {})
-        await send('DELETE', `/rules/${r.id}`, undefined, await etagNow()).catch(() => {})
+        if (r.version > 0) await send('POST', `/policies/${r.id}/publish`, { mode: 'disabled' }, r.etag).catch(() => {})
+        await send('DELETE', `/policies/${r.id}`, undefined, await etagNow()).catch(() => {})
       }
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
@@ -2626,16 +2713,19 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       } else reply = (JSON.parse(text) as { choices: { message: { content: string } }[] }).choices[0].message.content
       return { received, reply }
     }
-    const rule = (rehydrate: boolean) => ({
+    const policy = (rehydrate: boolean) => ({
       name, description: 'api-mode rehydration test', failMode: 'closed',
-      when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
-      then: [{ action: 'redact', detail: rehydrate ? 'email · rehydrate on return' : 'email' }],
+      rules: [{
+        name,
+        when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
+        then: [{ action: 'redact', detail: rehydrate ? 'email · rehydrate on return' : 'email' }],
+      }],
     })
     let id = ''
     try {
-      const made = await send<V>('POST', '/rules', rule(true))
+      const made = await send<V>('POST', '/policies', policy(true))
       id = made.id
-      const v1 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'enforce' }, made.etag)
+      const v1 = await send<V>('POST', `/policies/${id}/publish`, { mode: 'enforce' }, made.etag)
       expect(v1).toMatchObject({ mode: 'enforce', version: 1 })
       for (const stream of [false, true]) {
         const { received, reply } = await ask(stream)
@@ -2653,8 +2743,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       }, { timeout: 15_000, interval: 1000 })
 
       // Without "rehydrate on return" the placeholder stays in the reply.
-      const drafted = await send<V>('PUT', `/rules/${id}/draft`, rule(false), v1.etag)
-      const v2 = await send<V>('POST', `/rules/${id}/publish`, undefined, drafted.etag)
+      const drafted = await send<V>('PUT', `/policies/${id}/draft`, policy(false), v1.etag)
+      const v2 = await send<V>('POST', `/policies/${id}/publish`, undefined, drafted.etag)
       expect(v2).toMatchObject({ mode: 'enforce', version: 2 })
       for (const stream of [false, true]) {
         const { received, reply } = await ask(stream)
@@ -2662,29 +2752,29 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         expect(reply).toBe('You said: Write to [EMAIL_1] today')
       }
 
-      const v3 = await send<V>('POST', `/rules/${id}/publish`, { mode: 'disabled' }, v2.etag)
-      await send('DELETE', `/rules/${id}`, undefined, v3.etag)
+      const v3 = await send<V>('POST', `/policies/${id}/publish`, { mode: 'disabled' }, v2.etag)
+      await send('DELETE', `/policies/${id}`, undefined, v3.etag)
       id = ''
     } finally {
       if (id) {
-        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === id)?.etag
-        await send('POST', `/rules/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
-        await send('DELETE', `/rules/${id}`, undefined, await etagNow()).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/policies')).find((r) => r.id === id)?.etag
+        await send('POST', `/policies/${id}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/policies/${id}`, undefined, await etagNow()).catch(() => {})
       }
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 90_000)
 
-  it('reorders rules on Guardrails against the order the author saw, with an audit row', async () => {
+  it('reorders policies on Guardrails against the order the author saw, with an audit row', async () => {
     type R = { id: string; name: string; ordinal: number }
     type C = import('@/data/catalog').Change
-    const before = await catalog.api<R[]>('/rules')
+    const before = await catalog.api<R[]>('/policies')
     expect(before.length).toBeGreaterThan(1)
     const ids = before.map((r) => r.id)
     const swapped = [ids[1], ids[0], ...ids.slice(2)]
-    expect(await status(send('PUT', '/rules/order', { from: swapped, to: ids }))).toBe(409) // not the order now
-    expect(await status(send('PUT', '/rules/order', { from: ids, to: ids.slice(1) }))).toBe(400)
-    expect(await status(send('PUT', '/rules/order', { from: ids, to: ids }))).toBe(400)
+    expect(await status(send('PUT', '/policies/order', { from: swapped, to: ids }))).toBe(409) // not the order now
+    expect(await status(send('PUT', '/policies/order', { from: ids, to: ids.slice(1) }))).toBe(400)
+    expect(await status(send('PUT', '/policies/order', { from: ids, to: ids }))).toBe(400)
 
     window.history.pushState({}, '', '/guardrails')
     const r = render(<App />)
@@ -2694,29 +2784,29 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     let moved = false
     try {
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: `Move ${before[0].name} down` }))
+        fireEvent.click(within(screen.getByRole('navigation', { name: 'Policies' })).getByRole('button', { name: `Move ${before[0].name} down` }))
         await new Promise((ok) => setTimeout(ok, 400))
       })
       moved = true
-      expect((await catalog.api<R[]>('/rules')).map((x) => x.id)).toEqual(swapped)
+      expect((await catalog.api<R[]>('/policies')).map((x) => x.id)).toEqual(swapped)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
-        action: 'Reordered rules', targetKind: 'Policy', target: `${before[1].name} 2 → 1, ${before[0].name} 1 → 2`,
+        action: 'Reordered policies', targetKind: 'Policy', target: `${before[1].name} 2 → 1, ${before[0].name} 1 → 2`,
       })
-      expect(screen.getByRole('button', { name: `Move ${before[0].name} up` })).toBeTruthy()
+      expect(within(screen.getByRole('navigation', { name: 'Policies' })).getByRole('button', { name: `Move ${before[0].name} up` })).toBeTruthy()
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: `Move ${before[0].name} up` }))
+        fireEvent.click(within(screen.getByRole('navigation', { name: 'Policies' })).getByRole('button', { name: `Move ${before[0].name} up` }))
         await new Promise((ok) => setTimeout(ok, 400))
       })
       moved = false
-      expect((await catalog.api<R[]>('/rules')).map((x) => x.id)).toEqual(ids)
+      expect((await catalog.api<R[]>('/policies')).map((x) => x.id)).toEqual(ids)
     } finally {
-      if (moved) await send('PUT', '/rules/order', { from: swapped, to: ids })
+      if (moved) await send('PUT', '/policies/order', { from: swapped, to: ids })
       r.unmount()
     }
   }, 30_000)
 
   it('counts real detector hits from receipts on Detectors, with no thresholds or fixtures', async () => {
-    type D = { entity: string; kind: string; pattern: string; custom: boolean; usedBy: { rule: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }
+    type D = { entity: string; kind: string; pattern: string; custom: boolean; usedBy: { rule: string; policy: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }
     type V = { id: string; etag: string; version: number }
     const name = `api-mode-detect-${Date.now().toString(36)}`
     const { key, secret } = await testKey(name)
@@ -2726,23 +2816,22 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 20, messages: [{ role: 'user', content }] }),
       }).then((r) => r.status)
     const detectors = async () => Object.fromEntries((await catalog.api<D[]>('/detectors')).map((d) => [d.entity, d]))
-    const made: V[] = []
-    const rule = async (suffix: string, entity: string, action: string) => {
-      const r = await send<V>('POST', '/rules', {
-        name: `${name}-${suffix}`, description: 'api-mode test', failMode: 'closed',
-        when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
-        then: [{ action, detail: action === 'redact' ? entity : '' }],
-      })
-      made.push(await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'enforce' }, r.etag))
-    }
+    let made: V | null = null
+    const rule = (suffix: string, entity: string, action: string) => ({
+      name: `${name}-${suffix}`,
+      when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
+      then: [{ action, detail: action === 'redact' ? entity : '' }],
+    })
     try {
-      await rule('redact', 'email', 'redact')
-      await rule('block', 'secret', 'block')
+      // One policy, two rules: each names the detector it uses.
+      made = await send<V>('POST', '/policies', { name, description: 'api-mode test', failMode: 'closed', rules: [rule('redact', 'email', 'redact'), rule('block', 'secret', 'block')] })
+      made = await send<V>('POST', `/policies/${made.id}/publish`, { mode: 'enforce' }, made.etag)
       const before = await detectors()
       // The built-ins; custom entities (another test's, say) are listed too, marked custom.
       expect(Object.values(before).filter((d) => !d.custom).map((d) => d.entity).sort()).toEqual(['Acme account ID', 'SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
       expect(before['credit card'].kind).toBe('regex + Luhn check')
-      expect(before.email.usedBy).toContainEqual({ rule: `${name}-redact`, version: 1, mode: 'enforce', action: 'redact' })
+      expect(before.email.usedBy).toContainEqual({ rule: `${name}-redact`, policy: name, version: 1, mode: 'enforce', action: 'redact' })
+      expect(before.secret.usedBy).toContainEqual({ rule: `${name}-block`, policy: name, version: 1, mode: 'enforce', action: 'block' })
 
       expect(await call('write to jane.doe@example.com today')).toBe(200)
       expect(await call(`my key is sk-${'a'.repeat(24)}`)).toBe(403)
@@ -2765,7 +2854,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await act(async () => {})
       fireEvent.click(screen.getByRole('tab', { name: 'Detectors' }))
       const table = await screen.findByRole('table', { name: 'Detectors' }, { timeout: 5000 })
-      await waitFor(() => expect(table.textContent).toContain(`${name}-redact`), { timeout: 5000 })
+      await waitFor(() => expect(table.textContent).toContain(`${name}/${name}-redact`), { timeout: 5000 })
       const email = within(table).getByRole('row', { name: /^email/ })
       expect(email.textContent).toContain('[EMAIL_1]')
       const page = document.body.textContent!
@@ -2785,11 +2874,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(within(queue).getByRole('button', { name: `Mark email on ${redactedId} a false positive` })).toBeTruthy()
       expect(within(queue).getByRole('button', { name: `Mark secret on ${blockedId} correct` })).toBeTruthy()
     } finally {
-      for (const r of made) {
-        const now = (await catalog.api<V[]>('/rules')).find((x) => x.id === r.id)
-        if (!now) continue
-        const off = await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'disabled' }, now.etag).catch(() => now)
-        await send('DELETE', `/rules/${r.id}`, undefined, off.etag).catch(() => {})
+      const now = made && (await catalog.api<V[]>('/policies')).find((x) => x.id === made!.id)
+      if (now) {
+        const off = await send<V>('POST', `/policies/${now.id}/publish`, { mode: 'disabled' }, now.etag).catch(() => now)
+        await send('DELETE', `/policies/${now.id}`, undefined, off.etag).catch(() => {})
       }
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
@@ -2857,13 +2945,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
       })
       keyId = key.id
-      const r = await send<V>('POST', '/rules', {
+      const r = await send<V>('POST', '/policies', {
         name, description: 'api-mode custom entity test', failMode: 'closed',
-        when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
-        then: [{ action: 'redact', detail: entity }],
+        rules: [{
+          name,
+          when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
+          then: [{ action: 'redact', detail: entity }],
+        }],
       })
       ruleId = r.id
-      await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'enforce' }, r.etag)
+      await send<V>('POST', `/policies/${r.id}/publish`, { mode: 'enforce' }, r.etag)
 
       // Warden reloaded on the writes: the provider sees the placeholder, not the badge.
       const res = await fetch(`${gateway}/v1/chat/completions`, {
@@ -2925,10 +3016,12 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(await detector()).toMatchObject({ falsePositives30d: 0, confirmed30d: 1 })
       expect((await catalog.api<C[]>('/changes?kind=Review&limit=1'))[0]).toMatchObject({ action: 'Confirmed detector hit', target: `${entity} on receipt ${receipt!.id}` })
 
-      // Once no rule names it, it can be deleted, with an audit row; rules can't name it after.
-      const live = (await catalog.api<V[]>('/rules')).find((x) => x.id === ruleId)!
-      const off = await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, live.etag)
-      await send('DELETE', `/rules/${ruleId}`, undefined, off.etag)
+      // Even disabled, its policy still names it (a publish would turn it back on).
+      const live = (await catalog.api<V[]>('/policies')).find((x) => x.id === ruleId)!
+      const off = await send<V>('POST', `/policies/${ruleId}/publish`, { mode: 'disabled' }, live.etag)
+      await expect(send('DELETE', `/entities/${ce.id}`, undefined, edited.etag)).rejects.toMatchObject({ status: 409, message: `Policy ${name} names ${entity}. Take it out of that policy first.` })
+      // Once no policy names it, it can be deleted, with an audit row; rules can't name it after.
+      await send('DELETE', `/policies/${ruleId}`, undefined, off.etag)
       ruleId = ''
       await send('DELETE', `/entities/${ce.id}`, undefined, edited.etag)
       expect((await catalog.api<C[]>('/changes?kind=Detector&limit=1'))[0]).toMatchObject({ action: 'Deleted custom entity', target: entity })
@@ -2936,9 +3029,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<{ entities: string[] }>('/rules/vocabulary')).entities).not.toContain(entity)
     } finally {
       if (ruleId) {
-        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((x) => x.id === ruleId)?.etag
-        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
-        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+        const etagNow = async () => (await catalog.api<V[]>('/policies')).find((x) => x.id === ruleId)?.etag
+        await send('POST', `/policies/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/policies/${ruleId}`, undefined, await etagNow()).catch(() => {})
       }
       const left = (await detector())?.customEntity
       if (left) await send('DELETE', `/entities/${left.id}`, undefined, left.etag).catch(() => {})

@@ -1,4 +1,4 @@
-import { Braces, ListTree, Plus, TriangleAlert, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Braces, ListTree, Plus, Trash2, TriangleAlert, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { CodeBlock, CodeBlockBody } from '@/components/ui/code-block'
@@ -16,21 +16,27 @@ import { backends, models, projects, type RuleVocabulary, teams } from '@/data/c
 import { cn } from '@/lib/utils'
 import {
   type Action,
+  blankApiRule,
   type Cond,
   type Draft,
   entityOptions,
   fieldDefs,
   type Group,
   type Node,
+  type PolicyDraft,
   promptEntities,
+  rerouteConflicts,
   routeTargets,
-  toContent,
+  ruleProblems,
   toJson,
+  toPolicyContent,
   uid,
 } from './guardrails-model'
 
 // §7.5.7 rule builder / §8 RuleBuilder: nested condition tree, action list,
 // keyboard-operable (every control is a native button, select, or input).
+// Api mode builds a policy (§5.2): its rules in order, each with the actions
+// the engine applies, and the policy's fail mode.
 
 type Opt = { value: string; label: string }
 type FieldDef = (typeof fieldDefs)[number]
@@ -293,54 +299,223 @@ function GroupEditor({
 
 const actionLabels: Record<Action['type'], string> = { block: 'Block request', redact: 'Redact entities', reroute: 'Route to' }
 
-/** Api mode: exactly one action, and only what the engine does with it. */
-function ApiActionRow({ draft, vocab, onChange }: { draft: Draft; vocab: RuleVocabulary; onChange: (a: Action) => void }) {
-  const a = draft.then[0]
+const newAction = (t: Action['type'], d: Draft, vocab: RuleVocabulary, id = uid('a')): Action =>
+  t === 'redact' ? { id, type: 'redact', entities: promptEntities(d), rehydrate: false } : t === 'reroute' ? { id, type: 'reroute', to: vocab.targets[0] ?? '' } : { id, type: 'block', message: '' }
+
+/** Api mode: a rule's actions, at most one of each kind, and only what the engine does with them (§5.3). */
+function ApiActions({ draft, vocab, onChange }: { draft: Draft; vocab: RuleVocabulary; onChange: (then: Action[]) => void }) {
   const found = promptEntities(draft)
+  const used = new Set(draft.then.map((a) => a.type))
+  const free = (['redact', 'reroute', 'block'] as const).filter((t) => !used.has(t))
+  const set = (i: number, a: Action) => onChange(draft.then.map((x, j) => (j === i ? a : x)))
   return (
-    <div className="flex flex-col gap-1.5 py-1">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <StrSelect
-          label="Action"
-          value={a.type}
-          options={(['block', 'redact', 'reroute'] as const).map((t) => ({ value: t, label: actionLabels[t] }))}
-          onChange={(t) =>
-            onChange(
-              t === 'redact'
-                ? { id: a.id, type: 'redact', entities: found, rehydrate: false }
-                : t === 'reroute'
-                  ? { id: a.id, type: 'reroute', to: vocab.targets[0] ?? '' }
-                  : { id: a.id, type: 'block', message: '' },
-            )
-          }
-        />
-        {a.type === 'reroute' && (
-          <StrSelect label="Route target" value={a.to} options={vocab.targets.map((t) => ({ value: t, label: t }))} onChange={(to) => onChange({ ...a, to })} className="font-mono" />
-        )}
-        {a.type === 'redact' && (
-          <label className="ml-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground-strong">
-            <Switch checked={a.rehydrate} onCheckedChange={(rehydrate) => onChange({ ...a, rehydrate })} />
-            Rehydrate on return
-          </label>
-        )}
+    <div className="flex flex-col gap-1">
+      {draft.then.length === 0 && <p className="py-1 text-xs text-muted-foreground">No actions yet.</p>}
+      {draft.then.map((a, i) => (
+        <div key={a.id} className="flex flex-col gap-1 py-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <StrSelect
+              label="Action"
+              value={a.type}
+              options={(['block', 'redact', 'reroute'] as const).filter((t) => t === a.type || !used.has(t)).map((t) => ({ value: t, label: actionLabels[t] }))}
+              onChange={(t) => set(i, newAction(t as Action['type'], draft, vocab, a.id))}
+            />
+            {a.type === 'reroute' && (
+              <StrSelect label="Route target" value={a.to} options={vocab.targets.map((t) => ({ value: t, label: t }))} onChange={(to) => set(i, { ...a, to })} className="font-mono" />
+            )}
+            {a.type === 'redact' && (
+              <label className="ml-2 inline-flex items-center gap-1.5 text-xs text-muted-foreground-strong">
+                <Switch checked={a.rehydrate} onCheckedChange={(rehydrate) => set(i, { ...a, rehydrate })} />
+                Rehydrate on return
+              </label>
+            )}
+            {draft.then.length > 1 && (
+              <Button variant="ghost" size="icon-xs" onClick={() => onChange(draft.then.filter((_, j) => j !== i))} aria-label={`Remove ${actionLabels[a.type]} action`} className="ml-auto">
+                <X />
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {a.type === 'block' && 'Callers get a 403 naming the rule, and the entity when a prompt condition matched one.'}
+            {a.type === 'reroute' && 'Sends matching requests to that catalog model, or to a healthy backend in that region.'}
+            {a.type === 'redact' &&
+              found.length > 0 &&
+              `Replaces what the prompt conditions find (${found.join(', ')}) with placeholders before the request leaves. ${
+                a.rehydrate ? 'Warden puts the values back in the response, streamed or not, and the receipt counts them.' : 'Placeholders stay in the response.'
+              }`}
+          </p>
+        </div>
+      ))}
+      {free.length > 0 && (
+        <span className="flex flex-wrap gap-1 pt-1">
+          {free.map((t) => (
+            <Button key={t} variant="ghost" size="xs" aria-label={`Add ${actionLabels[t]} action`} onClick={() => onChange([...draft.then, newAction(t, draft, vocab)])}>
+              <Plus /> {actionLabels[t]}
+            </Button>
+          ))}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** Api mode: one rule of a policy, in its place in the order. */
+function ApiRuleEditor({
+  draft,
+  index,
+  count,
+  vocab,
+  onChange,
+  onMove,
+  onRemove,
+}: {
+  draft: Draft
+  index: number
+  count: number
+  vocab: RuleVocabulary
+  onChange: (d: Draft) => void
+  onMove: (by: -1 | 1) => void
+  onRemove: () => void
+}) {
+  const problems = ruleProblems(draft)
+  const label = draft.name || `rule ${index + 1}`
+  return (
+    <section aria-label={`Rule ${index + 1}`} className="flex flex-col gap-3 rounded-md border border-border p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <span className="num pb-1.5 font-mono text-xs text-muted-foreground">{index + 1}</span>
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Rule name</span>
+          <input
+            value={draft.name}
+            onChange={(e) => onChange({ ...draft, name: e.target.value.replace(/\s+/g, '-').toLowerCase() })}
+            className="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <span className="ml-auto flex gap-0.5">
+          <Button variant="ghost" size="icon-xs" aria-label={`Move ${label} up`} disabled={index === 0} onClick={() => onMove(-1)}>
+            <ArrowUp />
+          </Button>
+          <Button variant="ghost" size="icon-xs" aria-label={`Move ${label} down`} disabled={index === count - 1} onClick={() => onMove(1)}>
+            <ArrowDown />
+          </Button>
+          <Button variant="ghost" size="icon-xs" aria-label={`Remove ${label}`} disabled={count === 1} onClick={onRemove}>
+            <Trash2 />
+          </Button>
+        </span>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {a.type === 'block' && 'Callers get a 403 naming the rule, and the entity when a prompt condition matched one.'}
-        {a.type === 'reroute' && 'Sends matching requests to that catalog model, or to a healthy backend in that region.'}
-        {a.type === 'redact' &&
-          (found.length ? `Replaces what the prompt conditions find (${found.join(', ')}) with placeholders before the request leaves.` : '')}
-      </p>
-      {a.type === 'redact' && !found.length && (
-        <p className="text-xs font-medium text-v-degraded-fg">Add a “Prompt contains entity” condition: redact removes what it finds.</p>
+      <fieldset className="flex flex-col gap-1">
+        <legend className="mb-1 text-sm font-semibold">When</legend>
+        <GroupEditor g={draft.when} onChange={(when) => onChange({ ...draft, when })} defs={apiFieldDefs(vocab)} flat />
+      </fieldset>
+      <fieldset className="flex flex-col gap-1">
+        <legend className="mb-1 text-sm font-semibold">Then</legend>
+        <div className="ml-2 border-l border-border-strong pl-3">
+          <ApiActions draft={draft} vocab={vocab} onChange={(then) => onChange({ ...draft, then })} />
+        </div>
+        {problems.map((p) => (
+          <p key={p} className="mt-1 text-xs font-medium text-v-degraded-fg">
+            {p}
+          </p>
+        ))}
+      </fieldset>
+    </section>
+  )
+}
+
+/** Fail mode is the policy's (§4.5), and has to be answered before saving. */
+function FailModeField({ value, onChange, what }: { value?: 'open' | 'closed'; onChange: (v: 'open' | 'closed') => void; what: string }) {
+  return (
+    <fieldset className="flex flex-col gap-2 border-t border-border pt-4">
+      <legend className="text-base font-semibold">If Warden can't evaluate this {what}</legend>
+      <p className="-mt-1 text-xs text-muted-foreground">Control plane unreachable, cache stale, or the 50ms evaluation deadline passes. Required before publishing.</p>
+      <RadioGroup value={value ?? null} onValueChange={(v) => onChange(v as 'open' | 'closed')} orientation="horizontal" aria-label="Fail mode" aria-required="true">
+        <RadioGroupItem value="closed" description="Reject the request. Default for data protection.">
+          Block (fail-closed)
+        </RadioGroupItem>
+        <RadioGroupItem value="open" description="Let the request through unpoliced, and show a banner.">
+          Allow (fail-open)
+        </RadioGroupItem>
+      </RadioGroup>
+      {!value && <p className="text-xs font-medium text-v-degraded-fg">Choose a fail mode to publish.</p>}
+    </fieldset>
+  )
+}
+
+/** Api mode: a policy's name, its rules in evaluation order, and its fail mode, from the server's own vocabulary. */
+export function PolicyBuilder({ draft, onChange, vocab }: { draft: PolicyDraft; onChange: (d: PolicyDraft) => void; vocab: RuleVocabulary }) {
+  const [asJson, setAsJson] = useState(false)
+  const setRule = (i: number, r: Draft) => onChange({ ...draft, rules: draft.rules.map((x, j) => (j === i ? r : x)) })
+  const move = (i: number, by: -1 | 1) => {
+    const rules = draft.rules.slice()
+    ;[rules[i], rules[i + by]] = [rules[i + by], rules[i]]
+    onChange({ ...draft, rules })
+  }
+  const conflicts = rerouteConflicts(draft.rules)
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <label className="flex min-w-0 flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Policy name</span>
+          <input
+            value={draft.name}
+            onChange={(e) => onChange({ ...draft, name: e.target.value.replace(/\s+/g, '-').toLowerCase() })}
+            className="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <label className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Description</span>
+          <input
+            value={draft.description}
+            onChange={(e) => onChange({ ...draft, description: e.target.value })}
+            className="h-8 min-w-48 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <Button variant="outline" size="sm" onClick={() => setAsJson((v) => !v)} aria-pressed={asJson}>
+          {asJson ? <ListTree /> : <Braces />}
+          {asJson ? 'View as builder' : 'View as JSON'}
+        </Button>
+      </div>
+
+      {asJson ? (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">Stored shape (read-only). Policies are stored structured; this text is a view of the builder, not the source.</p>
+          <CodeBlock code={JSON.stringify(toPolicyContent(draft), null, 2)} className="w-full" showLineNumbers>
+            <CodeBlockBody maxLines={24} className="text-xs" />
+          </CodeBlock>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div>
+            <h3 className="text-base font-semibold">Rules, in order</h3>
+            <p className="text-xs text-muted-foreground">
+              Each rule’s conditions must all match. The first block wins and stops evaluation, redactions add up, and a later reroute overrides an earlier one.
+            </p>
+          </div>
+          {draft.rules.map((r, i) => (
+            <ApiRuleEditor
+              key={r.when.id}
+              draft={r}
+              index={i}
+              count={draft.rules.length}
+              vocab={vocab}
+              onChange={(nr) => setRule(i, nr)}
+              onMove={(by) => move(i, by)}
+              onRemove={() => onChange({ ...draft, rules: draft.rules.filter((_, j) => j !== i) })}
+            />
+          ))}
+          {conflicts.map((c) => (
+            <p key={c} role="alert" className="flex items-start gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-2 text-sm text-v-degraded-fg">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>{c}</span>
+            </p>
+          ))}
+          <Button variant="ghost" size="sm" className="w-fit" onClick={() => onChange({ ...draft, rules: [...draft.rules, blankApiRule()] })}>
+            <Plus /> Add rule
+          </Button>
+        </div>
       )}
-      {a.type === 'redact' && found.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {a.rehydrate
-            ? 'The provider sees only placeholders; Warden puts the values back in the response, streamed or not, and the receipt counts them.'
-            : 'Placeholders stay in the response.'}
-        </p>
-      )}
-      <p className="text-xs text-muted-foreground">One action per rule: the engine runs a rule’s first action only.</p>
+
+      <FailModeField value={draft.failMode} onChange={(failMode) => onChange({ ...draft, failMode })} what="policy" />
     </div>
   )
 }
@@ -376,8 +551,8 @@ function ActionRow({ a, onChange, onRemove }: { a: Action; onChange: (a: Action)
   )
 }
 
-/** `vocab` switches to api mode: only what the engine evaluates, from the server's own list. */
-export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange: (d: Draft) => void; vocab?: RuleVocabulary }) {
+/** Mock mode's builder (the mockup): nested groups, any actions, and the rule's own fail mode. */
+export function RuleBuilder({ draft, onChange }: { draft: Draft; onChange: (d: Draft) => void }) {
   const [asJson, setAsJson] = useState(false)
   const reroutes = draft.then.filter((a) => a.type === 'reroute')
   const hasBlock = draft.then.some((a) => a.type === 'block')
@@ -394,16 +569,6 @@ export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange
             className="h-8 w-56 rounded-md border border-input bg-background px-2 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
           />
         </label>
-        {vocab && (
-          <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Description</span>
-            <input
-              value={draft.description}
-              onChange={(e) => onChange({ ...draft, description: e.target.value })}
-              className="h-8 min-w-48 rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          </label>
-        )}
         <Button variant="outline" size="sm" onClick={() => setAsJson((v) => !v)} aria-pressed={asJson}>
           {asJson ? <ListTree /> : <Braces />}
           {asJson ? 'View as builder' : 'View as JSON'}
@@ -413,7 +578,7 @@ export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange
       {asJson ? (
         <div className="flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">Stored shape (read-only). Rules are stored structured; this text is a view of the builder, not the source.</p>
-          <CodeBlock code={JSON.stringify(vocab ? toContent(draft) : toJson(draft), null, 2)} className="w-full" showLineNumbers>
+          <CodeBlock code={JSON.stringify(toJson(draft), null, 2)} className="w-full" showLineNumbers>
             <CodeBlockBody maxLines={24} className="text-xs" />
           </CodeBlock>
         </div>
@@ -421,16 +586,11 @@ export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange
         <>
           <fieldset className="flex flex-col gap-1">
             <legend className="mb-1 text-base font-semibold">When</legend>
-            <GroupEditor g={draft.when} onChange={(when) => onChange({ ...draft, when })} defs={vocab ? apiFieldDefs(vocab) : fieldDefs} flat={!!vocab} />
+            <GroupEditor g={draft.when} onChange={(when) => onChange({ ...draft, when })} />
           </fieldset>
 
           <fieldset className="flex flex-col gap-1">
             <legend className="mb-1 text-base font-semibold">Then</legend>
-            {vocab ? (
-              <div className="ml-2 border-l border-border-strong pl-3">
-                <ApiActionRow draft={draft} vocab={vocab} onChange={(a) => onChange({ ...draft, then: [a] })} />
-              </div>
-            ) : (
             <div className="ml-2 border-l border-border-strong pl-3">
               {draft.then.length === 0 && <p className="py-1 text-xs text-muted-foreground">No actions. Matching requests are recorded but not changed.</p>}
               {draft.then.map((a, i) => (
@@ -451,7 +611,6 @@ export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange
                 </DropdownMenuPortal>
               </DropdownMenu>
             </div>
-            )}
             {reroutes.length > 1 && (
               <p role="alert" className="mt-2 flex items-start gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-2 text-sm text-v-degraded-fg">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -467,25 +626,7 @@ export function RuleBuilder({ draft, onChange, vocab }: { draft: Draft; onChange
         </>
       )}
 
-      <fieldset className="flex flex-col gap-2 border-t border-border pt-4">
-        <legend className="text-base font-semibold">If Warden can't evaluate this rule</legend>
-        <p className="-mt-1 text-xs text-muted-foreground">Control plane unreachable, cache stale, or the 50ms evaluation deadline passes. Required before publishing.</p>
-        <RadioGroup
-          value={draft.failMode ?? null}
-          onValueChange={(v) => onChange({ ...draft, failMode: v as 'open' | 'closed' })}
-          orientation="horizontal"
-          aria-label="Fail mode"
-          aria-required="true"
-        >
-          <RadioGroupItem value="closed" description="Reject the request. Default for data protection.">
-            Block (fail-closed)
-          </RadioGroupItem>
-          <RadioGroupItem value="open" description="Let the request through unpoliced, and show a banner.">
-            Allow (fail-open)
-          </RadioGroupItem>
-        </RadioGroup>
-        {!draft.failMode && <p className="text-xs font-medium text-v-degraded-fg">Choose a fail mode to publish.</p>}
-      </fieldset>
+      <FailModeField value={draft.failMode} onChange={(failMode) => onChange({ ...draft, failMode })} what="rule" />
     </div>
   )
 }

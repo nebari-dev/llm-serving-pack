@@ -9,7 +9,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { dataMode, type PolicyRule, rules as seedRules } from '@/data/catalog'
+import { dataMode, type PolicyRule, ruleFixtures as seedRules } from '@/data/catalog'
 import { int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useReceipts } from '@/state/app-state'

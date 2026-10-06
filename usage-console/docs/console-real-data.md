@@ -148,30 +148,44 @@ row in the same transaction and takes `If-Match` (409 with the current row
 when stale; 428 without it on an update or delete). Open questions are in
 `docs/backend-decisions.md`.
 
-- [x] Rules: create, publish, mode and fail mode, with audit rows, on
-  Guardrails (2026-09-30). Warden reloads before each write returns.
-  - Backend: `POST /rules`, `PUT`/`DELETE /rules/{id}/draft`,
-    `POST /rules/{id}/publish` (mode, fail mode, `?dryRun=true`),
-    `POST /rules/{id}/rollback`, `GET /rules/{id}/versions`,
-    `DELETE /rules/{id}`, and `GET /rules/vocabulary` (the entities, fields
-    and route targets validation accepts, so the builder offers only those).
-    Published versions are immutable; the first publish defaults to monitor
-    mode.
-  - Console (`pages/guardrails-live.tsx`): "New rule", then an explicit
-    "Save draft" and "Discard draft"; "Publish…" shows the server's dry run
-    and publishes as monitor, enforce or disabled; a disabled or unpublished
-    rule can be deleted. Versions lists the selected rule's real history,
-    diffs each version against the one before, and rolls back. A stale save
-    shows both versions: keep theirs, or save mine over theirs.
-  - The builder matches the engine (user's choice, 2026-09-30): one list of
-    conditions that must all match, and one action. Groups, "any of", regex,
-    the response field and a second action aren't offered, and the page says
-    why. A redact action has a "Rehydrate on return" switch (off for a new
-    one), which Warden honours (rehydration, below). Replay says it isn't
-    connected. Reordering isn't connected.
-  - Exit test: the api-mode suite builds a rule in the builder, publishes it
-    enforcing, sees the gateway refuse with `policy_blocked`, merges a stale
-    draft, rolls back from Versions, disables and deletes it.
+- [x] Policies (rules grouped as §5.2 has them): create, publish, mode and
+  fail mode, with audit rows, on Guardrails (rules 2026-09-30; policies
+  2026-10-06). Warden reloads before each write returns.
+  - Backend: `GET`/`POST /policies`, `PUT`/`DELETE /policies/{id}/draft`,
+    `POST /policies/{id}/publish` (mode, fail mode, `?dryRun=true` with
+    reroute warnings), `POST /policies/{id}/rollback`,
+    `GET /policies/{id}/versions`, `DELETE /policies/{id}`, and
+    `GET /rules/vocabulary` (the entities, fields and route targets
+    validation accepts, so the builder offers only those). A policy is an
+    ordered list of rules with one mode and one fail mode, versioned as a
+    unit; published versions are immutable; the first publish defaults to
+    monitor mode. Config migration 045 made each existing rule a policy of
+    its own, same id, name, mode, fail mode and versions (decisions §3).
+  - Console (`pages/guardrails-live.tsx`): a policy list in evaluation
+    order; open one to see and edit its rules in order (add, remove, move
+    up/down, all in the draft). "New policy", then an explicit "Save draft"
+    and "Discard draft"; "Publish…" shows the server's dry run (the policy
+    diff and its reroute conflicts) and publishes as monitor, enforce or
+    disabled; a disabled or unpublished policy can be deleted. Versions lists
+    the selected policy's real history, diffs each version (all its rules)
+    against the one before, and rolls back. A stale save shows both
+    versions: keep theirs, or save mine over theirs. Links that carry
+    `?rule=` (receipts, Overview, the palette) open the policy by id.
+  - The builder matches the engine (user's choice, 2026-09-30): per rule, one
+    list of conditions that must all match. Groups, "any of", regex and the
+    response field aren't offered, and the page says why. A rule takes one or
+    more actions, one of each kind (below). A redact action has a "Rehydrate
+    on return" switch (off for a new one), which Warden honours (rehydration,
+    below). Replay says it isn't connected.
+  - Exit tests (api-mode, not yet run): the API test drafts a two-rule policy
+    (redact and reroute in one rule, then a block), checks the refusals
+    (block with others says what wins), the reroute warning against seeded
+    eu-only, publishes it enforcing and sees `Rule <policy>/stop v2 blocks
+    this request.` with both rules in the receipt, rolls back and deletes it.
+    The UI test builds the same shape in the builder (the block-wins warning,
+    moving a rule up), publishes it, sees `policy_blocked`, merges a stale
+    draft, rolls back from Versions, disables and deletes it. The seeded
+    rules list as one-rule policies with their versions.
 - [x] Routes and backends: desired state, the route editor, and apply to
   the local gateway (2026-10-05; replaces the read-only decision of
   2026-09-30, decisions §6).
@@ -226,10 +240,12 @@ when stale; 428 without it on an update or delete). Open questions are in
   The savings analysis's "Review alias change" opens the alias's edit form
   with the cheaper target filled in (`/models?tab=aliases&edit=…&target=…`);
   nothing changes until Save.
-- [x] Rule order (2026-10-05). Move up/down on Guardrails calls
-  `PUT /rules/order {from, to}`: order decides outcomes (first block wins,
-  last reroute wins), so a `from` that isn't the current order is a 409. One
-  audit row ("Reordered rules", the moves), then Warden reloads.
+- [x] Policy order (rules 2026-10-05; policies 2026-10-06). Move up/down in
+  the policy list calls `PUT /policies/order {from, to}`: order decides
+  outcomes (first block wins, last reroute wins), so a `from` that isn't the
+  current order is a 409. One audit row ("Reordered policies", the moves),
+  then Warden reloads. A policy's own rules are reordered in its draft and
+  take effect when it's published.
 - [ ] Detector thresholds. On hold (decided 2026-09-30): the regex
   detectors have no confidence to threshold (decisions §6).
 - [x] Key rotation: extend the overlap, retire the old secret now.
@@ -333,12 +349,19 @@ when stale; 428 without it on an update or delete). Open questions are in
     `throttled`, and Spend, Keys and the receipt say so; projects are
     created, audited and capped before a key exists, from the API and from
     Spend and the key form.
-- [ ] Policies as §5.2 has them: versioning and matching per policy
-  (decided 2026-10-05).
-- [ ] More than one action per rule, with §5.3's ordering (decided
-  2026-10-05, later).
-- [x] Rule version history: versions, history and rollback on Guardrails
-  (2026-09-30, migration 004).
+- [x] Policies as §5.2 has them: versioning and matching per policy
+  (decided 2026-10-05, built 2026-10-06, config migration 045). See Writes
+  above and decisions §3: one policy per existing rule, so nothing decides
+  differently; policies evaluate in order, each policy's rules in theirs.
+- [x] More than one action per rule, with §5.3's ordering (decided
+  2026-10-05, built 2026-10-06). One of each kind per rule (redact and route
+  to together); block stands alone, and the builder and the API say block
+  wins. First block wins and short-circuits, redactions accumulate, the last
+  reroute wins, with a conflict warning when authoring. Receipts list each
+  rule's actions ("redact + route to"); Detectors show `policy/rule`.
+- [x] Policy version history: versions, history and rollback on Guardrails
+  (2026-09-30 per rule, migration 004; per policy 2026-10-06, migration 045,
+  which kept each rule's history as its policy's).
 - [x] **False-positive review queue and counts (2026-10-06, config migration
   051).** Guardrails → Detectors lists the last 7 days' detector hits (one
   row per entity per receipt: each redaction type, and the entity a policy
@@ -385,8 +408,10 @@ when stale; 428 without it on an update or delete). Open questions are in
     ignoring case among built-ins and custom; can't change once made. Labels:
     capitals, digits, underscores; not another detector's. At most 20
     examples of each kind, 500 characters each; every save checks them.
-  - Delete is refused (409, naming the rules) while a rule names the entity,
-    live, disabled or in a draft.
+  - Delete is refused (409, naming the policies) while a policy's rule names
+    the entity: live in any mode, in its draft, or in one of its published
+    versions, which a rollback would bring back (2026-10-06, with policies).
+    A deleted policy's history doesn't count.
   - Exit tests (api-mode, written, not yet run): add an entity from the form
     after a server-side Test, publish a rule with it, see the provider get
     the placeholder and the receipt record it, see it on Detectors; edits

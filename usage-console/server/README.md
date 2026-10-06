@@ -65,9 +65,9 @@ fails closed, with the reason in the receipt.
 
 For request-path safety (§9.3), Warden reads a snapshot it reloads in the
 background and never waits on the database. Evaluation has a 50ms deadline
-(`-deadline`). A rule reached after the deadline applies its own fail mode. If
+(`-deadline`). A rule reached after the deadline applies its policy's fail mode. If
 the engine hasn't answered at all, or panicked, the request fails closed when
-any enforced rule does, and fails open otherwise. The kill switch is
+any enforced policy does, and fails open otherwise. The kill switch is
 `curl -XPOST 'localhost:8084/passthrough?on=true'` (or start with
 `-passthrough`). It lets requests through unpoliced and marks each receipt that
 way. `GET :8084/metrics` exports the snapshot age.

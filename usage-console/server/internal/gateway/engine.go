@@ -32,7 +32,7 @@ type Snapshot struct {
 	Backends []model.Backend
 	Routes   []model.Route
 	Budgets  map[string]model.Budget
-	Rules    []model.PolicyRule // ordinal order
+	Policies []model.Policy // ordinal order, each with its live rules
 	Spend    store.MonthSpend
 	// Detectors is what "contains entity" can name: built-ins plus the
 	// tenant's custom entities. Nil is the built-ins.
@@ -488,86 +488,95 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 		return d.block(503, "no_healthy_backend", "no healthy backend serves "+resolved)
 	}
 
-	// Rules (§5.3): ordinal order; the first block wins, redacts accumulate,
-	// reroute is last-write-wins. Monitor-mode rules only record "would".
+	// Policies (§5.3): in order, and each policy's rules in order. The first
+	// block wins and short-circuits, redacts accumulate, and the last reroute
+	// wins. A monitoring policy only records what it would do.
 	msgs := slices.Clone(in.Req.Messages)
 	var outcomes []string
 	d.Vault = &Vault{}
 	names := newPlaceholders(promptText(msgs))
-	for _, rule := range s.Rules {
-		if rule.Mode == "draft" || rule.Mode == "disabled" {
+	for _, p := range s.Policies {
+		if p.Mode != "enforce" && p.Mode != "monitor" {
 			continue
 		}
-		t0 := time.Now()
-		if !in.Deadline.IsZero() && t0.After(in.Deadline) {
-			d.pastDeadline = true
-			ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Action: "not evaluated · deadline · fails open"}
-			if rule.Mode == "enforce" && rule.FailMode == "closed" {
-				ev.Action = "not evaluated · deadline · fails closed"
+		for _, rule := range p.Rules {
+			ref := ruleRef(p, rule)
+			t0 := time.Now()
+			ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, PolicyID: p.ID, Policy: p.Name, Version: p.Version}
+			if !in.Deadline.IsZero() && t0.After(in.Deadline) {
+				// Reached too late: the policy's fail mode decides (§4.5).
+				d.pastDeadline = true
+				ev.Action = "not evaluated · deadline · fails open"
+				if p.Mode == "enforce" && p.FailMode == "closed" {
+					ev.Action = "not evaluated · deadline · fails closed"
+					rc.Rules = append(rc.Rules, ev)
+					d.blockedBy = ref + " not evaluated before the deadline · fails closed"
+					return d.block(503, "policy_deadline", fmt.Sprintf("Rule %s couldn't be evaluated in time and fails closed. Retry the request.", ref))
+				}
 				rc.Rules = append(rc.Rules, ev)
-				d.blockedBy = fmt.Sprintf("%s v%d not evaluated before the deadline · fails closed", rule.Name, rule.Version)
-				return d.block(503, "policy_deadline", fmt.Sprintf("Rule %s v%d couldn't be evaluated in time and fails closed. Retry the request.", rule.Name, rule.Version))
+				continue
 			}
-			rc.Rules = append(rc.Rules, ev)
-			continue
-		}
-		ok, found := match(rule, ruleCtx{team: k.Team, project: k.ProjectID, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs), det: s.Detectors})
-		ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Matched: ok, Action: "no match"}
-		if ok && len(rule.Then) > 0 {
-			act := rule.Then[0]
-			ev.Action = act.Action
-			if rule.Mode == "monitor" {
-				ev.Action = "would " + act.Action
-			} else {
-				switch act.Action {
-				case "block":
+			ok, found := match(rule, ruleCtx{team: k.Team, project: k.ProjectID, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs), det: s.Detectors})
+			ev.Matched, ev.Action = ok, "no match"
+			if ok && len(rule.Then) > 0 {
+				ev.Action = actionNames(rule.Then)
+				if p.Mode == "monitor" {
+					ev.Action = "would " + ev.Action
+				} else if slices.ContainsFunc(rule.Then, func(a model.Action) bool { return a.Action == "block" }) {
+					// A block wins over the rest of its rule, and everything after.
 					ev.MS = round2(float64(time.Since(t0).Microseconds())/1000 + 0.1)
 					rc.Rules = append(rc.Rules, ev)
 					d.rulesMS += ev.MS
 					ent := firstKey(found)
 					if ent == "" {
 						// Matched on who or where, not on content.
-						d.blockedBy = fmt.Sprintf("blocked by %s v%d", rule.Name, rule.Version)
-						return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s v%d blocks this request.", rule.Name, rule.Version))
+						d.blockedBy = "blocked by " + ref
+						return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s blocks this request.", ref))
 					}
-					d.blockedBy = fmt.Sprintf("blocked by %s v%d on entity %q", rule.Name, rule.Version, ent)
-					return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s v%d matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", rule.Name, rule.Version, ent))
-				case "redact":
-					back := strings.Contains(act.Detail, RehydrateOnReturn)
-					for ent, n := range found {
-						for i := range msgs {
-							msgs[i].Content = s.Detectors.redact(ent, msgs[i].Content, func(label, m string) string {
-								ph := names.For(label, m)
-								if back {
-									d.Vault.put(ph, m, ent)
+					d.blockedBy = fmt.Sprintf("blocked by %s on entity %q", ref, ent)
+					return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", ref, ent))
+				} else {
+					for _, act := range rule.Then {
+						switch act.Action {
+						case "redact":
+							back := strings.Contains(act.Detail, RehydrateOnReturn)
+							for _, ent := range sortedKeys(found) {
+								for i := range msgs {
+									msgs[i].Content = s.Detectors.redact(ent, msgs[i].Content, func(label, m string) string {
+										ph := names.For(label, m)
+										if back {
+											d.Vault.put(ph, m, ent)
+										}
+										return ph
+									})
 								}
-								return ph
-							})
-						}
-						rc.Redactions = append(rc.Redactions, model.Redaction{Type: ent, Count: n})
-						outcomes = append(outcomes, fmt.Sprintf("redacted %d %s", n, ent))
-					}
-				case "route to":
-					if _, isModel := s.Models[act.Detail]; isModel {
-						if b, ok := s.primary(act.Detail); ok {
-							resolved, current = act.Detail, b
-						}
-					} else {
-						for _, b := range s.Backends {
-							if b.Region == act.Detail && b.Health != "down" {
-								resolved, current = s.substitute(b, resolved), b
-								break
+								rc.Redactions = append(rc.Redactions, model.Redaction{Type: ent, Count: found[ent]})
+								outcomes = append(outcomes, fmt.Sprintf("redacted %d %s", found[ent], ent))
 							}
+						case "route to":
+							// The last reroute wins: a later one replaces this.
+							if _, isModel := s.Models[act.Detail]; isModel {
+								if b, ok := s.primary(act.Detail); ok {
+									resolved, current = act.Detail, b
+								}
+							} else {
+								for _, b := range s.Backends {
+									if b.Region == act.Detail && b.Health != "down" {
+										resolved, current = s.substitute(b, resolved), b
+										break
+									}
+								}
+							}
+							d.rerouted = true
+							outcomes = append(outcomes, fmt.Sprintf("%s matched → route to %s", ruleName(p, rule), act.Detail))
 						}
 					}
-					d.rerouted = true
-					outcomes = append(outcomes, fmt.Sprintf("%s matched → route to %s", rule.Name, act.Detail))
 				}
 			}
+			ev.MS = round2(float64(time.Since(t0).Microseconds())/1000 + 0.1)
+			d.rulesMS += ev.MS
+			rc.Rules = append(rc.Rules, ev)
 		}
-		ev.MS = round2(float64(time.Since(t0).Microseconds())/1000 + 0.1)
-		d.rulesMS += ev.MS
-		rc.Rules = append(rc.Rules, ev)
 	}
 	if d.rerouted {
 		rc.RouteReason = "policy"
@@ -604,16 +613,56 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	return d
 }
 
-func firstKey(m map[string]int) string {
+// RuleCount is how many rules the snapshot's enforcing and monitoring
+// policies hold: what Warden evaluates.
+func (s *Snapshot) RuleCount() int {
+	n := 0
+	for _, p := range s.Policies {
+		if p.Mode == "enforce" || p.Mode == "monitor" {
+			n += len(p.Rules)
+		}
+	}
+	return n
+}
+
+// ruleName names a rule in traces: by itself when its policy has the same
+// name (a policy made from one rule, as migration 045 did), else policy/rule.
+func ruleName(p model.Policy, r model.PolicyRule) string {
+	if r.Name == p.Name {
+		return r.Name
+	}
+	return p.Name + "/" + r.Name
+}
+
+// ruleRef is ruleName at the policy's version: "no-pii-out v7",
+// "data-protection/no-secrets v2".
+func ruleRef(p model.Policy, r model.PolicyRule) string {
+	return fmt.Sprintf("%s v%d", ruleName(p, r), p.Version)
+}
+
+// actionNames is a rule's actions as a receipt records them: "redact + route to".
+func actionNames(as []model.Action) string {
+	names := make([]string, len(as))
+	for i, a := range as {
+		names[i] = a.Action
+	}
+	return strings.Join(names, " + ")
+}
+
+func sortedKeys(m map[string]int) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if len(keys) == 0 {
-		return ""
+	return keys
+}
+
+func firstKey(m map[string]int) string {
+	if keys := sortedKeys(m); len(keys) > 0 {
+		return keys[0]
 	}
-	return keys[0]
+	return ""
 }
 
 func (d *Decision) block(status int, code, msg string) *Decision {
