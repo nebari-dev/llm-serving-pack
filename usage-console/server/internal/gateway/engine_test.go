@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"strings"
@@ -209,8 +210,7 @@ func TestBudgetBlock(t *testing.T) {
 	}
 }
 
-// roll is a rand source whose every draw is v, so Float64 is about v/2^64:
-// 0 always falls under a throttle's share, max never does.
+// roll is a rand source whose every draw is v.
 type roll uint64
 
 func (r roll) Uint64() uint64 { return uint64(r) }
@@ -226,66 +226,92 @@ func runRoll(t *testing.T, s *Snapshot, in Input, r roll) *model.Receipt {
 	return d.Finish(s, c, res, failed, time.Now())
 }
 
-func TestThrottleShare(t *testing.T) {
-	for _, c := range []struct{ spent, cap, want float64 }{
-		{0, 100, 0},
-		{99.99, 100, 0},
-		{100, 100, 0.5}, // at the cap: half
-		{110, 100, 0.75},
-		{120, 100, 1}, // 120% of the cap: every request
-		{500, 100, 1},
-		{1, 0, 1}, // no cap to share out
-	} {
-		if got := ThrottleShare(c.spent, c.cap); math.Abs(got-c.want) > 1e-9 {
-			t.Errorf("ThrottleShare(%v, %v) = %v, want %v", c.spent, c.cap, got, c.want)
+// Throttle (spec §11 Phase 4): while a throttle budget covering the key is
+// over its cap, the key gets ThrottleRate requests in any ThrottleWindow. The
+// next is refused with 429 budget_throttled and a Retry-After that says when
+// its next slot opens; the receipt says "throttled", not "blocked".
+func TestThrottleLimitsEachKeyToARateWhileOverCap(t *testing.T) {
+	s := DemoSnapshot()
+	s.Spend.ByTeam["support"] = 13_000 // b1 throttles support at $12,000
+	th := NewThrottle()
+	admit := func(secret string, at time.Duration) *Decision {
+		return Admit(s, Input{Secret: secret, Req: chat("gpt-5-mini", "hi"), Now: demoNow.Add(at), Throttle: th}, rand.New(rand.NewPCG(1, 2)))
+	}
+	for i := range ThrottleRate {
+		d := admit(secret("k1"), time.Duration(i)*time.Second)
+		if d.Reject != nil {
+			t.Fatalf("request %d refused: %+v", i+1, d.Reject)
+		}
+		if want := fmt.Sprintf("over cap · throttled to %d a minute per key · admitted, %d of %d", ThrottleRate, i+1, ThrottleRate); d.budgetStep.Outcome != want || d.budgetStep.State != "warn" {
+			t.Fatalf("request %d budget step %+v", i+1, d.budgetStep)
 		}
 	}
-}
 
-func TestThrottleRefusesAShareWithRetryAfter(t *testing.T) {
-	s := DemoSnapshot()
-	s.Spend.ByTeam["support"] = 13_200 // b1 throttles at $12,000: 110% refuses 75%
-	d := Admit(s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi"), Now: demoNow}, rand.New(roll(0)))
-	if d.Reject == nil || d.Reject.Status != 429 || d.Reject.Code != "budget_throttled" || d.Reject.RetryAfter != ThrottleRetryAfter {
+	// The 11th, 10s in: the first request leaves the window at 60s.
+	d := admit(secret("k1"), 10*time.Second)
+	if d.Reject == nil || d.Reject.Status != 429 || d.Reject.Code != "budget_throttled" || d.Reject.RetryAfter != 50 {
 		t.Fatalf("reject %+v", d.Reject)
 	}
-	if want := "Team budget support is over its $12000 monthly cap and throttled: 75% of requests are refused. Retry after 5s, or ask a finance admin to raise the cap."; d.Reject.Message != want {
+	if want := "Team budget support is over its $12000 monthly cap, so each key is throttled to 10 requests a minute. Retry after 50s, or ask a finance admin to raise the cap."; d.Reject.Message != want {
 		t.Errorf("message %q", d.Reject.Message)
 	}
-	rc := d.Finish(s, nil, Result{}, nil, time.Now())
-	if rc.Verdict != "blocked" || rc.ErrorCode != "budget_throttled" || rc.Status != 429 {
+	rc := d.Finish(s, nil, Result{}, nil, demoNow)
+	if rc.Verdict != "throttled" || rc.ErrorCode != "budget_throttled" || rc.Status != 429 {
 		t.Fatalf("refused: %s %s %d", rc.Verdict, rc.ErrorCode, rc.Status)
 	}
-	if b := rc.Trace[1]; b.Outcome != "over cap · throttled 75%, refused" || b.State != "fail" {
+	if b := rc.Trace[1]; b.Outcome != "over cap · throttled to 10 a minute per key · refused, next slot in 50s" || b.State != "throttle" {
 		t.Errorf("refused budget step %+v", b)
 	}
-
-	rc = runRoll(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, roll(math.MaxUint64))
-	if rc.Verdict != "allowed" || rc.Trace[1].Outcome != "over cap · throttled 75%, admitted" || rc.Trace[1].State != "warn" {
-		t.Fatalf("admitted: %s, budget step %+v", rc.Verdict, rc.Trace[1])
+	if r := rc.Trace[2]; r.Outcome != "not reached" || r.State != "skip" {
+		t.Errorf("rules step %+v", r)
 	}
 
-	// From 120% of the cap nothing gets through, whatever the roll.
-	s.Spend.ByTeam["support"] = 14_400
-	if rc = runRoll(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, roll(math.MaxUint64)); rc.ErrorCode != "budget_throttled" {
-		t.Fatalf("at 120%%: %s %s", rc.Verdict, rc.ErrorCode)
+	// Each key has its own slots, even under the same team budget.
+	other := &store.KeyRecord{APIKey: model.APIKey{ID: "k9", Name: "support-batch", Team: "support", Project: "helpdesk",
+		ProjectID: demo.ProjectID(demo.Tenant, "support", "helpdesk"), AllowedModels: []string{"gpt-5-mini"}, Status: "active"}, Hash: "h-k9"}
+	s.KeyBy[other.Hash] = other
+	if d := AdmitKey(s, other, Input{Req: chat("gpt-5-mini", "hi"), Now: demoNow.Add(10 * time.Second), Throttle: th}, rand.New(rand.NewPCG(1, 2))); d.Reject != nil {
+		t.Fatalf("another key refused: %+v", d.Reject)
+	}
+
+	// A slot opens as the oldest request leaves the window.
+	if d := admit(secret("k1"), 60*time.Second); d.Reject != nil {
+		t.Fatalf("at 60s: %+v", d.Reject)
+	}
+	if d := admit(secret("k1"), 60*time.Second+500*time.Millisecond); d.Reject == nil || d.Reject.RetryAfter != 1 {
+		t.Fatalf("Retry-After rounds up to whole seconds: %+v", d.Reject)
+	}
+
+	// Under the cap nothing is limited.
+	s.Spend.ByTeam["support"] = 100
+	for i := range 2 * ThrottleRate {
+		if d := admit(secret("k1"), 61*time.Second); d.Reject != nil || d.budgetStep.Outcome != "within cap" {
+			t.Fatalf("under the cap, request %d: %+v %+v", i+1, d.Reject, d.budgetStep)
+		}
 	}
 }
 
-// The share refused follows the spend: about half just over the cap.
-func TestThrottleRefusesAboutTheShare(t *testing.T) {
-	s := DemoSnapshot()
-	s.Spend.ByTeam["support"] = 12_000
-	r := rand.New(rand.NewPCG(3, 4))
-	refused := 0
-	const n = 2000
-	for range n {
-		if d := Admit(s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi"), Now: demoNow}, r); d.Reject != nil {
-			refused++
+// The throttle's window slides: a request leaves it a window after it was
+// admitted. Refused requests don't take a slot.
+func TestThrottleTake(t *testing.T) {
+	th := NewThrottle()
+	for i := range ThrottleRate {
+		if ok, used, _ := th.Take("k", demoNow.Add(time.Duration(i)*time.Millisecond)); !ok || used != i+1 {
+			t.Fatalf("take %d: ok %v used %d", i+1, ok, used)
 		}
 	}
-	if share := float64(refused) / n; share < 0.45 || share > 0.55 {
-		t.Fatalf("refused %.2f at the cap, want about 0.5", share)
+	for range 3 {
+		if ok, _, wait := th.Take("k", demoNow.Add(time.Second)); ok || wait != ThrottleWindow-time.Second {
+			t.Fatalf("over the rate: ok %v wait %v", ok, wait)
+		}
+	}
+	if ok, used, _ := th.Take("k", demoNow.Add(ThrottleWindow+time.Hour)); !ok || used != 1 {
+		t.Fatalf("after the window: ok %v used %d", ok, used)
+	}
+	// A nil throttle has no memory: every request is a first one.
+	var none *Throttle
+	if ok, used, _ := none.Take("k", demoNow); !ok || used != 1 {
+		t.Fatalf("nil: ok %v used %d", ok, used)
 	}
 }
 
@@ -479,4 +505,40 @@ func TestGeneratedMixProducesEveryVerdict(t *testing.T) {
 		t.Errorf("allowed share %.2f outside 0.7–0.9: %v", share, counts)
 	}
 	t.Logf("verdicts: %v", counts)
+}
+
+// A "project is" condition names projects by id (§5.1): another team's
+// project with the same name doesn't match, and a rename keeps matching.
+func TestProjectConditionMatchesByID(t *testing.T) {
+	s := DemoSnapshot()
+	helpdesk := demo.ProjectID(demo.Tenant, "support", "helpdesk")
+	s.Rules = []model.PolicyRule{{ID: "rp", Name: "helpdesk-block", Version: 1, Mode: "enforce", FailMode: "open",
+		When: []model.Cond{{Field: "project", Op: "is", Value: []string{helpdesk}}}, Then: []model.Action{{Action: "block"}}}}
+	if rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.ErrorCode != "policy_blocked" {
+		t.Fatalf("by id: %s %s", rc.Verdict, rc.ErrorCode)
+	}
+	s.KeyByID("k1").Project = "Help desk"
+	if rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.ErrorCode != "policy_blocked" {
+		t.Fatalf("after a rename: %s %s", rc.Verdict, rc.ErrorCode)
+	}
+	// Another team's key in a project of the same name isn't in it.
+	other := &store.KeyRecord{APIKey: model.APIKey{ID: "k9", Name: "web-helpdesk", Team: "web", Project: "helpdesk",
+		ProjectID: demo.ProjectID(demo.Tenant, "web", "helpdesk"), AllowedModels: []string{"gpt-5-mini"}, Status: "active"}, Hash: "h-k9"}
+	if d := AdmitKey(s, other, Input{Req: chat("gpt-5-mini", "hi"), Now: demoNow}, rand.New(rand.NewPCG(1, 2))); d.Reject != nil {
+		t.Fatalf("same name, other team: %+v", d.Reject)
+	}
+	// A project's name isn't its id.
+	s.Rules[0].When[0].Value = []string{"Help desk"}
+	if rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{}); rc.Verdict == "blocked" {
+		t.Fatalf("a name matched: %s", rc.ErrorDetail)
+	}
+}
+
+// Receipts carry the key's project id (§5.1).
+func TestReceiptCarriesTheProjectID(t *testing.T) {
+	s := DemoSnapshot()
+	rc := run(t, s, Input{Secret: secret("k1"), Req: chat("gpt-5-mini", "hi")}, &fixedUp{})
+	if want := demo.ProjectID(demo.Tenant, "support", "helpdesk"); rc.ProjectID != want || rc.Project != "helpdesk" {
+		t.Fatalf("project %q %q, want %q", rc.ProjectID, rc.Project, want)
+	}
 }

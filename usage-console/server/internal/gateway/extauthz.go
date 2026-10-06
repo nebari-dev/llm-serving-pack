@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,9 +15,12 @@ import (
 // records them and receipt-ingest turns them back into the receipt's key,
 // team and project. aigw/base.yaml strips any the caller sends.
 const (
-	HeaderKeyID   = "X-Stargate-Key-Id"
-	HeaderTeam    = "X-Stargate-Team"
-	HeaderProject = "X-Stargate-Project"
+	HeaderKeyID = "X-Stargate-Key-Id"
+	HeaderTeam  = "X-Stargate-Team"
+	// HeaderProject is the project's name, URL-escaped (names may have
+	// spaces and any letters); ProjectName reads it back.
+	HeaderProject   = "X-Stargate-Project"
+	HeaderProjectID = "X-Stargate-Project-Id"
 	// HeaderSecretID names which of the key's secrets was used (SecretID).
 	HeaderSecretID = "X-Stargate-Secret-Id"
 	// HeaderModel is on a 403 only: the model the key may not call.
@@ -49,7 +53,8 @@ func (a *ExtAuthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set(HeaderKeyID, k.ID)
 	w.Header().Set(HeaderTeam, k.Team)
-	w.Header().Set(HeaderProject, k.Project)
+	w.Header().Set(HeaderProject, url.PathEscape(k.Project))
+	w.Header().Set(HeaderProjectID, k.ProjectID)
 	w.Header().Set(HeaderSecretID, SecretID(demo.HashSecret(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))))
 	m := requestModel(r)
 	if rej := snap.CheckModel(k, m); m != "" && rej != nil {
@@ -78,3 +83,12 @@ func requestModel(r *http.Request) string {
 // revealing it: the first 12 hex of the secret's hash. It doesn't change
 // when a rotation promotes the new secret.
 func SecretID(hash string) string { return hash[:min(12, len(hash))] }
+
+// ProjectName reads HeaderProject's value back into the name. A value that
+// isn't valid escaping is taken as it is.
+func ProjectName(v string) string {
+	if n, err := url.PathUnescape(v); err == nil {
+		return n
+	}
+	return v
+}

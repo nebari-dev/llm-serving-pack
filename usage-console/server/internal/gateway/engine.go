@@ -85,6 +85,9 @@ type Input struct {
 	// Deadline, when set, bounds rule evaluation (§9.3): a rule reached after
 	// it isn't evaluated, and its fail mode decides the request.
 	Deadline time.Time
+	// Throttle counts each key's requests while a throttle budget is over
+	// its cap. It must outlive the request; nil remembers nothing.
+	Throttle *Throttle
 }
 
 // Reject is a response the gateway returns without calling upstream.
@@ -92,29 +95,14 @@ type Reject struct {
 	Status  int
 	Code    string
 	Message string
-	// RetryAfter, when set, is the Retry-After header in seconds: a throttled
-	// request may go through if the caller tries again.
+	// RetryAfter, when set, is the Retry-After header in seconds: when a
+	// throttled key's next slot opens.
 	RetryAfter int
 }
 
-// ThrottleRetryAfter is the Retry-After a throttled refusal carries, in
-// seconds: about Warden's snapshot reload, after which spend (and the
-// share refused) may have moved.
-const ThrottleRetryAfter = 5
-
-// ThrottleShare is the share of requests a throttle budget refuses at a
-// month-to-date spend: none under the cap, half at it, rising linearly to
-// all of them at 120% of it (share = 0.5 + 2.5 × (spent − cap)/cap, capped
-// at 1).
-func ThrottleShare(spent, cap float64) float64 {
-	if cap <= 0 {
-		return 1
-	}
-	if spent < cap {
-		return 0
-	}
-	return min(1, 0.5+2.5*(spent-cap)/cap)
-}
+// Throttled reports whether the refusal is a throttle's: "try again later",
+// recorded with its own verdict rather than as a block.
+func (r *Reject) Throttled() bool { return r != nil && r.Code == "budget_throttled" }
 
 type Candidate struct {
 	Backend model.Backend
@@ -438,7 +426,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 	d := &Decision{start: in.Now, requested: in.Req.Model, Req: in.Req}
 	rc := &model.Receipt{
 		ID: hexStr(r, 8) + "-" + hexStr(r, 4), TenantID: s.Tenant, TraceID: hexStr(r, 32),
-		SessionID: in.SessionID, TS: in.Now.UnixMilli(), KeyID: k.ID, KeyName: k.Name, Team: k.Team, Project: k.Project,
+		SessionID: in.SessionID, TS: in.Now.UnixMilli(), KeyID: k.ID, KeyName: k.Name, Team: k.Team, Project: k.Project, ProjectID: k.ProjectID,
 		Actor: in.Actor, RequestedModel: in.Req.Model, RouteReason: "explicit", Verdict: "allowed", InboundVerdict: "skipped", PolicyMode: "enforced",
 		Redactions: []model.Redaction{}, Rules: []model.RuleEval{}, RequestHash: sha(in.Body),
 	}
@@ -462,17 +450,18 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 				return d.block(429, "budget_exceeded", fmt.Sprintf("%s budget %s is over its %s monthly cap. Ask a finance admin to raise it.",
 					scope, name, money(b.CapUSD)))
 			case "throttle":
-				// Refuse a share that grows with the overspend; the rest go through.
-				share := ThrottleShare(spent, b.CapUSD)
-				pct := fmt.Sprintf("%.0f%%", math.Round(share*100))
-				if r.Float64() < share {
-					d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttled "+pct+", refused", "fail"
-					d.block(429, "budget_throttled", fmt.Sprintf("%s budget %s is over its %s monthly cap and throttled: %s of requests are refused. Retry after %ds, or ask a finance admin to raise the cap.",
-						scope, name, money(b.CapUSD), pct, ThrottleRetryAfter))
-					d.Reject.RetryAfter = ThrottleRetryAfter
+				// Each key gets ThrottleRate requests a window; the next waits for a slot.
+				rate := fmt.Sprintf("over cap · throttled to %d a minute per key", ThrottleRate)
+				ok, used, wait := in.Throttle.Take(k.ID, in.Now)
+				if !ok {
+					secs := max(1, int(math.Ceil(wait.Seconds())))
+					d.budgetStep.Outcome, d.budgetStep.State = fmt.Sprintf("%s · refused, next slot in %ds", rate, secs), "throttle"
+					d.block(429, "budget_throttled", fmt.Sprintf("%s budget %s is over its %s monthly cap, so each key is throttled to %d requests a minute. Retry after %ds, or ask a finance admin to raise the cap.",
+						scope, name, money(b.CapUSD), ThrottleRate, secs))
+					d.Reject.RetryAfter = secs
 					return d
 				}
-				d.budgetStep.Outcome, d.budgetStep.State = "over cap · throttled "+pct+", admitted", "warn"
+				d.budgetStep.Outcome, d.budgetStep.State = fmt.Sprintf("%s · admitted, %d of %d", rate, used, ThrottleRate), "warn"
 			default:
 				d.budgetStep.Outcome, d.budgetStep.State = "over cap · warning only", "warn"
 			}
@@ -518,7 +507,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 			rc.Rules = append(rc.Rules, ev)
 			continue
 		}
-		ok, found := match(rule, ruleCtx{team: k.Team, project: k.Project, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs)})
+		ok, found := match(rule, ruleCtx{team: k.Team, project: k.ProjectID, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs)})
 		ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Matched: ok, Action: "no match"}
 		if ok && len(rule.Then) > 0 {
 			act := rule.Then[0]
@@ -717,6 +706,9 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 	rc.CostUSD = new(float64) // nothing billed unless served
 	if d.Reject != nil {
 		rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = "blocked", d.Reject.Status, d.Reject.Code, d.Reject.Message
+		if d.Reject.Throttled() {
+			rc.Verdict = "throttled"
+		}
 		rc.ResolvedModel = d.Req.Model
 		if r, ok := store.ResolveAlias(s.Aliases, d.Req.Model); ok {
 			rc.ResolvedModel = r
@@ -731,7 +723,7 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 		rules := model.TraceStep{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", len(rc.Rules)), Outcome: "not reached", MS: round2(d.rulesMS), State: "skip"}
 		if d.blockedBy != "" {
 			rules.Outcome, rules.State = d.blockedBy, "fail"
-		} else if d.budgetStep.State != "fail" {
+		} else if d.budgetStep.State != "fail" && d.budgetStep.State != "throttle" {
 			rules.Outcome, rules.State = d.Reject.Message, "fail"
 		}
 		skip := func(step string) model.TraceStep {

@@ -1,4 +1,4 @@
-import { ArrowLeft, Ban, Ellipsis, Plus, RefreshCw, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, Ban, Ellipsis, FolderKanban, Plus, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Meter, Sparkline } from '@/components/gw/charts'
@@ -8,12 +8,13 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleShare, fromWire, governingBudget, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, projects, revokeKey, teams } from '@/data/catalog'
 import { clock, int, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
 import { useLive, useNow } from '@/state/live'
 import { CreateKeyDialog, RevokeKeyDialog, RotateKeyDialog, RotationStatus, timeLeft } from './keys-dialogs'
+import { ManageProjectsDialog } from './project-dialogs'
 import { fmtDate, keySpend24h } from './spend-data'
 
 // §7.5.8 Keys. List → key detail (?key=<id>), each key a miniature dashboard.
@@ -66,8 +67,9 @@ export function KeysPage() {
   const [creating, setCreating] = useState(false)
   const [revoking, setRevoking] = useState<ApiKey | null>(null)
   const [rotating, setRotating] = useState<ApiKey | null>(null)
+  const [managingProjects, setManagingProjects] = useState(false)
   // Api mode re-reads /keys, which also picks up this page's own writes.
-  const { data: live } = useLive<WireKey[] | null>(dataMode === 'api' ? '/keys' : null, null)
+  const { data: live, reload } = useLive<WireKey[] | null>(dataMode === 'api' ? '/keys' : null, null)
   useEffect(() => {
     if (live) setList(live.map(fromWire))
   }, [live])
@@ -95,6 +97,15 @@ export function KeysPage() {
         }}
       />
       <RotateKeyDialog apiKey={rotating} onOpenChange={(o) => !o && setRotating(null)} onRotate={(k) => update(k.id, k)} />
+      <ManageProjectsDialog
+        open={managingProjects}
+        onOpenChange={setManagingProjects}
+        onChanged={() => {
+          // A rename shows on its keys at once; api mode re-reads them too.
+          setList((l) => l.map((k) => ({ ...k, project: projects.find((p) => p.id === k.projectId)?.name ?? k.project })))
+          reload()
+        }}
+      />
     </>
   )
 
@@ -133,9 +144,14 @@ export function KeysPage() {
         title="Keys"
         description="Gateway keys that apps use instead of provider credentials. Each key is scoped to a team and project and an allow-list of models and regions. Budgets on its team, project or the key itself apply to it."
         actions={
-          <Button onClick={() => setCreating(true)}>
-            <Plus /> Create key
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setManagingProjects(true)}>
+              <FolderKanban /> Projects
+            </Button>
+            <Button onClick={() => setCreating(true)}>
+              <Plus /> Create key
+            </Button>
+          </>
         }
       />
       <Section
@@ -182,7 +198,7 @@ export function KeysPage() {
                   <TableCell className="py-1.5 text-sm">
                     {teams.find((t) => t.id === k.team)?.name ?? k.team}
                     <span className="text-muted-foreground"> / </span>
-                    <span className="font-mono text-xs">{k.project}</span>
+                    <span className="text-xs">{k.project}</span>
                   </TableCell>
                   <TableCell className="num py-1.5 text-right font-mono" title={k.allowedModels.join(', ')}>
                     {k.allowedModels.length}
@@ -252,7 +268,8 @@ export function KeysPage() {
 
 /**
  * What the key's budget does at its cap. Api mode says only what the gateway
- * does, as on Spend: block returns 429, throttle and warn admit and mark.
+ * does, as on Spend: block returns 429, throttle holds the key to a few
+ * requests a minute, warn admits and marks.
  */
 function budgetWords(b: (typeof budgets)[number]) {
   const over = b.currentUsd > b.capUsd
@@ -262,9 +279,9 @@ function budgetWords(b: (typeof budgets)[number]) {
       return b.onExceed === 'block'
         ? 'Over cap · blocking new requests'
         : b.onExceed === 'throttle'
-          ? `Over cap · refusing ${Math.round(throttleShare(b) * 100)}% of new requests (429, retry later)`
+          ? `Over cap · throttled to ${throttleRate(b)} requests a minute (429, retry later)`
           : 'Over cap · requests admitted and marked'
-    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Marks requests over ${cap}`
+    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles to ${throttleRate(b)} requests a minute at ${cap}` : `Marks requests over ${cap}`
   }
   if (over) return `Over cap · ${b.onExceed === 'throttle' ? 'throttling' : b.onExceed === 'block' ? 'blocking' : 'warning'} new requests`
   return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Warns at ${cap}`
@@ -295,7 +312,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
       .map((g) => ({ ...g, p50: [...g.ms].sort((a, b) => a - b)[Math.floor(g.ms.length / 2)] ?? 0 }))
       .sort((a, b) => b.cost - a.cost)
   }, [receipts])
-  const blocks = receipts.filter((r) => r.verdict === 'blocked' || r.verdict === 'truncated').slice(0, 8)
+  const blocks = receipts.filter((r) => r.verdict === 'blocked' || r.verdict === 'truncated' || r.verdict === 'throttled').slice(0, 8)
   const recentWindow = receipts.length ? receipts[receipts.length - 1].ts : Date.now()
 
   return (
@@ -438,7 +455,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
         )}
       </Section>
 
-      <Section title="Recent blocks" description="Requests the gateway stopped or cut short for this key. Open one to see which rule and what to change.">
+      <Section title="Recent blocks" description="Requests the gateway stopped, throttled or cut short for this key. Open one to see which rule or budget, and what to change.">
         {blocks.length ? (
           <ul className="divide-y divide-border rounded-md border border-border bg-card">
             {blocks.map((r) => (
@@ -452,7 +469,11 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
                   <span className="num font-mono text-xs">{clock(r.ts)}</span>
                   <span className="font-mono text-xs">{r.requestedModel}</span>
                   <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {r.verdict === 'blocked' ? (r.rules.find((x) => x.matched)?.name ?? r.errorCode) : 'stream cut by inbound inspection'}
+                    {r.verdict === 'blocked'
+                      ? (r.rules.find((x) => x.matched)?.name ?? r.errorCode)
+                      : r.verdict === 'throttled'
+                        ? 'throttled by a budget over its cap · retry later'
+                        : 'stream cut by inbound inspection'}
                   </span>
                   <span className="text-xs text-muted-foreground">Open receipt →</span>
                 </button>

@@ -128,6 +128,7 @@ spec:
               stargate.key_id: "%REQ(X-STARGATE-KEY-ID)%"
               stargate.team: "%REQ(X-STARGATE-TEAM)%"
               stargate.project: "%REQ(X-STARGATE-PROJECT)%"
+              stargate.project_id: "%REQ(X-STARGATE-PROJECT-ID)%"
               stargate.secret_id: "%REQ(X-STARGATE-SECRET-ID)%"
               stargate.denied_key_id: "%RESP(X-STARGATE-KEY-ID)%"
               stargate.denied_model: "%RESP(X-STARGATE-MODEL)%"
@@ -189,7 +190,7 @@ spec:
     bufferLimit: 50Mi
   headers:
     earlyRequestHeaders:
-      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id, x-stargate-backend, x-ai-eg-original-path]
+      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id, x-stargate-backend, x-ai-eg-original-path]
 ---
 # Key check: every request goes to stargate-api's ext_authz service (:8082)
 # with its body, since the model lives there. 401 for a bad key, 403 for a model
@@ -214,7 +215,7 @@ spec:
           kind: Backend
           name: stargate-authz
           port: ${STARGATE_AUTHZ_PORT:-8082}
-      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-secret-id]
+      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id]
 ---
 # Warden: budgets and policy rules, after the key check. Headers and the whole
 # body go to it. messageTimeout sits above Warden's own 50ms deadline so

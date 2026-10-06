@@ -17,7 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toast'
-import { backends, keys, models, type Receipt, teams, type Verdict } from '@/data/catalog'
+import { backends, keys, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
@@ -28,7 +28,12 @@ import { type Dim, type Filters, type TrafficWindow, useTrafficFeed } from '@/st
 const dims: { dim: Dim; label: string; values: { value: string; label: string }[] }[] = [
   { dim: 'key', label: 'Key', values: keys.map((k) => ({ value: k.name, label: k.name })) },
   { dim: 'team', label: 'Team', values: teams.map((t) => ({ value: t.id, label: t.name })) },
-  { dim: 'project', label: 'Project', values: [...new Set(keys.map((k) => k.project))].map((p) => ({ value: p, label: p })) },
+  // By id, labelled with the team, since names repeat across teams.
+  {
+    dim: 'project',
+    label: 'Project',
+    values: projects.map((p) => ({ value: p.id, label: `${p.name} · ${teams.find((t) => t.id === p.team)?.name ?? p.team}` })),
+  },
   { dim: 'model', label: 'Model', values: models.map((m) => ({ value: m.id, label: m.id })) },
   {
     dim: 'verdict',
@@ -538,7 +543,7 @@ const TrafficRow = memo(function TrafficRow({
   const meta = verdictMeta[r.verdict]
   const cell = 'h-(--row-h) border-b border-border px-(--cell-px) whitespace-nowrap'
   const pinnedBg = 'bg-canvas group-hover:bg-muted group-focus-visible:bg-muted'
-  const blocked = r.verdict === 'blocked'
+  const blocked = r.verdict === 'blocked' || r.verdict === 'throttled' // refused before the upstream call
   return (
     <tr
       tabIndex={0}

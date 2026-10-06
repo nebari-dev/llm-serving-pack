@@ -1,11 +1,12 @@
-import { Ban, Check, EyeOff, Scissors, Shuffle, TriangleAlert } from 'lucide-react'
+import { Ban, Check, EyeOff, Hourglass, Scissors, Shuffle, TriangleAlert } from 'lucide-react'
 import type { ComponentProps } from 'react'
 import type { Verdict } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
 // §7.7: verdict is never conveyed by color alone — every verdict carries a
 // glyph and a text label. Truncated shares the degraded hue but has its own
-// glyph and label so it never reads as "blocked" (§4.5 streaming).
+// glyph and label so it never reads as "blocked" (§4.5 streaming). So does
+// Throttled: a throttle budget's "try again later" (429 with Retry-After).
 
 export type Tone = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'degraded' | 'neutral'
 
@@ -15,6 +16,7 @@ export const verdictMeta: Record<Verdict, { label: string; tone: Tone; Icon: typ
   rerouted: { label: 'Rerouted', tone: 'rerouted', Icon: Shuffle },
   blocked: { label: 'Blocked', tone: 'blocked', Icon: Ban },
   truncated: { label: 'Truncated', tone: 'degraded', Icon: Scissors },
+  throttled: { label: 'Throttled', tone: 'degraded', Icon: Hourglass },
 }
 
 export const toneText: Record<Tone, string> = {

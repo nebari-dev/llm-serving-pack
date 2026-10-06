@@ -2,7 +2,6 @@ package warden
 
 import (
 	"encoding/json"
-	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -152,24 +151,25 @@ func TestProjectBudgetAnswers429(t *testing.T) {
 	}
 }
 
-// roll is a rand source whose every draw is v: 0 falls under any throttle
-// share, max under none below 1.
-type roll uint64
-
-func (r roll) Uint64() uint64 { return uint64(r) }
-
-// rolling makes the server's throttle draws come from r.
-func rolling(w *Server, r roll) *Server {
-	w.evaluate = func(snap *gateway.Snapshot, k *store.KeyRecord, in gateway.Input) *gateway.Decision {
-		return gateway.AdmitKey(snap, k, in, rand.New(r))
-	}
-	return w
-}
-
-func TestThrottleBudgetAnswers429WithRetryAfter(t *testing.T) {
+// Over a throttle cap each key gets gateway.ThrottleRate requests a minute.
+// Warden is one process, so its counters are in memory and shared by every
+// request it decides; the one over the rate is refused with Retry-After until
+// the key's next slot, and recorded as throttled, not blocked.
+func TestThrottleBudgetLimitsEachKeyWithRetryAfter(t *testing.T) {
 	snap := gateway.DemoSnapshot()
 	snap.Spend.ByTeam["support"] = 13_000 // over b1's throttle cap
-	r := rolling(newServer(snap), 0).decide(headers(snap, "k1"), body("gpt-5-mini", "hello"))
+	w := newServer(snap)
+	now := time.Now() // rules check their deadline against the real clock; this only moves forward
+	w.Now = func() time.Time { return now }
+	for i := range gateway.ThrottleRate {
+		r := w.decide(headers(snap, "k1"), body("gpt-5-mini", "hello"))
+		p := policyOf(t, r)
+		if r.GetImmediateResponse() != nil || p.Trace[0].State != "warn" || !strings.Contains(p.Trace[0].Outcome, "admitted") {
+			t.Fatalf("request %d: policy = %+v", i+1, p)
+		}
+		now = now.Add(time.Second)
+	}
+	r := w.decide(headers(snap, "k1"), body("gpt-5-mini", "hello"))
 	ir := r.GetImmediateResponse()
 	if ir.GetStatus().GetCode() != 429 || !strings.Contains(string(ir.GetBody()), `"code":"budget_throttled"`) {
 		t.Fatalf("immediate = %v", ir)
@@ -178,22 +178,18 @@ func TestThrottleBudgetAnswers429WithRetryAfter(t *testing.T) {
 	for _, h := range ir.GetHeaders().GetSetHeaders() {
 		hs[h.GetHeader().GetKey()] = string(h.GetHeader().GetRawValue())
 	}
-	if hs["retry-after"] != "5" || hs[gateway.HeaderKeyID] != "k1" {
+	// The first of the ten leaves the window 60s after it came, 50s from now.
+	if hs["retry-after"] != "50" || hs[gateway.HeaderKeyID] != "k1" {
 		t.Errorf("headers %v", hs)
 	}
 	p := policyOf(t, r)
-	if p.Verdict != "blocked" || p.Blocked == nil || p.Blocked.ErrorCode != "budget_throttled" || p.Blocked.Status != 429 || p.Trace[0].State != "fail" {
+	if p.Verdict != "throttled" || p.Blocked == nil || p.Blocked.ErrorCode != "budget_throttled" || p.Blocked.Status != 429 || p.Trace[0].State != "throttle" {
 		t.Fatalf("policy = %+v", p)
 	}
-}
-
-func TestThrottleBudgetAdmitsTheRestWithWarning(t *testing.T) {
-	snap := gateway.DemoSnapshot()
-	snap.Spend.ByTeam["support"] = 13_000
-	r := rolling(newServer(snap), math.MaxUint64).decide(headers(snap, "k1"), body("gpt-5-mini", "hello"))
-	p := policyOf(t, r)
-	if r.GetImmediateResponse() != nil || p.Trace[0].State != "warn" || !strings.Contains(p.Trace[0].Outcome, "throttled") {
-		t.Fatalf("policy = %+v", p)
+	// The slot opens when Retry-After said.
+	now = now.Add(50 * time.Second)
+	if r := w.decide(headers(snap, "k1"), body("gpt-5-mini", "hello")); r.GetImmediateResponse() != nil {
+		t.Fatalf("after Retry-After: %v", r.GetImmediateResponse())
 	}
 }
 

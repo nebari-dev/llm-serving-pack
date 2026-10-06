@@ -122,6 +122,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/teams", s.teams)
 	h("GET "+p+"/projects", s.projects)
 	h("POST "+p+"/projects", s.createProject)
+	h("PUT "+p+"/projects/{id}", s.renameProject)
+	h("DELETE "+p+"/projects/{id}", s.deleteProject)
 	h("GET "+p+"/models", s.models)
 	h("GET "+p+"/aliases", s.aliases)
 	h("PUT "+p+"/aliases/{alias}", s.putAlias)
@@ -428,17 +430,22 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	}
 	in.Name, in.Project = strings.TrimSpace(in.Name), strings.TrimSpace(in.Project)
 	switch {
-	case in.Name == "" || in.Team == "" || in.Project == "":
+	case in.Name == "" || in.Team == "" || in.Project == "" && in.ProjectID == "":
 		return nil, badRequest("name, team and project are required")
 	case len(in.AllowedModels) == 0:
 		return nil, badRequest("at least one allowed model is required")
 	}
-	if err := s.checkKeyProject(r.Context(), t, in.Team, in.Project); err != nil {
+	// The project must exist on the key's team: a key no longer creates one.
+	if err := s.keyProject(r.Context(), t, &in); err != nil {
 		return nil, err
 	}
 	k, secret, err := s.Store.CreateKey(r.Context(), t, s.DevActor, in)
 	if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.Code == "23503" {
 		return nil, badRequest("unknown team")
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		// Deleted, or moved team, since keyProject looked.
+		return nil, badRequest("Project " + in.Project + " isn't one of team " + in.Team + "'s projects any more.")
 	}
 	if err != nil {
 		return nil, err

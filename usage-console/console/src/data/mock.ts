@@ -1,7 +1,8 @@
 // Seeded synthetic data for the demo tenant (spec §7.5.1). Everything here is
 // fabricated and deterministic so screens render the same way on every load.
 
-export type Verdict = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'truncated'
+/** throttled: refused for now (429 with Retry-After) by a throttle budget over its cap, not blocked. */
+export type Verdict = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'truncated' | 'throttled'
 // skipped: the response wasn't inspected (never reached, or no inspector in the path)
 export type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
 export type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
@@ -15,11 +16,17 @@ export interface Team {
   costCenter: string
 }
 
-/** A team's project (§5.2). Names are unique within a team; budgets name it by id. */
+/**
+ * A team's project (§5.2). Names are for people, unique within a team
+ * (ignoring case); receipts, budgets and rules name it by id, so it can be
+ * renamed.
+ */
 export interface Project {
   id: string
   team: string
   name: string
+  /** The version a rename or delete names in If-Match (api mode). */
+  etag?: string
 }
 
 export interface ApiKey {
@@ -27,7 +34,7 @@ export interface ApiKey {
   name: string
   prefix: string
   team: string
-  /** The project's name, as receipts carry it. */
+  /** The project's name. */
   project: string
   projectId: string
   allowedModels: string[]
@@ -108,7 +115,8 @@ export interface TraceStep {
   input: string
   outcome: string
   ms: number
-  state: 'ok' | 'warn' | 'fail' | 'skip'
+  /** throttle: a throttle budget refused the request for now (429, retry later). */
+  state: 'ok' | 'warn' | 'fail' | 'throttle' | 'skip'
 }
 
 export interface RuleEval {
@@ -132,7 +140,10 @@ export interface Receipt {
   keyId: string
   keyName: string
   team: string
+  /** The project's name when the request was made. */
   project: string
+  /** Api mode: absent on receipts with no key identity. */
+  projectId?: string
   actor?: string
   requestedModel: string
   resolvedModel: string
@@ -447,6 +458,8 @@ export interface Budget {
   capUsd: number
   currentUsd: number
   onExceed: 'warn' | 'throttle' | 'block'
+  /** A throttle budget: requests a minute each covered key gets while it's over its cap. */
+  throttlePerMinute?: number
   projectedUsd: number
   /** The scope's daily average the projection uses. */
   trailingDailyUsd: number
@@ -456,16 +469,11 @@ export interface Budget {
   etag?: string
 }
 
-/**
- * The share of new requests a throttle budget refuses with 429 and
- * Retry-After, as the gateway computes it: none under the cap, half at it,
- * rising linearly to all of them at 120% of it.
- */
-export function throttleShare(b: Pick<Budget, 'currentUsd' | 'capUsd'>) {
-  if (b.capUsd <= 0) return 1
-  if (b.currentUsd < b.capUsd) return 0
-  return Math.min(1, 0.5 + (2.5 * (b.currentUsd - b.capUsd)) / b.capUsd)
-}
+/** The gateway's throttle (gateway.ThrottleRate): requests a minute per key while a throttle budget is over its cap. */
+export const THROTTLE_PER_MINUTE = 10
+
+/** Requests a minute each key gets while `b`, a throttle budget, is over its cap. */
+export const throttleRate = (b: Pick<Budget, 'throttlePerMinute'>) => b.throttlePerMinute ?? THROTTLE_PER_MINUTE
 
 /** A budget's scope as people read it: the key's or project's name, not its id. */
 export const budgetLabel = (b: Pick<Budget, 'scope' | 'scopeName'>) => b.scopeName || b.scope
@@ -587,7 +595,7 @@ function budgetStep(b: Budget | undefined): TraceStep {
   if (!b) return { step: 'Budget checked', input: 'no budget applies', outcome: 'skipped', ms: 0.1, state: 'skip' }
   const usd = (n: number) => (n < 100 ? `$${n.toFixed(2)}` : `$${Math.round(n)}`)
   const over = b.currentUsd >= b.capUsd
-  const outcome = !over ? 'within cap' : b.onExceed === 'block' ? 'over cap · blocked' : b.onExceed === 'throttle' ? 'over cap · throttle active, admitted' : 'over cap · warning only'
+  const outcome = !over ? 'within cap' : b.onExceed === 'block' ? 'over cap · blocked' : b.onExceed === 'throttle' ? 'over cap · throttled to 10 a minute per key · admitted' : 'over cap · warning only'
   return { step: 'Budget checked', input: `${b.scopeType} budget ${budgetLabel(b)} ·${usd(b.currentUsd)} of ${usd(b.capUsd)}`, outcome, ms: 0.1, state: !over ? 'ok' : b.onExceed === 'block' ? 'fail' : 'warn' }
 }
 
@@ -714,6 +722,7 @@ export function makeReceipt(ts: number, r: () => number = rand, opts: { inFlight
     keyName: key.name,
     team: key.team,
     project: key.project,
+    projectId: key.projectId,
     actor: pick(actors, r),
     requestedModel: requested,
     resolvedModel: resolved,
@@ -761,6 +770,8 @@ export interface SeriesPoint {
   rerouted: number
   blocked: number
   truncated: number
+  /** Refused for now by a throttle budget over its cap. */
+  throttled: number
 }
 
 export const trafficSeries: SeriesPoint[] = Array.from({ length: 48 }, (_, i) => {
@@ -775,6 +786,7 @@ export const trafficSeries: SeriesPoint[] = Array.from({ length: 48 }, (_, i) =>
     rerouted: Math.round(base * 0.04),
     blocked: Math.round(base * (incident ? 0.09 : 0.03)),
     truncated: Math.round(base * 0.005),
+    throttled: Math.round(base * 0.004),
   }
 })
 
@@ -1062,7 +1074,7 @@ export interface UnpricedPair {
 
 const seriesTotals = trafficSeries.reduce(
   (a, p) => ({
-    requests: a.requests + p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated,
+    requests: a.requests + p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated + p.throttled,
     blocked: a.blocked + p.blocked,
     redacted: a.redacted + p.redacted,
   }),

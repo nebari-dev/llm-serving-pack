@@ -114,8 +114,9 @@ func (s *Store) Changes(ctx context.Context, tenant string, limit int, kind stri
 type NewKey struct {
 	Name string `json:"name"`
 	Team string `json:"team"`
-	// Project is a project of Team, by name. One the team doesn't have yet is
-	// created along with the key.
+	// ProjectID is one of Team's projects. The API also takes Project, the
+	// project's name within the team, and resolves it (KeyProject).
+	ProjectID      string   `json:"projectId"`
 	Project        string   `json:"project"`
 	AllowedModels  []string `json:"allowedModels"`
 	AllowedRegions []string `json:"allowedRegions"`
@@ -155,15 +156,21 @@ func (s *Store) CreateKey(ctx context.Context, tenant, actor string, in NewKey) 
 		return KeyRecord{}, "", err
 	}
 	defer tx.Rollback(ctx)
-	p, _, err := ensureProject(ctx, tx, tenant, actor, in.Team, in.Project)
-	if err != nil {
+	// The project must still be the team's, and not deleted; FOR SHARE
+	// holds off a delete until the key is in.
+	var live bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE tenant_id = $1 AND id = $2 AND team_id = $3 AND deleted_at IS NULL FOR SHARE)`,
+		tenant, in.ProjectID, in.Team).Scan(&live); err != nil {
 		return KeyRecord{}, "", err
+	}
+	if !live {
+		return KeyRecord{}, "", ErrNotFound
 	}
 	k, err := scanKey(tx.QueryRow(ctx, `
 		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'active')
 		RETURNING `+keyCols,
-		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, p.ID, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
+		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.ProjectID, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
 	if err != nil {
 		return KeyRecord{}, "", err
 	}

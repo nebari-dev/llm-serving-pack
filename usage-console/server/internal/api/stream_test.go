@@ -48,3 +48,14 @@ func TestReceiptQueryRangeStartsOnABucket(t *testing.T) {
 		t.Fatalf("keys %v aggregable %v", q.Keys, q.Aggregable())
 	}
 }
+
+// Traffic's project filter takes project ids, like the list (§5.1).
+func TestFilterMatchesProjectsByID(t *testing.T) {
+	f := filter{tenant: "demo", q: store.ReceiptQuery{Projects: []string{"p1"}}}
+	if !f.match(model.Receipt{TenantID: "demo", Project: "helpdesk", ProjectID: "p1"}) {
+		t.Error("same id didn't match")
+	}
+	if f.match(model.Receipt{TenantID: "demo", Project: "helpdesk", ProjectID: "p2"}) {
+		t.Error("another team's helpdesk matched")
+	}
+}

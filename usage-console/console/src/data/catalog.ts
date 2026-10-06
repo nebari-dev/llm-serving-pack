@@ -97,7 +97,8 @@ export let budgets: Budget[] = mock.budgets
 export const governingBudget = (k: BudgetKey) => mock.governingBudget(k, budgets)
 export const coveringBudgets = (k: BudgetKey) => budgets.filter((b) => mock.budgetCovers(b, k))
 export const budgetLabel = mock.budgetLabel
-export const throttleShare = mock.throttleShare
+export const throttleRate = mock.throttleRate
+export const THROTTLE_PER_MINUTE = mock.THROTTLE_PER_MINUTE
 /** Every team's projects, keys or not. Forms re-read GET /projects when they open. */
 export let projects: Project[] = mock.projects
 export let rules: PolicyRule[] = mock.rules
@@ -210,7 +211,8 @@ export async function hydrate() {
 export interface NewKeyInput {
   name: string
   team: string
-  project: string
+  /** One of the team's projects; create it first (createProject). */
+  projectId: string
   allowedModels: string[]
   allowedRegions: string[]
   expiresAt: string | null
@@ -221,25 +223,23 @@ function mockSecret() {
   return 'ngw_live_' + Array.from({ length: 40 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join('')
 }
 
-/** Records a project the catalog hasn't seen (one a key creation made). */
+/** Records a project, or its new name, in the catalog. */
 const storeProject = (p: Project) => {
-  if (!projects.some((x) => x.id === p.id)) projects = [...projects, p]
+  projects = projects.some((x) => x.id === p.id) ? projects.map((x) => (x.id === p.id ? p : x)) : [...projects, p]
 }
 
-/** The key's team's project by name; one the team doesn't have is created with the key (and audited). */
+/** Creates a key in one of its team's projects; the server refuses a project the team doesn't have. */
 export async function createKey(input: NewKeyInput): Promise<{ key: ApiKey; secret: string }> {
   if (dataMode === 'api') {
     const res = await api<{ key: WireKey; secret: string }>('/keys', { method: 'POST', body: JSON.stringify(input) })
-    const key = fromWire(res.key)
-    storeProject({ id: key.projectId, team: key.team, name: key.project })
-    return { key, secret: res.secret }
+    return { key: fromWire(res.key), secret: res.secret }
   }
   const secret = mockSecret()
-  const projectId = mock.mockProjectId(input.team, input.project)
-  storeProject({ id: projectId, team: input.team, name: input.project })
+  const project = projects.find((p) => p.id === input.projectId && p.team === input.team)
+  if (!project) throw new ApiError(400, 'bad_request', `Project ${input.projectId} isn't one of team ${input.team}'s projects.`)
   const key: ApiKey = {
     ...input,
-    projectId,
+    project: project.name,
     id: 'k' + Math.random().toString(36).slice(2, 7),
     prefix: secret.slice(0, 13),
     lastUsed: 'never',
@@ -278,16 +278,49 @@ export async function finishRotation(k: ApiKey): Promise<ApiKey> {
   return { ...k, status: 'active', rotation: undefined }
 }
 
-/** Adds a project to a team, so it can have a budget before it has keys. A name the team has is a 409. */
+/** Projects of `team` other than `except` already using `name`, ignoring case and outer spaces, as the server compares. */
+export const projectNameTaken = (list: Project[], team: string, name: string, except?: string) =>
+  list.some((x) => x.team === team && x.id !== except && x.name.trim().toLowerCase() === name.trim().toLowerCase())
+
+/** Adds a project to a team, so it can have keys and a budget. A name the team has (ignoring case) is a 409. */
 export async function createProject(team: string, name: string): Promise<Project> {
   let p: Project
+  name = name.trim()
   if (dataMode === 'api') p = await api<Project>('/projects', { method: 'POST', body: JSON.stringify({ team, name }) })
   else {
-    if (projects.some((x) => x.team === team && x.name === name)) throw new ApiError(409, 'conflict', `team ${team} already has a project named ${name}`)
+    if (projectNameTaken(projects, team, name)) throw new ApiError(409, 'conflict', `Team ${team} already has a project named ${name}.`)
     p = { id: mock.mockProjectId(team, name), team, name }
   }
   storeProject(p)
   return p
+}
+
+/** Renames `p` as the caller last saw it. Keys, budgets, rules and receipts follow it by id. */
+export async function renameProject(p: Project, name: string): Promise<Project> {
+  name = name.trim()
+  let next: Project
+  if (dataMode === 'api') next = await api<Project>(`/projects/${p.id}`, { method: 'PUT', body: JSON.stringify({ name }), headers: { 'If-Match': p.etag ?? '' } })
+  else {
+    if (projectNameTaken(projects, p.team, name, p.id)) throw new ApiError(409, 'conflict', `Team ${p.team} already has a project named ${name}.`)
+    next = { ...p, name }
+  }
+  storeProject(next)
+  keys = keys.map((k) => (k.projectId === p.id ? { ...k, project: next.name } : k))
+  return next
+}
+
+/**
+ * Deletes `p`. The server refuses (409, saying why) while it has an active
+ * key or a budget; mock mode checks the same.
+ */
+export async function deleteProject(p: Project): Promise<void> {
+  if (dataMode === 'api') await api(`/projects/${p.id}`, { method: 'DELETE', headers: { 'If-Match': p.etag ?? '' } })
+  else {
+    const active = keys.filter((k) => k.projectId === p.id && k.status !== 'revoked')
+    if (active.length || budgets.some((b) => b.scopeType === 'project' && b.scope === p.id))
+      throw new ApiError(409, 'conflict', `Project ${p.name} still has active keys or a budget. Revoke the keys and delete the budget first.`)
+  }
+  projects = projects.filter((x) => x.id !== p.id)
 }
 
 // ---- budgets ---------------------------------------------------------------

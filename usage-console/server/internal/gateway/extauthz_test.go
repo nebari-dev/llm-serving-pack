@@ -93,6 +93,29 @@ func TestExtAuthzIdentityHeaders(t *testing.T) {
 	if w.Code != 200 || h.Get(HeaderTeam) != "web" || h.Get(HeaderProject) != "assistant" || h.Get(HeaderModel) != "" {
 		t.Errorf("200 headers: %d %v", w.Code, h)
 	}
+	if want := demo.ProjectID(demo.Tenant, "web", "assistant"); h.Get(HeaderProjectID) != want {
+		t.Errorf("%s = %q, want %q", HeaderProjectID, h.Get(HeaderProjectID), want)
+	}
+}
+
+// Project names may have spaces and non-ASCII letters, so the header carries
+// the name URL-escaped; ProjectName reads it back.
+func TestExtAuthzEscapesTheProjectName(t *testing.T) {
+	snap := DemoSnapshot()
+	snap.KeyByID("k4").Project = "Help desk · ünïcode"
+	var cur Current
+	cur.Store(snap)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5-mini"}`))
+	req.Header.Set("Authorization", secret("k4"))
+	w := httptest.NewRecorder()
+	(&ExtAuthz{Snap: &cur}).ServeHTTP(w, req)
+	got := w.Header().Get(HeaderProject)
+	if strings.ContainsAny(got, " ·ü") || ProjectName(got) != "Help desk · ünïcode" {
+		t.Errorf("header %q reads back as %q", got, ProjectName(got))
+	}
+	if ProjectName("assistant") != "assistant" || ProjectName("100%") != "100%" {
+		t.Error("a plain or unescapable name should read as itself")
+	}
 }
 
 // Which secret authenticated a request goes on as a header, so receipts can

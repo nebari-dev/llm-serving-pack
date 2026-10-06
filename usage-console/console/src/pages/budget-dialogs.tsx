@@ -15,7 +15,6 @@ import {
   budgetLabel,
   budgets as catalogBudgets,
   createBudget,
-  createProject,
   dataMode,
   deleteBudget,
   fromWire,
@@ -24,13 +23,14 @@ import {
   type Project,
   projects as catalogProjects,
   teams,
-  throttleShare,
+  THROTTLE_PER_MINUTE,
   updateBudget,
   type WireKey,
 } from '@/data/catalog'
 import { money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
+import { NewProjectForm } from './project-dialogs'
 
 // §7.5.5 budget writes on Spend: add (scope, monthly cap, what happens at the
 // cap), edit (cap and action; the scope is fixed), delete. Every write shows
@@ -57,7 +57,7 @@ const actions: { value: OnExceed; label: string; description: string }[] = [
     value: 'throttle',
     label: 'Throttle',
     description: api
-      ? 'Over the cap, a share of new requests get 429 budget_throttled with Retry-After: half at the cap, rising to all of them at 120% of it.'
+      ? `Over the cap, each key gets ${THROTTLE_PER_MINUTE} requests a minute. More get 429 budget_throttled, with Retry-After saying when to try again.`
       : 'Requests over the cap are throttled to 10 requests/min.',
   },
   {
@@ -96,64 +96,6 @@ function useScopes(open: boolean) {
     key: active.map((k) => ({ value: k.id, label: k.name })).sort(byName),
   }
   return { loaded: !api || (live.loaded && liveProjects.loaded), reloadProjects: liveProjects.reload, ...scopes }
-}
-
-/** Adds a project from the budget form, so it can have a budget before it has keys. */
-function NewProject({ onCreated, onCancel }: { onCreated: (p: Project) => void; onCancel: () => void }) {
-  const [team, setTeam] = useState(teams[0]?.id ?? '')
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const valid = /^[a-z0-9][a-z0-9_-]{0,62}$/.test(name)
-  const create = async () => {
-    if (!valid || busy) return
-    setBusy(true)
-    setError('')
-    try {
-      const p = await createProject(team, name)
-      toast.add({ title: 'Project created', description: `${name} on ${teams.find((t) => t.id === team)?.name ?? team}.${api ? ' Recorded in the audit log.' : ''}`, type: 'success' })
-      onCreated(p)
-    } catch (e) {
-      setError(e instanceof ApiError && e.status === 409 ? 'That team already has a project by this name; choose it above.' : errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-      <div className="grid grid-cols-2 gap-3">
-        <Field>
-          <FieldLabel>Team</FieldLabel>
-          <Select items={teams.map((t) => ({ value: t.id, label: t.name }))} value={team} onValueChange={(v) => v && setTeam(v as string)}>
-            <SelectTrigger aria-label="Project team">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {teams.map((t) => (
-                <SelectItem key={t.id} value={t.id}>
-                  {t.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field invalid={!!name && !valid}>
-          <FieldLabel>Project name</FieldLabel>
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="launch" className="font-mono" autoComplete="off" />
-          {!!name && !valid && <FieldError match>Up to 63 lowercase letters, digits, - or _, starting with a letter or digit.</FieldError>}
-        </Field>
-      </div>
-      {error && <p className="text-sm text-destructive-foreground">{error}</p>}
-      <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" type="button" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button size="sm" type="button" disabled={!valid || busy} onClick={() => void create()}>
-          Create project
-        </Button>
-      </div>
-    </div>
-  )
 }
 
 function errorText(e: unknown) {
@@ -196,7 +138,7 @@ function PreviewPanel({ preview, loading, error, input, edit }: { preview: Budge
             {input.onExceed === 'block'
               ? 'Covered keys get 429 budget_exceeded on their next request after you save.'
               : input.onExceed === 'throttle' && api
-                ? `Covered keys get 429 budget_throttled, with Retry-After, on ${Math.round(throttleShare(b) * 100)}% of new requests after you save.`
+                ? `After you save, covered keys get ${THROTTLE_PER_MINUTE} requests a minute each; more get 429 budget_throttled with Retry-After.`
                 : 'Requests stay admitted; their receipts record the budget over cap.'}
           </AlertDescription>
         </Alert>
@@ -384,7 +326,7 @@ export function BudgetDialog({ budget, onClose, onSaved }: { budget: Budget | nu
                   {tried && !scope && <FieldError match>Choose what this budget applies to.</FieldError>}
                 </Field>
                 {scopeType === 'project' && addingProject && (
-                  <NewProject
+                  <NewProjectForm
                     onCancel={() => setAddingProject(false)}
                     onCreated={(p) => {
                       scopes.reloadProjects()

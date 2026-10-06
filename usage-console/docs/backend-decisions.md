@@ -150,16 +150,36 @@ Agent Router (api-mode test).
 - **Decided 2026-10-05: projects become a table (built, migration 011).**
   §5.2's `projects(id, team_id, name)`, so a project budget can be set up
   before any key in it exists. Keys reference one of their team's projects;
-  a project budget names it by id. Defaults I picked, to confirm: names are
-  unique per team (two teams may each have "helpdesk", as free text
-  allowed), new names are slugs, there's no rename or delete, and
-  `POST /keys` creates a project it doesn't find on the key's team. Spend
-  and rules still group and match projects by name, so same-named projects
-  on two teams share a row there.
-- **Decided 2026-10-05: "throttle" rejects with "try again later" (built).**
-  Over a throttle cap the gateway answers 429 `budget_throttled` with
-  `Retry-After: 5` for a share of requests: half at the cap, rising
-  linearly to all of them at 120% (user's choice). The rest are admitted.
+  a project budget names it by id.
+- **Decided 2026-10-05: projects go by id everywhere, and names are for
+  people (built, config migrations 014–015, receipts 008).** Receipts carry
+  `project_id`; Spend groups, Traffic filters and "project is" rules match
+  by it, so two teams' "helpdesk" stay apart and a rename changes nothing
+  but the label. Names are any text (trimmed, 1–80 characters, no control
+  characters), unique per team ignoring case. `POST /keys` takes
+  `projectId` (or a name the team has) and refuses an unknown one; it no
+  longer creates projects. `PUT /projects/{id}` renames (If-Match, audited);
+  `DELETE` is refused with the reason while the project has an active key
+  or a budget, and otherwise marks it deleted, so revoked keys' history
+  keeps a name. Defaults I picked: the aggregates aren't rebuilt (they keep
+  `key_id` and a key never changes project, so Spend maps keys to projects;
+  a rebuild would lose aggregate history older than raw receipts' 30 days);
+  older receipts are backfilled from their key's project, exactly, at the
+  next start of stargate-api; receipts keep the name they were made under.
+- **Decided 2026-10-05: "throttle" is a per-key rate while over the cap
+  (built; replaces the share-refused version, spec §11 Phase 4).** While
+  any throttle budget covering a key is over its cap, the key gets 10
+  requests in any minute (sliding window). The next gets 429
+  `budget_throttled` with `Retry-After` = seconds until its oldest request
+  leaves the window. Ten a minute keeps a person-driven app usable while
+  the batch job or runaway agent that overspent crawls; it's one number
+  for every budget (budgets carry it as `throttlePerMinute`), not a
+  setting, to keep the form simple. Receipts say `throttled` (own verdict
+  and trace state, degraded hue), not `blocked`, so Overview, Activity
+  and Traffic count it apart; it's still a 429 in error rates. Counters
+  are in Warden's memory: right for one Warden, but each replica would
+  allow the rate (a shared counter, e.g. Envoy's rate-limit service, is
+  the fix then), and a restart forgets them.
 - **Decided 2026-10-05: a key-scoped budget matches by key ID (built,
   migration 010).** It matched by key name, which a rename or a reused name
   would break. The API adds `scopeName` for display.

@@ -33,7 +33,7 @@ func (s *Store) BudgetScopes(ctx context.Context, tenant string) (BudgetScopes, 
 		return out, err
 	}
 	for _, p := range projects {
-		out.Projects[p.ID] = true
+		out.Projects[p.ID] = !p.Deleted
 	}
 	keys, err := s.Keys(ctx, tenant)
 	if err != nil {

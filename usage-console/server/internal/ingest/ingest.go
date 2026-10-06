@@ -49,6 +49,7 @@ const (
 	attrKeyID       = "stargate.key_id"
 	attrTeam        = "stargate.team"
 	attrProject     = "stargate.project"
+	attrProjectID   = "stargate.project_id"
 	attrSecretID    = "stargate.secret_id"
 	attrDeniedSecID = "stargate.denied_secret_id"
 	attrDeniedKeyID = "stargate.denied_key_id"
@@ -122,15 +123,15 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	identity := model.TraceStep{Step: "Identity resolved", Input: "—", Outcome: "no key check in the path", State: "skip"}
 	keyID, denied := KeyID(a), get(attrKeyID) == ""
 	if keyID != "" {
-		rc.KeyID, rc.KeyName, rc.Team, rc.Project = keyID, keyID, get(attrTeam), get(attrProject)
+		rc.KeyID, rc.KeyName, rc.Team = keyID, keyID, get(attrTeam)
+		rc.Project, rc.ProjectID = gateway.ProjectName(get(attrProject)), get(attrProjectID)
 		rc.SecretID = cmp.Or(get(attrSecretID), get(attrDeniedSecID))
 		k := s.KeyByID(keyID)
 		if k != nil {
+			// The key has the rest, and a 403 has no request headers to log. A
+			// key never changes team or project.
 			rc.KeyName, identity.Input = k.Name, "Bearer "+k.Prefix+"…"
-			if denied {
-				// A 403 has no request headers to log; the key has the rest.
-				rc.Team, rc.Project = k.Team, k.Project
-			}
+			rc.Team, rc.Project, rc.ProjectID = k.Team, k.Project, k.ProjectID
 		}
 		identity.Outcome, identity.State = rc.KeyName+" → "+rc.Team+" / "+rc.Project, "ok"
 		if denied {
@@ -211,7 +212,8 @@ func withPolicy(rc *model.Receipt, p gateway.Policy) bool {
 	if b == nil {
 		return false
 	}
-	rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = "blocked", b.Status, b.ErrorCode, b.ErrorDetail
+	// Refused: blocked, or throttled (its own verdict, so it isn't counted as a block).
+	rc.Verdict, rc.Status, rc.ErrorCode, rc.ErrorDetail = cmp.Or(p.Verdict, "blocked"), b.Status, b.ErrorCode, b.ErrorDetail
 	rc.ResolvedModel, rc.Backend, rc.Provider, rc.Region = b.ResolvedModel, b.Backend, b.Provider, b.Region
 	rc.InputTokens, rc.ResponseHash, rc.TTFTMS = b.InputTokens, "—", nil
 	return true

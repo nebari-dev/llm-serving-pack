@@ -61,6 +61,7 @@ function simulate(draft: Draft, baseline: Draft | null, range: TimeRange, receip
     rerouted: Math.round(total * 0.041),
     blocked: Math.round(total * 0.0005),
     truncated: Math.round(total * 0.0004),
+    throttled: 0,
     allowed: 0,
   }
   current.allowed = total - current.redacted - current.rerouted - current.blocked - current.truncated

@@ -9,20 +9,17 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, type KeyRotation, budgetLabel, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, type Project, projects as catalogProjects, rotateKey, teams } from '@/data/catalog'
+import { type ApiKey, type KeyRotation, budgetLabel, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
-import { useLive, useNow } from '@/state/live'
+import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
+import { NEW_PROJECT, ProjectFields, useProjectChoice } from './project-dialogs'
 
 // §7.5.8 key lifecycle dialogs: create (expiry required, "never" is an explicit
 // choice with a warning), show-once secret with acknowledgement, revoke with
 // blast radius and typed confirmation, rotate with an overlap window.
 
 const regions = ['us-east', 'eu-central', 'eu-west', 'eu-private']
-
-/** The project picker's "make one" entry; never a project name (names are slugs). */
-const NEW_PROJECT = ' new'
-const projectSlug = /^[a-z0-9][a-z0-9_-]{0,62}$/
 
 /** Shows a secret exactly once. Done stays disabled until the user acknowledges storing it. */
 function SecretOnce({ secret, onDone, context }: { secret: string; onDone: () => void; context: string }) {
@@ -65,9 +62,6 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   const [secret, setSecret] = useState('')
   const [name, setName] = useState('')
   const [team, setTeam] = useState<string>('support')
-  // A project of the team, by name, or NEW_PROJECT with the new one's name in newProject.
-  const [project, setProject] = useState('')
-  const [newProject, setNewProject] = useState('')
   const [allowed, setAllowed] = useState<string[]>(['gpt-5-mini'])
   const [allowedRegions, setAllowedRegions] = useState<string[]>(['us-east'])
   const [expiry, setExpiry] = useState<Expiry | ''>('')
@@ -76,12 +70,11 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   const [tried, setTried] = useState(false)
   const [busy, setBusy] = useState(false)
 
-  // Projects are the team's own (§5.2); the list is re-read each time the form opens.
-  const liveProjects = useLive<Project[]>(open && dataMode === 'api' ? '/projects' : null, catalogProjects, 60_000)
-  const teamProjects = liveProjects.data.filter((p) => p.team === team).sort((a, b) => a.name.localeCompare(b.name))
-  const projectName = project === NEW_PROJECT ? newProject.trim() : project
-  const projectValid = project === NEW_PROJECT ? projectSlug.test(projectName) && !teamProjects.some((p) => p.name === projectName) : !!project
-  const projectId = teamProjects.find((p) => p.name === projectName)?.id ?? ''
+  // Projects are the team's own (§5.2); the list is re-read each time the form
+  // opens. A new one is created (audited) just before the key.
+  const project = useProjectChoice(team, open)
+  const projectValid = !project.error
+  const projectId = project.projectId
 
   const nameValid = /^[a-z][a-z0-9-]{2,39}$/.test(name)
   const expiryValid = expiry !== '' && (expiry !== 'custom' || !!customDate) && (expiry !== 'never' || neverAck)
@@ -91,8 +84,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
     setStep('form')
     setSecret('')
     setName('')
-    setProject('')
-    setNewProject('')
+    project.reset()
     setAllowed(['gpt-5-mini'])
     setAllowedRegions(['us-east'])
     setExpiry('')
@@ -113,7 +105,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
       const res = await createKey({
         name,
         team,
-        project: projectName,
+        projectId: await project.resolve(),
         allowedModels: allowed,
         allowedRegions,
         expiresAt,
@@ -181,7 +173,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
                     onValueChange={(v) => {
                       if (!v) return
                       setTeam(v)
-                      if (project !== NEW_PROJECT) setProject('')
+                      if (project.choice !== NEW_PROJECT) project.setChoice('')
                     }}
                   >
                     <SelectTrigger>
@@ -196,42 +188,8 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field invalid={tried && !projectValid}>
-                  <FieldLabel>Project</FieldLabel>
-                  <Select
-                    items={[...teamProjects.map((p) => ({ value: p.name, label: p.name })), { value: NEW_PROJECT, label: 'New project…' }]}
-                    value={project || null}
-                    onValueChange={(v) => setProject((v as string) ?? '')}
-                  >
-                    <SelectTrigger aria-label="Project" className={cn(project !== NEW_PROJECT && 'font-mono')} disabled={!liveProjects.loaded}>
-                      <SelectValue placeholder={teamProjects.length ? 'Choose a project' : 'No projects yet'} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {teamProjects.map((p) => (
-                        <SelectItem key={p.id} value={p.name} className="font-mono">
-                          {p.name}
-                        </SelectItem>
-                      ))}
-                      <SelectItem value={NEW_PROJECT}>New project…</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {tried && !project && <FieldError match>Choose a project so spend can be attributed.</FieldError>}
-                </Field>
+                <ProjectFields c={project} team={team} tried={tried} when="when you create the key" />
               </div>
-              {project === NEW_PROJECT && (
-                <Field invalid={tried && !projectValid}>
-                  <FieldLabel>New project name</FieldLabel>
-                  <Input value={newProject} onChange={(e) => setNewProject(e.target.value)} placeholder="helpdesk" className="font-mono" autoComplete="off" />
-                  <FieldDescription>Created on {teams.find((t) => t.id === team)?.name ?? team} along with the key.</FieldDescription>
-                  {tried && !projectValid && (
-                    <FieldError match>
-                      {teamProjects.some((p) => p.name === projectName)
-                        ? 'The team already has this project; choose it above.'
-                        : 'Use up to 63 lowercase letters, digits, - or _, starting with a letter or digit.'}
-                    </FieldError>
-                  )}
-                </Field>
-              )}
 
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">Allowed models</legend>

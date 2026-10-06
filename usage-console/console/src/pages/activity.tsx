@@ -54,7 +54,7 @@ function around(ts: number, metric: ActivityMetric) {
   const hi = Math.min(trafficSeries.length, i + 5)
   const pts = trafficSeries.slice(lo, hi)
   const val = (p: (typeof trafficSeries)[number]) =>
-    metric === 'total' ? p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated : p[metric]
+    metric === 'total' ? p.allowed + p.redacted + p.rerouted + p.blocked + p.truncated + p.throttled : p[metric]
   return { values: pts.map(val), split: i - lo, ok: pts.length > 2 }
 }
 

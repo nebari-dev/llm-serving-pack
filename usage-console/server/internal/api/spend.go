@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/store"
 )
@@ -107,10 +108,19 @@ type grouper struct {
 	keys     map[string]model.APIKey
 	backends map[string]model.Backend
 	models   map[string]model.Model
+	projects map[string]model.Project // deleted ones too, for their history
 }
 
 func (s *Server) grouper(ctx context.Context, t string) (grouper, error) {
-	g := grouper{teams: map[string]model.Team{}, keys: map[string]model.APIKey{}, backends: map[string]model.Backend{}, models: map[string]model.Model{}}
+	g := grouper{teams: map[string]model.Team{}, keys: map[string]model.APIKey{}, backends: map[string]model.Backend{}, models: map[string]model.Model{},
+		projects: map[string]model.Project{}}
+	ps, err := s.Store.Projects(ctx, t)
+	if err != nil {
+		return g, err
+	}
+	for _, x := range ps {
+		g.projects[x.ID] = x
+	}
 	teams, err := s.Store.Teams(ctx, t)
 	if err != nil {
 		return g, err
@@ -188,8 +198,9 @@ const notRouted = "(not routed)"
 const unattributed = "(unattributed)"
 
 // key returns the group id for a cell. Keys group by name, since that's what
-// Traffic's key filter takes. A project comes from the key's current
-// project, so a key that moves takes its history with it.
+// Traffic's key filter takes. Projects group by id (§5.1), so two teams'
+// same-named projects are two rows and a rename keeps one; the aggregates
+// keep the key, and a key never changes project.
 func (g grouper) key(c store.SpendCell, by string) string {
 	if c.KeyID == "" && by != "model" && by != "provider" {
 		return unattributed
@@ -197,7 +208,7 @@ func (g grouper) key(c store.SpendCell, by string) string {
 	switch by {
 	case "project":
 		if k, ok := g.keys[c.KeyID]; ok {
-			return k.Project
+			return k.ProjectID
 		}
 		return "(unknown key)"
 	case "key":
@@ -228,10 +239,25 @@ func (g grouper) label(id, by string) (label, sub string) {
 		if t, ok := g.teams[id]; ok {
 			return t.Name, t.CostCenter
 		}
+	case "project":
+		if p, ok := g.projects[id]; ok {
+			sub = p.Team
+			if t, ok := g.teams[p.Team]; ok {
+				sub = t.Name
+			}
+			if p.Deleted {
+				sub += " · deleted"
+			}
+			return p.Name, sub
+		}
 	case "key":
 		for _, k := range g.keys {
 			if k.Name == id {
-				return id, k.Team + " / " + k.Project
+				project := k.Project
+				if p, ok := g.projects[k.ProjectID]; ok {
+					project = p.Name
+				}
+				return id, k.Team + " / " + project
 			}
 		}
 	case "model":
@@ -464,12 +490,8 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 	if err != nil {
 		return nil, err
 	}
-	ps, err := s.Store.Projects(ctx, t)
-	if err != nil {
-		return nil, err
-	}
-	projects := make(map[string]string, len(ps))
-	for _, p := range ps {
+	projects := make(map[string]string, len(g.projects))
+	for _, p := range g.projects {
 		projects[p.ID] = p.Name
 	}
 	now := time.Now().UTC()
@@ -486,6 +508,9 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 	for i := range bs {
 		b := &bs[i]
 		b.ScopeName = g.scopeName(*b, projects)
+		if b.OnExceed == "throttle" {
+			b.ThrottlePerMinute = gateway.ThrottleRate
+		}
 		v := per[b.ScopeType+":"+b.Scope]
 		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
 		b.UnpricedRequests = unpriced[b.ScopeType+":"+b.Scope]

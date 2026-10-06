@@ -1,7 +1,6 @@
 package store
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/jbouder/stargate/server/internal/model"
@@ -63,25 +62,6 @@ func TestBudgetCovers(t *testing.T) {
 	} {
 		if got := BudgetCovers(model.Budget{ScopeType: c.scopeType, Scope: c.scope}, k); got != c.want {
 			t.Errorf("%s %s: got %v", c.scopeType, c.scope, got)
-		}
-	}
-}
-
-func TestValidateProjectName(t *testing.T) {
-	for name, want := range map[string]string{
-		"helpdesk":              "",
-		"nightly-digest_2":      "",
-		"":                      "name is required",
-		"Help Desk":             "name may use lowercase letters, digits, - and _, starting with a letter or digit",
-		"-lead":                 "name may use lowercase letters, digits, - and _, starting with a letter or digit",
-		strings.Repeat("a", 64): "name is at most 63 characters",
-	} {
-		got := ""
-		if err := ValidateProjectName(name); err != nil {
-			got = err.Error()
-		}
-		if got != want {
-			t.Errorf("%q: got %q, want %q", name, got, want)
 		}
 	}
 }

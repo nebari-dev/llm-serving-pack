@@ -47,7 +47,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   partial days from `receipts_5m`, so totals match Overview's.
   - The breakdown by team, project, key, model and provider comes from the
     aggregates. `receipts_daily` now groups by backend, so provider is exact.
-    Project comes from each key's current project. Requests with no key
+    Project rows are by project id (a key never changes project), labelled
+    with the current name and the team, and drill to Traffic by id. Requests with no key
     identity show as "Unattributed", and requests refused before routing
     show as "Not routed". Neither drills through, because Traffic has no
     filter for them.
@@ -58,9 +59,9 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - Projection: month to date plus the trailing 7-day average × days left in
     the UTC month, basis stated. Budgets use the same basis.
   - Budget enforcement words say only what the gateway does: block refuses,
-    throttle refuses a share of requests with 429 and Retry-After (stated,
-    from the budget's spend), warn admits and marks. The invented "since" and
-    rate are gone.
+    throttle holds each key to 10 requests a minute (the budget's
+    `throttlePerMinute`) and answers the rest 429 with Retry-After, warn
+    admits and marks. The invented "since" is gone.
   - The surge callout is hidden (the spec has no surge rule), and so is
     savings, which needs per-request output length and alias writes. Both
     show as not connected.
@@ -90,6 +91,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     "Retire old secret now" are disabled until the key-rotation writes land.
   - Budget wording matches Spend's. The invented "rotation reminders every
     90 days" is gone.
+  - "Projects" opens every team's projects: add, rename, delete (refused
+    with the server's reason while a key is active or a budget names it).
 - [x] **Activity.** One `GET /activity?range` serves the changes in the
   range and the traffic events, all from `receipts_5m`.
   - Before/after per change, across the tenant: up to an hour of complete
@@ -282,26 +285,50 @@ when stale; 428 without it on an update or delete). Open questions are in
     its projects (`projects(id, tenant_id, team_id, name)`, names unique per
     team), points keys at theirs by `project_id` (same team, enforced), names
     project budgets by project id, and drops `api_keys.project`. Receipts
-    still carry the project's name, so Spend, Traffic and rules are as before.
+    carried only the name until 2026-10-05 (below).
   - `GET /projects`; `POST /projects {team, name}` with an audit row ("Created
-    project"), 409 on a name the team has. `POST /keys` still takes the
-    project by name within the key's team, and creates a missing one (with
-    its own audit row). Budgets return `scopeName`, the project's name.
+    project"), 409 on a name the team has. Budgets return `scopeName`, the
+    project's name.
   - Console: the key form picks one of the team's projects or "New
     project…"; the budget form lists every project with its team and can add
     one, then cap it with no keys in it.
+- [x] Projects by id, rename and delete (2026-10-05, decisions §2).
+  - Receipts migration 008 adds `receipts.project_id` (set by the key check's
+    `X-Stargate-Project-Id` header → access log → ingest, or Warden's engine);
+    stargate-api backfills older receipts from their key's project, a UTC day
+    at a time, once. The aggregates aren't rebuilt: they keep the key.
+  - Spend's project rows, Traffic's project filter (list and stream) and
+    "project is" rule conditions use the id; config migration 015 turned
+    rule values that were names into the ids of every project with that
+    name (what they matched before). The rule builder offers projects by
+    name and team and stores the id.
+  - Names are free text, unique per team ignoring case (migration 014).
+    `PUT /projects/{id}` renames (If-Match, "Renamed project"); `DELETE`
+    (If-Match) is a 409 saying what to do while the project has an active
+    key or a budget, else "Deleted project" and it leaves `GET /projects`.
+  - `POST /keys` takes `projectId`, or a name the team has; an unknown one is
+    a 400 ("Create the project first, then the key"). The key form and
+    onboarding create a "New project…" first, with its own audit row;
+    onboarding defaults to the team's "onboarding" project, or makes it.
+  - Exit tests (api-mode, not yet run): rename/delete over the API; two
+    teams' same-named projects apart in receipts, Spend (API and page),
+    Traffic and a rule; the key form's new project and Keys → Projects.
 - [x] Throttle answers 429 with Retry-After; key-scoped budgets match by key
   ID (decided 2026-10-05, decisions §2).
-  - Over a throttle cap Warden refuses `0.5 + 2.5 × (spent − cap)/cap` of
-    requests (half at the cap, all from 120% of it) with 429
-    `budget_throttled` and `Retry-After: 5`; the rest are admitted and the
-    trace says the share. Receipts show `blocked` with that code. Block is
-    unchanged. The draw is the engine's injected rand, so tests fix it.
+  - Throttle is a per-key rate (spec §11 Phase 4, replacing the share
+    refused): over a throttle cap each key gets 10 requests in any minute,
+    counted in Warden's memory (`gateway.Throttle`); the next gets 429
+    `budget_throttled` with `Retry-After` until the key's next slot. The
+    trace says "admitted, n of 10" or "refused, next slot in Ns" (state
+    `throttle`), and the receipt's verdict is `throttled`, so Traffic's
+    filter, the Overview chart (lighter degraded hue) and Activity's blocked
+    share tell it from a block. Block is unchanged.
   - Config migration 010 points key budgets at the key with their name (an
     active one first). The API returns `scopeName` (the key's name), and
     audit targets and traces use it. Activity's budget events match by id too.
   - Exit tests (api-mode, not yet run): a cent throttle cap answers
-    `budget_throttled` with Retry-After 5 and Spend says so; projects are
+    `budget_throttled` with Retry-After within the minute, receipts say
+    `throttled`, and Spend, Keys and the receipt say so; projects are
     created, audited and capped before a key exists, from the API and from
     Spend and the key form.
 - [ ] Policies as §5.2 has them: versioning and matching per policy

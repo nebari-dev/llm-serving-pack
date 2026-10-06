@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgetLabel, budgets, dataMode, syncBudgets, throttleShare, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { type Budget, budgetLabel, budgets, dataMode, syncBudgets, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
 import { downloadText, spendCsv } from '@/lib/csv'
 import { int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -521,9 +521,9 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
 
 /**
  * What the budget does at its cap, in words (§7.5.5). Api mode says only what
- * the gateway does: block returns 429; throttle refuses a share of requests
- * with 429 and Retry-After (half at the cap, all at 120% of it); warn admits
- * the request and records the budget step in its receipt.
+ * the gateway does: block returns 429; throttle holds each covered key to a
+ * few requests a minute and answers the rest 429 with Retry-After; warn
+ * admits the request and records the budget step in its receipt.
  */
 function enforcement(b: Budget) {
   const pct = b.currentUsd / b.capUsd
@@ -535,7 +535,7 @@ function enforcement(b: Budget) {
         b.onExceed === 'block'
           ? 'Blocking new requests.'
           : b.onExceed === 'throttle'
-            ? `Throttling: ${Math.round(throttleShare(b) * 100)}% of new requests get 429 budget_throttled with Retry-After, rising to all of them at ${capMoney(Math.round(b.capUsd * 120) / 100)}.`
+            ? `Throttling: each key gets ${throttleRate(b)} requests a minute; more get 429 budget_throttled with Retry-After.`
             : 'Warn only: requests are admitted and their receipts record the budget over cap.'
       return {
         tone: b.onExceed === 'block' ? ('blocked' as const) : ('degraded' as const),
@@ -547,7 +547,7 @@ function enforcement(b: Budget) {
       b.onExceed === 'block'
         ? `Blocks new requests at ${cap}`
         : b.onExceed === 'throttle'
-          ? `Throttles at ${cap}: half of new requests get 429 with Retry-After, all of them at ${capMoney(Math.round(b.capUsd * 120) / 100)}`
+          ? `Throttles at ${cap}: each key then gets ${throttleRate(b)} requests a minute`
           : `Marks requests over ${cap} in their receipts, no enforcement`
     const risk = b.projectedUsd > b.capUsd ? ' Projected to cross before period end.' : ''
     return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
@@ -607,10 +607,16 @@ function BudgetTable({
           return (
             <TableRow key={b.id}>
               <TableCell className="py-2">
-                <Link to={`/traffic?${b.scopeType}=${encodeURIComponent(budgetLabel(b))}`} className="font-mono text-[0.8125rem] hover:underline">
+                {/* Traffic filters keys by name, teams and projects by id. */}
+                <Link
+                  to={`/traffic?${b.scopeType}=${encodeURIComponent(b.scopeType === 'key' ? budgetLabel(b) : b.scope)}`}
+                  className="font-mono text-[0.8125rem] hover:underline"
+                >
                   {budgetLabel(b)}
                 </Link>
-                <div className="text-xs text-muted-foreground">{b.scopeType} · monthly</div>
+                <div className="text-xs text-muted-foreground">
+                  {b.scopeType === 'project' ? ['project', projects.find((p) => p.id === b.scope)?.team].filter(Boolean).join(' · ') : b.scopeType} · monthly
+                </div>
               </TableCell>
               <TableCell className="py-2 text-right">
                 <Money value={b.currentUsd} />

@@ -288,6 +288,47 @@ func TestReceiptBlockedByWarden(t *testing.T) {
 	}
 }
 
+// A throttle refusal keeps its own verdict, so the aggregates count it apart
+// from blocks.
+func TestReceiptThrottledByWarden(t *testing.T) {
+	p := `{"mode":"enforced","verdict":"throttled","requestedModel":"gpt-5-mini","rules":[],"redactions":[],` +
+		`"trace":[{"step":"Budget checked","state":"throttle"},{"step":"Rules evaluated","state":"skip"}],` +
+		`"blocked":{"status":429,"errorCode":"budget_throttled","errorDetail":"throttled","resolvedModel":"gpt-5-mini","backend":"openai-prod","provider":"OpenAI","region":"us-east","inputTokens":42}}`
+	rc, err := Receipt(snap, record(map[string]string{"response_code": "429", "gen_ai.request.model": "-", "gen_ai.response.model": "-",
+		"gen_ai.provider.name": "-", "stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "p", "stargate.policy": p}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Verdict != "throttled" || rc.Status != 429 || rc.ErrorCode != "budget_throttled" || rc.Trace[1].State != "throttle" {
+		t.Errorf("receipt = %+v", rc)
+	}
+}
+
+// Receipts carry the project's id (§5.1), so Spend and Traffic tell two
+// teams' same-named projects apart. The key's project wins (a key never
+// changes project); a key the snapshot doesn't have yet uses the key check's
+// headers, whose name is URL-escaped since names may have spaces.
+func TestReceiptRecordsTheProjectID(t *testing.T) {
+	s := *keyed
+	k := *s.KeyBy["h"]
+	k.ProjectID = "p4a1b2c3d"
+	s.KeyBy = map[string]*store.KeyRecord{"h": &k}
+	rc, err := Receipt(&s, record(map[string]string{"stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "stale", "stargate.project_id": "pstale"}))
+	if err != nil || rc.ProjectID != "p4a1b2c3d" || rc.Project != "assistant" {
+		t.Fatalf("known key: project %q %q, err %v", rc.ProjectID, rc.Project, err)
+	}
+	rc, err = Receipt(&s, record(map[string]string{"stargate.key_id": "k99", "stargate.team": "web", "stargate.project": "Help%20desk", "stargate.project_id": "p0f0f0f0f"}))
+	if err != nil || rc.ProjectID != "p0f0f0f0f" || rc.Project != "Help desk" {
+		t.Fatalf("new key: project %q %q, err %v", rc.ProjectID, rc.Project, err)
+	}
+	// A 403 from the key check takes the key's project too.
+	rc, _ = Receipt(&s, record(map[string]string{"response_code": "403", "gen_ai.request.model": "-", "gen_ai.response.model": "-", "gen_ai.provider.name": "-",
+		"stargate.key_id": "-", "stargate.denied_key_id": "k4", "stargate.denied_model": "gpt-5.5"}))
+	if rc.ProjectID != "p4a1b2c3d" {
+		t.Fatalf("denied: project %q", rc.ProjectID)
+	}
+}
+
 func TestReceiptRecordsWhichSecret(t *testing.T) {
 	rc, err := Receipt(keyed, record(map[string]string{"stargate.key_id": "k4", "stargate.team": "web", "stargate.project": "assistant", "stargate.secret_id": "3f9a0c11b2de"}))
 	if err != nil || rc.SecretID != "3f9a0c11b2de" {

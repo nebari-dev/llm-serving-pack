@@ -19,7 +19,7 @@ var receiptCols = []string{
 	"requested_model", "resolved_model", "backend", "provider", "region", "route_reason", "fallback_from",
 	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis", "cache_write_tokens",
 	"verdict", "inbound_verdict", "redactions", "rules", "status", "error_code", "error_detail",
-	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id", "overhead_us",
+	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id", "overhead_us", "project_id",
 }
 
 func nullStr(s string) *string {
@@ -46,7 +46,7 @@ func receiptValues(r *model.Receipt) []any {
 		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
 		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis, r.CacheWriteTokens,
 		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
-		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS,
+		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS, nullStr(r.ProjectID),
 	}
 }
 
@@ -111,7 +111,7 @@ const selectReceipt = `SELECT id, ts, tenant_id, trace_id, coalesce(session_id, 
 	requested_model, resolved_model, backend, provider, region, route_reason, coalesce(fallback_from, ''),
 	input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, cost_usd::float8,
 	verdict, inbound_verdict, redactions, rules, status, coalesce(error_code, ''), coalesce(error_detail, ''),
-	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, ''), cache_write_tokens, overhead_us FROM receipts`
+	request_hash, response_hash, content_captured, in_flight, route_trace, coalesce(policy_mode, ''), cost_basis, coalesce(secret_id, ''), cache_write_tokens, overhead_us, coalesce(project_id, '') FROM receipts`
 
 func scanReceipt(row pgx.Row) (model.Receipt, error) {
 	var r model.Receipt
@@ -121,7 +121,7 @@ func scanReceipt(row pgx.Row) (model.Receipt, error) {
 		&r.RequestedModel, &r.ResolvedModel, &r.Backend, &r.Provider, &r.Region, &r.RouteReason, &r.FallbackFrom,
 		&r.InputTokens, &r.CachedInputTokens, &r.OutputTokens, &r.ReasoningTokens, &r.CostUSD,
 		&r.Verdict, &r.InboundVerdict, &red, &rules, &r.Status, &r.ErrorCode, &r.ErrorDetail,
-		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID, &r.CacheWriteTokens, &r.OverheadUS)
+		&r.RequestHash, &r.ResponseHash, &r.ContentCaptured, &r.InFlight, &trace, &r.PolicyMode, &basis, &r.SecretID, &r.CacheWriteTokens, &r.OverheadUS, &r.ProjectID)
 	if err != nil {
 		return r, err
 	}
@@ -167,7 +167,7 @@ type ReceiptQuery struct {
 	Since     int64 // epoch ms, inclusive; 0 = the hot window (30 days)
 	Keys      []string
 	Teams     []string
-	Projects  []string
+	Projects  []string // by id
 	Models    []string
 	Verdicts  []string
 	Providers []string
@@ -204,7 +204,7 @@ func (s *Store) ListReceipts(ctx context.Context, tenant string, q ReceiptQuery)
 	}
 	any("key_id", q.Keys)
 	any("team", q.Teams)
-	any("project", q.Projects)
+	any("project_id", q.Projects)
 	any("verdict", q.Verdicts)
 	any("provider", q.Providers)
 	any("backend", q.Backends)
@@ -275,19 +275,7 @@ func (s *Store) TrafficSeries(ctx context.Context, tenant string, bucket time.Du
 		if i < 0 || i >= points {
 			continue
 		}
-		p := &out[i]
-		switch x.v {
-		case "allowed":
-			p.Allowed += x.n
-		case "redacted":
-			p.Redacted += x.n
-		case "rerouted":
-			p.Rerouted += x.n
-		case "blocked":
-			p.Blocked += x.n
-		case "truncated":
-			p.Truncated += x.n
-		}
+		out[i].Add(x.v, x.n)
 	}
 	return out, nil
 }

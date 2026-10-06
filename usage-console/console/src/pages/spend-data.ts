@@ -21,6 +21,7 @@ export const dims: { value: Dim; label: string }[] = [
 export interface Cell {
   team: string
   project: string
+  projectId: string
   key: string
   keyId: string
   model: string
@@ -72,6 +73,7 @@ export const cells: Cell[] = (() => {
         out.push({
           team: t.id,
           project: k.project,
+          projectId: k.projectId,
           key: k.name,
           keyId: k.id,
           model: m,
@@ -133,7 +135,8 @@ export function breakdown(dim: Dim, range: TimeRange): BreakdownRow[] {
   const prev = teamSpendOver(days, Math.max(1, Math.ceil(days)))
   const groups = new Map<string, BreakdownRow & { p50w: number }>()
   for (const c of cells) {
-    const id = c[dim]
+    // Projects group by id, as the control plane does: names repeat across teams.
+    const id = dim === 'project' ? c.projectId : c[dim]
     const spend = (now[c.team] ?? 0) * c.share
     const prevSpend = (prev[c.team] ?? 0) * c.share
     const requests = spend / c.avgCost
@@ -141,7 +144,7 @@ export function breakdown(dim: Dim, range: TimeRange): BreakdownRow[] {
       groups.get(id) ??
       ({
         id,
-        label: dim === 'team' ? (teams.find((t) => t.id === id)?.name ?? id) : id,
+        label: dim === 'team' ? (teams.find((t) => t.id === id)?.name ?? id) : dim === 'project' ? c.project : id,
         dim,
         spend: 0,
         prevSpend: 0,

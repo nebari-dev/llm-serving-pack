@@ -75,6 +75,10 @@ type Server struct {
 	Now     func() time.Time
 
 	passthrough atomic.Bool
+	// throttle is each key's recent requests while a throttle budget is over
+	// its cap. Warden runs as one process, so in-memory counts are the
+	// gateway's; several replicas would each allow the rate.
+	throttle gateway.Throttle
 	// evaluate is the decision; tests swap it to simulate slow or broken rules.
 	evaluate func(snap *gateway.Snapshot, k *store.KeyRecord, in gateway.Input) *gateway.Decision
 }
@@ -212,11 +216,12 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 			s.Refresh()
 		}
 		rec := store.KeyRecord{APIKey: model.APIKey{ID: keyID, Name: keyID, Team: h[strings.ToLower(gateway.HeaderTeam)],
-			Project: h[strings.ToLower(gateway.HeaderProject)], AllowedModels: []string{snap.Resolve(cr.Model)}}}
+			Project: gateway.ProjectName(h[strings.ToLower(gateway.HeaderProject)]), ProjectID: h[strings.ToLower(gateway.HeaderProjectID)],
+			AllowedModels: []string{snap.Resolve(cr.Model)}}}
 		k = &rec
 	}
 	in := gateway.Input{Region: h["x-data-region"], SessionID: h["x-session-id"], Actor: h["x-actor"],
-		Req: cr, Body: body, Now: now, Deadline: deadline}
+		Req: cr, Body: body, Now: now, Deadline: deadline, Throttle: &s.throttle}
 	eval := s.evaluate
 	if eval == nil {
 		eval = func(snap *gateway.Snapshot, k *store.KeyRecord, in gateway.Input) *gateway.Decision {

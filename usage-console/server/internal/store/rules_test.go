@@ -108,3 +108,19 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
+
+// A project condition names projects by id (§5.1), so a rule can't mean two
+// teams' same-named projects at once, and a rename doesn't change it.
+func TestValidateRuleNamesProjectsByID(t *testing.T) {
+	env := ruleEnv
+	env.Projects = []string{"p1a2b3c4d"}
+	r := RuleContent{Name: "helpdesk-only", FailMode: "open", Then: []model.Action{{Action: "block"}},
+		When: []model.Cond{{Field: "project", Op: "is", Value: []string{"p1a2b3c4d"}}}}
+	if err := ValidateRule(r, env); err != nil {
+		t.Fatalf("by id: %v", err)
+	}
+	r.When[0].Value = []string{"p1a2b3c4d", "helpdesk"}
+	if err := ValidateRule(r, env); err == nil || err.Error() != `condition 1: unknown project "helpdesk" (name projects by id)` {
+		t.Fatalf("by name: %v", err)
+	}
+}

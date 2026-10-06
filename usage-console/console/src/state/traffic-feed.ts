@@ -42,7 +42,8 @@ const MAX_ROWS = 10_000
 function matches(r: Receipt, f: Filters, w: TrafficWindow) {
   if (r.ts < w.since) return false
   if (w.before !== null && r.ts >= w.before) return false
-  if (f.project.length && !f.project.includes(r.project)) return false
+  // Projects filter by id (§5.1): two teams' "helpdesk" are two projects.
+  if (f.project.length && !f.project.includes(r.projectId ?? '')) return false
   if (f.key.length && !f.key.includes(r.keyName)) return false
   if (f.team.length && !f.team.includes(r.team)) return false
   if (f.model.length && !f.model.includes(r.resolvedModel) && !f.model.includes(r.requestedModel)) return false

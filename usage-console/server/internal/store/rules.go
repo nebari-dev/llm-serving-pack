@@ -24,10 +24,11 @@ type RuleContent struct {
 	Then        []model.Action `json:"then"`
 }
 
-// RuleEnv is what a rule may refer to: the engine's entity detectors, and
-// the catalog models and backend regions a "route to" can target.
+// RuleEnv is what a rule may refer to: the engine's entity detectors, the
+// catalog models and backend regions a "route to" can target, and the
+// project ids a project condition names (nil: not checked).
 type RuleEnv struct {
-	Entities, Models, Regions []string
+	Entities, Models, Regions, Projects []string
 }
 
 var ruleName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -63,6 +64,13 @@ func ValidateRule(r RuleContent, env RuleEnv) error {
 		case "is", "is not", "equals", "not equals":
 			if !slices.Contains(RuleFields, c.Field) {
 				return fmt.Errorf("condition %d: unknown field %q", n, c.Field)
+			}
+			if c.Field == "project" && env.Projects != nil {
+				for _, v := range c.Value {
+					if !slices.Contains(env.Projects, v) {
+						return fmt.Errorf("condition %d: unknown project %q (name projects by id)", n, v)
+					}
+				}
 			}
 		default:
 			return fmt.Errorf("condition %d: unknown op %q", n, c.Op)

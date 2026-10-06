@@ -12,7 +12,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { backends, models, type RuleVocabulary, teams } from '@/data/catalog'
+import { backends, models, projects, type RuleVocabulary, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import {
   type Action,
@@ -44,10 +44,17 @@ const apiFieldLabels: Record<string, string> = {
   'header x-data-region': 'Header x-data-region',
 }
 
+/** A project condition names the project by id (§5.1); people read its name and team. */
+const projectLabel = (id: string) => {
+  const p = projects.find((x) => x.id === id)
+  return p ? `${p.name} · ${teams.find((t) => t.id === p.team)?.name ?? p.team}` : id
+}
+
 /** Api mode: the fields and values the server's validation accepts, nothing more. */
 function apiFieldDefs(v: RuleVocabulary): FieldDef[] {
   const suggest: Record<string, string[] | undefined> = {
     team: teams.map((t) => t.name),
+    project: projects.map((p) => p.id),
     model: models.map((m) => m.id),
     provider: [...new Set(backends.map((b) => b.provider))],
   }
@@ -58,6 +65,7 @@ function apiFieldDefs(v: RuleVocabulary): FieldDef[] {
       label: apiFieldLabels[f] ?? f,
       ops: f.startsWith('header ') ? ['equals', 'not equals'] : ['is', 'is not'],
       suggestions: suggest[f],
+      labelOf: f === 'project' ? projectLabel : undefined,
     })),
   ]
 }
@@ -113,20 +121,22 @@ function ValueChips({
   suggestions,
   freeText,
   label,
+  labelOf = (v) => v,
 }: {
   values: string[]
   onChange: (v: string[]) => void
   suggestions?: string[]
   freeText?: boolean
   label: string
+  labelOf?: (v: string) => string
 }) {
   const [text, setText] = useState('')
   const remaining = (suggestions ?? []).filter((s) => !values.includes(s))
   return (
     <span className="flex flex-wrap items-center gap-1">
       {values.map((v) => (
-        <Chip key={v} label={v} onRemove={() => onChange(values.filter((x) => x !== v))}>
-          {v}
+        <Chip key={v} label={labelOf(v)} onRemove={() => onChange(values.filter((x) => x !== v))}>
+          {labelOf(v)}
         </Chip>
       ))}
       {freeText || !suggestions ? (
@@ -146,7 +156,7 @@ function ValueChips({
         />
       ) : (
         remaining.length > 0 && (
-          <Select value={null} onValueChange={(v) => v != null && onChange([...values, v as string])}>
+          <Select value={null} onValueChange={(v) => v != null && onChange([...values, v as string])} items={remaining.map((s) => ({ value: s, label: labelOf(s) }))}>
             <SelectTrigger
               aria-label={`Add ${label} value`}
               className="h-6 min-h-6 w-auto border-dashed bg-transparent py-0 pr-1 pl-1.5 text-xs text-muted-foreground shadow-none"
@@ -157,7 +167,7 @@ function ValueChips({
             <SelectContent className="min-w-44">
               {remaining.map((s) => (
                 <SelectItem key={s} value={s}>
-                  {s}
+                  {labelOf(s)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -186,6 +196,7 @@ function CondRow({ c, onChange, onRemove, defs }: { c: Cond; onChange: (c: Cond)
         label={def.label}
         values={c.value}
         suggestions={def.suggestions}
+        labelOf={def.labelOf}
         freeText={c.op === 'matches regex'}
         onChange={(value) => onChange({ ...c, value })}
       />

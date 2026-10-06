@@ -33,6 +33,16 @@ func (s *Server) ruleEnv(ctx context.Context, t string) (store.RuleEnv, error) {
 	for _, b := range backends {
 		env.Regions = append(env.Regions, b.Region)
 	}
+	projects, err := s.Store.Projects(ctx, t)
+	if err != nil {
+		return env, err
+	}
+	env.Projects = []string{}
+	for _, p := range projects {
+		if !p.Deleted {
+			env.Projects = append(env.Projects, p.ID)
+		}
+	}
 	return env, nil
 }
 

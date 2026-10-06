@@ -145,7 +145,8 @@ function ReceiptBody({ r }: { r: Receipt }) {
     { label: 'Output', tok: r.outputTokens, rate: basis?.outPerM, source: basis?.sources?.output },
     { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM, source: basis?.sources?.reasoning },
   ]
-  const blocked = r.verdict === 'blocked'
+  // Refused before the upstream call: blocked, or throttled for now.
+  const blocked = r.verdict === 'blocked' || r.verdict === 'throttled'
   const lineTotal = lines.reduce((sum, l) => sum + (l.rate == null ? 0 : (l.tok * l.rate) / 1e6), 0)
   // The recorded total is the number of record; say so if the lines disagree with it.
   const mismatch = basis && r.costUsd !== null && !r.inFlight && !blocked && Math.abs(lineTotal - r.costUsd) > 1e-6
@@ -340,13 +341,13 @@ function ReceiptBody({ r }: { r: Receipt }) {
               : unpriced
                 ? `${r.resolvedModel} on ${r.backend} had no price when this request arrived, so it has no cost and isn't in spend or budgets yet. It's costed once someone sets a price for that pair on Models → Pricing.`
                 : blocked
-                ? 'Blocked before the upstream call: nothing was billed.'
+                ? `${r.verdict === 'throttled' ? 'Throttled' : 'Blocked'} before the upstream call: nothing was billed.`
                 : r.inFlight
                   ? 'Priced when the stream ends and usage arrives.'
                   : r.costUsd === 0
                     ? "Nothing was priced: the request didn't complete upstream."
                     : "No price snapshot was recorded with this receipt, so the rates behind its total can't be shown."}
-            {basis && blocked && ' Blocked before the upstream call: nothing was billed.'}
+            {basis && blocked && ` ${r.verdict === 'throttled' ? 'Throttled' : 'Blocked'} before the upstream call: nothing was billed.`}
           </p>
           {mismatch && (
             <p className="mt-1 text-xs text-v-degraded-fg">

@@ -63,6 +63,14 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     // Refuse the dev stack: this suite's writes would land in the console's own history.
     const env = (await catalog.api<{ environment: string }>('/session')).environment
     if (env !== 'test') throw new Error(`${base} is the "${env}" control plane; run the suite against the test stack (server/scripts/test-stack.sh up, npm run test:api)`)
+    // POST /keys no longer makes a project (decided 2026-10-05): the suite's
+    // keys go in an "api-mode-test" project, made on each team if missing.
+    for (const t of await catalog.api<{ id: string }[]>('/teams'))
+      await catalog
+        .api('/projects', { method: 'POST', body: JSON.stringify({ team: t.id, name: 'api-mode-test' }) })
+        .catch((e: unknown) => {
+          if (!(e instanceof catalog.ApiError && e.status === 409)) throw e
+        })
     await catalog.hydrate()
     App = (await import('@/App')).default
   })
@@ -79,7 +87,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     // Keys reference a project of their own team (§5.2); seeded ones have one each.
     const k1 = catalog.keys.find((k) => k.id === 'k1')!
     expect(catalog.projects.find((p) => p.id === k1.projectId)).toMatchObject({ team: 'support', name: 'helpdesk' })
-    for (const k of catalog.keys) expect(catalog.projects.find((p) => p.id === k.projectId)).toMatchObject({ team: k.team, name: k.project })
+    // Revoked keys may be in a project deleted since (their history keeps its name).
+    for (const k of catalog.keys.filter((x) => x.status !== 'revoked')) expect(catalog.projects.find((p) => p.id === k.projectId)).toMatchObject({ team: k.team, name: k.project })
     // The seeded key budget names batch-summarize by id.
     expect(catalog.budgets.find((b) => b.id === 'b3')).toMatchObject({ scopeType: 'key', scope: 'k3', scopeName: 'batch-summarize' })
   })
@@ -245,6 +254,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(text()).toContain('smollm2')
     let keyId = ''
     try {
+      // The key goes in one of the team's projects: its "onboarding" project,
+      // picked, or made with the key when the team has none by that name.
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Create a key for local' })).toHaveProperty('disabled', false), { timeout: 5000 })
+      const picked = screen.getByRole('combobox', { name: 'Project' }).textContent ?? ''
+      expect(picked === 'onboarding' || (picked === 'New project…' && (screen.getByLabelText('New project name') as HTMLInputElement).value === 'onboarding')).toBe(true)
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Create a key for local' }))
       })
@@ -650,8 +664,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
    */
   const spendUntil = async (secret: string, want: 'budget_exceeded' | 'budget_throttled') => {
     const prompt = 'Summarize the following incident log. '.repeat(500)
-    // The fake upstream also answers some requests 429; only Warden's carry a budget code.
-    for (let i = 0; i < 40; i++) {
+    // The fake upstream also answers some requests 429; only Warden's carry a
+    // budget code. A throttle admits ten a minute past the cap, so allow for those.
+    for (let i = 0; i < 60; i++) {
       const res = await fetch(`${gateway}/v1/chat/completions`, {
         method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'gpt-5.5', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
@@ -849,47 +864,72 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 120_000)
 
-  // Throttle (decided 2026-10-05): over the cap Warden refuses a share of
-  // requests with 429 budget_throttled and Retry-After, half at the cap and
-  // all of them from 120% of it. A cent cap is soon far past 120% with long
-  // gpt-5.5 requests, so refusals come within a few Warden reloads.
-  it('throttles over a throttle cap with 429 budget_throttled and Retry-After, and says so on Spend', async () => {
+  // Throttle (spec §11 Phase 4, decided 2026-10-05): while a throttle budget
+  // covering a key is over its cap, the key gets 10 requests a minute. The
+  // next gets 429 budget_throttled with Retry-After until its next slot, and
+  // its receipt says "throttled", not "blocked". A cent cap is soon over with
+  // long gpt-5.5 requests; the ten admitted after that take ten seconds here.
+  it('throttles a key to 10 requests a minute over a throttle cap, with Retry-After, and says so on Spend, Keys and Traffic', async () => {
     type B = import('@/data/catalog').Budget & { etag: string }
-    type R = { id: string; verdict: string; status: number; errorCode?: string; trace: { step: string; input: string; outcome: string }[] }
+    type R = { id: string; verdict: string; status: number; errorCode?: string; trace: { step: string; input: string; outcome: string; state: string }[] }
     const name = `api-mode-throttle-${Date.now().toString(36)}`
     const { key, secret } = await testKey(name)
     let b: B | undefined
     try {
       b = await send<B>('POST', '/budgets', { scopeType: 'key', scope: key.id, capUsd: 0.01, onExceed: 'throttle' })
-      expect(await spendUntil(secret, 'budget_throttled')).toEqual({ code: 'budget_throttled', retryAfter: '5' })
+      expect(b).toMatchObject({ onExceed: 'throttle', throttlePerMinute: 10 })
+      const first = await spendUntil(secret, 'budget_throttled')
+      expect(first.code).toBe('budget_throttled')
+      // Retry-After is when the key's next slot opens: within the minute.
+      expect(Number(first.retryAfter)).toBeGreaterThanOrEqual(1)
+      expect(Number(first.retryAfter)).toBeLessThanOrEqual(60)
+
       let refused: R | undefined
       for (let i = 0; i < 20 && !refused; i++) {
-        refused = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=blocked`)).find((r) => r.errorCode === 'budget_throttled')
+        refused = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}&verdict=throttled`)).find((r) => r.errorCode === 'budget_throttled')
         if (!refused) await new Promise((ok) => setTimeout(ok, 500))
       }
-      expect(refused).toMatchObject({ status: 429, errorCode: 'budget_throttled' })
+      expect(refused).toMatchObject({ verdict: 'throttled', status: 429, errorCode: 'budget_throttled' })
       const step = refused!.trace.find((s) => s.step === 'Budget checked')!
       expect(step.input).toMatch(new RegExp(`^key budget ${name} · \\$\\d+\\.\\d\\d of \\$0\\.01$`))
-      expect(step.outcome).toMatch(/^over cap · throttled \d+%, refused$/)
+      expect(step.outcome).toMatch(/^over cap · throttled to 10 a minute per key · refused, next slot in \d+s$/)
+      expect(step.state).toBe('throttle')
+      // Requests within the rate went through, and their trace says so.
+      const admitted = (await catalog.api<R[]>(`/receipts?limit=40&key=${key.id}&verdict=allowed`)).filter((r) =>
+        /^over cap · throttled to 10 a minute per key · admitted, \d+ of 10$/.test(r.trace.find((s) => s.step === 'Budget checked')?.outcome ?? ''),
+      )
+      expect(admitted.length).toBeGreaterThan(0)
+      // A throttle isn't a block: Traffic's blocked filter doesn't list it, and the series counts it apart.
+      expect((await catalog.api<R[]>(`/receipts?limit=40&key=${key.id}&verdict=blocked`)).some((r) => r.errorCode === 'budget_throttled')).toBe(false)
+      const series = await catalog.api<{ throttled: number }[]>('/series/traffic?range=1h')
+      expect(series.reduce((n, p) => n + p.throttled, 0)).toBeGreaterThan(0)
 
       window.history.pushState({}, '', '/spend')
       render(<App />)
       const table = await screen.findByRole('table', { name: 'Budgets' })
       await waitFor(() => expect(table.textContent).toContain(name), { timeout: 5000 })
       const row = within(table).getByRole('link', { name }).closest('tr')!
-      await waitFor(() => expect(row.textContent).toMatch(/Throttling: \d+% of new requests get 429 budget_throttled with Retry-After/), { timeout: 5000 })
-      expect(document.body.textContent).not.toContain('isn’t enforced')
+      await waitFor(() => expect(row.textContent).toContain('Throttling: each key gets 10 requests a minute; more get 429 budget_throttled with Retry-After.'), { timeout: 5000 })
+      expect(document.body.textContent).not.toContain('of new requests get 429')
 
-      // A receipt says what refused it.
-      window.history.pushState({}, '', `/traffic?receipt=${refused!.id}`)
+      // Spend re-read the budgets, so the key's page has this one over its cap.
       cleanup()
+      window.history.pushState({}, '', `/keys?key=${key.id}`)
+      render(<App />)
+      await waitFor(() => expect(document.body.textContent).toContain('Over cap · throttled to 10 requests a minute (429, retry later)'), { timeout: 5000 })
+
+      // A receipt says what refused it, with its own verdict.
+      cleanup()
+      window.history.pushState({}, '', `/traffic?receipt=${refused!.id}`)
       render(<App />)
       await waitFor(() => expect(document.body.textContent).toContain('A budget over its cap throttled this request'), { timeout: 5000 })
+      expect(document.body.textContent).toContain('Throttled before the upstream call: nothing was billed.')
+      expect(screen.getAllByText('Throttled').length).toBeGreaterThan(0)
     } finally {
       if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
-  }, 120_000)
+  }, 150_000)
 
   // Projects are a table (§5.2, decided 2026-10-05): a project budget can be
   // set up before any key is in it, and names it by id.
@@ -907,7 +947,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<P[]>('/projects')).find((x) => x.id === p.id)).toEqual(p)
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created project', target: `support / ${name}`, targetKind: 'Project' })
       expect(await status(send('POST', '/projects', { team: 'support', name }))).toBe(409)
-      for (const bad of [{ team: 'support', name: 'Has Spaces' }, { team: 'support', name: '' }, { team: 'nobody', name: name + '-x' }, { name: name + '-y' }])
+      // Names are for people now (decided 2026-10-05): spaces and capitals are fine; the same name in another case isn't.
+      expect(await status(send('POST', '/projects', { team: 'support', name: name.toUpperCase() }))).toBe(409)
+      for (const bad of [{ team: 'support', name: '   ' }, { team: 'support', name: 'x'.repeat(81) }, { team: 'support', name: 'tab\there' }, { team: 'nobody', name: name + '-x' }, { name: name + '-y' }])
         expect(await status(send('POST', '/projects', bad))).toBe(400)
 
       // No keys yet: the budget covers none, and shows the project's name.
@@ -918,25 +960,227 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created budget', target: `project ${name} · $5 monthly, warn` })
       expect(await status(send('POST', '/budgets?dryRun=true', { ...draft, scope: name }))).toBe(400) // by id, not name
 
-      // A key in the project joins it; the same name on another team is another project.
+      // A key in the project joins it, by name or id. A key no longer creates a
+      // project: an unknown name is refused with what to do.
       const inIt = await send<{ key: K }>('POST', '/keys', { name: `${name}-k`, team: 'support', project: name, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
       keys.push(inIt.key.id)
       expect(inIt.key).toMatchObject({ team: 'support', project: name, projectId: p.id })
-      const elsewhere = await send<{ key: K }>('POST', '/keys', { name: `${name}-w`, team: 'web', project: name, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
+      const refused = await send('POST', '/keys', { name: `${name}-w`, team: 'web', project: name, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }).catch((e: Error & { status: number }) => e)
+      expect(refused).toMatchObject({ status: 400, message: `Team web has no project named "${name}". Create the project first, then the key.` })
+      expect(await status(send('POST', '/keys', { name: `${name}-x`, team: 'web', projectId: p.id, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }))).toBe(400) // another team's
+      // The same name on another team is another project.
+      const web = await send<P>('POST', '/projects', { team: 'web', name })
+      const elsewhere = await send<{ key: K }>('POST', '/keys', { name: `${name}-w`, team: 'web', projectId: web.id, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
       keys.push(elsewhere.key.id)
-      expect(elsewhere.key.projectId).not.toBe(p.id)
+      expect(elsewhere.key).toMatchObject({ project: name, projectId: web.id })
+      expect(web.id).not.toBe(p.id)
       expect((await catalog.api<C[]>('/changes')).slice(0, 2)).toMatchObject([
         { action: 'Created key', target: `${name}-w` },
         { action: 'Created project', target: `web / ${name}` },
       ])
       expect(await send('PATCH', `/budgets/${b.id}?dryRun=true`, { capUsd: 6 })).toMatchObject({ covers: [`${name}-k`] })
-      expect(await status(send('POST', '/keys', { name: `${name}-bad`, team: 'support', project: 'Not A Slug', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }))).toBe(400)
+      expect(await status(send('POST', '/keys', { name: `${name}-bad`, team: 'support', project: 'No Such Project', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }))).toBe(400)
     } finally {
       if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
       for (const id of keys) await send('POST', `/keys/${id}/revoke`).catch(() => {})
     }
   })
 
+  // Projects can be renamed (If-Match, audited) and deleted once nothing uses
+  // them (decided 2026-10-05). Keys, budgets, rules and receipts name a
+  // project by id, so a rename carries them along.
+  it('renames a project with If-Match and an audit row, and deletes it only without active keys or a budget', async () => {
+    type B = import('@/data/catalog').Budget & { etag: string }
+    type C = import('@/data/catalog').Change
+    type P = import('@/data/catalog').Project & { etag: string }
+    type K = { id: string; name: string; project: string; projectId: string }
+    const stamp = Date.now().toString(36)
+    const before = `Amt Rename ${stamp}`
+    const after = `Help desk · ${stamp}`
+    const keys: string[] = []
+    let b: B | undefined
+    try {
+      const p = await send<P>('POST', '/projects', { team: 'support', name: `  ${before}  ` })
+      expect(p).toMatchObject({ team: 'support', name: before }) // trimmed
+      expect(p.etag).toBeTruthy()
+      const { key } = await send<{ key: K }>('POST', '/keys', { name: `amt-rename-${stamp}`, team: 'support', projectId: p.id, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' })
+      keys.push(key.id)
+      expect(key).toMatchObject({ project: before, projectId: p.id })
+
+      expect(await status(send('PUT', `/projects/${p.id}`, { name: after }))).toBe(428)
+      const renamed = await send<P>('PUT', `/projects/${p.id}`, { name: after }, p.etag)
+      expect(renamed).toMatchObject({ id: p.id, team: 'support', name: after })
+      expect(renamed.etag).not.toBe(p.etag)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Renamed project', target: `support / ${before} → ${after}`, targetKind: 'Project' })
+      expect(await status(send('PUT', `/projects/${p.id}`, { name: 'stale' }, p.etag))).toBe(409)
+      expect(await status(send('PUT', `/projects/${p.id}`, { name: ' ' }, renamed.etag))).toBe(400)
+      // The key follows the rename; it names the project by id.
+      expect((await catalog.api<K[]>('/keys')).find((k) => k.id === key.id)).toMatchObject({ project: after, projectId: p.id })
+
+      // Another of the team's projects can't take the name, in any case.
+      const other = await send<P>('POST', '/projects', { team: 'support', name: `Amt Other ${stamp}` })
+      expect(await status(send('PUT', `/projects/${other.id}`, { name: after.toUpperCase() }, other.etag))).toBe(409)
+
+      // Delete is refused, saying why, while a key is active or a budget names it.
+      const keyed = await send('DELETE', `/projects/${p.id}`, undefined, renamed.etag).catch((e: Error & { status: number }) => e)
+      expect(keyed).toMatchObject({ status: 409, message: `Project ${after} still has 1 active key (amt-rename-${stamp}). Revoke the key first.` })
+      b = await send<B>('POST', '/budgets', { scopeType: 'project', scope: other.id, capUsd: 5, onExceed: 'warn' })
+      const budgeted = await send('DELETE', `/projects/${other.id}`, undefined, other.etag).catch((e: Error & { status: number }) => e)
+      expect(budgeted).toMatchObject({ status: 409, message: `Project Amt Other ${stamp} still has a budget. Delete the budget on Spend first.` })
+
+      // Revoked keys don't hold it: their history keeps the project's name.
+      await send('POST', `/keys/${key.id}/revoke`)
+      expect(await status(send('DELETE', `/projects/${p.id}`))).toBe(428)
+      await send('DELETE', `/projects/${p.id}`, undefined, renamed.etag)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Deleted project', target: `support / ${after}`, targetKind: 'Project' })
+      expect((await catalog.api<P[]>('/projects')).some((x) => x.id === p.id)).toBe(false)
+      // A deleted project takes no new keys, and its name is free again.
+      expect(await status(send('POST', '/keys', { name: `amt-rename-${stamp}-2`, team: 'support', projectId: p.id, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }))).toBe(400)
+      const again = await send<P>('POST', '/projects', { team: 'support', name: after })
+      expect(again.id).not.toBe(p.id)
+    } finally {
+      if (b) await send('DELETE', `/budgets/${b.id}`, undefined, b.etag).catch(() => {})
+      for (const id of keys) await send('POST', `/keys/${id}/revoke`).catch(() => {})
+    }
+  })
+
+  // §5.1: receipts carry the project's id, so Spend and Traffic group, and
+  // rules match, two teams' same-named projects apart.
+  it('keeps two teams’ same-named projects apart in receipts, Spend, Traffic and rules', async () => {
+    type P = import('@/data/catalog').Project
+    type K = { id: string; name: string; projectId: string }
+    type R = { id: string; keyId: string; project: string; projectId?: string }
+    type Row = { id: string; label: string; sub?: string; requests: number }
+    type V = { id: string; etag: string }
+    const stamp = Date.now().toString(36)
+    const name = `Shared ${stamp}`
+    const call = (secret: string) =>
+      fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5-mini', max_tokens: 20, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+    const keys: string[] = []
+    let ruleId = ''
+    try {
+      const support = await send<P>('POST', '/projects', { team: 'support', name })
+      const web = await send<P>('POST', '/projects', { team: 'web', name })
+      const made = await Promise.all(
+        [support, web].map((p) =>
+          send<{ key: K; secret: string }>('POST', '/keys', { name: `amt-shared-${p.team}-${stamp}`, team: p.team, projectId: p.id, allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }),
+        ),
+      )
+      keys.push(...made.map((m) => m.key.id))
+      for (const m of made) expect((await call(m.secret)).status).toBe(200)
+
+      // Each receipt has its own project's id; Traffic's project filter takes the id.
+      let mine: R[] = []
+      for (let i = 0; i < 30 && mine.length < 2; i++) {
+        mine = (await catalog.api<R[]>('/receipts?limit=50&range=15m')).filter((r) => keys.includes(r.keyId))
+        if (mine.length < 2) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(mine.find((r) => r.keyId === made[0].key.id)).toMatchObject({ project: name, projectId: support.id })
+      expect(mine.find((r) => r.keyId === made[1].key.id)).toMatchObject({ project: name, projectId: web.id })
+      expect((await catalog.api<R[]>(`/receipts?limit=50&range=15m&project=${support.id}`)).map((r) => r.keyId)).toEqual([made[0].key.id])
+
+      // Spend has a row per project, by id, labelled with the name and its team.
+      let rows: Row[] = []
+      for (let i = 0; i < 30 && rows.length < 2; i++) {
+        rows = (await catalog.api<{ rows: Row[] }>('/spend?range=1h&by=project')).rows.filter((r) => r.id === support.id || r.id === web.id)
+        if (rows.length < 2) await new Promise((ok) => setTimeout(ok, 500))
+      }
+      expect(rows.find((r) => r.id === support.id)).toMatchObject({ label: name, sub: catalog.teams.find((t) => t.id === 'support')?.name, requests: 1 })
+      expect(rows.find((r) => r.id === web.id)).toMatchObject({ label: name, sub: catalog.teams.find((t) => t.id === 'web')?.name, requests: 1 })
+
+      // And on the page: two rows of the same name; each drills to Traffic by id.
+      window.history.pushState({}, '', '/spend')
+      render(<App />)
+      fireEvent.click(await screen.findByRole('tab', { name: 'Breakdown' }))
+      fireEvent.click(screen.getByRole('combobox', { name: 'Group by' }))
+      choose(await screen.findByRole('option', { name: 'Project' }))
+      const table = await screen.findByRole('table', { name: 'Spend by project' })
+      await waitFor(() => expect(within(table).getAllByRole('button', { name: `Open receipts for ${name}` })).toHaveLength(2), { timeout: 5000 })
+      fireEvent.click(within(table).getAllByRole('button', { name: `Open receipts for ${name}` })[0])
+      await waitFor(() => expect(new URLSearchParams(window.location.search).get('project')).toMatch(new RegExp(`^(${support.id}|${web.id})$`)))
+      cleanup()
+
+      // A "project is" rule names the project by id: the web project of the same name isn't in it.
+      const rule = { name: `amt-shared-${stamp}`, description: 'api-mode test', failMode: 'closed', when: [{ field: 'project', op: 'is', value: [support.id] }], then: [{ action: 'block' }] }
+      expect(await status(send('POST', '/rules', { ...rule, name: `${rule.name}-by-name`, when: [{ field: 'project', op: 'is', value: [name] }] }))).toBe(400)
+      const r0 = await send<V>('POST', '/rules', rule)
+      ruleId = r0.id
+      await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'enforce' }, r0.etag)
+      expect((await call(made[0].secret)).status).toBe(403)
+      expect((await call(made[1].secret)).status).toBe(200)
+    } finally {
+      if (ruleId) {
+        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === ruleId)?.etag
+        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+      }
+      for (const id of keys) await send('POST', `/keys/${id}/revoke`).catch(() => {})
+    }
+  }, 90_000)
+
+  // POST /keys won't make a project, so the key form makes it first, with
+  // its own audit row; Keys → Projects renames one and says why a delete is
+  // refused.
+  it('creates a project from the key form, and renames it and explains a refused delete from Keys → Projects', async () => {
+    type C = import('@/data/catalog').Change
+    type P = import('@/data/catalog').Project
+    type K = { id: string; name: string; project: string; projectId: string }
+    const stamp = Date.now().toString(36)
+    const name = `Amt Form ${stamp}`
+    const keyName = `amt-form-${stamp}`
+    const support = catalog.teams.find((t) => t.id === 'support')?.name ?? 'support'
+    let keyId = ''
+    try {
+      window.history.pushState({}, '', '/keys')
+      render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /Create key/ }))
+      const form = await formDialog()
+      fireEvent.change(within(form).getByLabelText('Name'), { target: { value: keyName } })
+      const picker = within(form).getByRole('combobox', { name: 'Project' })
+      await waitFor(() => expect(picker).toHaveProperty('disabled', false))
+      fireEvent.click(picker)
+      choose(await screen.findByRole('option', { name: 'New project…' }))
+      fireEvent.change(within(form).getByLabelText('New project name'), { target: { value: name } })
+      expect(form.textContent).toContain(`Created on ${support} when you create the key.`)
+      fireEvent.click(within(form).getByRole('radio', { name: '30 days' }))
+      fireEvent.click(within(form).getByRole('button', { name: 'Create key' }))
+      await waitFor(() => expect(document.body.textContent).toContain('Copy your new secret'), { timeout: 5000 })
+      const p = (await catalog.api<P[]>('/projects')).find((x) => x.team === 'support' && x.name === name)!
+      const k = (await catalog.api<K[]>('/keys')).find((x) => x.name === keyName)!
+      keyId = k.id
+      expect(k).toMatchObject({ project: name, projectId: p.id })
+      expect((await catalog.api<C[]>('/changes')).slice(0, 2)).toMatchObject([
+        { action: 'Created key', target: keyName },
+        { action: 'Created project', target: `support / ${name}` },
+      ])
+      const secretStep = await formDialog()
+      fireEvent.click(within(secretStep).getByRole('checkbox', { name: /stored this secret/ }))
+      fireEvent.click(within(secretStep).getByRole('button', { name: 'Done' }))
+      await formDialogClosed()
+
+      // Keys → Projects: rename it, then try to delete it while its key is active.
+      fireEvent.click(screen.getByRole('button', { name: /Projects/ }))
+      const dialog = await formDialog()
+      const label = `${name} (${support})`
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: `Rename ${label}` })).toBeTruthy(), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: `Rename ${label}` }))
+      fireEvent.change(within(dialog).getByLabelText(`New name for ${label}`), { target: { value: `${name} renamed` } })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save name' }))
+      await waitFor(async () => expect((await catalog.api<P[]>('/projects')).find((x) => x.id === p.id)?.name).toBe(`${name} renamed`), { timeout: 5000 })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Renamed project', target: `support / ${name} → ${name} renamed` })
+      const renamed = `${name} renamed (${support})`
+      await waitFor(() => expect(within(dialog).getByRole('button', { name: `Delete ${renamed}` })).toBeTruthy(), { timeout: 5000 })
+      fireEvent.click(within(dialog).getByRole('button', { name: `Delete ${renamed}` }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+      await waitFor(() => expect(dialog.textContent).toContain(`Project ${name} renamed still has 1 active key (${keyName}). Revoke the key first.`), { timeout: 5000 })
+      expect((await catalog.api<P[]>('/projects')).some((x) => x.id === p.id)).toBe(true)
+    } finally {
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`).catch(() => {})
+    }
+  }, 60_000)
   it('adds a project and its budget from Spend, and picks a team’s project on the key form', async () => {
     type B = import('@/data/catalog').Budget & { etag: string }
     type C = import('@/data/catalog').Change

@@ -45,7 +45,7 @@ func in(vals []string, v string) bool { return len(vals) == 0 || slices.Contains
 func (f filter) match(r model.Receipt) bool {
 	q := f.q
 	return r.TenantID == f.tenant &&
-		in(q.Keys, r.KeyID) && in(q.Teams, r.Team) && in(q.Projects, r.Project) &&
+		in(q.Keys, r.KeyID) && in(q.Teams, r.Team) && in(q.Projects, r.ProjectID) &&
 		(len(q.Models) == 0 || slices.Contains(q.Models, r.ResolvedModel) || slices.Contains(q.Models, r.RequestedModel)) &&
 		in(q.Verdicts, r.Verdict) && in(q.Providers, r.Provider) && in(q.Backends, r.Backend) &&
 		in(q.Reasons, r.RouteReason) && in(q.Sessions, r.SessionID)

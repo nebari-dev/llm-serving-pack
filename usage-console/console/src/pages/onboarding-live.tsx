@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { copy, FirstRequest, type Lang, readLang, Step, type StepInfo, StepMap } from './onboarding'
+import { NEW_PROJECT, ProjectFields, useProjectChoice } from './project-dialogs'
 import { ProviderForm } from './providers-live'
 
 // §7.5.1 Onboarding against the real control plane. Pick a backend the
@@ -103,8 +104,25 @@ export function LiveOnboardingPage() {
   const backend = live.data.find((b) => b.name === name) ?? null
   const gatewayUrl = sess.gatewayUrl ?? ''
 
+  // The key goes in one of the team's projects. Until someone picks, it's the
+  // team's "onboarding" project, or a new one by that name, made with the key.
+  const project = useProjectChoice(team, true)
+  const [tried, setTried] = useState(false)
+  const { choice, setChoice, setNewName, teamProjects } = project
+  const loaded = project.live.loaded
+  useEffect(() => {
+    if (!loaded || choice) return
+    const existing = teamProjects.find((p) => p.name === 'onboarding')
+    if (existing) setChoice(existing.id)
+    else {
+      setChoice(NEW_PROJECT)
+      setNewName('onboarding')
+    }
+  }, [loaded, choice, teamProjects, setChoice, setNewName])
+
   const create = async () => {
-    if (!backend) return
+    setTried(true)
+    if (!backend || project.error) return
     setCreating(true)
     setError(null)
     try {
@@ -112,7 +130,7 @@ export function LiveOnboardingPage() {
       const { key, secret } = await createKey({
         name: `onboarding-${backend.name}-${Math.random().toString(36).slice(2, 6)}`,
         team,
-        project: 'onboarding',
+        projectId: await project.resolve(),
         allowedModels: backend.models,
         allowedRegions: [backend.region],
         expiresAt: expires,
@@ -222,7 +240,14 @@ export function LiveOnboardingPage() {
                 </dl>
                 <Field>
                   <FieldLabel>Team</FieldLabel>
-                  <Select items={teams.map((t) => ({ value: t.id, label: t.name }))} value={team} onValueChange={(v) => setTeam((v as string) ?? team)}>
+                  <Select
+                    items={teams.map((t) => ({ value: t.id, label: t.name }))}
+                    value={team}
+                    onValueChange={(v) => {
+                      setTeam((v as string) ?? team)
+                      project.reset()
+                    }}
+                  >
                     <SelectTrigger aria-label="Team" className="w-60">
                       <SelectValue />
                     </SelectTrigger>
@@ -236,8 +261,11 @@ export function LiveOnboardingPage() {
                   </Select>
                   <FieldDescription>The key’s spend and receipts count against this team. It may call only {backend.name}’s models.</FieldDescription>
                 </Field>
+                <div className="flex w-60 flex-col gap-4">
+                  <ProjectFields c={project} team={team} tried={tried} when="when you create the key" />
+                </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button onClick={create} loading={creating} loadingText="Creating key…" variant={created ? 'outline' : 'default'} disabled={!team}>
+                  <Button onClick={create} loading={creating} loadingText="Creating key…" variant={created ? 'outline' : 'default'} disabled={!team || !loaded}>
                     {created ? 'Create another key' : `Create a key for ${backend.name}`}
                   </Button>
                 </div>

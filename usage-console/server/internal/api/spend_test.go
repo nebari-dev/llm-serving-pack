@@ -34,12 +34,12 @@ func TestProjectionBasis(t *testing.T) {
 func TestGrouperUsesTheCatalog(t *testing.T) {
 	g := grouper{
 		teams:    map[string]model.Team{"support": {ID: "support", Name: "Support", CostCenter: "CC-1"}},
-		keys:     map[string]model.APIKey{"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk"}},
+		keys:     map[string]model.APIKey{"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk", ProjectID: "p1a2b3c4d"}},
 		backends: map[string]model.Backend{"anthropic-us": {Name: "anthropic-us", Provider: "Anthropic"}},
 		models:   map[string]model.Model{},
 	}
 	c := store.SpendCell{Team: "support", KeyID: "k1", Model: "claude-sonnet-5", Backend: "anthropic-us"}
-	want := map[string]string{"team": "support", "project": "helpdesk", "key": "support-bot", "model": "claude-sonnet-5", "provider": "Anthropic"}
+	want := map[string]string{"team": "support", "project": "p1a2b3c4d", "key": "support-bot", "model": "claude-sonnet-5", "provider": "Anthropic"}
 	for by, id := range want {
 		if got := g.key(c, by); got != id {
 			t.Errorf("key(%s) = %q, want %q", by, got, id)
@@ -136,5 +136,38 @@ func TestUnpricedPairs(t *testing.T) {
 	}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}
+
+// Spend groups projects by id (§5.1): two teams' "helpdesk" are two rows,
+// each shown by its current name with its team underneath. A deleted
+// project's history keeps its name.
+func TestSpendGroupsProjectsByID(t *testing.T) {
+	g := grouper{
+		teams: map[string]model.Team{"support": {ID: "support", Name: "Support"}, "web": {ID: "web", Name: "Web"}},
+		keys: map[string]model.APIKey{
+			"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk", ProjectID: "p1"},
+			"k2": {ID: "k2", Name: "web-bot", Team: "web", Project: "helpdesk", ProjectID: "p2"},
+			"k3": {ID: "k3", Name: "old-bot", Team: "web", Project: "intranet", ProjectID: "p3", Status: "revoked"},
+		},
+		projects: map[string]model.Project{
+			"p1": {ID: "p1", Team: "support", Name: "Help desk"}, // renamed since
+			"p2": {ID: "p2", Team: "web", Name: "helpdesk"},
+			"p3": {ID: "p3", Team: "web", Name: "intranet", Deleted: true},
+		},
+	}
+	for key, want := range map[string]string{"k1": "p1", "k2": "p2", "k3": "p3"} {
+		if got := g.key(store.SpendCell{Team: "support", KeyID: key}, "project"); got != want {
+			t.Errorf("%s: project %q, want %q", key, got, want)
+		}
+	}
+	for id, want := range map[string][2]string{"p1": {"Help desk", "Support"}, "p2": {"helpdesk", "Web"}, "p3": {"intranet", "Web · deleted"}} {
+		if label, sub := g.label(id, "project"); label != want[0] || sub != want[1] {
+			t.Errorf("%s: label %q sub %q, want %v", id, label, sub, want)
+		}
+	}
+	// The key's own label names its project by the current name.
+	if _, sub := g.label("support-bot", "key"); sub != "support / Help desk" {
+		t.Errorf("key sub %q", sub)
 	}
 }

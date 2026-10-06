@@ -21,6 +21,8 @@ type Server struct {
 	Snap  *Current
 	Up    Upstream
 	Store *store.Store
+	// throttle counts requests per key across requests (Input.Throttle).
+	throttle Throttle
 }
 
 func (g *Server) Handler() http.Handler {
@@ -61,7 +63,7 @@ func (g *Server) chat(w http.ResponseWriter, req *http.Request) {
 	in := Input{
 		Secret: req.Header.Get("Authorization"), Region: req.Header.Get("X-Data-Region"),
 		SessionID: req.Header.Get("X-Session-Id"), Actor: req.Header.Get("X-Actor"),
-		Req: cr, Body: body, Now: time.Now(),
+		Req: cr, Body: body, Now: time.Now(), Throttle: &g.throttle,
 	}
 	d := Admit(snap, in, r)
 	if d.Reject != nil {

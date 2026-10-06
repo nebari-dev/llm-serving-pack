@@ -9,12 +9,17 @@ type Team struct {
 	CostCenter string `json:"costCenter"`
 }
 
-// Project groups a team's keys (§5.2). Names are unique within a team; a
-// project budget names the project by id.
+// Project groups a team's keys (§5.2). Names are for people and unique
+// within a team (ignoring case); receipts, budgets and rules name the
+// project by id, so it can be renamed.
 type Project struct {
 	ID   string `json:"id"`
 	Team string `json:"team"`
 	Name string `json:"name"`
+	// Deleted projects stay, so the history of their revoked keys keeps a
+	// name; GET /projects leaves them out.
+	Deleted bool   `json:"-"`
+	ETag    string `json:"etag,omitempty"` // for If-Match
 }
 
 // Model is a catalog entry. Prices are per (model, backend): see Pricing.
@@ -279,13 +284,16 @@ type Budget struct {
 	Scope string `json:"scope"`
 	// ScopeName is what to show for it: the team id, the project's or the
 	// key's name (the id when the key is gone).
-	ScopeName    string  `json:"scopeName,omitempty"`
-	ScopeType    string  `json:"scopeType"`
-	Period       string  `json:"period"`
-	CapUSD       float64 `json:"capUsd"`
-	CurrentUSD   float64 `json:"currentUsd"`
-	OnExceed     string  `json:"onExceed"`
-	ProjectedUSD float64 `json:"projectedUsd"`
+	ScopeName  string  `json:"scopeName,omitempty"`
+	ScopeType  string  `json:"scopeType"`
+	Period     string  `json:"period"`
+	CapUSD     float64 `json:"capUsd"`
+	CurrentUSD float64 `json:"currentUsd"`
+	OnExceed   string  `json:"onExceed"`
+	// ThrottlePerMinute is how many requests a minute each covered key gets
+	// while a throttle budget is over its cap (gateway.ThrottleRate).
+	ThrottlePerMinute int     `json:"throttlePerMinute,omitempty"`
+	ProjectedUSD      float64 `json:"projectedUsd"`
 	// TrailingDailyUSD is the scope's daily average the projection uses.
 	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
 	// UnpricedRequests is this month's requests in scope with no price:
@@ -345,7 +353,7 @@ type TraceStep struct {
 	Input   string  `json:"input"`
 	Outcome string  `json:"outcome"`
 	MS      float64 `json:"ms"`
-	State   string  `json:"state"` // ok | warn | fail | skip
+	State   string  `json:"state"` // ok | warn | fail | throttle | skip
 }
 
 type RuleEval struct {
@@ -380,7 +388,8 @@ type Receipt struct {
 	// first 12 hex of its hash); empty when not recorded.
 	SecretID          string      `json:"secretId,omitempty"`
 	Team              string      `json:"team"`
-	Project           string      `json:"project"`
+	Project           string      `json:"project"` // the project's name when the request was made
+	ProjectID         string      `json:"projectId,omitempty"`
 	Actor             string      `json:"actor,omitempty"`
 	RequestedModel    string      `json:"requestedModel"`
 	ResolvedModel     string      `json:"resolvedModel"`
@@ -419,6 +428,25 @@ type SeriesPoint struct {
 	Rerouted  int   `json:"rerouted"`
 	Blocked   int   `json:"blocked"`
 	Truncated int   `json:"truncated"`
+	Throttled int   `json:"throttled"`
+}
+
+// Add counts n requests of verdict v; an unknown verdict isn't charted.
+func (p *SeriesPoint) Add(v string, n int) {
+	switch v {
+	case "allowed":
+		p.Allowed += n
+	case "redacted":
+		p.Redacted += n
+	case "rerouted":
+		p.Rerouted += n
+	case "blocked":
+		p.Blocked += n
+	case "truncated":
+		p.Truncated += n
+	case "throttled":
+		p.Throttled += n
+	}
 }
 
 type SpendPoint struct {

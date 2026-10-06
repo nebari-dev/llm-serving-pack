@@ -1,4 +1,4 @@
-import { Check, CircleSlash, TriangleAlert, X } from 'lucide-react'
+import { Check, CircleSlash, Hourglass, TriangleAlert, X } from 'lucide-react'
 import type { TraceStep } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
@@ -10,6 +10,8 @@ const stateMeta = {
   ok: { Icon: Check, dot: 'bg-v-allowed-bg text-v-allowed-fg border-v-allowed-border', label: 'OK' },
   warn: { Icon: TriangleAlert, dot: 'bg-v-degraded-bg text-v-degraded-fg border-v-degraded-border', label: 'Attention' },
   fail: { Icon: X, dot: 'bg-v-blocked-bg text-v-blocked-fg border-v-blocked-border', label: 'Stopped here' },
+  // A throttle refuses for now, not for good: the degraded hue, its own glyph.
+  throttle: { Icon: Hourglass, dot: 'bg-v-degraded-bg text-v-degraded-fg border-v-degraded-border', label: 'Throttled here' },
   skip: { Icon: CircleSlash, dot: 'bg-muted text-muted-foreground border-border', label: 'Not reached' },
 } as const
 
@@ -39,7 +41,7 @@ export function DecisionTrace({ steps, totalMs }: { steps: TraceStep[]; totalMs:
                   className={cn(
                     'font-mono break-words',
                     s.state === 'fail' && 'text-v-blocked-fg',
-                    s.state === 'warn' && 'text-v-degraded-fg',
+                    (s.state === 'warn' || s.state === 'throttle') && 'text-v-degraded-fg',
                   )}
                 >
                   {s.outcome}

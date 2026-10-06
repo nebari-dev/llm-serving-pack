@@ -33,7 +33,8 @@ export const uid = (p = 'n') => `${p}${++seq}`
 
 export const entityOptions = ['email', 'SSN', 'person', 'phone', 'credit card', 'secret', 'private key', 'source code', 'Acme account ID']
 
-export const fieldDefs: { value: string; label: string; ops: string[]; suggestions?: string[] }[] = [
+/** labelOf: how a value reads, when it's an id (a project's). */
+export const fieldDefs: { value: string; label: string; ops: string[]; suggestions?: string[]; labelOf?: (v: string) => string }[] = [
   { value: 'prompt', label: 'Prompt', ops: ['contains entity', 'matches regex'], suggestions: entityOptions },
   { value: 'response', label: 'Response', ops: ['contains entity', 'matches regex'], suggestions: entityOptions },
   { value: 'key.team', label: 'Team', ops: ['is', 'is not'], suggestions: ['support', 'agents', 'batch', 'web', 'research', 'security'] },

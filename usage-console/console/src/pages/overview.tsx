@@ -24,7 +24,10 @@ const volumeSeries = [{ key: 'total', label: 'Requests', color: 'var(--muted-for
 
 // Stack order is part of the palette: validate_palette.js checks adjacent
 // pairs, and yellow↔red fails as neighbors. This order passes in both themes.
+// Throttled shares truncated's degraded hue (§7.2 keeps five state colors),
+// lightened so the two read apart in the stack.
 const verdictSeries = [
+  { key: 'throttled', label: 'Throttled', color: `color-mix(in oklch, ${toneFill.degraded} 50%, var(--canvas))` },
   { key: 'redacted', label: 'Redacted', color: toneFill.redacted },
   { key: 'truncated', label: 'Truncated', color: toneFill.degraded },
   { key: 'rerouted', label: 'Rerouted', color: toneFill.rerouted },
@@ -109,17 +112,17 @@ export function OverviewPage() {
           syncId="overview-traffic"
           height={140}
           hideXAxis
-          data={series.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked } }))}
+          data={series.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked + p.throttled } }))}
           xFormat={xFormat}
           annotations={annotations}
         />
         <h3 className="mt-5 mb-1 text-sm font-medium">Not allowed</h3>
         <StackedArea
-          caption={`Redacted, truncated, rerouted, and blocked requests ${perBucket(series)}`}
+          caption={`Throttled, redacted, truncated, rerouted, and blocked requests ${perBucket(series)}`}
           series={verdictSeries}
           syncId="overview-traffic"
           height={150}
-          data={series.map((p) => ({ t: p.t, values: { redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
+          data={series.map((p) => ({ t: p.t, values: { throttled: p.throttled, redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
           xFormat={xFormat}
           annotations={annotations.map((a) => ({ ...a, label: '' }))}
         />

@@ -64,6 +64,22 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("receipts: refresh receipts_daily: %w", err)
 		}
 	}
+	// Receipts from before 008 get their project id from the config database.
+	// It's recorded like a migration once done, so a failed run is retried
+	// at the next start.
+	const backfill = "008_project_id.backfill"
+	var done bool
+	if err := s.Receipts.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, backfill).Scan(&done); err != nil {
+		return fmt.Errorf("receipts: %w", err)
+	}
+	if !done {
+		if err := s.backfillReceiptProjects(ctx); err != nil {
+			return fmt.Errorf("receipts: %w", err)
+		}
+		if _, err := s.Receipts.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, backfill); err != nil {
+			return fmt.Errorf("receipts: %w", err)
+		}
+	}
 	return nil
 }
 
