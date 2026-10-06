@@ -39,10 +39,14 @@ import (
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
 // Condition types reported on PassthroughModel status.
 const (
+	// CondUpstreamCredentialResolved reports whether the provider Secret has a non-empty API key.
+	// "Upstream" distinguishes it from inbound client API-key Secrets.
+	CondUpstreamCredentialResolved = "UpstreamCredentialResolved"
 	// CondBackendConfigured covers the provider plumbing: Backend,
 	// BackendTLSPolicy, AIServiceBackend, BackendSecurityPolicy.
 	CondBackendConfigured = "BackendConfigured"
@@ -93,6 +97,11 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	conditions := []metav1.Condition{}
+	if provider.UsesCredentialSecret(pm.Spec.Provider) {
+		conditions = append(conditions, resolveUpstreamCredential(ctx, r.Client, pm))
+	}
+
 	clientIDs, err := apiKeyClientIDs(ctx, r.Client, pm.Name, pm.Namespace)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("reading api key client ids: %w", err)
@@ -111,7 +120,8 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			Reason:  "BuildFailed",
 			Message: err.Error(),
 		}
-		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, "", []metav1.Condition{buildCond}); statusErr != nil {
+		conditions = append(conditions, buildCond)
+		if statusErr := r.updateStatus(ctx, log, pm, llmv1alpha1.PassthroughPhaseError, "", conditions); statusErr != nil {
 			log.Error(statusErr, "failed to update status after build error")
 		}
 		return ctrl.Result{}, fmt.Errorf("building passthrough resources: %w", err)
@@ -132,9 +142,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// whole reconcile. Each failure is captured in a status condition and the
 	// reconcile is requeued so the resources are retried once the CRDs exist
 	// (the same surface-and-requeue convention as the LLMModel reconciler).
-	conditions := []metav1.Condition{}
 	cleanupPending := false
-
 	backendErr := r.applyAll(ctx, log, pm,
 		resources.Backend,
 		resources.BackendTLSPolicy,
@@ -200,6 +208,10 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 	if cleanupPending {
 		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+	}
+	if meta.IsStatusConditionPresentAndEqual(conditions, CondUpstreamCredentialResolved, metav1.ConditionUnknown) {
+		// Retry the informational probe without blocking resource provisioning.
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 	return ctrl.Result{}, nil
 }
@@ -339,6 +351,10 @@ func (r *PassthroughModelReconciler) updateStatus(
 	// Empty on a build failure: the provider could not be resolved, so no
 	// address is claimed. Display clients read this instead of resolving.
 	fresh.Status.ProviderHostname = providerHostname
+	if meta.FindStatusCondition(conditions, CondUpstreamCredentialResolved) == nil {
+		// Workload identity has no Secret to inspect; discard any previous result.
+		meta.RemoveStatusCondition(&fresh.Status.Conditions, CondUpstreamCredentialResolved)
+	}
 	for _, c := range conditions {
 		c.ObservedGeneration = fresh.Generation
 		meta.SetStatusCondition(&fresh.Status.Conditions, c)
@@ -371,6 +387,20 @@ func boolOrDefaultStatus(b *bool) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Index registration happens before the manager starts its cache.
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&llmv1alpha1.PassthroughModel{},
+		upstreamCredentialSecretIndex,
+		indexPassthroughModelByUpstreamCredentialSecret,
+	); err != nil {
+		return fmt.Errorf("indexing PassthroughModels by credential Secret: %w", err)
+	}
+	operatorNamespace := ""
+	if r.Config != nil {
+		operatorNamespace = r.Config.OperatorNamespace
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llmv1alpha1.PassthroughModel{}).
 		Watches(
@@ -379,6 +409,13 @@ func (r *PassthroughModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return enqueueAllModelsForAPIKeySecret(ctx, r.Client, obj, &llmv1alpha1.PassthroughModelList{})
 			}),
 			builder.WithPredicates(managedByOperatorPredicate()),
+		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				return enqueuePassthroughModelsForUpstreamCredentialSecret(ctx, r.Client, obj)
+			}),
+			builder.WithPredicates(upstreamCredentialSecretInNamespacePredicate(operatorNamespace)),
 		).
 		Named("passthroughmodel").
 		Complete(r)
