@@ -5,7 +5,11 @@
 // Stargate API key: the gateway must never forward the caller's credentials.
 // GET /{backend}/v1/models lists a backend's models. The "keyed" backend
 // (fakellm.KeyedBackend) wants its own provider key, as a real provider does,
-// answers 401 without it, and echoes the prompt.
+// answers 401 without it, and echoes the prompt, saying which of its two keys
+// it got in X-Fake-Key. The "keyed-anthropic" backend
+// (fakellm.AnthropicBackend) speaks Anthropic's native API instead: GET
+// /{backend}/v1/models and POST /{backend}/v1/messages, with x-api-key and
+// anthropic-version.
 package main
 
 import (
@@ -16,6 +20,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +34,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{backend}/v1/chat/completions", handle)
 	mux.HandleFunc("GET /{backend}/v1/models", listModels)
+	mux.HandleFunc("POST /{backend}/v1/messages", messages)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	log.Printf("fake-openai listening on %s", *addr)
 	log.Fatal(http.ListenAndServe(*addr, mux))
@@ -45,7 +51,49 @@ func authorized(w http.ResponseWriter, req *http.Request) bool {
 	return false
 }
 
+// anthropicAuthorized answers as Anthropic does for a request without its key.
+func anthropicAuthorized(w http.ResponseWriter, req *http.Request) bool {
+	status, body := fakellm.AnthropicAuth(req.Header.Get("X-Api-Key"), req.Header.Get("Anthropic-Version"))
+	if status == 0 {
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write([]byte(body))
+	return false
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+// messages is Anthropic's Messages API, on the Anthropic backend only.
+func messages(w http.ResponseWriter, req *http.Request) {
+	if !fakellm.IsAnthropic(req.PathValue("backend")) {
+		http.NotFound(w, req)
+		return
+	}
+	if !anthropicAuthorized(w, req) {
+		return
+	}
+	var mr fakellm.AnthropicRequest
+	if err := json.NewDecoder(req.Body).Decode(&mr); err != nil || mr.Stream {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"invalid JSON, or stream (not simulated)"}}`))
+		return
+	}
+	writeJSON(w, fakellm.AnthropicReply(mr))
+}
+
 func listModels(w http.ResponseWriter, req *http.Request) {
+	if fakellm.IsAnthropic(req.PathValue("backend")) {
+		if anthropicAuthorized(w, req) {
+			writeJSON(w, fakellm.AnthropicModels())
+		}
+		return
+	}
 	if !authorized(w, req) {
 		return
 	}
@@ -81,6 +129,9 @@ func handle(w http.ResponseWriter, req *http.Request) {
 		// (Warden restores redacted values in the body).
 		p = fakellm.Echo(cr)
 		w.Header().Set("X-Fake-Received", url.QueryEscape(p.Content()))
+		if n := fakellm.KeyedKeyNumber(req.Header.Get("Authorization")); n > 0 {
+			w.Header().Set("X-Fake-Key", strconv.Itoa(n))
+		}
 	}
 	ctx := req.Context()
 	sleep := func(d time.Duration) bool {

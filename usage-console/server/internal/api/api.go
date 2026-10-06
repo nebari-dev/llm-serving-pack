@@ -108,6 +108,8 @@ func (s *Server) Handler() http.Handler {
 				writeJSON(w, 503, errBody("unavailable", err.Error()))
 			case errors.As(err, new(applyFailed)):
 				writeJSON(w, 502, errBody("apply_failed", err.Error()))
+			case errors.As(err, new(keyRefused)):
+				writeJSON(w, 422, errBody("key_test_failed", err.Error()))
 			case err != nil:
 				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
 				writeJSON(w, 500, errBody("internal", "internal error"))
@@ -218,6 +220,12 @@ func (u unavailable) Error() string { return string(u) }
 type applyFailed string
 
 func (a applyFailed) Error() string { return string(a) }
+
+// keyRefused is a provider key that failed its connection test, so nothing
+// was saved (422): the provider's error, the key scrubbed from it.
+type keyRefused string
+
+func (k keyRefused) Error() string { return string(k) }
 
 func errBody(code, msg string) map[string]any {
 	return map[string]any{"error": map[string]any{"code": code, "message": msg}}

@@ -10,7 +10,8 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { type ApiKey, api, type Backend, backends as seedBackends, createKey, type Receipt, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
+import { toast } from '@/components/ui/toast'
+import { type ApiKey, api, ApiError, type Backend, backends as seedBackends, createKey, type LiveRoute, type Receipt, type RoutingChange, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
@@ -19,7 +20,8 @@ import { ProviderForm } from './providers-live'
 
 // §7.5.1 Onboarding against the real control plane. Pick a backend the
 // control plane has, or connect a new provider (its key tested once, then
-// sealed), route its models to it and apply; the key is a real key; the first
+// sealed; one that fails isn't saved), route its models to it and apply
+// (every pending change, listed first); the key is a real key; the first
 // request is a real receipt for that key, from the caller's own app or the
 // test request sent here.
 
@@ -261,53 +263,102 @@ export function LiveOnboardingPage() {
 
 /**
  * A provider saved here isn't in the gateway yet: it needs a route for its
- * models, then an apply, which restarts the gateway with every pending
- * routing change.
+ * models (saved like any route), then an apply. The applier applies the whole
+ * desired routing, one config and one restart, so applying here applies every
+ * pending change, not only this provider's: the button says how many, and
+ * they're listed above it. Applying sends the listed plan's etag, so a change
+ * made meanwhile is refused rather than applied unseen.
  */
 function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
-  const plan = useLive<RoutingPlan | null>('/routing', null, 10_000)
+  const plan = useLive<RoutingPlan | null>('/routing', null, 5_000)
+  const routes = useLive<LiveRoute[] | null>('/routes', null, 10_000)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const others = (plan.data?.changes ?? []).filter((c) => c.name !== b.name && c.name !== `${b.name}-key` && c.kind !== 'AIGatewayRoute').length
-  const connect = async () => {
+  const [error, setError] = useState<{ title: string; text: string } | null>(null)
+  const routed = routes.data?.some((r) => r.targets.some((t) => t.backend === b.name)) ?? false
+  const changes = plan.data?.changes ?? []
+  const n = changes.length
+  const ours = (c: RoutingChange) => c.name === b.name || c.name === `${b.name}-key` || c.kind === 'AIGatewayRoute'
+
+  const route = async () => {
     setBusy(true)
     setError(null)
     try {
-      const routes = await api<{ name: string; targets: { backend: string }[] }[]>('/routes')
-      if (!routes.some((r) => r.targets.some((t) => t.backend === b.name))) {
-        await api('/routes', { method: 'POST', body: JSON.stringify({ name: b.name, match: { models: b.models, headers: [] }, targets: [{ backend: b.name }], fallback: [] }) })
-      }
-      const p = await api<RoutingPlan>('/routing')
-      if (p.changes.length) await api('/routing/apply', { method: 'POST', body: '{}', headers: { 'If-Match': p.etag } })
-      onDone()
+      await api('/routes', { method: 'POST', body: JSON.stringify({ name: b.name, match: { models: b.models, headers: [] }, targets: [{ backend: b.name }], fallback: [] }) })
+      routes.reload()
+      plan.reload()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError({ title: 'Not routed', text: e instanceof Error ? e.message : String(e) })
     } finally {
       setBusy(false)
     }
   }
+  const apply = async () => {
+    if (!plan.data) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api('/routing/apply', { method: 'POST', body: '{}', headers: { 'If-Match': plan.data.etag } })
+      toast.add({ title: 'Changes applied', description: `The gateway sends ${b.models.join(', ')} to ${b.name}.`, type: 'success' })
+      onDone()
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) setError({ title: 'Routing changed since this list', text: 'Review the pending changes again, then apply.' })
+      else if (e instanceof ApiError && e.status === 502) setError({ title: 'The gateway didn’t take the new config', text: e.message })
+      else setError({ title: 'Not applied', text: e instanceof Error ? e.message : String(e) })
+      plan.reload()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="mt-4 flex flex-col items-start gap-3 rounded-md border border-border p-4">
       <p className="text-sm">
-        <span className="font-mono">{b.name}</span> is saved{b.key ? <> with key <span className="font-mono">{b.key.prefix}…</span></> : null}. The gateway sends to it once a route
-        matches its models and routing is applied.
+        <span className="font-mono">{b.name}</span> is saved{b.key ? <> with key <span className="font-mono">{b.key.prefix}…</span>, which passed its test</> : null}. The gateway
+        sends to it once a route matches its models and routing is applied.
       </p>
       {b.lastTest && !b.lastTest.ok && <p className="text-sm text-destructive-foreground">Its connection test failed: {b.lastTest.message}</p>}
-      <p className="text-xs text-muted-foreground">
-        Applying restarts the gateway with every pending routing change{others > 0 ? `, including ${others} not about this provider` : ''}. Review them on{' '}
-        <Link to="/routing" className="underline underline-offset-4">
-          Routing
-        </Link>{' '}
-        first if you’re unsure.
-      </p>
-      <Button onClick={connect} loading={busy} loadingText="Applying… the gateway is restarting" disabled={plan.data ? !plan.data.canApply : false} title={plan.data && !plan.data.canApply ? plan.data.reason : undefined}>
-        Route {b.models.join(', ')} to {b.name} and apply
-      </Button>
+      {routes.loaded && !routed && (
+        <Button onClick={route} loading={busy} loadingText="Saving the route…">
+          Route {b.models.join(', ')} to {b.name}
+        </Button>
+      )}
+      {routed && plan.data && n === 0 && (
+        <>
+          <p className="text-sm text-muted-foreground">Nothing is pending: the gateway already sends to {b.name}.</p>
+          <Button onClick={onDone}>Continue</Button>
+        </>
+      )}
+      {routed && plan.data && n > 0 && (
+        <>
+          <p className="text-sm">
+            Applying restarts the gateway with every pending routing change, not only this provider’s: the gateway runs one config, so it can’t take part of one.
+            {changes.some((c) => !ours(c)) ? ' Some of these aren’t about this provider.' : ''} Review the diffs on{' '}
+            <Link to="/routing" className="underline underline-offset-4">
+              Routing
+            </Link>{' '}
+            if you’re unsure.
+          </p>
+          <ul aria-label="Pending routing changes" className="flex w-full flex-col gap-0.5 text-sm">
+            {changes.map((c) => (
+              <li key={`${c.kind}/${c.name}`} className="flex gap-2">
+                <span className="w-28 shrink-0 text-muted-foreground">{c.change === 'key replaced' ? 'Key replaced' : c.change[0].toUpperCase() + c.change.slice(1)}</span>
+                <span className="font-mono">
+                  {c.kind}/{c.name}
+                </span>
+                {!ours(c) && <span className="text-muted-foreground">not this provider</span>}
+              </li>
+            ))}
+          </ul>
+          <Button onClick={apply} loading={busy} loadingText="Applying… the gateway is restarting" disabled={!plan.data.canApply} title={plan.data.canApply ? undefined : plan.data.reason}>
+            {n === 1 ? 'Apply 1 change' : `Apply all ${n} changes`}
+          </Button>
+        </>
+      )}
       {error && (
         <Alert variant="destructive">
-          <AlertTitle>Not connected</AlertTitle>
+          <AlertTitle>{error.title}</AlertTitle>
           <AlertDescription>
-            <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap">{error}</pre>
+            <pre className="max-h-48 overflow-auto font-mono text-xs whitespace-pre-wrap">{error.text}</pre>
           </AlertDescription>
         </Alert>
       )}

@@ -89,3 +89,47 @@ func TestTestUnsavedProvider(t *testing.T) {
 		}
 	}
 }
+
+// memKeys is a KeyStore in memory, to see what a write stored.
+type memKeys map[string]string
+
+func (m memKeys) Target() string            { return "memory" }
+func (m memKeys) Put(ref, key string) error { m[ref] = key; return nil }
+func (m memKeys) Remove(ref string) error   { delete(m, ref); return nil }
+func (m memKeys) Get(ref string) (string, bool, error) {
+	k, ok := m[ref]
+	return k, ok, nil
+}
+
+// §7.5.1 "Tested once, then sealed": a provider added with a key that fails
+// its test isn't saved, and neither is the key. The refusal (422) is the
+// provider's error, the key scrubbed from it. (Store is nil here: a refused
+// key must be refused before anything is written.)
+func TestAddingAProviderWithAFailingKeySavesNothing(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error":{"message":"Incorrect API key provided: ` + strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") + `"}}`))
+	}))
+	defer provider.Close()
+	keys := memKeys{}
+	h := (&Server{Tenants: []string{"demo"}, Keys: keys}).Handler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/demo/backends", strings.NewReader(
+		`{"name":"together","provider":"OpenAI-compatible","region":"us-east","baseUrl":"`+provider.URL+`/v1","models":["m1"],"apiKey":"sk-wrong-0123456789xyz"}`)))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("%d %s, want 422", w.Code, w.Body)
+	}
+	var body struct {
+		Error struct{ Code, Message string } `json:"error"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if body.Error.Code != "key_test_failed" || !strings.Contains(body.Error.Message, "Incorrect API key provided") || !strings.Contains(body.Error.Message, "not saved") {
+		t.Errorf("error = %+v", body.Error)
+	}
+	if strings.Contains(w.Body.String(), "0123456789xyz") {
+		t.Errorf("the key came back: %s", w.Body)
+	}
+	if len(keys) != 0 {
+		t.Errorf("a refused key was stored: %v", keys)
+	}
+}

@@ -81,7 +81,7 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	aigwConfig := fs.String("aigw-config", "", "the config file aigw runs (e.g. tmp/aigw/config.yaml); empty: routing isn't applied anywhere")
 	aigwRestart := fs.String("aigw-restart", "", "shell command that restarts aigw on -aigw-config (e.g. 'scripts/restart.sh aigw'); empty: routing can't be applied")
 	aigwLog := fs.String("aigw-log", "", "shell command printing the end of aigw's log, quoted when an apply fails (e.g. 'tail -n 20 tmp/aigw.log')")
-	providerKeys := fs.String("provider-keys", "", "the owner-only env file provider keys set from the console go to, which aigw is started with; default provider-keys.env next to -aigw-config")
+	providerKeys := fs.String("provider-keys", "", "the owner-only env file aigw is started with, holding the provider keys set from the console once routing is applied (they wait in provider-keys.pending.env beside it until then); default provider-keys.env next to -aigw-config")
 	fs.Parse(args)
 	if *providerKeys == "" && *aigwConfig != "" {
 		*providerKeys = filepath.Join(filepath.Dir(*aigwConfig), "provider-keys.env")
@@ -123,13 +123,19 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
 	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", ConfigChanged: reload, WardenURL: *warden, Environment: *environment, LiteLLMURL: *litellm, GatewayURL: *gatewayURL}
-	if *aigwConfig != "" {
-		srv.Routing = &routing.LocalApplier{Base: *aigwBase, Path: *aigwConfig, Restart: *aigwRestart, Log: *aigwLog, Ready: routing.HTTPReady(*gatewayURL, 90*time.Second)}
-	}
+	var keys *routing.LocalKeyFile
 	if *providerKeys != "" {
 		// server/.env holds keys set by hand (OPENROUTER_API_KEY); it's read
 		// for connection tests, never written.
-		srv.Keys = &routing.LocalKeyFile{Path: *providerKeys, Fallback: []string{".env"}}
+		keys = &routing.LocalKeyFile{Path: *providerKeys, Fallback: []string{".env"}}
+		srv.Keys = keys
+	}
+	if *aigwConfig != "" {
+		a := &routing.LocalApplier{Base: *aigwBase, Path: *aigwConfig, Restart: *aigwRestart, Log: *aigwLog, Ready: routing.HTTPReady(*gatewayURL, 90*time.Second)}
+		if keys != nil {
+			a.Keys = keys // keys saved from the console go live with the apply
+		}
+		srv.Routing = a
 	}
 	go srv.FinishRotations(ctx)
 	go srv.RunPriceSync(ctx)

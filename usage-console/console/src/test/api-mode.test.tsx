@@ -1307,10 +1307,12 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   })
 
-  // fake-openai's "keyed" backend wants its own provider key (fakellm.KeyedKey)
-  // and answers 401 in OpenAI's words without it.
+  // fake-openai's "keyed" backend wants its own provider key (fakellm.KeyedKey,
+  // or KeyedKey2: X-Fake-Key says which it got) and answers 401 in OpenAI's
+  // words without it.
   const fakeOpenAI = (import.meta.env.VITE_FAKE_OPENAI as string | undefined) ?? 'http://localhost:8090'
   const KEYED_KEY = 'sk-fake-keyed-7d1c0b5e9a2f4e68'
+  const KEYED_KEY_2 = 'sk-fake-keyed-2b8e4f1a0c6d3957'
   const WRONG_KEY = 'sk-wrongkey-0000000000000000'
   /** The part of a key past its prefix: in no response, ever (§9.1). */
   const secretPart = (k: string) => k.slice(8)
@@ -1374,6 +1376,15 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       // Save it with the key: Postgres keeps the prefix, the key file the key.
       expect(await status(send('POST', '/backends', { ...provider, provider: 'Bedrock', apiKey: KEYED_KEY }))).toBe(400)
       expect(await status(send('POST', '/backends', { ...provider, models: [] }))).toBe(400)
+      // §7.5.1 "Tested once, then sealed": a key that fails its test saves nothing.
+      const auditBefore = (await catalog.api<C[]>('/changes?kind=Backend'))[0]
+      const refusedKey = (await send('POST', '/backends', { ...provider, apiKey: WRONG_KEY }).catch((e) => e)) as { status: number; code: string; message: string }
+      expect(refusedKey).toMatchObject({ status: 422, code: 'key_test_failed' })
+      expect(refusedKey.message).toContain('not saved')
+      expect(refusedKey.message).toContain('Incorrect API key provided')
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false)
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toEqual(auditBefore)
+      expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
       const made = await send<BackendResult>('POST', '/backends', { ...provider, apiKey: KEYED_KEY })
       expect(made.backend).toMatchObject({ name, sync: 'pending', key: { prefix: KEYED_KEY.slice(0, 8) }, endpoint: { apiKeyEnv: ref, baseUrl: provider.baseUrl } })
       expect(made.test).toMatchObject({ ok: true })
@@ -1411,24 +1422,32 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         expect(rc).toMatchObject({ backend: name, resolvedModel: 'keyed-echo', status: 200 })
       }, { timeout: 20_000, interval: 1000 })
 
-      // Replace the key with a wrong one: tested at once, pending until applied.
+      expect((await callKeyed(k.secret, (s) => s === 200)).headers.get('x-fake-key')).toBe('1')
+
+      // Replacing it with a key that fails its test is refused: nothing changes.
       const before = await catalog.api<RoutingPlan>('/routing')
-      const replaced = await send<BackendResult>('PUT', `/backends/${name}/key`, { apiKey: WRONG_KEY })
-      expect(replaced.test).toMatchObject({ ok: false, status: 401 })
-      expect(replaced.backend).toMatchObject({ sync: 'pending', key: { prefix: WRONG_KEY.slice(0, 8) } })
-      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Replaced provider key', target: `${name} · key ${WRONG_KEY.slice(0, 8)}…` })
+      const wrongReplace = (await send('PUT', `/backends/${name}/key`, { apiKey: WRONG_KEY }).catch((e) => e)) as { status: number; code: string; message: string }
+      expect(wrongReplace).toMatchObject({ status: 422, code: 'key_test_failed' })
+      expect(wrongReplace.message).toContain('Incorrect API key provided')
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)).toMatchObject({ sync: 'synced', key: { prefix: KEYED_KEY.slice(0, 8) } })
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).not.toMatchObject({ action: 'Replaced provider key', target: expect.stringContaining(WRONG_KEY.slice(0, 8)) })
+      expect((await catalog.api<RoutingPlan>('/routing')).etag).toBe(before.etag)
+
+      // Replace it with another good key: tested at once, pending until applied.
+      const replaced = await send<BackendResult>('PUT', `/backends/${name}/key`, { apiKey: KEYED_KEY_2 })
+      expect(replaced.test).toMatchObject({ ok: true, status: 200 })
+      expect(replaced.backend).toMatchObject({ sync: 'pending', key: { prefix: KEYED_KEY_2.slice(0, 8) }, lastTest: { ok: true } })
+      expect((await catalog.api<C[]>('/changes?kind=Backend'))[0]).toMatchObject({ action: 'Replaced provider key', target: `${name} · key ${KEYED_KEY_2.slice(0, 8)}…` })
       const pending = await catalog.api<RoutingPlan>('/routing')
       expect(pending.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual([`key replaced Secret/${name}-key`])
       expect(pending.etag).not.toBe(before.etag)
-      // The gateway sends the old key until the apply restarts it with the new one.
-      expect((await callKeyed(k.secret, (s) => s === 200)).status).toBe(200)
+      // §7.1 principle 4: the gateway sends the applied key until the apply
+      // restarts it with the new one (the new key is staged, not in the file
+      // aigw starts with, so no other restart picks it up either).
+      expect((await callKeyed(k.secret, (s) => s === 200)).headers.get('x-fake-key')).toBe('1')
       await send('POST', '/routing/apply', {}, pending.etag)
       expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
-      expect((await callKeyed(k.secret, (s) => s === 401)).status).toBe(401)
-      // The right key back, applied: requests land again.
-      await send('PUT', `/backends/${name}/key`, { apiKey: KEYED_KEY })
-      await applyPending()
-      expect((await callKeyed(k.secret, (s) => s === 200)).status).toBe(200)
+      expect((await callKeyed(k.secret, (s) => s === 200)).headers.get('x-fake-key')).toBe('2')
       expect((await send<BackendResult>('POST', `/backends/${name}/test`)).test).toMatchObject({ ok: true })
 
       // Edit with If-Match; the key stays as it is.
@@ -1451,6 +1470,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(rec.bodies.length).toBeGreaterThan(20)
       for (const b of rec.bodies) {
         expect(b).not.toContain(secretPart(KEYED_KEY))
+        expect(b).not.toContain(secretPart(KEYED_KEY_2))
         expect(b).not.toContain(secretPart(WRONG_KEY))
       }
     } finally {
@@ -1492,6 +1512,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       })
       await waitFor(() => expect(d.textContent).toContain('Incorrect API key provided'), { timeout: 10_000 })
       expect(d.textContent).toContain('401')
+      // Saving with the wrong key saves nothing, and says so in the provider's words.
+      fireEvent.change(within(d).getByLabelText('Models'), { target: { value: 'keyed-echo' } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save provider' }))
+      })
+      await waitFor(() => expect(d.textContent).toContain('The key failed its connection test'), { timeout: 10_000 })
+      expect(d.textContent).toContain('not saved')
+      expect(d.textContent).toContain('Incorrect API key provided')
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false)
+      fireEvent.change(within(d).getByLabelText('Models'), { target: { value: '' } })
       fireEvent.change(keyInput, { target: { value: KEYED_KEY } })
       await act(async () => {
         fireEvent.click(within(d).getByRole('button', { name: 'Test connection' }))
@@ -1518,7 +1548,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(text()).toContain('1 model: keyed-echo')
       expect(document.body.innerHTML).not.toContain(secretPart(KEYED_KEY))
 
-      // Replace the key: the change waits for an apply.
+      // Replace the key: a key that fails its test is refused and says why;
+      // a good one is saved and waits for an apply.
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
       })
@@ -1530,12 +1561,20 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         fireEvent.click(within(d).getByRole('button', { name: 'Replace key' }))
       })
       await waitFor(() => expect(d.textContent).toContain('Incorrect API key provided'), { timeout: 10_000 }) // tested once, and it says so
+      expect(d.textContent).toContain('The key failed its connection test')
+      expect(d.textContent).toContain('not saved')
+      expect(within(d).queryByRole('button', { name: 'Done' })).toBeNull()
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.key?.prefix).toBe(KEYED_KEY.slice(0, 8))
+      fireEvent.change(within(d).getByLabelText('New API key'), { target: { value: KEYED_KEY_2 } })
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Replace key' }))
+      })
+      await waitFor(() => expect(within(d).getByRole('button', { name: 'Done' })).toBeTruthy(), { timeout: 10_000 })
+      expect(d.textContent).toContain('pending until you apply')
       await act(async () => {
         fireEvent.click(within(d).getByRole('button', { name: 'Done' }))
       })
       await formDialogClosed()
-      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.key?.prefix).toBe(WRONG_KEY.slice(0, 8))
-      await waitFor(() => expect(text()).toContain(`${WRONG_KEY.slice(0, 8)}…`), { timeout: 5000 })
 
       // Edit its models.
       await act(async () => {
@@ -1568,8 +1607,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 120_000)
 
-  it('onboards with a new provider: tests the key, saves it, routes its models and applies, then a key’s first request lands on it', async () => {
+  it('onboards with a new provider: tests the key, saves it, routes its models and applies all pending changes, then a key’s first request lands on it', async () => {
     const name = `onb-keyed-${Date.now().toString(36)}`
+    const other = `onb-other-${Date.now().toString(36)}`
     await applyPending()
     window.history.pushState({}, '', '/onboarding')
     const r = render(<App />)
@@ -1598,12 +1638,29 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await act(async () => {
         fireEvent.click(within(form).getByRole('button', { name: 'Save provider' }))
       })
-      // Saved, then its models need a route and the gateway an apply.
-      const connect = await screen.findByRole('button', { name: /Route keyed-echo to .* and apply/ }, { timeout: 10_000 })
+      // Saved, then its models need a route (a saved change, not yet applied).
+      const route = await screen.findByRole('button', { name: `Route keyed-echo to ${name}` }, { timeout: 10_000 })
       await act(async () => {
-        fireEvent.click(connect)
+        fireEvent.click(route)
+      })
+      // §7.3: the applier applies the whole desired routing, so the button
+      // says it applies every pending change, and lists them first,
+      // including one that isn't about this provider.
+      await send('POST', '/backends', { name: other, provider: 'Self-hosted', region: 'local', baseUrl: `${fakeOpenAI}/vllm-internal/v1`, models: ['llama-3.3-70b'] })
+      const plan = await catalog.api<RoutingPlan>('/routing')
+      const n = plan.changes.length
+      expect(n).toBeGreaterThan(4)
+      const apply = await screen.findByRole('button', { name: `Apply all ${n} changes` }, { timeout: 20_000 })
+      const pendingList = screen.getByRole('list', { name: 'Pending routing changes' })
+      for (const c of plan.changes) expect(pendingList.textContent).toContain(`${c.kind}/${c.name}`)
+      expect(pendingList.textContent).toContain(`Backend/${other}`)
+      expect(screen.queryByRole('button', { name: /and apply/ })).toBeNull()
+      await act(async () => {
+        fireEvent.click(apply)
       })
       await waitFor(() => expect(screen.getByRole('button', { name: `Create a key for ${name}` })).toBeTruthy(), { timeout: 120_000 })
+      expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === other)?.sync).toBe('synced')
       expect((await catalog.api<LiveRoute[]>('/routes')).find((x) => x.name === name)).toMatchObject({ sync: 'synced', targets: [{ backend: name }] })
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: `Create a key for ${name}` }))
@@ -1621,9 +1678,39 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     } finally {
       if (keyId) await catalog.api(`/keys/${keyId}/revoke`, { method: 'POST' })
       r.unmount()
-      await dropBackends(name)
+      await dropBackends(name, other)
     }
   }, 300_000)
+
+  // fake-openai's "keyed-anthropic" backend speaks Anthropic's native API
+  // (fakellm.AnthropicBackend): x-api-key and anthropic-version, no bearer token.
+  const ANTHROPIC_KEY = 'sk-ant-fake-3c9e1f0a6b2d4c87'
+  it('tests an Anthropic key on Anthropic’s native API, and refuses one that fails', async () => {
+    const name = `anthropic-${Date.now().toString(36)}`
+    const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, models: ['claude-echo'] }
+    try {
+      const right = await send<ConnectionTest>('POST', '/backends/test', { ...provider, apiKey: ANTHROPIC_KEY })
+      expect(right).toMatchObject({ ok: true, status: 200, models: ['claude-echo'] })
+      const wrong = await send<ConnectionTest>('POST', '/backends/test', { ...provider, apiKey: WRONG_KEY })
+      expect(wrong).toMatchObject({ ok: false, status: 401 })
+      expect(wrong.error).toContain('invalid x-api-key')
+      // An OpenAI-compatible test (a bearer token) doesn't get in: the test really is native.
+      expect(await send<ConnectionTest>('POST', '/backends/test', { ...provider, provider: 'OpenAI-compatible', apiKey: ANTHROPIC_KEY })).toMatchObject({ ok: false, status: 401 })
+      const refused = (await send('POST', '/backends', { ...provider, apiKey: WRONG_KEY }).catch((e) => e)) as { status: number; message: string }
+      expect(refused).toMatchObject({ status: 422 })
+      expect(refused.message).toContain('invalid x-api-key')
+      expect(refused.message).not.toContain(secretPart(WRONG_KEY))
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false)
+    } finally {
+      await dropBackends(name)
+    }
+  }, 60_000)
+  // The gateway can't translate OpenAI-style calls to Anthropic's native
+  // Messages API yet: aigw v1.1.0 (and ai-gateway main as of 2026-10-05) has
+  // no OpenAI→Anthropic translator for schema Anthropic, only for GCPAnthropic
+  // and AWSAnthropic, so Anthropic still compiles to its OpenAI-compatible
+  // endpoint. See docs/backend-decisions.md §6.
+  it.todo('routes an OpenAI-style call through the gateway to keyed-anthropic’s /v1/messages (schema Anthropic, AnthropicAPIKey)')
 
   it('lists provider keys by prefix and last test on Settings, not as not connected', async () => {
     window.history.pushState({}, '', '/settings')

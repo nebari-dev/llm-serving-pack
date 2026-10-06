@@ -101,8 +101,9 @@ for w in "${what[@]}"; do
       fi
       # server/.env (gitignored) holds upstream settings aigw substitutes into
       # its config: OPENROUTER_API_KEY, LOCAL_LLM_PORT and the rest. Then the
-      # provider keys set from the console, which stargate-api writes to an
-      # owner-only file next to the config; they win over .env.
+      # provider keys set from the console and applied, which stargate-api
+      # writes to an owner-only file next to the config; they win over .env.
+      # Keys saved but not applied (provider-keys.pending.env) aren't loaded.
       if [ ! -f "$AIGW_CONFIG" ]; then
         [ -x "$BIN/stargate-api" ] || go build -o "$BIN/stargate-api" ./cmd/stargate-api
         "$BIN/stargate-api" routing write -o "$AIGW_CONFIG"

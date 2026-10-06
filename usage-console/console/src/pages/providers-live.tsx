@@ -15,9 +15,10 @@ import { useLive } from '@/state/live'
 
 // Providers in api mode (§7.5.1, §7.5.6, §9.1). A provider is a backend: a
 // base URL speaking OpenAI's API and an optional key. The key goes to the
-// control plane once, is tested, and is never shown again: the console sees
-// its prefix and the last test only. Saving changes the desired state; the
-// gateway sends to the provider once routing is applied.
+// control plane once and is tested; one that fails isn't saved. It's never
+// shown again: the console sees its prefix and the last test only. Saving
+// changes the desired state; the gateway sends to the provider (with its key)
+// once routing is applied.
 
 interface Tile {
   id: string
@@ -42,6 +43,26 @@ const tiles: Tile[] = [
 const tileFor = (provider: string) => tiles.find((t) => t.id === provider && !t.disabled)
 
 const splitModels = (s: string) => s.split(/[\s,]+/).filter(Boolean)
+
+/** Why a write was refused. A key that failed its test (422) saved nothing, and says so. */
+interface Refusal {
+  title: string
+  message: string
+}
+
+const refusal = (e: unknown, title: string): Refusal =>
+  e instanceof ApiError && e.code === 'key_test_failed'
+    ? { title: 'The key failed its connection test', message: e.message }
+    : { title, message: e instanceof Error ? e.message : String(e) }
+
+function RefusalAlert({ r }: { r: Refusal }) {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>{r.title}</AlertTitle>
+      <AlertDescription className="max-h-48 overflow-auto break-words whitespace-pre-wrap">{r.message}</AlertDescription>
+    </Alert>
+  )
+}
 
 /** The last test of a backend, in a line. */
 export function LastTest({ t }: { t?: Backend['lastTest'] }) {
@@ -119,7 +140,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
   const [test, setTest] = useState<ConnectionTest | null>(null)
   const [testing, setTesting] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Refusal | null>(null)
   const [stale, setStale] = useState<Backend | null>(null)
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
   const tile = tiles.find((t) => t.id === draft.provider)
@@ -133,7 +154,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
       // Edit: the saved backend's stored key. New: the key typed here, for this request only.
       setTest(backend ? ((await api<BackendResult>(`/backends/${encodeURIComponent(backend.name)}/test`, { method: 'POST' })).test ?? null) : await api<ConnectionTest>('/backends/test', { method: 'POST', body: JSON.stringify(body()) }))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(refusal(e, 'Not tested'))
     } finally {
       setTesting(false)
     }
@@ -153,7 +174,8 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
       onSaved(out)
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.current) setStale(e.current as Backend)
-      else setError(e instanceof ApiError && e.status === 409 ? `A backend named ${draft.name.trim()} already exists.` : e instanceof Error ? e.message : String(e))
+      else if (e instanceof ApiError && e.status === 409) setError({ title: 'Not saved', message: `A backend named ${draft.name.trim()} already exists.` })
+      else setError(refusal(e, 'Not saved'))
     } finally {
       setBusy(false)
     }
@@ -216,7 +238,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
               <Field>
                 <FieldLabel>API key</FieldLabel>
                 <Input type="password" value={draft.apiKey} onChange={(e) => set({ apiKey: e.target.value })} placeholder={tile?.id === 'Self-hosted' ? 'None' : 'sk-…'} className="font-mono" autoComplete="off" spellCheck={false} />
-                <FieldDescription>Tested once, then sealed. Never returned to callers: the console shows its first characters only.</FieldDescription>
+                <FieldDescription>Tested once, then sealed: saving tests it, and a key that fails isn’t saved. Never returned to callers: the console shows its first characters only.</FieldDescription>
               </Field>
             )}
             <Field className="sm:col-span-2">
@@ -253,12 +275,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
           </AlertDescription>
         </Alert>
       )}
-      {error && (
-        <Alert variant="destructive">
-          <AlertTitle>Not saved</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {error && <RefusalAlert r={error} />}
       <div className="flex justify-end gap-2">
         {onCancel && (
           <Button variant="outline" type="button" onClick={onCancel}>
@@ -283,7 +300,7 @@ export function ProviderDialog({ backend, onClose }: { backend?: Backend; onClos
           <DialogDescription>
             {backend
               ? 'Saving changes the desired routing; the gateway runs it once you apply. Replace the key from the backend’s details.'
-              : 'A base URL speaking OpenAI’s API, and its key. Saving adds the backend to the desired routing; route its models to it, then apply.'}
+              : 'A base URL speaking OpenAI’s API, and its key. Saving tests the key (one that fails isn’t saved) and adds the backend to the desired routing; route its models to it, then apply.'}
           </DialogDescription>
         </DialogHeader>
         <ProviderForm
@@ -304,11 +321,11 @@ export function ProviderDialog({ backend, onClose }: { backend?: Backend; onClos
   )
 }
 
-/** Replaces a backend's key: tested once with the new key, then pending until applied. */
+/** Replaces a backend's key: tested once with the new key, saved only if that passes, then pending until applied. */
 export function ReplaceKeyDialog({ backend, onClose }: { backend: Backend; onClose: (replaced: boolean) => void }) {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<Refusal | null>(null)
   const [done, setDone] = useState<BackendResult | null>(null)
   const replace = async () => {
     setBusy(true)
@@ -317,7 +334,7 @@ export function ReplaceKeyDialog({ backend, onClose }: { backend: Backend; onClo
       setDone(await api<BackendResult>(`/backends/${encodeURIComponent(backend.name)}/key`, { method: 'PUT', body: JSON.stringify({ apiKey: key }) }))
       setKey('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(refusal(e, 'Not replaced'))
     } finally {
       setBusy(false)
     }
@@ -335,7 +352,8 @@ export function ReplaceKeyDialog({ backend, onClose }: { backend: Backend; onClo
           <DialogHeader>
             <DialogTitle>Replace {backend.name}’s key</DialogTitle>
             <DialogDescription>
-              The gateway keeps sending the current key{backend.key ? ` (${backend.key.prefix}…)` : ''} until you apply routing; the apply restarts it with the new one.
+              The new key is tested once and saved only if the provider takes it. The gateway keeps sending the current key{backend.key ? ` (${backend.key.prefix}…)` : ''} until you apply
+              routing; the apply restarts it with the new one.
             </DialogDescription>
           </DialogHeader>
           {done ? (
@@ -352,12 +370,7 @@ export function ReplaceKeyDialog({ backend, onClose }: { backend: Backend; onClo
               <FieldDescription>Tested once, then sealed. Never returned to callers.</FieldDescription>
             </Field>
           )}
-          {error && (
-            <Alert variant="destructive">
-              <AlertTitle>Not replaced</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          {error && <RefusalAlert r={error} />}
           <DialogFooter>
             {done ? (
               <Button type="button" onClick={() => onClose(true)}>
@@ -403,7 +416,7 @@ export function DeleteBackendDialog({ backend, onClose }: { backend: Backend; on
         <DialogHeader>
           <DialogTitle>Delete provider {backend.name}?</DialogTitle>
           <DialogDescription>
-            {backend.sync === 'synced' ? 'The gateway keeps it until the next apply. ' : ''}Its key is removed from the gateway’s key store. Its prices stay, as history.
+            {backend.sync === 'synced' ? 'The gateway keeps it, and its key, until the next apply. ' : ''}The apply removes its key from the gateway’s key store. Its prices stay, as history.
           </DialogDescription>
         </DialogHeader>
         {error && (

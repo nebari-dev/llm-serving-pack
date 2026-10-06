@@ -90,23 +90,48 @@ func (s *Server) keyStore() (routing.KeyStore, error) {
 	return s.Keys, nil
 }
 
-// test runs a saved backend's connection test with key and keeps the result.
-func (s *Server) test(ctx context.Context, t string, b model.Backend, key string) (routing.ConnectionTest, error) {
-	res := routing.TestConnection(ctx, s.providerClient(), b.Provider, routing.ResolvedBaseURL(*b.Endpoint, os.Getenv), key)
-	return res, s.Store.RecordBackendTest(ctx, t, b.Name, model.BackendTest{At: res.At, OK: res.OK, Message: res.Message()})
+// connect tests a backend's connection with key (none when "").
+func (s *Server) connect(ctx context.Context, b model.Backend, key string) routing.ConnectionTest {
+	return routing.TestConnection(ctx, s.providerClient(), b.Provider, routing.ResolvedBaseURL(*b.Endpoint, os.Getenv), key)
 }
 
-// createBackend takes {name, provider, region, baseUrl, models, apiKey?}. The
-// key, if any, is stored, then the connection tested with it once.
+// record keeps a saved backend's connection test.
+func (s *Server) record(ctx context.Context, t, name string, res routing.ConnectionTest) error {
+	return s.Store.RecordBackendTest(ctx, t, name, model.BackendTest{At: res.At, OK: res.OK, Message: res.Message()})
+}
+
+// test runs a saved backend's connection test with key and keeps the result.
+func (s *Server) test(ctx context.Context, t string, b model.Backend, key string) (routing.ConnectionTest, error) {
+	res := s.connect(ctx, b, key)
+	return res, s.record(ctx, t, b.Name, res)
+}
+
+// testKey is a new key's one test (spec §7.5.1 "Tested once, then sealed"):
+// a key that fails it is refused before anything is written.
+func (s *Server) testKey(ctx context.Context, b model.Backend, key string) (routing.ConnectionTest, error) {
+	res := s.connect(ctx, b, key)
+	if !res.OK {
+		return res, keyRefused("The key was not saved: its connection test failed. Check the key and the base URL, then try again.\n" + res.Error)
+	}
+	return res, nil
+}
+
+// createBackend takes {name, provider, region, baseUrl, models, apiKey?}. A
+// key is tested first, and the backend saved with it only if it passes; a
+// backend with no key is saved, then tested (a self-hosted one may be down).
 func (s *Server) createBackend(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	b, key, err := readBackend(r, "", nil)
 	if err != nil {
 		return nil, err
 	}
 	var nk *store.NewProviderKey
+	var res routing.ConnectionTest
 	if key != "" {
 		ks, err := s.keyStore()
 		if err != nil {
+			return nil, err
+		}
+		if res, err = s.testKey(r.Context(), b, key); err != nil {
 			return nil, err
 		}
 		ref := routing.KeyRef(b.Name)
@@ -117,7 +142,11 @@ func (s *Server) createBackend(w http.ResponseWriter, r *http.Request, t string)
 		return nil, err
 	}
 	s.configChanged()
-	res, err := s.test(r.Context(), t, saved, key)
+	if key == "" {
+		res, err = s.test(r.Context(), t, saved, "")
+	} else {
+		err = s.record(r.Context(), t, saved.Name, res)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +200,11 @@ func (s *Server) deleteBackend(_ http.ResponseWriter, r *http.Request, t string)
 	return map[string]string{"name": name}, nil
 }
 
-// setBackendKey takes {"apiKey": "…"}: stores it under the backend's
-// reference, records its prefix, and tests the connection with it. Like the
-// other key writes it takes no If-Match (decisions §7). The gateway sends the
-// new key once routing is applied.
+// setBackendKey takes {"apiKey": "…"}: tests the connection with it and, if
+// that passes, stages it under the backend's reference and records its
+// prefix; a key that fails is refused and nothing changes. Like the other key
+// writes it takes no If-Match (decisions §7). The gateway sends the new key
+// once routing is applied.
 func (s *Server) setBackendKey(w http.ResponseWriter, r *http.Request, t string) (any, error) {
 	var in struct {
 		APIKey string `json:"apiKey"`
@@ -193,8 +223,15 @@ func (s *Server) setBackendKey(w http.ResponseWriter, r *http.Request, t string)
 	if err != nil {
 		return nil, err
 	}
+	if was.Endpoint == nil {
+		return nil, conflict(was.Name + " has no endpoint, so the gateway has nowhere to send a key")
+	}
+	res, err := s.testKey(r.Context(), was, in.APIKey)
+	if err != nil {
+		return nil, err
+	}
 	ref := routing.KeyRef(was.Name)
-	if was.Endpoint != nil && was.Endpoint.APIKeyEnv != "" {
+	if was.Endpoint.APIKeyEnv != "" {
 		ref = was.Endpoint.APIKeyEnv
 	}
 	saved, err := s.Store.SetBackendKey(r.Context(), t, s.DevActor, was.Name, store.NewProviderKey{
@@ -204,8 +241,7 @@ func (s *Server) setBackendKey(w http.ResponseWriter, r *http.Request, t string)
 		return nil, err
 	}
 	s.configChanged()
-	res, err := s.test(r.Context(), t, saved, in.APIKey)
-	if err != nil {
+	if err := s.record(r.Context(), t, saved.Name, res); err != nil {
 		return nil, err
 	}
 	v, err := s.backendView(w, r, t, saved.Name)

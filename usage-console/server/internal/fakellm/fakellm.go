@@ -60,13 +60,28 @@ var Profiles = map[string]Profile{
 const rateLimitRate = 0.012
 
 // KeyedBackend stands in for a provider that needs its own key, for adding a
-// provider from the console end to end: it answers only KeyedKey, with a 401
-// in OpenAI's words otherwise, and serves KeyedModel by echoing the prompt.
+// provider from the console end to end: it answers only KeyedKey and
+// KeyedKey2, with a 401 in OpenAI's words otherwise, and serves KeyedModel by
+// echoing the prompt. Two keys, so a replaced key that works is told apart
+// from the one it replaced (fake-openai says which in X-Fake-Key).
 const (
 	KeyedBackend = "keyed"
 	KeyedKey     = "sk-fake-keyed-7d1c0b5e9a2f4e68"
+	KeyedKey2    = "sk-fake-keyed-2b8e4f1a0c6d3957"
 	KeyedModel   = "keyed-echo"
 )
+
+// KeyedKeyNumber is which of the keyed backend's keys an Authorization
+// header carries: 1, 2, or 0 for neither.
+func KeyedKeyNumber(authorization string) int {
+	switch authorization {
+	case "Bearer " + KeyedKey:
+		return 1
+	case "Bearer " + KeyedKey2:
+		return 2
+	}
+	return 0
+}
 
 // models are what GET /{backend}/v1/models lists, mirroring demo.Backends.
 var models = map[string][]string{
@@ -76,6 +91,7 @@ var models = map[string][]string{
 	"vllm-internal":   {"llama-3.3-70b"},
 	"azure-openai-eu": {"gpt-5-mini"},
 	KeyedBackend:      {KeyedModel},
+	AnthropicBackend:  {AnthropicModel},
 }
 
 // ModelsFor is the models a fake backend lists; an unknown one lists
@@ -90,7 +106,7 @@ func ModelsFor(backend string) []string {
 // Authorized is whether a request with this Authorization header gets past
 // the backend's key check. Only KeyedBackend checks one.
 func Authorized(backend, authorization string) bool {
-	return backend != KeyedBackend || authorization == "Bearer "+KeyedKey
+	return backend != KeyedBackend || KeyedKeyNumber(authorization) != 0
 }
 
 // Unauthorized is the 401 body a provider sends for a wrong key.

@@ -211,23 +211,30 @@ retire-old-secret-now are in.
     - Keys (user's choice): Postgres keeps the reference (an env var name,
       `STARGATE_PROVIDER_KEY_<NAME>`), the key's prefix (at most 8 characters
       and a third of the key), when it was set, and the last connection
-      test. The key goes to a `routing.KeyStore`; the local one writes the
-      owner-only `tmp/aigw/provider-keys.env` (test stack:
-      `tmp/aigw-test/provider-keys.env`), which aigw is started with. A
-      Kubernetes one would write the Secret instead. No response carries a key.
+      test. The key goes to a `routing.KeyStore`; the local one stages it in
+      the owner-only `tmp/aigw/provider-keys.pending.env` (test stack:
+      `tmp/aigw-test/…`), and the apply promotes that into
+      `provider-keys.env`, which aigw is started with. A Kubernetes one
+      would write the Secret instead. No response carries a key.
     - A replaced key is a pending change: the compiled Secret carries a
       `stargate.dev/key-version` annotation (when the key was set), so the
       plan shows `Secret/<name>-key: key replaced`, its etag moves, and the
       apply's restart loads the key. The test stack's apply now recreates
       the container (`test-stack.sh aigw`), since `docker restart` keeps the
       old environment.
+    - A saved key takes effect only on apply (spec §7.1 principle 4, fixed
+      2026-10-05): it waits in the staged file, which nothing starts aigw
+      with, so a gateway restarted for any other reason still sends the
+      applied key. The apply promotes the staged file with the config and,
+      if the gateway doesn't come back, puts both back (the staged keys stay
+      staged). Removing a backend's key is staged the same way.
+    - A key that fails its test isn't saved (spec §7.5.1 "Tested once, then
+      sealed", fixed 2026-10-05): creating a backend with a key, or
+      replacing one, tests it first; on failure the answer is a 422
+      `key_test_failed` with the provider's error (key scrubbed), and
+      nothing is stored, audited or made pending. A backend with no key is
+      still saved, then tested (a self-hosted one may be down).
     - Defaults I picked, to confirm:
-      - The key file is written when the key is saved, not at apply. Any
-        gateway restart before the apply (or the restart of a rolled-back
-        apply) already sends the new key; the plan still says pending.
-      - Saving a key tests it once and keeps the result, but saves a key
-        that fails the test (the provider may be down); the console says it
-        failed.
       - A provider's error is shown verbatim except for the key: the key
         itself, any 6+ characters of it past the prefix, and masked echoes
         like OpenAI's `sk-proj-****abcd` are taken out.
@@ -235,18 +242,35 @@ retire-old-secret-now are in.
         provider = the backend's, context 0 = unknown) with no price and no
         LiteLLM key: "no price" until someone sets a rate or a key on Models.
         No LiteLLM key is guessed, even for OpenAI.
-      - Anthropic goes through its OpenAI-compatible endpoint
-        (`https://api.anthropic.com/v1`) with the key as a bearer token, so
-        it needs no schema translation; its test sends `x-api-key`.
+      - Anthropic still goes through its OpenAI-compatible endpoint
+        (`https://api.anthropic.com/v1`) with the key as a bearer token. Its
+        connection test is native (`GET /v1/models` with `x-api-key` and
+        `anthropic-version`). Switching to `schema: Anthropic` with a
+        `BackendSecurityPolicy` of type `AnthropicAPIKey` (which aigw
+        v1.1.0 has, sending `x-api-key`) is blocked: aigw v1.1.0, and
+        ai-gateway's main branch as of 2026-10-05, translate OpenAI chat
+        completions to Anthropic only for `GCPAnthropic` and `AWSAnthropic`.
+        A `schema: Anthropic` backend serves only Anthropic-style callers
+        (`/anthropic/v1/messages`); an OpenAI-style call to it fails with
+        "unsupported API schema". Open question for the user: keep the
+        OpenAI-compatible endpoint until upstream adds the translator, or
+        add a second, native Anthropic backend for Anthropic-style callers.
       - `localhost`/`127.0.0.1` in a base URL compiles to
         `${STARGATE_HOST:-…}`, like the seeded fake backends, so the Docker
         test gateway can reach the host.
-      - Deleting a backend removes its key from the file at once and keeps
-        its prices as history. A backend name is unique across tenants
+      - Deleting a backend stages its key's removal (gone from the gateway's
+        file on the next apply, with the backend) and keeps its prices as
+        history. A backend name is unique across tenants
         (the existing primary key).
-      - Onboarding's "Connect a new provider" saves the provider, adds a
-        route for its models and applies everything pending (it says how
-        many other changes that includes).
+    - Onboarding's "Connect a new provider" (spec §7.3, fixed 2026-10-05)
+      saves the provider, then a route for its models ("Route … to …"),
+      then lists every pending routing change and says it applies them all
+      ("Apply all N changes", with the listed plan's etag, so nothing
+      unseen is applied). Applying only that provider's changes was
+      considered and not done: the applier applies one whole config, and a
+      partial one would have to splice this provider's rules into the
+      shared AIGatewayRoutes (ordered, split at 16 rules) while leaving
+      other pending edits out, a config nobody reviewed as a whole.
   - Rule order: the gateway tries rules with more header matches first;
     among equals, in rule order. A new route goes ahead of any catch-all
     (`*` with no headers), and two routes can't claim the same model with

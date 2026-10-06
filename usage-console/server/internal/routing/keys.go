@@ -14,20 +14,30 @@ import (
 	"unicode"
 )
 
-// KeyStore holds provider keys where the gateway reads them (spec §9.1).
-// Postgres keeps only a reference (Ref), the key's prefix and its last test;
-// the key itself goes here and nowhere else. The local one writes an env file
-// aigw is started with; a Kubernetes one would write the Secret the
+// KeyStore holds provider keys for the gateway (spec §9.1). Postgres keeps
+// only a reference (Ref), the key's prefix and its last test; the key itself
+// goes here and nowhere else. A key put or removed is staged: the gateway
+// reads it only once routing is applied (§7.1 principle 4), when the
+// applier promotes what's staged. The local one writes env files aigw is
+// started with; a Kubernetes one would write the Secret the
 // BackendSecurityPolicy names.
 type KeyStore interface {
 	// Target says where keys go, for the console.
 	Target() string
-	// Put stores key under ref, replacing any key there.
+	// Put stages key under ref, replacing any key there.
 	Put(ref, key string) error
-	// Get is the key under ref, for testing a saved backend's connection.
+	// Get is the key under ref as staged (else as applied), for testing a
+	// saved backend's connection.
 	Get(ref string) (key string, ok bool, err error)
-	// Remove deletes the key under ref, if any.
+	// Remove stages removing the key under ref, if any.
 	Remove(ref string) error
+}
+
+// KeyPromoter makes staged keys the ones the gateway reads. An apply calls
+// Promote with the config it writes, and undo if the gateway doesn't come
+// back, so keys and config roll back together.
+type KeyPromoter interface {
+	Promote() (undo func() error, err error)
 }
 
 // KeyRef is the reference a backend's key is stored under: an environment
@@ -69,15 +79,26 @@ var refRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // LocalKeyFile keeps keys as KEY=VALUE lines in Path, owner-only (0600),
 // values taken literally: the format of `docker run --env-file`, and what
-// scripts/restart.sh loads before starting aigw. Fallback files (server/.env)
-// are read, never written, for keys set there by hand.
+// scripts/restart.sh loads before starting aigw. Put and Remove write the
+// staged file instead (StagedPath: Path's whole next version, also 0600),
+// which nothing starts aigw with; Promote moves it over Path. Fallback files
+// (server/.env) are read, never written, for keys set there by hand.
 type LocalKeyFile struct {
 	Path     string
 	Fallback []string
 	mu       sync.Mutex
 }
 
-func (f *LocalKeyFile) Target() string { return "the gateway's key file " + f.Path }
+func (f *LocalKeyFile) Target() string {
+	return "the gateway's key file " + f.Path + " (staged in " + f.StagedPath() + " until routing is applied)"
+}
+
+// StagedPath is where keys wait for an apply: provider-keys.env's staged
+// file is provider-keys.pending.env.
+func (f *LocalKeyFile) StagedPath() string {
+	ext := filepath.Ext(f.Path)
+	return strings.TrimSuffix(f.Path, ext) + ".pending" + ext
+}
 
 // envLine is one line of an env file: a KEY=VALUE pair, or anything else
 // (comments, blanks), kept as it was.
@@ -113,11 +134,33 @@ func readEnv(path string, lenient bool) ([]envLine, error) {
 	return out, sc.Err()
 }
 
+// next is the staged file if there is one, else the live one: what Path
+// would hold after the next promote.
+func (f *LocalKeyFile) next() ([]envLine, error) {
+	lines, err := readEnv(f.StagedPath(), false)
+	if err != nil || lines != nil {
+		return lines, err
+	}
+	if _, err := os.Stat(f.StagedPath()); err == nil {
+		return nil, nil // staged, and empty: every key removed
+	}
+	return readEnv(f.Path, false)
+}
+
 func (f *LocalKeyFile) Get(ref string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i, path := range append([]string{f.Path}, f.Fallback...) {
-		lines, err := readEnv(path, i > 0)
+	lines, err := f.next()
+	if err != nil {
+		return "", false, err
+	}
+	for _, l := range lines {
+		if l.key == ref && l.value != "" {
+			return l.value, true, nil
+		}
+	}
+	for _, path := range f.Fallback {
+		lines, err := readEnv(path, true)
 		if err != nil {
 			return "", false, err
 		}
@@ -142,12 +185,12 @@ func (f *LocalKeyFile) Put(ref, key string) error {
 
 func (f *LocalKeyFile) Remove(ref string) error { return f.update(ref, nil) }
 
-// update sets ref to *key, or removes it when key is nil, and rewrites the
-// file in one rename.
+// update stages ref set to *key, or removed when key is nil, rewriting the
+// staged file in one rename.
 func (f *LocalKeyFile) update(ref string, key *string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	lines, err := readEnv(f.Path, false)
+	lines, err := f.next()
 	if err != nil {
 		return err
 	}
@@ -165,7 +208,46 @@ func (f *LocalKeyFile) update(ref string, key *string) error {
 	if key != nil && !done {
 		b.WriteString(ref + "=" + *key + "\n")
 	}
-	return writeSecretFile(f.Path, []byte(b.String()))
+	return writeSecretFile(f.StagedPath(), []byte(b.String()))
+}
+
+// Promote moves the staged file over the live one. undo puts the live file
+// back as it was and the promoted keys back in staging, unless a key was
+// staged since (that staged file already holds them).
+func (f *LocalKeyFile) Promote() (func() error, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	staged, err := os.ReadFile(f.StagedPath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return func() error { return nil }, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	prev, err := os.ReadFile(f.Path)
+	hadPrev := err == nil
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if err := writeSecretFile(f.Path, staged); err != nil {
+		return nil, err
+	}
+	if err := os.Remove(f.StagedPath()); err != nil {
+		return nil, err
+	}
+	return func() error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if _, err := os.Stat(f.StagedPath()); errors.Is(err, fs.ErrNotExist) {
+			if err := writeSecretFile(f.StagedPath(), staged); err != nil {
+				return err
+			}
+		}
+		if !hadPrev {
+			return os.Remove(f.Path)
+		}
+		return writeSecretFile(f.Path, prev)
+	}, nil
 }
 
 // writeSecretFile replaces path in one rename with an owner-only file. The

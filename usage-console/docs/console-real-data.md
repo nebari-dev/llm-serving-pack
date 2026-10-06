@@ -333,31 +333,48 @@ when stale; 428 without it on an update or delete). Open questions are in
     delete, delete refused while routed), `PUT /backends/{name}/key`,
     `POST /backends/test` (unsaved: the key in the body only) and
     `POST /backends/{name}/test`, which list the provider's models or give
-    its error verbatim, key removed. Migration 012 adds the key's prefix,
-    when it was set and the last test; the key goes to a `routing.KeyStore`
-    (locally the owner-only `tmp/aigw/provider-keys.env` aigw starts with).
-    The compiled Secret's `stargate.dev/key-version` annotation makes a
-    replaced key a pending `key replaced` change, applied by a restart (the
-    test stack recreates its container). Unknown models join the catalog
-    with no price.
+    its error verbatim, key removed. Saving a key (create or replace) tests
+    it first; one that fails is a 422 `key_test_failed` carrying the
+    provider's error, and nothing is stored or audited. Migration 012 adds
+    the key's prefix, when it was set and the last test; the key goes to a
+    `routing.KeyStore`, staged until an apply: locally
+    `tmp/aigw/provider-keys.pending.env`, which the apply promotes into the
+    owner-only `tmp/aigw/provider-keys.env` aigw starts with (rolled back
+    with the config if the gateway doesn't come back), so no other restart
+    loads an unapplied key. The compiled Secret's `stargate.dev/key-version`
+    annotation makes a replaced key a pending `key replaced` change (the
+    test stack's apply recreates its container). Unknown models join the
+    catalog with no price.
   - Console: Routing's "Add provider" (provider tiles, with Bedrock, Azure
     and Vertex disabled for want of cloud credentials; name, base URL,
     region, a password field for the key, Test connection, models to add
     from the test) and, in a backend's drawer, the key's prefix and last
     test, Edit provider, Replace key, Test connection and Delete provider.
-    Onboarding's "Connect a new provider" saves one, routes its models to
-    it and applies before the key step. Settings → Providers lists each
+    A key that fails its test shows "The key failed its connection test"
+    with the provider's words, and the form stays open. Onboarding's
+    "Connect a new provider" saves one, then "Route … to …" saves its route,
+    then lists every pending routing change and applies them all ("Apply all
+    N changes"): the applier applies one whole config, so it can't apply
+    only that provider's. Settings → Providers lists each
     backend's key by prefix and its last test. Rotation reminders aren't
     built.
-  - fake-openai: `GET /{backend}/v1/models`, and a `keyed` backend that
-    wants `fakellm.KeyedKey` and answers 401 otherwise.
+  - fake-openai: `GET /{backend}/v1/models`; a `keyed` backend that wants
+    `fakellm.KeyedKey` or `KeyedKey2` (saying which in `X-Fake-Key`) and
+    answers 401 otherwise; and a `keyed-anthropic` backend speaking
+    Anthropic's native API (`GET /v1/models`, `POST /v1/messages`, x-api-key
+    and anthropic-version).
   - Exit tests (api mode): an API test adds a provider at fake-openai's
-    keyed backend (wrong key → 401 verbatim, right key → models), saves it,
-    checks no response carries the key, routes to it, applies, sees a
-    receipt land on it, replaces the key (pending, applied → 401, right key
-    → 200), edits and deletes it (refused while routed); a UI test does the
-    same on Routing; an onboarding test connects one and sends the first
-    request through it.
+    keyed backend (wrong key → 401 verbatim, right key → models; saving the
+    wrong key → 422, nothing stored), saves it, checks no response carries
+    the key, routes to it, applies, sees a receipt land on it, refuses a
+    failing replacement key, replaces it with the second key (pending; the
+    gateway sends key 1 until the apply, key 2 after), edits and deletes it
+    (refused while routed); a UI test does the same on Routing; an
+    onboarding test connects one, applies all N pending changes (listed,
+    one not about it) and sends the first request through it; an Anthropic
+    test checks the connection test is native and a failing key is refused.
+    Anthropic through the gateway's OpenAI→Anthropic translation is a
+    `todo`: aigw v1.1.0 can't (backend-decisions §6).
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, provenance, reconcile events over
   SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership

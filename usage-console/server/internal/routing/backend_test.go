@@ -193,6 +193,28 @@ func TestTestConnectionListsModels(t *testing.T) {
 	}
 }
 
+// Anthropic is tested on its native API: GET /v1/models with x-api-key and
+// anthropic-version, and no bearer token, read in Anthropic's list shape.
+func TestTestConnectionAnthropicNative(t *testing.T) {
+	var seen http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Clone()
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"data":[{"type":"model","id":"claude-sonnet-5","display_name":"Claude Sonnet 5"}],"has_more":false}`))
+	}))
+	defer srv.Close()
+	got := TestConnection(context.Background(), http.DefaultClient, "Anthropic", srv.URL+"/v1", "sk-ant-0123456789")
+	if !got.OK || !slices.Equal(got.Models, []string{"claude-sonnet-5"}) {
+		t.Errorf("TestConnection = %+v", got)
+	}
+	if seen.Get("X-Api-Key") != "sk-ant-0123456789" || seen.Get("Anthropic-Version") != "2023-06-01" || seen.Get("Authorization") != "" {
+		t.Errorf("headers = %v", seen)
+	}
+}
+
 // A refusal comes back in the provider's words, with the key taken out
 // wherever the provider echoed it.
 func TestTestConnectionReportsTheProvidersError(t *testing.T) {

@@ -67,6 +67,9 @@ func TestLocalKeyFileWritesOwnerOnlyAndReplaces(t *testing.T) {
 	if err := f.Put("STARGATE_PROVIDER_KEY_A", "sk-a2a2a2a2a2a2a2a2"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.Promote(); err != nil {
+		t.Fatal(err)
+	}
 	if m := readMode(t, f.Path); m != 0o600 {
 		t.Errorf("mode %o, want 600", m)
 	}
@@ -89,6 +92,9 @@ func TestLocalKeyFileWritesOwnerOnlyAndReplaces(t *testing.T) {
 	if _, ok, _ := f.Get("STARGATE_PROVIDER_KEY_A"); ok {
 		t.Errorf("removed key still there")
 	}
+	if _, err := f.Promote(); err != nil {
+		t.Fatal(err)
+	}
 	if entries, _ := os.ReadDir(filepath.Dir(f.Path)); len(entries) != 1 {
 		t.Errorf("left temporary files behind: %v", entries)
 	}
@@ -102,6 +108,9 @@ func TestLocalKeyFileTightensAnExistingFile(t *testing.T) {
 	}
 	f := &LocalKeyFile{Path: path}
 	if err := f.Put("STARGATE_PROVIDER_KEY_A", "sk-aaaaaaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Promote(); err != nil {
 		t.Fatal(err)
 	}
 	if m := readMode(t, path); m != 0o600 {
@@ -166,5 +175,112 @@ func TestLocalKeyFileConcurrentPuts(t *testing.T) {
 		if _, ok, _ := f.Get("K_" + ref); !ok {
 			t.Errorf("lost K_%s", ref)
 		}
+	}
+}
+
+func contains(t *testing.T, path, s string) bool {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return strings.Contains(string(b), s)
+}
+
+// §7.1 principle 4: a saved key is a proposal until routing is applied. It's
+// staged (owner-only, beside the live file) and reaches the file the gateway
+// reads only through Promote, so a gateway restarted for any other reason
+// still sends the applied key. Get, for connection tests, sees the staged one.
+func TestLocalKeyFileStagesKeysUntilPromoted(t *testing.T) {
+	dir := t.TempDir()
+	f := &LocalKeyFile{Path: filepath.Join(dir, "provider-keys.env")}
+	if err := f.Put("K_A", "sk-applied-aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	if contains(t, f.Path, "sk-applied") {
+		t.Fatalf("a saved key reached the live file before an apply")
+	}
+	if m := readMode(t, f.StagedPath()); m != 0o600 {
+		t.Errorf("staged file mode %o, want 600", m)
+	}
+	if v, ok, _ := f.Get("K_A"); !ok || v != "sk-applied-aaaaaaaaaaaa" {
+		t.Errorf("Get = %q, %v; want the staged key", v, ok)
+	}
+	if _, err := f.Promote(); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, f.Path, "K_A=sk-applied-aaaaaaaaaaaa") {
+		t.Fatalf("Promote didn't put the key in the live file")
+	}
+	if _, err := os.Stat(f.StagedPath()); !os.IsNotExist(err) {
+		t.Errorf("the staged file outlived its promotion: %v", err)
+	}
+
+	// Replace it: the live file keeps the applied key until the next promote.
+	if err := f.Put("K_A", "sk-pending-bbbbbbbbbbbb"); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, f.Path, "sk-applied") || contains(t, f.Path, "sk-pending") {
+		t.Errorf("replacing a key changed the live file before an apply")
+	}
+	// Removing one is staged too: the gateway still runs that backend.
+	if err := f.Put("K_B", "sk-other-cccccccccccc"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Promote(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Remove("K_B"); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, f.Path, "K_B=sk-other") {
+		t.Errorf("a removed key left the live file before an apply")
+	}
+	if _, ok, _ := f.Get("K_B"); ok {
+		t.Errorf("Get still sees a key removed (staged)")
+	}
+}
+
+// A failed apply puts back the live file it promoted over, and the staged
+// keys stay staged.
+func TestLocalKeyFilePromoteUndo(t *testing.T) {
+	dir := t.TempDir()
+	f := &LocalKeyFile{Path: filepath.Join(dir, "provider-keys.env")}
+	_ = f.Put("K_A", "sk-applied-aaaaaaaaaaaa")
+	if _, err := f.Promote(); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Put("K_A", "sk-pending-bbbbbbbbbbbb")
+	undo, err := f.Promote()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, f.Path, "sk-pending") {
+		t.Fatalf("not promoted")
+	}
+	if err := undo(); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, f.Path, "K_A=sk-applied-aaaaaaaaaaaa") || contains(t, f.Path, "sk-pending") {
+		t.Errorf("undo didn't restore the live file")
+	}
+	if !contains(t, f.StagedPath(), "K_A=sk-pending-bbbbbbbbbbbb") {
+		t.Errorf("undo lost the staged key")
+	}
+	if m := readMode(t, f.Path); m != 0o600 {
+		t.Errorf("restored live file mode %o, want 600", m)
+	}
+
+	// With nothing staged, Promote changes nothing and its undo is harmless.
+	g := &LocalKeyFile{Path: filepath.Join(t.TempDir(), "k.env")}
+	undo, err = g.Promote()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := undo(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(g.Path); !os.IsNotExist(err) {
+		t.Errorf("promoting nothing created the live file")
 	}
 }

@@ -115,3 +115,37 @@ func TestLocalApplierNotReady(t *testing.T) {
 		t.Errorf("an applier with no restart command says it can apply")
 	}
 }
+
+// An apply promotes staged provider keys with the config, before the restart
+// that loads them; a failed apply rolls both back.
+func TestLocalApplierPromotesKeys(t *testing.T) {
+	fail := false
+	a, dir := newLocal(t, func(int) error {
+		if fail {
+			fail = false // the rollback's restart comes up
+			return errors.New("gateway didn't answer")
+		}
+		return nil
+	})
+	keys := &LocalKeyFile{Path: filepath.Join(dir, "aigw", "provider-keys.env")}
+	a.Keys = keys
+	_ = keys.Put("K_A", "sk-first-aaaaaaaaaaaa")
+	if err := a.Apply(context.Background(), Compile(demo.Backends[:1], nil)); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(t, keys.Path, "K_A=sk-first") {
+		t.Fatalf("the apply didn't promote the staged key")
+	}
+
+	_ = keys.Put("K_A", "sk-second-bbbbbbbbbbbb")
+	fail = true
+	if err := a.Apply(context.Background(), Compile(demo.Backends, demo.Routes)); err == nil {
+		t.Fatal("apply succeeded")
+	}
+	if !contains(t, keys.Path, "K_A=sk-first") || contains(t, keys.Path, "sk-second") {
+		t.Errorf("the failed apply left the new key live")
+	}
+	if !contains(t, keys.StagedPath(), "sk-second") {
+		t.Errorf("the failed apply dropped the staged key")
+	}
+}

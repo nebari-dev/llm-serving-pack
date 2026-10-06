@@ -32,9 +32,12 @@ type Applier interface {
 // the compiled routing, written to Path. Restart is a shell command that
 // restarts aigw on Path; Ready says when it answers again. Log is a shell
 // command printing the end of aigw's log, quoted when it doesn't come back.
+// Keys, if set, are the provider keys staged since the last apply, promoted
+// with the config and rolled back with it.
 type LocalApplier struct {
 	Base, Path, Restart, Log string
 	Ready                    func(context.Context) error
+	Keys                     KeyPromoter
 }
 
 func (a *LocalApplier) Target() string { return "aigw's config file " + a.Path + ", then a restart" }
@@ -82,8 +85,14 @@ func (a *LocalApplier) Apply(ctx context.Context, desired []Object) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
+	undoKeys := func() error { return nil }
+	if a.Keys != nil {
+		if undoKeys, err = a.Keys.Promote(); err != nil {
+			return err
+		}
+	}
 	if err := writeFile(a.Path, next); err != nil {
-		return err
+		return errors.Join(err, undoKeys())
 	}
 	err = a.restart(ctx)
 	if err == nil {
@@ -98,6 +107,7 @@ func (a *LocalApplier) Apply(ctx context.Context, desired []Object) error {
 	} else {
 		err = os.Remove(a.Path)
 	}
+	err = errors.Join(err, undoKeys())
 	if err == nil {
 		err = a.restart(ctx)
 	}

@@ -146,7 +146,7 @@ case "${1:-up}" in
     down
     psql_in configdb stargate "DROP DATABASE IF EXISTS stargate_test"
     psql_in receiptsdb receipts "DROP DATABASE IF EXISTS receipts_test"
-    rm -f "$AIGW_DIR/config.yaml" "$AIGW_DIR/provider-keys.env" "$AIGW_DIR/aigw.env"
+    rm -f "$AIGW_DIR/config.yaml" "$AIGW_DIR/provider-keys.env" "$AIGW_DIR/provider-keys.pending.env" "$AIGW_DIR/aigw.env"
     up ;;
   aigw) run_aigw ;;
   *) echo "usage: $0 db|up|down|restart|reset|aigw" >&2; exit 2 ;;

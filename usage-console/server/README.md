@@ -131,12 +131,14 @@ restart `aigw`, or apply from the console. The test stack does the same with
 `tmp/aigw-test/config.yaml` and `scripts/test-stack.sh aigw`, which recreates
 the container (`docker restart` would keep its old environment).
 
-Provider keys set from the console go to `tmp/aigw/provider-keys.env`
-(owner-only, `KEY=value` lines, gitignored; `-provider-keys` to move it), never
-to Postgres, which keeps the reference and the key's first characters.
-`restart.sh aigw` loads it after `server/.env`; the test stack merges
+Provider keys set from the console wait in `tmp/aigw/provider-keys.pending.env`
+until routing is applied, which moves them into `tmp/aigw/provider-keys.env`
+(both owner-only, `KEY=value` lines, gitignored; `-provider-keys` to move them),
+never to Postgres, which keeps the reference and the key's first characters.
+`restart.sh aigw` loads only the applied file, after `server/.env`, so a restart
+for any other reason keeps the applied keys; the test stack merges
 `tmp/aigw-test/provider-keys.env` over `.env` into the container's
-`--env-file`. A replaced key is a pending change until routing is applied.
+`--env-file`. A saved key is a pending change until routing is applied.
 
 Never stop these with `pkill -f`: `make dev-aigw` runs everything under one
 shell whose command line matches every command, and its `trap 'kill 0'`
