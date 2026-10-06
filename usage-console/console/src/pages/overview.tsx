@@ -68,7 +68,9 @@ export function OverviewPage() {
   const xFormat = (t: number) => (multiDay ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : clock(t).slice(0, 5))
   // Changes inside the charted window; the latest one is labeled.
   const windowStart = series[0]?.t ?? 0
-  const inWindow = changes.filter((c) => c.ts >= windowStart)
+  // Exports (the close report) are audit rows but change nothing; Activity lists them.
+  const configChanges = changes.filter((c) => c.targetKind !== 'Export')
+  const inWindow = configChanges.filter((c) => c.ts >= windowStart)
   const annotations = inWindow.map((c, i) => ({ t: c.ts, label: i === 0 ? c.target : '' }))
   const { current, previous } = summary
   const span = rangeLabel(range).replace('last ', '')
@@ -168,9 +170,9 @@ export function OverviewPage() {
           </Button>
         }
       >
-        {changes[0] ? <FeaturedChange change={changes[0]} /> : <p className="text-sm text-muted-foreground">No config changes yet.</p>}
+        {configChanges[0] ? <FeaturedChange change={configChanges[0]} /> : <p className="text-sm text-muted-foreground">No config changes yet.</p>}
         <ol className="mt-4 divide-y divide-border border-y border-border">
-          {changes.slice(1, 5).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
+          {configChanges.slice(1, 5).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
             <li key={c.id} className="grid grid-cols-[5rem_1fr_auto] items-baseline gap-4 py-2.5 text-sm">
               <span className="num font-mono text-xs text-muted-foreground">{clock(c.ts).slice(0, 5)}</span>
               <div className="min-w-0">

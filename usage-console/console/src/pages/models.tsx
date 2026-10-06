@@ -208,6 +208,23 @@ function AliasesTab({ nonce }: { nonce: number }) {
     reload()
   }
   const { data: pricing } = useLive<PricingView | null>(live ? '/pricing' : null, null, 300_000)
+  // ?edit=<alias>&target=<model>, from Spend's savings analysis: open the
+  // alias's edit form with the target filled in, for review.
+  const [params, setParams] = useSearchParams()
+  const [suggested, setSuggested] = useState<string | undefined>()
+  const editParam = params.get('edit')
+  useEffect(() => {
+    if (!live || !loaded || !editParam) return
+    const row = rows.find((a) => a.alias === editParam)
+    if (row) {
+      setEditing(row as LiveAlias)
+      setSuggested(params.get('target') ?? undefined)
+    }
+    const next = new URLSearchParams(params)
+    next.delete('edit')
+    next.delete('target')
+    setParams(next, { replace: true })
+  }, [loaded, editParam, rows, params, setParams])
   return (
     <>
       <div className="overflow-x-auto">
@@ -288,7 +305,16 @@ function AliasesTab({ nonce }: { nonce: number }) {
           </tbody>
         </table>
       </div>
-      {editing && <AliasDialog alias={editing} onClose={(saved) => done(editing.alias, saved ?? undefined)} />}
+      {editing && (
+        <AliasDialog
+          alias={editing}
+          suggested={suggested}
+          onClose={(saved) => {
+            setSuggested(undefined)
+            done(editing.alias, saved ?? undefined)
+          }}
+        />
+      )}
       {deleting && <DeleteAliasDialog alias={deleting} onClose={(deleted) => done(deleting.alias, deleted ? null : undefined)} />}
       <Section>
         {live ? (

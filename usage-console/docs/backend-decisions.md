@@ -144,6 +144,31 @@ earlier. Defaults I picked:
   and adds `unpriced_requests`. Budgets don't count unpriced requests
   against the cap (they have no cost); the budget shows how many.
 
+**Built 2026-10-06: savings analysis (spec §7.5.5).** `GET /spend/savings`;
+method in `internal/api/savings.go` and on the page. It reads raw receipts
+(30 days) rather than new aggregate columns, for the reason above. Defaults
+I picked, all open to change:
+- "Would plausibly have served" = the answer was at most **1,000 output
+  tokens** (reasoning included) and input + output fits the cheaper model's
+  context. One fixed number, not a setting. Quality isn't measured; the page
+  says to try the cheaper model on part of the traffic first.
+- "Same family" is `model_catalog.family`, which is coarse: Opus 4.1 →
+  Haiku 4.5 counts (both `claude`).
+- The cheaper model bills the same token counts, cache hits included
+  (switching models would usually lose them), on the cheapest backend that
+  offers it, not the one routing would pick.
+- The headline is what the last 30 days would have saved (or the days of
+  receipts there are), not extrapolated to a month.
+- A key that doesn't allow the cheaper model still counts; the page names it,
+  since moving it first needs the model added.
+
+**Built 2026-10-06: close report PDF (§7.5.5).** `GET
+/spend/close-report?month=YYYY-MM`. Defaults I picked: budgets show caps as
+configured at export time (cap history is only in the audit log); unpriced
+counts are partial for a month that started over 30 days ago and "not
+known" for one that ended before that; the audit row is kind `Export`, and
+Overview's featured change and Activity's traffic effect skip that kind.
+
 ## 2. Budgets
 
 Done: every budget whose scope covers a key is enforced (team, project,
@@ -464,6 +489,16 @@ retire-old-secret-now are in.
   admin once roles exist.
   - Price writes will require `If-Match` too (decided 2026-10-05, not
     built). Two editors changing the same rate concurrently has happened.
+- **PDFs are written by `internal/pdf`, our own (2026-10-06, my default).**
+  About 400 lines: text and rules, standard Helvetica (not embedded),
+  WinAnsi, uncompressed streams, so the text in a report can be searched
+  and tests read it. The libraries I weighed: `go-pdf/fpdf` (the
+  maintained gofpdf fork) is archived; `signintech/gopdf` needs a TTF file
+  shipped for any text; `johnfercher/maroto` sits on fpdf. A report is
+  tables of text, so a dependency buys little. The catch: characters
+  outside WinAnsi (Latin-1 plus typographic marks) print as "?", so a
+  project named in, say, Japanese would. Embedding a Unicode font (or
+  moving to gopdf with one) fixes that if it matters.
 - **Database-backed Go tests (decided 2026-10-05, not built).** SQL currently
   runs only in the api-mode suite against the live stack. That's where the
   ambiguous-column bug in the rule drafts query surfaced.

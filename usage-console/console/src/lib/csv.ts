@@ -42,8 +42,13 @@ export function spendCsv(view: SpendView): string {
 
 /** Saves text as a file through a temporary link. */
 export function downloadText(name: string, text: string, type = 'text/csv') {
+  downloadBlob(name, new Blob([text], { type }))
+}
+
+/** Saves a blob as a file through a temporary link. */
+export function downloadBlob(name: string, blob: Blob) {
   const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([text], { type }))
+  a.href = URL.createObjectURL(blob)
   a.download = name
   a.click()
   URL.revokeObjectURL(a.href)

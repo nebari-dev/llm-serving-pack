@@ -55,6 +55,20 @@ func TestImpactComparesAnHourEitherSide(t *testing.T) {
 	}
 }
 
+// An export changes nothing, so it has no before/after effect to show.
+func TestAnExportHasNoImpact(t *testing.T) {
+	bs := buckets(t0.Add(-time.Hour), "a", flat(24, store.ActivityBucket{Requests: 30, Served: 30, CostUSD: 3})...)
+	c := model.Change{TargetKind: "Export", TS: t0.UnixMilli()}
+	im := impactOf(c, bs, t0.Add(time.Hour))
+	if im.WindowMinutes != 0 || im.Effect != "" || im.Bins == nil {
+		t.Fatalf("export impact %+v", im)
+	}
+	c.TargetKind = "Budget"
+	if impactOf(c, bs, t0.Add(time.Hour)).WindowMinutes == 0 {
+		t.Fatalf("a budget change lost its impact")
+	}
+}
+
 func TestImpactWindowStopsAtNow(t *testing.T) {
 	bs := buckets(t0.Add(-time.Hour), "a", flat(16, store.ActivityBucket{Requests: 30, Served: 30, CostUSD: 3})...)
 	// 17 minutes after the change's bucket: three complete buckets after. The

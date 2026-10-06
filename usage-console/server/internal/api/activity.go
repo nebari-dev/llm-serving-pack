@@ -118,6 +118,15 @@ func (a tally) agg() Agg {
 	return g
 }
 
+// impactOf is a change's impact. An export (the close report) changes
+// nothing, so it has none.
+func impactOf(c model.Change, bs []store.ActivityBucket, now time.Time) ActivityImpact {
+	if c.TargetKind == "Export" {
+		return ActivityImpact{Bins: []int{}}
+	}
+	return impactAt(bs, time.UnixMilli(c.TS), now)
+}
+
 // impactAt compares up to an hour of buckets either side of at. The after
 // side takes only complete buckets, since the one still filling would read
 // as a drop in requests, and the before side matches its length.
@@ -442,7 +451,7 @@ func (s *Server) activity(_ http.ResponseWriter, r *http.Request, t string) (any
 		if c.TS < out.Since {
 			continue
 		}
-		im := impactAt(bs, time.UnixMilli(c.TS), now)
+		im := impactOf(c, bs, now)
 		c.Effect, c.EffectTone = im.Effect, im.EffectTone
 		out.Changes = append(out.Changes, ActivityChange{Change: c, Impact: im})
 	}

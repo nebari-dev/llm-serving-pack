@@ -64,11 +64,10 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     throttle holds each key to 10 requests a minute (the budget's
     `throttlePerMinute`) and answers the rest 429 with Retry-After, warn
     admits and marks. The invented "since" is gone.
-  - The surge callout is hidden (the spec has no surge rule), and so is
-    savings, which needs per-request output length and alias writes. Both
-    show as not connected.
-  - CSV export downloads the breakdown. PDF is disabled, with the reason
-    given. Budgets are editable (see Writes).
+  - The surge callout is hidden (the spec has no surge rule) and shows as
+    not connected. Savings is connected (2026-10-06, below).
+  - CSV export downloads the breakdown; the close report is a PDF (below).
+    Budgets are editable (see Writes).
 - [x] **Traffic streams.** Each api-mode Traffic tab held two SSE
   connections (the global receipt stream and Traffic's filtered one), so
   three tabs used up Chrome's 6-per-host HTTP/1.1 limit behind the Vite proxy,
@@ -224,8 +223,9 @@ when stale; 428 without it on an update or delete). Open questions are in
 - [x] Aliases (2026-10-05). New alias, Edit (retarget) and Delete on Models
   call `PUT`/`DELETE /aliases/{alias}` with If-None-Match / If-Match; the
   table shows a write's result at once so a follow-up carries the new etag.
-  Saving the savings analysis's draft alias changes waits on that analysis
-  (§3).
+  The savings analysis's "Review alias change" opens the alias's edit form
+  with the cheaper target filled in (`/models?tab=aliases&edit=…&target=…`);
+  nothing changes until Save.
 - [x] Rule order (2026-10-05). Move up/down on Guardrails calls
   `PUT /rules/order {from, to}`: order decides outcomes (first block wins,
   last reroute wins), so a `from` that isn't the current order is a 409. One
@@ -490,9 +490,38 @@ when stale; 428 without it on an update or delete). Open questions are in
   first byte upstream: key check, Warden, Agent Router) into
   `receipts.overhead_us`; `GET /gateway/overhead` gives the last hour's p50
   and p95 against spec G6's 10ms, shown on the Overview status strip.
-- [ ] Spend savings analysis (§7.5.5): requests a cheaper same-family model
-  would have served. Needs output length per request, or an aggregate of it.
-- [ ] Spend close report as a PDF, with an audit row for each export.
+- [x] Spend savings analysis (§7.5.5, 2026-10-06). `GET /spend/savings`
+  reads the last 30 days of raw receipts (output length isn't in the
+  aggregates, and rebuilding them would lose history older than 30 days;
+  one grouped query, by key, requested/resolved model, price period, size
+  bucket, short or not, priced or not). Method, stated on the page
+  (decisions §1):
+  - Counted: priced, served requests whose answer was at most 1,000 output
+    tokens (reasoning included) and whose input + output fits the cheaper
+    model's context. Unpriced ones are never a saving; they're counted apart.
+  - The cheaper model is any same-`family` catalog model on a backend that
+    offers it, at the same token counts, priced at its (model, backend) row
+    in effect when each request started; the actual cost is the receipt's.
+    A request it has no price for isn't counted. Best (model, backend) per
+    group wins.
+  - Groups are what an alias change moves: an alias's requests that ran on
+    its target ("Review alias change" opens the pre-filled form on Models),
+    or a key's requests for a model by name. Rerouted requests (policy,
+    fallback) and revoked or expired keys' aren't counted.
+  - It says which keys don't allow the cheaper model (they'd get 403
+    `model_not_allowed`), and why each other request wasn't counted.
+- [x] Spend close report as a PDF (2026-10-06). `GET
+  /spend/close-report?month=YYYY-MM` (this month to date, or any past one)
+  returns `application/pdf`: totals; spend by team, project, key and model
+  from the aggregates; budgets against their caps (caps as configured now);
+  unpriced requests (from raw receipts, so partial or "not known" past 30
+  days, and said so); the price basis and the price rows in effect. Each
+  export writes an audit row ("Exported close report", the month, kind
+  `Export`) in the same transaction, so no file goes out unrecorded.
+  Overview doesn't feature exports and Activity gives them no traffic
+  effect. Spend has a month picker (default: last month) and "Download close
+  report". Written by `internal/pdf`, a small writer of our own (decisions
+  §7).
 - [x] Pricing sync (2026-10-05, decisions §1).
   - stargate-api reads LiteLLM's price file daily, retrying hourly after a
     failure; Sync now runs it on demand. Rates nobody overrode apply as new

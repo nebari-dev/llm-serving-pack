@@ -553,7 +553,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     })
     const text = document.body.textContent ?? ''
     expect(text).toContain('trailing 7-day average')
-    expect(text).toContain("Savings analysis isn't connected yet")
+    // Savings and the close report are connected (their own tests below).
+    expect(text).not.toContain("Savings analysis isn't connected yet")
+    expect(text).not.toContain('Export PDF for close')
+    expect(screen.getByRole('button', { name: 'Download close report' })).toHaveProperty('disabled', false)
     expect(text).not.toContain('isn’t connected yet: the control plane serves budgets read-only')
     expect(screen.getByRole('button', { name: 'Add budget' })).toHaveProperty('disabled', false)
     expect(text).not.toContain('spend is up')
@@ -3059,6 +3062,113 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(text).toContain(`Total${(full.inputTokens + full.outputTokens).toLocaleString('en-US')}$`)
     } finally {
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
+
+  // §7.5.5 savings: a key asking for gpt-5.5 by name with short answers is a
+  // group a cheaper gpt-5 model would plausibly have served. The saving is
+  // the receipts' cost less the sibling's price for the same tokens; the key
+  // doesn't allow the sibling, so it says that must change first.
+  it('finds the saving a cheaper same-family model would have made on short requests, from real receipts, with its method', async () => {
+    type V = import('@/data/catalog').SavingsView
+    const name = `api-mode-savings-${Date.now().toString(36)}`
+    const { key, secret } = await testKey(name) // allows gpt-5.5 only
+    try {
+      for (let i = 0; i < 3; i++) await echo(secret, 'gpt-5.5')
+      const rs = await receiptsOf(key.id, 3)
+      for (const r of rs) expect(r.costUsd).toBeGreaterThan(0)
+      const actual = rs.reduce((a, r) => a + r.costUsd!, 0)
+
+      const v = await catalog.api<V>('/spend/savings')
+      expect(v).toMatchObject({ outputLimit: 1000 })
+      expect(v.days).toBeGreaterThan(0)
+      expect(v.served).toBeGreaterThanOrEqual(3)
+      const o = v.opportunities.find((x) => x.id === `key:${key.id}:gpt-5.5`)!
+      expect(o).toMatchObject({ key: name, keyId: key.id, model: 'gpt-5.5', requests: 3, served: 3, keys: [name], notAllowedKeys: [name], notAllowedRequests: 3 })
+      expect(o.alias).toBeUndefined()
+      // A cheaper model in gpt-5.5's family, on a backend that serves it.
+      expect(o.target).not.toBe('gpt-5.5')
+      expect(catalog.modelById[o.target].family).toBe(catalog.modelById['gpt-5.5'].family)
+      expect(catalog.backends.find((b) => b.name === o.targetBackend)!.models).toContain(o.target)
+      // The actual cost is the receipts'; the saving is what the sibling would have cost less.
+      expect(o.actualUsd).toBeCloseTo(actual, 5)
+      expect(o.targetUsd).toBeGreaterThan(0)
+      expect(o.savedUsd).toBeGreaterThan(0)
+      expect(o.savedUsd).toBeCloseTo(o.actualUsd - o.targetUsd, 5)
+      // Unpriced requests are never a saving: none is counted from an unpriced group.
+      for (const x of v.opportunities) expect(x.actualUsd).toBeGreaterThan(x.targetUsd)
+
+      window.history.pushState({}, '', '/spend')
+      render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 800))
+      })
+      const text = document.body.textContent ?? ''
+      cleanup()
+      expect(text).not.toContain("Savings analysis isn't connected yet")
+      expect(text).toContain(`${name}’s short gpt-5.5 calls moved to ${o.target}`)
+      expect(text).toContain('3 of 3 requests counted')
+      expect(text).toContain(`${name} doesn’t allow ${o.target} yet`)
+      // The method, stated: short answers, the same tokens at the sibling's price then, quality not measured.
+      expect(text).toContain('its answer was at most 1,000 output tokens')
+      expect(text).toContain('in effect when each request started')
+      expect(text).toContain('Quality isn’t measured')
+    } finally {
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
+
+  // §7.5.5 export: the month's close report is a PDF from the control plane,
+  // with the month and its total in it, and each export writes an audit row.
+  it('downloads the month’s close report as a PDF with its total, and audits each export', async () => {
+    type V = import('@/data/catalog').SpendView
+    type C = import('@/data/catalog').Change
+    const now = new Date()
+    const month = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`
+    const monthName = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+
+    const f = await catalog.apiFile(`/spend/close-report?month=${month}`)
+    expect(f.type).toBe('application/pdf')
+    expect(f.name).toBe(`stargate-close-report-demo-${month}.pdf`)
+    // Text is uncompressed WinAnsi, so it reads as latin1.
+    const pdf = new TextDecoder('latin1').decode(await f.blob.arrayBuffer())
+    expect(pdf.startsWith('%PDF-1.4')).toBe(true)
+    expect(pdf.trimEnd().endsWith('%%EOF')).toBe(true)
+    expect(pdf).toContain(`(Spend close report: ${monthName}) Tj`)
+    expect(pdf).toContain('month to date') // this month is still open
+    expect(pdf).toContain('(Price basis) Tj')
+    expect(pdf).toContain('(Requests with no price) Tj')
+    // The total, from the same aggregates as Spend's month to date, a moment apart.
+    const total = /\(Spend\) Tj ET\n[^\n]*\(\$([\d,]+\.\d{2})\) Tj/.exec(pdf)
+    expect(total).not.toBeNull()
+    const mtd = (await catalog.api<V>('/spend?range=24h')).period.monthToDateUsd
+    expect(Math.abs(Number(total![1].replace(/,/g, '')) - mtd)).toBeLessThan(Math.max(1, mtd * 0.01))
+
+    // One audit row per export.
+    const exports = async () => (await catalog.api<C[]>('/changes?kind=Export&limit=500')).filter((c) => c.action === 'Exported close report' && c.target === month)
+    const audited = await exports()
+    expect(audited[0]).toMatchObject({ targetKind: 'Export', actor: catalog.session.actor.email })
+    await catalog.apiFile(`/spend/close-report?month=${month}`)
+    const again = await exports()
+    expect(again.length).toBe(audited.length + 1)
+    // A malformed or future month is refused, and writes nothing.
+    expect(await status(catalog.apiFile('/spend/close-report?month=nope'))).toBe(400)
+    expect(await status(catalog.apiFile(`/spend/close-report?month=${now.getUTCFullYear() + 1}-01`))).toBe(400)
+    expect((await catalog.api<C[]>('/changes?kind=Export&limit=1'))[0].id).toBe(again[0].id)
+
+    // From Spend: the control downloads it and says the export is recorded.
+    const created = vi.fn(() => 'blob:close-report')
+    URL.createObjectURL = created
+    URL.revokeObjectURL = vi.fn()
+    window.history.pushState({}, '', '/spend')
+    render(<App />)
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Download close report' }))
+      await waitFor(() => expect(created).toHaveBeenCalled(), { timeout: 10_000 })
+      expect(await screen.findByText('Close report downloaded')).toBeTruthy()
+      expect(document.body.textContent).toContain('The export is recorded on Activity.')
+    } finally {
+      cleanup()
     }
   }, 60_000)
 })

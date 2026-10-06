@@ -71,6 +71,7 @@ const kindResource: Record<string, string> = {
   Backend: '/routing?tab=backends',
   Policy: '/guardrails',
   Budget: '/spend',
+  Export: '/spend',
   Key: '/keys',
 }
 

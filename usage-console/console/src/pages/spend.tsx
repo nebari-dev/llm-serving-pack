@@ -22,6 +22,7 @@ import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { BudgetDialog, capMoney, DeleteBudgetDialog } from './budget-dialogs'
 import { type Dim, dims, mockSpendView } from './spend-data'
+import { CloseReportControl, LiveSavings } from './spend-live'
 
 // §7.5.5 Spend and budgets. Two modes on one screen (trend / breakdown),
 // every cell drills through to the filtered traffic view, budgets state their
@@ -122,9 +123,7 @@ export function SpendPage() {
               <Download /> Export CSV
             </Button>
             {api ? (
-              <Button variant="outline" disabled title="The PDF close report isn't connected yet: the control plane doesn't render reports.">
-                <FileText /> Export PDF for close
-              </Button>
+              <CloseReportControl />
             ) : (
               <Button
                 variant="outline"
@@ -297,16 +296,13 @@ export function SpendPage() {
       <Section
         id="savings"
         title="Savings opportunities"
-        description="Requests where a cheaper model in the same family would plausibly have served, based on output length and task shape. Each one is a draft you review — nothing is applied automatically."
+        description={
+          api
+            ? 'Requests a cheaper model in the same family would plausibly have served, and what they’d have cost on it. Each is a suggestion you review: an alias change opens on Models and nothing changes until you save it.'
+            : 'Requests where a cheaper model in the same family would plausibly have served, based on output length and task shape. Each one is a draft you review — nothing is applied automatically.'
+        }
       >
-        {seedSavings ? (
-          <Savings opportunities={seedSavings} />
-        ) : (
-          <p className="rounded-md border border-dashed border-border px-4 py-3 text-sm text-muted-foreground-strong">
-            Savings analysis isn't connected yet. It needs each request's output length and task shape, which the spend aggregates don't carry, and drafting
-            an alias change needs alias writes.
-          </p>
-        )}
+        {api ? <LiveSavings /> : seedSavings && <Savings opportunities={seedSavings} />}
       </Section>
     </div>
   )

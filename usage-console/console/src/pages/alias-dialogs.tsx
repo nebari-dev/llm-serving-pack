@@ -20,10 +20,13 @@ function errorText(e: unknown) {
   return e instanceof Error ? e.message : String(e)
 }
 
-/** New alias (no `alias`), or a new target for an existing one. */
-export function AliasDialog({ alias, onClose }: { alias?: LiveAlias; onClose: (saved: LiveAlias | null) => void }) {
+/**
+ * New alias (no `alias`), or a new target for an existing one. `suggested`
+ * pre-fills the target (Spend's savings analysis); nothing changes until Save.
+ */
+export function AliasDialog({ alias, suggested, onClose }: { alias?: LiveAlias; suggested?: string; onClose: (saved: LiveAlias | null) => void }) {
   const [name, setName] = useState(alias?.alias ?? '')
-  const [target, setTarget] = useState(alias?.target ?? '')
+  const [target, setTarget] = useState(suggested ?? alias?.target ?? '')
   const [tried, setTried] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -65,6 +68,15 @@ export function AliasDialog({ alias, onClose }: { alias?: LiveAlias; onClose: (s
               Clients ask for the alias; the gateway resolves it to the target before routing. Applies on the gateway’s next config load, within seconds.
             </DialogDescription>
           </DialogHeader>
+          {alias && suggested && suggested !== alias.target && (
+            <Alert>
+              <AlertTitle>Suggested by Spend’s savings analysis</AlertTitle>
+              <AlertDescription>
+                <span className="font-mono">{alias.target}</span> → <span className="font-mono">{suggested}</span>. Nothing changes until you save, and saving moves every
+                request for <span className="font-mono">{alias.alias}</span>, not only the short ones the estimate counted.
+              </AlertDescription>
+            </Alert>
+          )}
           <Field>
             <FieldLabel>Alias</FieldLabel>
             <Input value={name} onChange={(e) => setName(e.target.value)} disabled={!!alias} placeholder="fast or summarize-*" className="font-mono" autoComplete="off" spellCheck={false} />

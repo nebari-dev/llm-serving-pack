@@ -114,7 +114,7 @@ export const seedNotifications = dataMode === 'api' ? [] : mock.notifications
 export const seedDegradations: Degradation[] = dataMode === 'api' ? [] : mock.degradations
 export let now: () => number = mock.now
 export let session: Session = mock.session
-/** Mock-mode Spend callouts. Api mode has no surge rule or savings analysis yet. */
+/** Mock-mode Spend callouts. Api mode has no surge rule, and reads savings from GET /spend/savings. */
 export const seedSpendSurge = dataMode === 'api' ? null : mock.spendSurge
 export const seedSavings = dataMode === 'api' ? null : mock.savings
 /** Mock-mode fixtures for GET /summary and GET /changes/{id}/impact. */
@@ -188,6 +188,67 @@ export async function downloadSignedExport(path: string): Promise<SignedExport> 
   a.click()
   URL.revokeObjectURL(url)
   return { filename, count: Number(res.headers.get('X-Stargate-Export-Count') ?? 0), keyId: res.headers.get('X-Stargate-Signing-Key') ?? '' }
+}
+
+/** A file from the control plane (the close report PDF), with the name it gives it. Errors as api() does. */
+export async function apiFile(path: string): Promise<{ blob: Blob; name: string; type: string }> {
+  const res = await fetch(API_BASE + path)
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`)
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'download'
+  return { blob: await res.blob(), name, type: res.headers.get('Content-Type') ?? '' }
+}
+
+// ---- spend savings (api mode, §7.5.5) ---------------------------------------
+// GET /spend/savings: requests a cheaper same-family model would plausibly
+// have served, priced from raw receipts (the last 30 days). See
+// server/internal/api/savings.go for the method.
+
+/** Why a group's other served requests weren't counted, each under its first reason. */
+export interface SavingsExcluded {
+  unpriced: number
+  keyInactive: number
+  longOutput: number
+  overContext: number
+  targetUnpriced: number
+}
+
+/** One group's best move. `alias` when its requests came through one (retargeting moves them); else `key` asked for `model` by name. */
+export interface LiveSavingsOpportunity {
+  id: string
+  alias?: string
+  key?: string
+  keyId?: string
+  model: string
+  target: string
+  targetBackend: string
+  requests: number
+  actualUsd: number
+  targetUsd: number
+  savedUsd: number
+  served: number
+  excluded: SavingsExcluded
+  keys: string[]
+  /** Keys that don't allow `target` yet: they'd be refused until it's added. */
+  notAllowedKeys: string[]
+  notAllowedRequests: number
+}
+
+export interface SavingsView {
+  from: number
+  to: number
+  /** Earliest served request in the window; 0 when none. */
+  firstAt: number
+  days: number
+  /** Longest answer (output tokens, reasoning included) counted as short. */
+  outputLimit: number
+  served: number
+  unpriced: number
+  /** Ran on a model other than the one asked for (policy, fallback, or an alias retargeted since). */
+  rerouted: number
+  opportunities: LiveSavingsOpportunity[]
 }
 
 /** The control plane sends lastUsedAt (epoch ms); screens show "12s ago". */

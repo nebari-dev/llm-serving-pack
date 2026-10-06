@@ -184,6 +184,8 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/series/traffic", s.trafficSeries)
 	h("GET "+p+"/series/spend", s.spendSeries)
 	h("GET "+p+"/spend", s.spend)
+	h("GET "+p+"/spend/savings", s.savings)
+	h("GET "+p+"/spend/close-report", s.closeReport)
 	h("GET "+p+"/stream/traffic", s.streamTraffic)
 	h("GET "+p+"/degradations", s.degradations)
 	h("GET "+p+"/session", s.session)
