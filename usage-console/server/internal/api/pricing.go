@@ -259,7 +259,7 @@ func (s *Server) setPrice(_ http.ResponseWriter, r *http.Request, t string) (any
 			return nil, badRequest("effectiveFrom must be an RFC 3339 time")
 		}
 	}
-	if _, err := s.Store.SetPrice(r.Context(), t, s.DevActor, e, now); store.IsBadPrice(err) {
+	if _, err := s.Store.SetPrice(r.Context(), t, actor(r), e, now); store.IsBadPrice(err) {
 		return nil, badRequest(err.Error())
 	} else if err != nil {
 		return nil, err
@@ -279,7 +279,7 @@ func (s *Server) cancelPrice(_ http.ResponseWriter, r *http.Request, t string) (
 	if err != nil {
 		return nil, err
 	}
-	err = s.Store.CancelPrice(r.Context(), t, s.DevActor, m, b, time.UnixMilli(ms), time.Now())
+	err = s.Store.CancelPrice(r.Context(), t, actor(r), m, b, time.UnixMilli(ms), time.Now())
 	if store.IsBadPrice(err) {
 		return nil, badRequest(err.Error())
 	} else if err != nil {
@@ -312,7 +312,7 @@ func (s *Server) setPriceSource(_ http.ResponseWriter, r *http.Request, t string
 			return nil, badRequest(fmt.Sprintf("LiteLLM's price file has no token prices under %q", in.LiteLLMKey))
 		}
 	}
-	if err := s.Store.SetPriceSource(r.Context(), t, s.DevActor, m, b, in.LiteLLMKey); store.IsBadPrice(err) {
+	if err := s.Store.SetPriceSource(r.Context(), t, actor(r), m, b, in.LiteLLMKey); store.IsBadPrice(err) {
 		return nil, badRequest(err.Error())
 	} else if err != nil {
 		return nil, err
@@ -345,7 +345,7 @@ func (s *Server) acceptProposal(_ http.ResponseWriter, r *http.Request, t string
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.Store.AcceptProposal(r.Context(), t, s.DevActor, id, time.Now()); store.IsBadPrice(err) {
+	if _, err := s.Store.AcceptProposal(r.Context(), t, actor(r), id, time.Now()); store.IsBadPrice(err) {
 		return nil, badRequest(err.Error())
 	} else if err != nil {
 		return nil, err
@@ -360,7 +360,7 @@ func (s *Server) dismissProposal(_ http.ResponseWriter, r *http.Request, t strin
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Store.DismissProposal(r.Context(), t, s.DevActor, id, time.Now()); err != nil {
+	if err := s.Store.DismissProposal(r.Context(), t, actor(r), id, time.Now()); err != nil {
 		return nil, err
 	}
 	return s.pricing(nil, r, t)

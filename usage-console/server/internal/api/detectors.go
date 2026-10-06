@@ -179,7 +179,7 @@ func (s *Server) createEntity(w http.ResponseWriter, r *http.Request, t string) 
 	if v, err := checkEntity(e, custom, in, dryRun(r)); v != nil || err != nil {
 		return v, err
 	}
-	out, err := s.Store.CreateCustomEntity(r.Context(), t, s.DevActor, e)
+	out, err := s.Store.CreateCustomEntity(r.Context(), t, actor(r), e)
 	if errors.Is(err, store.ErrConflict) {
 		return nil, conflict(fmt.Sprintf("a custom entity named %q was just added", e.Name))
 	}
@@ -218,7 +218,7 @@ func (s *Server) updateEntity(w http.ResponseWriter, r *http.Request, t string) 
 	if err != nil {
 		return nil, err
 	}
-	out, err := s.Store.UpdateCustomEntity(r.Context(), t, s.DevActor, id, m, e)
+	out, err := s.Store.UpdateCustomEntity(r.Context(), t, actor(r), id, m, e)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func (s *Server) deleteEntity(_ http.ResponseWriter, r *http.Request, t string) 
 	if err := entityInUse(custom[i].Name, rules, drafts); err != nil {
 		return nil, err
 	}
-	if err := s.Store.DeleteCustomEntity(r.Context(), t, s.DevActor, id, m); err != nil {
+	if err := s.Store.DeleteCustomEntity(r.Context(), t, actor(r), id, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -406,7 +406,7 @@ func (s *Server) setVerdict(_ http.ResponseWriter, r *http.Request, t string) (a
 	if i < 0 {
 		return nil, badRequest(fmt.Sprintf("receipt %s records no %s hit", in.ReceiptID, in.Entity))
 	}
-	v, err := s.Store.SetDetectorVerdict(r.Context(), t, s.DevActor, store.DetectorVerdict{ReceiptID: rc.ID, ReceiptTS: rc.TS, Entity: in.Entity, Verdict: in.Verdict}, m)
+	v, err := s.Store.SetDetectorVerdict(r.Context(), t, actor(r), store.DetectorVerdict{ReceiptID: rc.ID, ReceiptTS: rc.TS, Entity: in.Entity, Verdict: in.Verdict}, m)
 	if err != nil {
 		return nil, err
 	}

@@ -20,10 +20,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/api"
+	"github.com/jbouder/stargate/server/internal/auth"
 	"github.com/jbouder/stargate/server/internal/config"
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/gateway"
@@ -84,6 +86,12 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	aigwLog := fs.String("aigw-log", "", "shell command printing the end of aigw's log, quoted when an apply fails (e.g. 'tail -n 20 tmp/aigw.log')")
 	providerKeys := fs.String("provider-keys", "", "the owner-only env file aigw is started with, holding the provider keys set from the console once routing is applied (they wait in provider-keys.pending.env beside it until then); default provider-keys.env next to -aigw-config")
 	signingKey := fs.String("signing-key", "tmp/receipt-signing.pem", "the Ed25519 key receipt exports are signed with, as an owner-only PKCS#8 PEM file; made on first start")
+	oidcIssuer := fs.String("oidc-issuer", "", "the Keycloak realm people sign in with (e.g. http://localhost:8180/realms/nebari); empty is dev mode: no sign-in, every caller is -dev-actor")
+	oidcClient := fs.String("oidc-client-id", "stargate-console", "the OIDC client the console signs in as; its secret is $STARGATE_OIDC_CLIENT_SECRET (empty for a public client)")
+	consoleURL := fs.String("console-url", "http://localhost:5173", "the console's origin as the browser sees it; Keycloak returns to <console-url>/api/auth/callback")
+	groupPrefix := fs.String("oidc-group-prefix", "stargate-", "Keycloak groups named <prefix><role> (e.g. /stargate-admin) grant that role")
+	devActor := fs.String("dev-actor", auth.DevUserEmail, "dev mode: who every caller is")
+	devRoles := fs.String("dev-roles", "owner", "dev mode: the dev actor's roles, comma-separated (e.g. viewer, to see what a viewer can't do)")
 	fs.Parse(args)
 	if *providerKeys == "" && *aigwConfig != "" {
 		*providerKeys = filepath.Join(filepath.Dir(*aigwConfig), "provider-keys.env")
@@ -124,7 +132,25 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	go hub.Listen(ctx, st, st.Receipts)
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
-	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", ConfigChanged: reload, WardenURL: *warden, Environment: *environment, LiteLLMURL: *litellm, GatewayURL: *gatewayURL}
+	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, ConfigChanged: reload, WardenURL: *warden, Environment: *environment, LiteLLMURL: *litellm, GatewayURL: *gatewayURL}
+	if *oidcIssuer != "" {
+		o, err := auth.Discover(ctx, auth.Config{Issuer: *oidcIssuer, ClientID: *oidcClient, ClientSecret: os.Getenv("STARGATE_OIDC_CLIENT_SECRET"), ConsoleURL: *consoleURL, GroupPrefix: *groupPrefix})
+		if err != nil {
+			log.Fatalf("oidc: %v", err)
+		}
+		srv.Auth = o
+		log.Printf("console sign-in: OIDC, issuer %s, client %s, callback %s%s", *oidcIssuer, *oidcClient, o.ConsoleURL, auth.CallbackPath)
+	} else {
+		srv.Dev = auth.User{Email: *devActor}
+		for _, r := range strings.Split(*devRoles, ",") {
+			role, ok := auth.ParseRole(r)
+			if !ok {
+				log.Fatalf("-dev-roles: %q isn't a role (%v)", r, auth.Roles)
+			}
+			srv.Dev.Roles = append(srv.Dev.Roles, role)
+		}
+		log.Printf("console sign-in: dev mode, every caller is %s (%s); pass -oidc-issuer to sign in with Keycloak", srv.Dev.Email, *devRoles)
+	}
 	signer, err := receiptsig.LoadOrCreate(*signingKey)
 	if err != nil {
 		log.Fatalf("receipt signing key: %v", err)

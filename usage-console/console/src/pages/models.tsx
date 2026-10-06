@@ -8,7 +8,7 @@ import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { backends, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
+import { backends, can, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
 import { AliasDialog, DeleteAliasDialog, type LiveAlias } from './alias-dialogs'
@@ -46,7 +46,7 @@ export function ModelsPage() {
         description="What clients can ask for, what it resolves to, and what it costs."
         actions={
           tab === 'aliases' ? (
-            <Button onClick={live ? () => setCreating(true) : undefined}>
+            <Button onClick={live ? () => setCreating(true) : undefined} disabled={!can('routing').ok} title={can('routing').reason}>
               <Plus /> New alias
             </Button>
           ) : undefined
@@ -283,10 +283,10 @@ function AliasesTab({ nonce }: { nonce: number }) {
                   {live && (
                     <td className={cn(td, 'pr-6')}>
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="xs" aria-label={`Edit ${a.alias}`} onClick={() => setEditing(a as LiveAlias)}>
+                        <Button variant="ghost" size="xs" aria-label={`Edit ${a.alias}`} disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setEditing(a as LiveAlias)}>
                           <Pencil /> Edit
                         </Button>
-                        <Button variant="ghost" size="xs" aria-label={`Delete ${a.alias}`} onClick={() => setDeleting(a as LiveAlias)}>
+                        <Button variant="ghost" size="xs" aria-label={`Delete ${a.alias}`} disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setDeleting(a as LiveAlias)}>
                           <Trash2 />
                         </Button>
                       </div>

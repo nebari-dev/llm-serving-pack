@@ -17,7 +17,7 @@ import { MenuBarActions, MenuBarBrand, NavigationMenu } from '@/components/ui/na
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { useTheme } from '@/hooks/theme-provider'
 import { isThemeMode } from '@/hooks/use-theme-preference'
-import { dataMode, type Session, seedNotifications, session } from '@/data/catalog'
+import { dataMode, type Session, seedNotifications, session, signOut } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useDegradations } from '@/state/degradations'
@@ -51,6 +51,8 @@ export function AppHeader() {
   const unread = notifications.filter((n) => n.unread).length
   const envLabel = dataMode === 'api' ? session.environment.charAt(0).toUpperCase() + session.environment.slice(1) : env === 'production' ? 'Production' : 'Staging'
   const actor = session.actor
+  // Dev mode: no IdP, every caller is the dev user (dev@localhost, owner).
+  const devMode = dataMode === 'api' && session.auth.mode === 'dev'
 
   return (
     <div className="relative">
@@ -203,9 +205,11 @@ export function AppHeader() {
               <DropdownMenuContent align="end" className="w-[248px] p-2">
                 <div className="border-b px-1.5 pb-2">
                   <p className="text-sm font-medium text-foreground">{actor.name ?? actor.email}</p>
+                  {actor.name && <p className="text-xs text-muted-foreground">{actor.email}</p>}
                   <p className="text-xs text-muted-foreground">
-                    {actor.authenticated ? [actor.email, actor.role].filter(Boolean).join(' · ') : 'Not signed in · sign-in (OIDC) isn’t connected yet'}
+                    {actor.roles.length ? `Role${actor.roles.length > 1 ? 's' : ''}: ${actor.roles.join(', ')}` : 'No Stargate role'}
                   </p>
+                  {devMode && <p className="mt-1 text-xs text-muted-foreground">Dev mode · no sign-in ({actor.email} is {actor.roles.join(', ') || 'no role'})</p>}
                 </div>
                 <div className="py-2">
                   <MenuPrimitive.RadioGroup
@@ -243,8 +247,11 @@ export function AppHeader() {
                 </div>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  disabled={!actor.authenticated}
-                  title={actor.authenticated ? undefined : 'Nothing to sign out of: sign-in isn’t connected yet'}
+                  disabled={devMode}
+                  title={devMode ? 'Dev mode: no identity provider is configured, so there’s nothing to sign out of' : undefined}
+                  onClick={() => {
+                    if (dataMode === 'api' && !devMode) void signOut()
+                  }}
                   className="leading-5 text-sign-out-foreground data-[highlighted]:text-sign-out-foreground"
                 >
                   <LogOut className="size-4 shrink-0" aria-hidden="true" />

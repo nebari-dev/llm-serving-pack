@@ -38,7 +38,7 @@ func (s *Server) createBudget(w http.ResponseWriter, r *http.Request, t string) 
 	if dryRun(r) {
 		return s.budgetDryRun(r.Context(), t, b)
 	}
-	b, err := s.Store.CreateBudget(r.Context(), t, s.DevActor, b)
+	b, err := s.Store.CreateBudget(r.Context(), t, actor(r), b)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +92,7 @@ func (s *Server) updateBudget(w http.ResponseWriter, r *http.Request, t string) 
 		}
 		return s.budgetDryRun(r.Context(), t, next)
 	}
-	b, err := s.Store.UpdateBudget(r.Context(), t, s.DevActor, id, match, edit)
+	b, err := s.Store.UpdateBudget(r.Context(), t, actor(r), id, match, edit)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (s *Server) deleteBudget(_ http.ResponseWriter, r *http.Request, t string) 
 		return nil, err
 	}
 	id := r.PathValue("id")
-	if err := s.Store.DeleteBudget(r.Context(), t, s.DevActor, id, m); err != nil {
+	if err := s.Store.DeleteBudget(r.Context(), t, actor(r), id, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()

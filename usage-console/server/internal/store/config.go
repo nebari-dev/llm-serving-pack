@@ -65,12 +65,12 @@ type KeyRecord struct {
 // keyCols reads a key with its project's name, which receipts carry. A
 // subquery rather than a join, so RETURNING can use it too.
 const keyCols = `id, name, prefix, team_id, (SELECT p.name FROM projects p WHERE p.id = api_keys.project_id), project_id,
-	allowed_models, allowed_regions, to_char(expires_at, 'YYYY-MM-DD'), status, hash, coalesce(next_hash, ''), rotate_until`
+	allowed_models, allowed_regions, to_char(expires_at, 'YYYY-MM-DD'), status, hash, coalesce(next_hash, ''), rotate_until, owner`
 
 func scanKey(r pgx.Row) (KeyRecord, error) {
 	var k KeyRecord
 	err := r.Scan(&k.ID, &k.Name, &k.Prefix, &k.Team, &k.Project, &k.ProjectID, &k.AllowedModels, &k.AllowedRegions,
-		&k.ExpiresAt, &k.Status, &k.Hash, &k.NextHash, &k.RotateUntil)
+		&k.ExpiresAt, &k.Status, &k.Hash, &k.NextHash, &k.RotateUntil, &k.Owner)
 	return k, err
 }
 
@@ -186,10 +186,10 @@ func (s *Store) CreateKey(ctx context.Context, tenant, actor string, in NewKey) 
 		return KeyRecord{}, "", ErrNotFound
 	}
 	k, err := scanKey(tx.QueryRow(ctx, `
-		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'active')
+		INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status, owner)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'active',$11)
 		RETURNING `+keyCols,
-		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.ProjectID, in.AllowedModels, in.AllowedRegions, in.ExpiresAt))
+		id, tenant, in.Name, secret[:13], demo.HashSecret(secret), in.Team, in.ProjectID, in.AllowedModels, in.AllowedRegions, in.ExpiresAt, actor))
 	if err != nil {
 		return KeyRecord{}, "", err
 	}

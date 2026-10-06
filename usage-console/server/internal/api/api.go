@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jbouder/stargate/server/internal/auth"
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/receiptsig"
@@ -26,10 +27,14 @@ import (
 type Server struct {
 	Store *store.Store
 	Hub   *Hub
-	// Tenants this server answers for. Auth (OIDC, §6) is not wired yet, so
-	// every caller acts as DevActor.
-	Tenants  []string
-	DevActor string
+	// Tenants this server answers for.
+	Tenants []string
+	// Auth signs people in (OIDC against Keycloak). Nil is dev mode: every
+	// caller is Dev, with no credentials.
+	Auth *auth.OIDC
+	// Dev is who every caller is in dev mode; empty is DevUser
+	// (dev@localhost, owner).
+	Dev auth.User
 	// ConfigChanged, if set, runs after a write to anything the gateway
 	// enforces (keys, aliases, budgets, rules, prices) and before the
 	// response, so the key check sees it at once. Warden is asked to reload
@@ -58,6 +63,12 @@ type Server struct {
 	Signer  *receiptsig.Signer
 	syncMu  sync.Mutex
 	applyMu sync.Mutex
+	// seen is the members cache's last write per user (touchUser).
+	seen sync.Map
+	// keyOwner replaces Store.KeyOwner in tests.
+	keyOwner func(ctx context.Context, tenant, id string) (string, error)
+	// patterns is every route Handler registered, for tests.
+	patterns []string
 }
 
 func (s *Server) configChanged() {
@@ -83,47 +94,19 @@ func (s *Server) configChanged() {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	h := func(pattern string, fn func(http.ResponseWriter, *http.Request, string) (any, error)) {
-		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			tenant := r.PathValue("tenant")
-			if !slices.Contains(s.Tenants, tenant) {
-				writeJSON(w, 404, errBody("tenant_not_found", "unknown tenant "+tenant))
-				return
-			}
-			v, err := fn(w, r, tenant)
-			var stale *store.StaleError
-			switch {
-			case errors.As(err, &stale):
-				// §6: a stale write is a 409 carrying what's there now, for a merge.
-				body := errBody("conflict", err.Error())
-				body["current"] = stale.Current
-				writeJSON(w, 409, body)
-			case errors.Is(err, store.ErrNotFound):
-				writeJSON(w, 404, errBody("not_found", "not found"))
-			case errors.Is(err, store.ErrConflict):
-				writeJSON(w, 409, errBody("conflict", err.Error()))
-			case errors.As(err, new(preconditionRequired)):
-				writeJSON(w, 428, errBody("precondition_required", err.Error()))
-			case errors.As(err, new(conflict)):
-				writeJSON(w, 409, errBody("conflict", err.Error()))
-			case errors.As(err, new(badRequest)):
-				writeJSON(w, 400, errBody("bad_request", err.Error()))
-			case errors.As(err, new(unavailable)):
-				writeJSON(w, 503, errBody("unavailable", err.Error()))
-			case errors.As(err, new(applyFailed)):
-				writeJSON(w, 502, errBody("apply_failed", err.Error()))
-			case errors.As(err, new(keyRefused)):
-				writeJSON(w, 422, errBody("key_test_failed", err.Error()))
-			case err != nil:
-				log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
-				writeJSON(w, 500, errBody("internal", "internal error"))
-			case v != nil:
-				writeJSON(w, http.StatusOK, v)
-			}
-		})
+	s.patterns = nil
+	h := func(pattern string, fn handlerFunc) {
+		s.patterns = append(s.patterns, pattern)
+		mux.HandleFunc(pattern, s.wrap(pattern, fn))
+	}
+	if s.Auth != nil {
+		mux.HandleFunc("GET /api/auth/login", s.Auth.Login)
+		mux.HandleFunc("GET "+auth.CallbackPath, s.Auth.Callback)
+		mux.HandleFunc("POST /api/auth/logout", s.Auth.Logout)
 	}
 	const p = "/api/v1/{tenant}"
 	h("GET "+p+"/teams", s.teams)
+	h("GET "+p+"/members", s.members)
 	h("GET "+p+"/projects", s.projects)
 	h("POST "+p+"/projects", s.createProject)
 	h("PUT "+p+"/projects/{id}", s.renameProject)
@@ -203,6 +186,71 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/gateway/overhead", s.gatewayOverhead)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux
+}
+
+type handlerFunc func(http.ResponseWriter, *http.Request, string) (any, error)
+
+// wrap is every tenant route: the tenant, then who's asking (401 without a
+// session in OIDC mode), then their roles against the route's action (403),
+// then fn, its answer or error mapped to a status.
+func (s *Server) wrap(pattern string, fn handlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenant := r.PathValue("tenant")
+		if !slices.Contains(s.Tenants, tenant) {
+			writeJSON(w, 404, errBody("tenant_not_found", "unknown tenant "+tenant))
+			return
+		}
+		u, err := s.authenticate(w, r)
+		if err == nil {
+			err = s.authorize(r, tenant, u, pattern)
+		}
+		if err != nil {
+			writeError(w, r, err)
+			return
+		}
+		s.touchUser(r.Context(), tenant, u)
+		r = r.WithContext(withUser(r.Context(), u))
+		v, err := fn(w, r, tenant)
+		if err != nil {
+			writeError(w, r, err)
+		} else if v != nil {
+			writeJSON(w, http.StatusOK, v)
+		}
+	}
+}
+
+// writeError answers a failed request with the status its error means.
+func writeError(w http.ResponseWriter, r *http.Request, err error) {
+	if writeAuthError(w, err) {
+		return
+	}
+	var stale *store.StaleError
+	switch {
+	case errors.As(err, &stale):
+		// §6: a stale write is a 409 carrying what's there now, for a merge.
+		body := errBody("conflict", err.Error())
+		body["current"] = stale.Current
+		writeJSON(w, 409, body)
+	case errors.Is(err, store.ErrNotFound):
+		writeJSON(w, 404, errBody("not_found", "not found"))
+	case errors.Is(err, store.ErrConflict):
+		writeJSON(w, 409, errBody("conflict", err.Error()))
+	case errors.As(err, new(preconditionRequired)):
+		writeJSON(w, 428, errBody("precondition_required", err.Error()))
+	case errors.As(err, new(conflict)):
+		writeJSON(w, 409, errBody("conflict", err.Error()))
+	case errors.As(err, new(badRequest)):
+		writeJSON(w, 400, errBody("bad_request", err.Error()))
+	case errors.As(err, new(unavailable)):
+		writeJSON(w, 503, errBody("unavailable", err.Error()))
+	case errors.As(err, new(applyFailed)):
+		writeJSON(w, 502, errBody("apply_failed", err.Error()))
+	case errors.As(err, new(keyRefused)):
+		writeJSON(w, 422, errBody("key_test_failed", err.Error()))
+	case err != nil:
+		log.Printf("%s %s: %v", r.Method, r.URL.Path, err)
+		writeJSON(w, 500, errBody("internal", "internal error"))
+	}
 }
 
 // preconditionRequired is an update or delete without If-Match (428).
@@ -454,7 +502,7 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if err := s.keyProject(r.Context(), t, &in); err != nil {
 		return nil, err
 	}
-	k, secret, err := s.Store.CreateKey(r.Context(), t, s.DevActor, in)
+	k, secret, err := s.Store.CreateKey(r.Context(), t, actor(r), in)
 	if pe := (*pgconn.PgError)(nil); errors.As(err, &pe) && pe.Code == "23503" {
 		return nil, badRequest("unknown team")
 	}
@@ -470,7 +518,7 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 }
 
 func (s *Server) revokeKey(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	k, err := s.Store.RevokeKey(r.Context(), t, s.DevActor, r.PathValue("id"))
+	k, err := s.Store.RevokeKey(r.Context(), t, actor(r), r.PathValue("id"))
 	if err != nil {
 		return nil, err
 	}
@@ -495,7 +543,7 @@ func (s *Server) rotateKey(_ http.ResponseWriter, r *http.Request, t string) (an
 	if in.OverlapHours < 1 || in.OverlapHours > 168 {
 		return nil, badRequest("overlapHours must be between 1 and 168")
 	}
-	k, secret, err := s.Store.RotateKey(r.Context(), t, s.DevActor, r.PathValue("id"), time.Duration(in.OverlapHours)*time.Hour)
+	k, secret, err := s.Store.RotateKey(r.Context(), t, actor(r), r.PathValue("id"), time.Duration(in.OverlapHours)*time.Hour)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +567,7 @@ func (s *Server) extendRotation(_ http.ResponseWriter, r *http.Request, t string
 	if in.Hours < 1 || in.Hours > 168 {
 		return nil, badRequest("hours must be between 1 and 168")
 	}
-	k, err := s.Store.ExtendRotation(r.Context(), t, s.DevActor, r.PathValue("id"), time.Duration(in.Hours)*time.Hour)
+	k, err := s.Store.ExtendRotation(r.Context(), t, actor(r), r.PathValue("id"), time.Duration(in.Hours)*time.Hour)
 	if errors.Is(err, store.ErrOverlapTooLong) {
 		return nil, badRequest(err.Error())
 	}
@@ -532,7 +580,7 @@ func (s *Server) extendRotation(_ http.ResponseWriter, r *http.Request, t string
 
 // finishRotation retires the old secret now, instead of at the overlap's end.
 func (s *Server) finishRotation(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
-	k, err := s.Store.FinishRotation(r.Context(), t, s.DevActor, r.PathValue("id"))
+	k, err := s.Store.FinishRotation(r.Context(), t, actor(r), r.PathValue("id"))
 	if err != nil {
 		return nil, err
 	}

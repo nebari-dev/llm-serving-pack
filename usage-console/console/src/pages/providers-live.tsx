@@ -8,7 +8,7 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { toast } from '@/components/ui/toast'
-import { api, ApiError, type Backend, type BackendResult, type ConnectionTest } from '@/data/catalog'
+import { api, ApiError, can, type Backend, type BackendResult, type ConnectionTest } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -252,7 +252,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
               <FieldDescription>The models the gateway serves from it. A model the catalog doesn’t know is added with no price until one is set on Models.</FieldDescription>
             </Field>
             <div className="flex flex-col items-start gap-2 sm:col-span-2">
-              <Button type="button" variant="outline" onClick={runTest} loading={testing} loadingText="Testing…" disabled={!draft.baseUrl.trim()}>
+              <Button type="button" variant="outline" onClick={runTest} loading={testing} loadingText="Testing…" disabled={!draft.baseUrl.trim() || !can('routing').ok} title={can('routing').reason}>
                 Test connection
               </Button>
               {test && <TestResult test={test} models={splitModels(draft.models)} onAdd={(m) => set({ models: [...splitModels(draft.models), m].join(', ') })} />}
@@ -287,7 +287,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
             Cancel
           </Button>
         )}
-        <Button type="submit" loading={busy} loadingText="Saving…" disabled={!draft.provider || !!stale}>
+        <Button type="submit" loading={busy} loadingText="Saving…" disabled={!draft.provider || !!stale || !can('routing').ok} title={can('routing').reason}>
           Save provider
         </Button>
       </div>
@@ -386,7 +386,7 @@ export function ReplaceKeyDialog({ backend, onClose }: { backend: Backend; onClo
                 <Button variant="outline" type="button" onClick={() => onClose(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" loading={busy} loadingText="Replacing and testing…" disabled={!key}>
+                <Button type="submit" loading={busy} loadingText="Replacing and testing…" disabled={!key || !can('routing').ok} title={can('routing').reason}>
                   Replace key
                 </Button>
               </>
@@ -434,7 +434,7 @@ export function DeleteBackendDialog({ backend, onClose }: { backend: Backend; on
           <Button variant="outline" type="button" onClick={() => onClose(false)}>
             Keep it
           </Button>
-          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…">
+          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…" disabled={!can('routing').ok} title={can('routing').reason}>
             Delete provider
           </Button>
         </DialogFooter>

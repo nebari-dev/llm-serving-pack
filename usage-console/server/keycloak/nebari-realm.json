@@ -1,0 +1,144 @@
+{
+  "realm": "nebari",
+  "displayName": "Nebari (Stargate dev)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 28800,
+  "ssoSessionMaxLifespan": 86400,
+  "groups": [
+    { "name": "stargate-owner" },
+    { "name": "stargate-admin" },
+    { "name": "stargate-security" },
+    { "name": "stargate-finance" },
+    { "name": "stargate-editor" },
+    { "name": "stargate-viewer" },
+    { "name": "developer" }
+  ],
+  "clients": [
+    {
+      "clientId": "stargate-console",
+      "name": "Stargate console",
+      "description": "The console signs in through the control plane (backend-for-frontend): authorization code + PKCE, confidential client.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "stargate-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "rootUrl": "http://localhost:5173",
+      "baseUrl": "/",
+      "redirectUris": ["http://localhost:5173/api/auth/callback"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://localhost:5173/*"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "stargate-console audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "stargate-console",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "olive",
+      "email": "olive@example.com",
+      "firstName": "Olive",
+      "lastName": "Owner",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-owner"]
+    },
+    {
+      "username": "ada",
+      "email": "ada@example.com",
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-admin"]
+    },
+    {
+      "username": "sam",
+      "email": "sam@example.com",
+      "firstName": "Sam",
+      "lastName": "Security",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-security"]
+    },
+    {
+      "username": "fran",
+      "email": "fran@example.com",
+      "firstName": "Fran",
+      "lastName": "Finance",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-finance"]
+    },
+    {
+      "username": "eddie",
+      "email": "eddie@example.com",
+      "firstName": "Eddie",
+      "lastName": "Editor",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-editor"]
+    },
+    {
+      "username": "vic",
+      "email": "vic@example.com",
+      "firstName": "Vic",
+      "lastName": "Viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/stargate-viewer"]
+    },
+    {
+      "username": "dev",
+      "email": "dev@example.com",
+      "firstName": "Dana",
+      "lastName": "Developer",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "stargate", "temporary": false }],
+      "groups": ["/developer"]
+    }
+  ]
+}

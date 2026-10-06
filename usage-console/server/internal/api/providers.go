@@ -137,7 +137,7 @@ func (s *Server) createBackend(w http.ResponseWriter, r *http.Request, t string)
 		ref := routing.KeyRef(b.Name)
 		nk = &store.NewProviderKey{Ref: ref, Prefix: routing.KeyPrefix(key), Put: func() error { return ks.Put(ref, key) }}
 	}
-	saved, err := s.Store.CreateBackend(r.Context(), t, s.DevActor, b, nk)
+	saved, err := s.Store.CreateBackend(r.Context(), t, actor(r), b, nk)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (s *Server) updateBackend(w http.ResponseWriter, r *http.Request, t string)
 	if key != "" {
 		return nil, badRequest("replace the key on its own (PUT /backends/{name}/key)")
 	}
-	if _, err := s.Store.UpdateBackend(r.Context(), t, s.DevActor, m, b); err != nil {
+	if _, err := s.Store.UpdateBackend(r.Context(), t, actor(r), m, b); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -186,7 +186,7 @@ func (s *Server) deleteBackend(_ http.ResponseWriter, r *http.Request, t string)
 		return nil, err
 	}
 	name := r.PathValue("name")
-	was, err := s.Store.DeleteBackend(r.Context(), t, s.DevActor, name, m)
+	was, err := s.Store.DeleteBackend(r.Context(), t, actor(r), name, m)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +234,7 @@ func (s *Server) setBackendKey(w http.ResponseWriter, r *http.Request, t string)
 	if was.Endpoint.APIKeyEnv != "" {
 		ref = was.Endpoint.APIKeyEnv
 	}
-	saved, err := s.Store.SetBackendKey(r.Context(), t, s.DevActor, was.Name, store.NewProviderKey{
+	saved, err := s.Store.SetBackendKey(r.Context(), t, actor(r), was.Name, store.NewProviderKey{
 		Ref: ref, Prefix: routing.KeyPrefix(in.APIKey), Put: func() error { return ks.Put(ref, in.APIKey) },
 	})
 	if err != nil {

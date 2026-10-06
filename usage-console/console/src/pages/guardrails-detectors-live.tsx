@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { can } from '@/data/catalog'
 import { Link } from 'react-router-dom'
 import { Section } from '@/components/gw/page'
 import { StateChip } from '@/components/gw/verdict'
@@ -79,7 +80,7 @@ export function LiveDetectorsTab({ onEntitiesChanged }: { onEntitiesChanged?: ()
                       {d.customEntity && (
                         <span className="mt-0.5 flex items-center gap-2 text-xs font-normal text-muted-foreground">
                           Custom
-                          <button type="button" className="underline hover:text-foreground" aria-label={`Edit ${d.entity}`} onClick={() => setEditing(d.customEntity!)}>
+                          <button type="button" className="underline hover:text-foreground" aria-label={`Edit ${d.entity}`} disabled={!can('detectors').ok} title={can('detectors').reason} onClick={() => setEditing(d.customEntity!)}>
                             Edit
                           </button>
                         </span>
@@ -144,7 +145,7 @@ export function LiveDetectorsTab({ onEntitiesChanged }: { onEntitiesChanged?: ()
         description="Your own entity types, such as internal account or employee IDs. Rules name them in “Prompt contains entity” like the built-ins, and Warden reloads as soon as you save."
         actions={
           editing === null && (
-            <Button size="sm" variant="outline" onClick={() => setEditing('new')}>
+            <Button size="sm" variant="outline" onClick={() => setEditing('new')} disabled={!can('detectors').ok} title={can('detectors').reason}>
               Add entity
             </Button>
           )
@@ -414,7 +415,8 @@ function ReviewQueue({ detectors, onReviewed }: { detectors: DetectorView[]; onR
                         <Button
                           size="xs"
                           variant="outline"
-                          disabled={busy === h.receiptId + h.entity}
+                          disabled={busy === h.receiptId + h.entity || !can('detectors').ok}
+                          title={can('detectors').reason}
                           aria-label={`Mark ${h.entity} on ${h.receiptId} a false positive`}
                           onClick={() => void mark(h, 'false_positive')}
                         >
@@ -425,7 +427,8 @@ function ReviewQueue({ detectors, onReviewed }: { detectors: DetectorView[]; onR
                         <Button
                           size="xs"
                           variant="outline"
-                          disabled={busy === h.receiptId + h.entity}
+                          disabled={busy === h.receiptId + h.entity || !can('detectors').ok}
+                          title={can('detectors').reason}
                           aria-label={`Mark ${h.entity} on ${h.receiptId} correct`}
                           onClick={() => void mark(h, 'confirmed')}
                         >

@@ -154,6 +154,60 @@ curl localhost:8081/v1/chat/completions \
 The `X-Stargate-Receipt` response header names the receipt. `X-Data-Region: eu`
 triggers the `eu-only` reroute.
 
+### Signing in (OIDC with Keycloak)
+
+By default there's no sign-in (dev mode): every caller is `dev@localhost`
+with role `owner`, which is what `make dev`, the test stack and the api-mode
+suite run as. `serve -dev-actor me@laptop -dev-roles viewer` changes who that
+is, to see the console as another role without Keycloak.
+
+To sign in for real, against a local Keycloak (realm `nebari`, as
+llm-serving-pack uses):
+
+```sh
+make keycloak                   # Keycloak on :8180 (compose profile auth), realm imported from keycloak/nebari-realm.json
+make dev AUTH=oidc              # or make dev-oidc (both); also make dev-aigw AUTH=oidc, make restart AUTH=oidc
+cd ../console && npm run dev:api   # http://localhost:5173 sends you to Keycloak
+```
+
+Sign in as any of the test users, password `stargate`: `olive` (owner),
+`ada` (admin), `sam` (security), `fran` (finance), `eddie` (editor), `vic`
+(viewer), or `dev`, who is only in Nebari's `developer` group and so has no
+Stargate role (signed in, sees nothing). Keycloak's admin console is
+http://localhost:8180/admin (`admin` / `admin`); roles are assigned there, by
+adding people to the `stargate-<role>` groups. `make keycloak-down` stops it.
+
+How it works (`internal/auth`):
+
+- The console signs in through the control plane, not in the browser (a
+  backend-for-frontend). `GET /api/auth/login?next=/path` starts the
+  authorization code flow with PKCE (S256) as the confidential client
+  `stargate-console` (secret in `$STARGATE_OIDC_CLIENT_SECRET`; the Makefile
+  sets the dev realm's). `GET /api/auth/callback` checks the state, exchanges
+  the code, validates the ID token (signature against the realm's JWKS,
+  issuer, audience = the client id, expiry, nonce) and stores it in an
+  HttpOnly, SameSite=Lax cookie, with the refresh token in another. Vite
+  proxies `/api`, so the cookies are the console's own origin's.
+- Every `/api/v1` request validates that token again; an expired one is
+  renewed with the refresh token, until Keycloak's SSO session ends. No
+  session is a 401 `{"error": {"code": "unauthenticated", "loginUrl"}}`, and
+  the console goes to the login. A cookie-authenticated write from another
+  origin than `-console-url` is refused (403 `cross_site`).
+- `POST /api/auth/logout` clears the cookies and answers `{redirect}`:
+  Keycloak's end-session endpoint, which ends the SSO session and returns to
+  the console.
+- Scripts can send a Keycloak access token as `Authorization: Bearer` (the
+  realm's audience mapper puts `stargate-console` in its `aud`).
+- Roles come from the token's `groups` claim: `/stargate-admin` is `admin`
+  (`-oidc-group-prefix` changes the prefix). Other groups grant nothing.
+- Flags: `-oidc-issuer` (empty: dev mode), `-oidc-client-id`
+  (`stargate-console`), `-console-url` (`http://localhost:5173`; the
+  callback is `<console-url>/api/auth/callback`, which must be a redirect URI
+  of the client), `-oidc-group-prefix` (`stargate-`).
+
+Gateway keys for model traffic are separate: the ext_authz key check on
+:8082 doesn't change.
+
 ### Restarting after a change
 
 `make dev-aigw` doesn't rebuild on change. To pick up server changes without
@@ -200,7 +254,7 @@ shell, so Ctrl-C on `make dev-aigw` leaves it running; stop it by port, e.g.
 
 | | |
 |---|---|
-| `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. With `-aigw-config` and `-aigw-restart`, applies routing to aigw. Also `migrate`, `backfill -days N -per-day N`, and `routing write -o path`. |
+| `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. With `-aigw-config` and `-aigw-restart`, applies routing to aigw. With `-oidc-issuer`, the console signs in with Keycloak (above); without it, dev mode. Also `migrate`, `backfill -days N -per-day N`, and `routing write -o path`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
 | `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` and `GET /{backend}/v1/models` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. The `keyed` backend wants provider key `fakellm.KeyedKey` (401 otherwise) and echoes `keyed-echo`. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
@@ -256,6 +310,23 @@ Writes (the console doesn't call most of them yet):
   - `PUT backends/{name}/key` with `{apiKey}` stores the key in the key store, records its prefix, and tests it. No response ever carries a key.
   - `POST backends/test` with `{provider, baseUrl, apiKey?}` tests an unsaved provider (GET `{baseUrl}/models`; the key is used for that request only); `POST backends/{name}/test` tests a saved one with its stored key. Both return `{ok, status, models, error}`, the error in the provider's words with the key taken out.
 
+Who may call what:
+
+- `GET session` reports the caller (`actor`: email, name, `roles`), how
+  sign-in works here (`auth`: `mode` dev or oidc, sign-in and sign-out URLs,
+  Keycloak's account and groups pages), and `permissions`: per action of the
+  role table, whether the caller may and which roles may.
+- `GET members` lists who has used the console, with the roles their last
+  token gave them (the `users` cache; Keycloak is the source).
+- Every write checks the caller's roles against the table in
+  `docs/backend-decisions.md` §7 (`routeActions` in `internal/api/authz.go`;
+  a write missing from it is owner-only). Refused is a 403
+  `{"error": {"code": "forbidden", "message": "Needs role finance or admin to change budgets (you have viewer). …", "roles": ["admin", "finance"]}}`.
+  Reads need any role.
+- Keys have an `owner`, who created them. Revoke, rotate, extend and finish
+  need the owner or `admin`; creating a key needs any role.
+- Audit rows, key owners, export and reveal records name the signed-in user.
+
 Aliases, budgets and rules carry an `etag`. Updating or deleting one needs
 `If-Match: <etag>` (428 without it; 409 with the current resource when it's
 stale); creating an alias with `PUT` needs `If-None-Match: *`. Every mutation
@@ -303,7 +374,7 @@ the rows weren't changed in the database before the export.
 
 ## Not yet (by design for this slice)
 
-- **Auth.** There's no OIDC yet; every caller is `dev@localhost`. There's also no ETag/If-Match and no `dryRun`.
+- **Auth.** Service accounts with scoped tokens for CI (spec §6) aren't built; a Keycloak access token works as a Bearer token. Assigning roles stays in Keycloak.
 - **Mutations.** Only keys are writable. Backends, routes, rules and budgets are read-only over the API; the console still edits those in local state.
 - **Rule engine.** It understands the demo rules' condition and action forms, with regex detectors. Warden runs the same engine. Message content has to be a plain string: a body with content parts (images) can't be inspected, so it gets the fail mode.
 - **Routing.** Routes feed the fallback lists only. Key `allowedRegions` isn't enforced, and backend health is configured rather than probed.

@@ -8,7 +8,7 @@ import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, projects, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgetLabel, budgets, can, canManageKey, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, projects, revokeKey, teams } from '@/data/catalog'
 import { clock, int, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
@@ -148,7 +148,7 @@ export function KeysPage() {
             <Button variant="outline" onClick={() => setManagingProjects(true)}>
               <FolderKanban /> Projects
             </Button>
-            <Button onClick={() => setCreating(true)}>
+            <Button onClick={() => setCreating(true)} disabled={!can('keys.own').ok} title={can('keys.own').reason}>
               <Plus /> Create key
             </Button>
           </>
@@ -243,9 +243,15 @@ export function KeysPage() {
                         <DropdownMenuPortal>
                           <DropdownMenuContent align="end" className="min-w-48">
                             <DropdownMenuItem onClick={() => openKey(k.id)}>View key</DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => setRotating(k)}>{k.status === 'rotating' ? 'View rotation' : 'Rotate secret'}</DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => setRotating(k)}
+                              disabled={k.status !== 'rotating' && !canManageKey(k).ok}
+                              title={k.status !== 'rotating' ? canManageKey(k).reason : undefined}
+                            >
+                              {k.status === 'rotating' ? 'View rotation' : 'Rotate secret'}
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem variant="destructive" onClick={() => setRevoking(k)}>
+                            <DropdownMenuItem variant="destructive" onClick={() => setRevoking(k)} disabled={!canManageKey(k).ok} title={canManageKey(k).reason}>
                               Revoke key…
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -294,6 +300,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
   const budget = governingBudget(k)
   const e = expiryInfo(k)
   const revoked = k.status === 'revoked'
+  const manage = canManageKey(k)
 
   const topModels = useMemo(() => {
     const m = new Map<string, { model: string; n: number; tokens: number; cost: number; unpriced: number; ms: number[] }>()
@@ -326,6 +333,9 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
               {teams.find((t) => t.id === k.team)?.name} / <span className="font-mono">{k.project}</span>
             </span>
             <StatusCell k={k} />
+            <span>
+              Owner <span className="font-mono">{k.owner}</span>
+            </span>
           </span>
         }
         actions={
@@ -335,10 +345,10 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
             </Button>
             {!revoked && (
               <>
-                <Button variant="outline" onClick={onRotate}>
+                <Button variant="outline" onClick={onRotate} disabled={k.status !== 'rotating' && !manage.ok} title={k.status !== 'rotating' ? manage.reason : undefined}>
                   <RefreshCw /> {k.status === 'rotating' ? 'View rotation' : 'Rotate secret'}
                 </Button>
-                <Button variant="destructive" onClick={onRevoke}>
+                <Button variant="destructive" onClick={onRevoke} disabled={!manage.ok} title={manage.reason}>
                   <Ban /> Revoke key…
                 </Button>
               </>

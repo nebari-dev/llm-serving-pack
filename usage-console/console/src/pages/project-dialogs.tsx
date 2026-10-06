@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from '@/components/ui/toast'
 import {
   ApiError,
+  can,
   createProject,
   dataMode,
   deleteProject,
@@ -183,7 +184,7 @@ export function NewProjectForm({ onCreated, onCancel }: { onCreated: (p: Project
         <Button variant="outline" size="sm" type="button" onClick={onCancel}>
           Cancel
         </Button>
-        <Button size="sm" type="button" disabled={!name.trim() || !!invalid || busy} onClick={() => void create()}>
+        <Button size="sm" type="button" disabled={!name.trim() || !!invalid || busy || !can('projects').ok} title={can('projects').reason} onClick={() => void create()}>
           Create project
         </Button>
       </div>
@@ -259,10 +260,10 @@ function ProjectRow({ p, all, onChanged }: { p: Project; all: Project[]; onChang
           </span>
         ) : (
           <span className="inline-flex gap-1">
-            <Button size="sm" variant="ghost" aria-label={`Rename ${label}`} onClick={() => (setRenaming(true), setError(''))}>
+            <Button size="sm" variant="ghost" aria-label={`Rename ${label}`} disabled={!can('projects').ok} title={can('projects').reason} onClick={() => (setRenaming(true), setError(''))}>
               Rename
             </Button>
-            <Button size="sm" variant="ghost" aria-label={`Delete ${label}`} onClick={() => (setConfirming(true), setError(''))}>
+            <Button size="sm" variant="ghost" aria-label={`Delete ${label}`} disabled={!can('projects').ok} title={can('projects').reason} onClick={() => (setConfirming(true), setError(''))}>
               Delete
             </Button>
           </span>
@@ -304,7 +305,7 @@ export function ManageProjectsDialog({ open, onOpenChange, onChanged }: { open: 
             />
           ) : (
             <div>
-              <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Button size="sm" variant="outline" disabled={!can('projects').ok} title={can('projects').reason} onClick={() => setAdding(true)}>
                 New project
               </Button>
             </div>

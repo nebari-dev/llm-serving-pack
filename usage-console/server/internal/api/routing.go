@@ -207,7 +207,7 @@ func (s *Server) createRoute(w http.ResponseWriter, r *http.Request, t string) (
 	if dryRun(r) {
 		return RouteDryRun{true, in, routing.RuleYAML(in, backends)}, nil
 	}
-	if _, err := s.Store.CreateRoute(r.Context(), t, s.DevActor, in); err != nil {
+	if _, err := s.Store.CreateRoute(r.Context(), t, actor(r), in); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -239,7 +239,7 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request, t string) (
 		}
 		return RouteDryRun{true, in, routing.RuleYAML(in, backends)}, nil
 	}
-	if _, err := s.Store.UpdateRoute(r.Context(), t, s.DevActor, match, in); err != nil {
+	if _, err := s.Store.UpdateRoute(r.Context(), t, actor(r), match, in); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -252,7 +252,7 @@ func (s *Server) deleteRoute(_ http.ResponseWriter, r *http.Request, t string) (
 		return nil, err
 	}
 	name := r.PathValue("name")
-	if err := s.Store.DeleteRoute(r.Context(), t, s.DevActor, name, m); err != nil {
+	if err := s.Store.DeleteRoute(r.Context(), t, actor(r), name, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -361,7 +361,7 @@ func (s *Server) applyRouting(w http.ResponseWriter, r *http.Request, t string) 
 	if applyErr != nil {
 		msg = applyErr.Error()
 	}
-	if err := s.Store.RecordApply(ctx, t, s.DevActor, applyErr == nil, msg, p.Changes, tries); err != nil {
+	if err := s.Store.RecordApply(ctx, t, actor(r), applyErr == nil, msg, p.Changes, tries); err != nil {
 		return nil, err
 	}
 	if applyErr != nil {

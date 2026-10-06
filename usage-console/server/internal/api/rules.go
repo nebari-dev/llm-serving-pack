@@ -105,7 +105,7 @@ func (s *Server) createRule(w http.ResponseWriter, r *http.Request, t string) (a
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.CreateRule(r.Context(), t, s.DevActor, c)
+	v, err := s.Store.CreateRule(r.Context(), t, actor(r), c)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (s *Server) saveRuleDraft(w http.ResponseWriter, r *http.Request, t string)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.SaveDraft(r.Context(), t, s.DevActor, r.PathValue("id"), m, c)
+	v, err := s.Store.SaveDraft(r.Context(), t, actor(r), r.PathValue("id"), m, c)
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func (s *Server) discardRuleDraft(w http.ResponseWriter, r *http.Request, t stri
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.DiscardDraft(r.Context(), t, s.DevActor, r.PathValue("id"), m)
+	v, err := s.Store.DiscardDraft(r.Context(), t, actor(r), r.PathValue("id"), m)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -206,7 +206,7 @@ func (s *Server) publishRule(w http.ResponseWriter, r *http.Request, t string) (
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.Store.Publish(r.Context(), t, s.DevActor, id, m, in.Mode, in.FailMode)
+	v, err := s.Store.Publish(r.Context(), t, actor(r), id, m, in.Mode, in.FailMode)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -228,7 +228,7 @@ func (s *Server) rollbackRule(w http.ResponseWriter, r *http.Request, t string) 
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Version < 1 {
 		return nil, badRequest("version is required")
 	}
-	v, err := s.Store.Rollback(r.Context(), t, s.DevActor, r.PathValue("id"), m, in.Version)
+	v, err := s.Store.Rollback(r.Context(), t, actor(r), r.PathValue("id"), m, in.Version)
 	if err != nil {
 		return nil, publishErr(err)
 	}
@@ -247,7 +247,7 @@ func (s *Server) deleteRule(_ http.ResponseWriter, r *http.Request, t string) (a
 		return nil, err
 	}
 	id := r.PathValue("id")
-	if err := s.Store.DeleteRule(r.Context(), t, s.DevActor, id, m); err != nil {
+	if err := s.Store.DeleteRule(r.Context(), t, actor(r), id, m); err != nil {
 		return nil, publishErr(err)
 	}
 	s.configChanged()
@@ -261,7 +261,7 @@ func (s *Server) reorderRules(_ http.ResponseWriter, r *http.Request, t string) 
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		return nil, badRequest("invalid JSON body")
 	}
-	err := s.Store.ReorderRules(r.Context(), t, s.DevActor, in.From, in.To)
+	err := s.Store.ReorderRules(r.Context(), t, actor(r), in.From, in.To)
 	var bad store.ErrBadOrder
 	switch {
 	case errors.As(err, &bad):

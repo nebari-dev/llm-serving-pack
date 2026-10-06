@@ -74,8 +74,9 @@ func (s *Store) Seed(ctx context.Context) (bool, error) {
 		if k.Status == "revoked" {
 			revokedAt = &now
 		}
-		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status, revoked_at)
-		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		// Seeded keys belong to the dev user, like keys made before sign-in.
+		b.Queue(`INSERT INTO api_keys (id, tenant_id, name, prefix, hash, team_id, project_id, allowed_models, allowed_regions, expires_at, status, revoked_at, owner)
+		         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'dev@localhost')`,
 			k.ID, t, k.Name, k.Prefix, demo.HashSecret(demo.DevSecret(k.Prefix)), k.Team, k.ProjectID, k.AllowedModels, k.AllowedRegions, k.ExpiresAt, k.Status, revokedAt)
 	}
 	for _, r := range demo.Rules {

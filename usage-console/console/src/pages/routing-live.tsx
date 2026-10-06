@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { api, ApiError, type Backend, backends as seedBackends, type LiveRoute, liveRoutes, type RouteTarget, type RoutingPlan } from '@/data/catalog'
+import { api, ApiError, can, type Backend, backends as seedBackends, type LiveRoute, liveRoutes, type RouteTarget, type RoutingPlan } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -102,7 +102,7 @@ export function LiveRoutingPage() {
             <Button variant="outline" disabled={!plan.data} onClick={() => plan.data && download('routing.yaml', plan.data.yaml)}>
               <Download /> Export YAML
             </Button>
-            <Button onClick={() => setAdding(true)}>
+            <Button onClick={() => setAdding(true)} disabled={!can('routing').ok} title={can('routing').reason}>
               <Plus /> Add provider
             </Button>
           </>
@@ -186,7 +186,7 @@ function ApplyBar({ plan, onApplied }: { plan: RoutingPlan | null; onApplied: ()
             )}
           </p>
         </div>
-        <Button disabled={!n || !plan.canApply} title={plan.canApply ? undefined : plan.reason} onClick={() => setReviewing(true)}>
+        <Button disabled={!n || !plan.canApply || !can('routing').ok} title={can('routing').reason ?? (plan.canApply ? undefined : plan.reason)} onClick={() => setReviewing(true)}>
           {n ? `Review and apply ${plural(n, 'change')}` : 'Review and apply'}
         </Button>
       </div>
@@ -262,7 +262,7 @@ function ApplyDialog({ plan, onClose }: { plan: RoutingPlan; onClose: (applied: 
           <Button variant="outline" disabled={busy} onClick={() => onClose(false)}>
             {error ? 'Close' : 'Cancel'}
           </Button>
-          <Button onClick={apply} loading={busy} loadingText="Applying… the gateway is restarting">
+          <Button onClick={apply} loading={busy} loadingText="Applying… the gateway is restarting" disabled={!can('routing').ok} title={can('routing').reason}>
             {error?.title.startsWith('The gateway') ? 'Retry' : 'Apply to gateway'}
           </Button>
         </DialogFooter>
@@ -325,7 +325,7 @@ function RoutesList({
         <p className="text-xs text-muted-foreground">
           {loaded ? plural(routes.length, 'route') : 'Loading routes…'}. The gateway tries the rule with the most header conditions first; among equals, the first in this list.
         </p>
-        <Button size="sm" onClick={onNew}>
+        <Button size="sm" onClick={onNew} disabled={!can('routing').ok} title={can('routing').reason}>
           <Plus /> New route
         </Button>
       </div>
@@ -339,7 +339,7 @@ function RoutesList({
                 <SyncStateIndicator state={r.sync} />
                 {r.captureContent && <CaptureMarker />}
                 <div className="ml-auto flex gap-1">
-                  <Button variant="ghost" size="xs" aria-label={`Edit ${r.name}`} onClick={() => onEdit(r)}>
+                  <Button variant="ghost" size="xs" aria-label={`Edit ${r.name}`} disabled={!can('routing').ok} title={can('routing').reason} onClick={() => onEdit(r)}>
                     <Pencil /> Edit route
                   </Button>
                   <Button variant="ghost" size="xs" onClick={() => setYamlFor(r)}>
@@ -348,7 +348,7 @@ function RoutesList({
                   <Button variant="outline" size="xs" onClick={() => download(`${r.name}.yaml`, r.yaml)}>
                     <Download /> Export
                   </Button>
-                  <Button variant="ghost" size="icon-xs" aria-label={`Delete ${r.name}`} onClick={() => setDeleting(r)}>
+                  <Button variant="ghost" size="icon-xs" aria-label={`Delete ${r.name}`} disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setDeleting(r)}>
                     <Trash2 />
                   </Button>
                 </div>
@@ -633,7 +633,7 @@ function RouteEditor({ route, backends, onClose }: { route?: LiveRoute; backends
               <Button variant="outline" type="button" onClick={() => onClose(false)}>
                 Cancel
               </Button>
-              <Button type="submit" loading={busy} loadingText="Saving…" disabled={!!stale}>
+              <Button type="submit" loading={busy} loadingText="Saving…" disabled={!!stale || !can('routing').ok} title={can('routing').reason}>
                 {route ? 'Save' : 'Create route'}
               </Button>
             </div>
@@ -680,7 +680,7 @@ function DeleteRouteDialog({ route, onClose }: { route: LiveRoute; onClose: (del
           <Button variant="outline" type="button" onClick={() => onClose(false)}>
             Keep route
           </Button>
-          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…">
+          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…" disabled={!can('routing').ok} title={can('routing').reason}>
             Delete route
           </Button>
         </DialogFooter>
@@ -836,15 +836,15 @@ function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: bool
         </dl>
       </DrawerBody>
       <DrawerFooter className="flex-wrap">
-        <Button variant="outline" onClick={() => setDialog('edit')}>
+        <Button variant="outline" disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setDialog('edit')}>
           <Pencil /> Edit provider
         </Button>
         {e && (
           <>
-            <Button variant="outline" onClick={() => setDialog('key')}>
+            <Button variant="outline" disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setDialog('key')}>
               <KeyRound /> Replace key
             </Button>
-            <Button variant="outline" onClick={test} loading={testing} loadingText="Testing…">
+            <Button variant="outline" onClick={test} loading={testing} loadingText="Testing…" disabled={!can('routing').ok} title={can('routing').reason}>
               Test connection
             </Button>
           </>
@@ -854,7 +854,7 @@ function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: bool
             <FileCode /> View generated YAML
           </Button>
         )}
-        <Button variant="ghost" onClick={() => setDialog('delete')}>
+        <Button variant="ghost" disabled={!can('routing').ok} title={can('routing').reason} onClick={() => setDialog('delete')}>
           <Trash2 /> Delete provider
         </Button>
       </DrawerFooter>

@@ -83,7 +83,7 @@ func (s *Server) setPassthrough(_ http.ResponseWriter, r *http.Request, t string
 	if on {
 		action = "Turned on Warden pass-through"
 	}
-	err = s.Store.Audited(r.Context(), t, s.DevActor, action, "Warden", "Kill switch",
+	err = s.Store.Audited(r.Context(), t, actor(r), action, "Warden", "Kill switch",
 		map[string]bool{"passthrough": h.Passthrough}, map[string]bool{"passthrough": on},
 		func() error {
 			if err := s.setWardenPassthrough(r.Context(), on); err != nil {

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, type KeyRotation, budgetLabel, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
+import { type ApiKey, type KeyRotation, budgetLabel, canManageKey, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
@@ -566,7 +566,8 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               </Button>
               <Button
                 variant="outline"
-                disabled={busy || extendTooFar}
+                disabled={busy || extendTooFar || !canManageKey(k).ok}
+                title={canManageKey(k).reason}
                 onClick={() =>
                   write('Could not extend overlap', async () => {
                     const next = await extendRotation(k, 24)
@@ -582,7 +583,7 @@ export function RotateKeyDialog({ apiKey, onOpenChange, onRotate }: { apiKey: Ap
               >
                 Extend overlap 24h
               </Button>
-              <Button variant="destructive" disabled={busy} onClick={() => setRetiring(true)}>
+              <Button variant="destructive" disabled={busy || !canManageKey(k).ok} title={canManageKey(k).reason} onClick={() => setRetiring(true)}>
                 Retire old secret now
               </Button>
             </DialogFooter>

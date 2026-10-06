@@ -12,6 +12,7 @@ import { toast } from '@/components/ui/toast'
 import {
   api,
   ApiError,
+  can,
   cancelPairPrice,
   decidePriceProposal,
   type PairPrice,
@@ -113,7 +114,7 @@ export function PricingLive() {
             Source file
           </a>
         )}
-        <Button variant="outline" size="sm" className="ml-auto" onClick={syncNow} disabled={syncing}>
+        <Button variant="outline" size="sm" className="ml-auto" onClick={syncNow} disabled={syncing || !can('prices').ok} title={can('prices').reason}>
           <RefreshCw className={cn(syncing && 'animate-spin')} /> Sync now
         </Button>
       </div>
@@ -139,10 +140,10 @@ export function PricingLive() {
                   override <Money value={p.current} precision="micro" />, LiteLLM now <Money value={p.proposed} precision="micro" /> / 1M
                 </span>
                 <span className="ml-auto flex gap-2">
-                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => act(`d${p.id}`, () => decidePriceProposal(p.id, 'dismiss'), 'Kept the override')}>
+                  <Button size="sm" variant="outline" disabled={busy !== null || !can('prices').ok} title={can('prices').reason} onClick={() => act(`d${p.id}`, () => decidePriceProposal(p.id, 'dismiss'), 'Kept the override')}>
                     Dismiss
                   </Button>
-                  <Button size="sm" disabled={busy !== null} onClick={() => act(`a${p.id}`, () => decidePriceProposal(p.id, 'accept'), 'Following LiteLLM again')}>
+                  <Button size="sm" disabled={busy !== null || !can('prices').ok} title={can('prices').reason} onClick={() => act(`a${p.id}`, () => decidePriceProposal(p.id, 'accept'), 'Following LiteLLM again')}>
                     Accept
                   </Button>
                 </span>
@@ -188,7 +189,7 @@ export function PricingLive() {
                 <td className={cn(td, 'num font-mono text-xs whitespace-nowrap')}>{p.effectiveFrom ?? '—'}</td>
                 <td className={cn(td, 'font-mono text-xs')}>{p.litellmKey ?? <span className="font-sans text-muted-foreground">None</span>}</td>
                 <td className={cn(td, 'pr-6 text-right')}>
-                  <Button variant="ghost" size="sm" onClick={() => setEditing(p)} aria-label={`Edit price for ${p.model} on ${p.backend}`}>
+                  <Button variant="ghost" size="sm" disabled={!can('prices').ok} title={can('prices').reason} onClick={() => setEditing(p)} aria-label={`Edit price for ${p.model} on ${p.backend}`}>
                     <Pencil /> Edit
                   </Button>
                 </td>
@@ -289,7 +290,7 @@ function ChangesTable({ changes, loaded, busy, onCancel }: { changes: PriceChang
               <td className="py-2 pr-3 text-xs text-muted-foreground">{c.source ? sourceLabel[c.source] : 'Ended'}</td>
               <td className="py-2 text-right">
                 {showCancel && (
-                  <Button variant="ghost" size="sm" disabled={busy !== null} onClick={() => onCancel(c)}>
+                  <Button variant="ghost" size="sm" disabled={busy !== null || !can('prices').ok} title={can('prices').reason} onClick={() => onCancel(c)}>
                     Cancel
                   </Button>
                 )}

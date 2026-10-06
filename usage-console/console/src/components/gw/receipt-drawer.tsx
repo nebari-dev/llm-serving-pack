@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { API_BASE, api as apiCall, ApiError, changes, dataMode, downloadSignedExport, type PriceSource, type Receipt } from '@/data/catalog'
+import { API_BASE, api as apiCall, ApiError, can, changes, dataMode, downloadSignedExport, type PriceSource, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
@@ -413,7 +413,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
                   <p className="text-sm text-muted-foreground-strong">
                     Content was stored for this request (backend <span className="font-mono">{r.backend}</span> captures it). Revealing it writes an audit record naming you first.
                   </p>
-                  <Button variant="outline" size="sm" onClick={reveal} disabled={busy === 'reveal'} data-print-hide>
+                  <Button variant="outline" size="sm" onClick={reveal} disabled={busy === 'reveal' || !can('capture').ok} title={can('capture').reason} data-print-hide>
                     <Eye /> {busy === 'reveal' ? 'Revealing…' : 'Reveal content'}
                   </Button>
                 </div>

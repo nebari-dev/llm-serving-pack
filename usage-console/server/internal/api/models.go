@@ -49,7 +49,7 @@ func (s *Server) putAlias(w http.ResponseWriter, r *http.Request, t string) (any
 	if err := store.ValidateAlias(alias, in.Target, ids); err != nil {
 		return nil, badRequest(err.Error())
 	}
-	if err := s.Store.PutAlias(r.Context(), t, s.DevActor, alias, in.Target, match, create); err != nil {
+	if err := s.Store.PutAlias(r.Context(), t, actor(r), alias, in.Target, match, create); err != nil {
 		return nil, err
 	}
 	s.configChanged()
@@ -62,7 +62,7 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request, t string) (
 		return nil, err
 	}
 	alias := r.PathValue("alias")
-	if err := s.Store.DeleteAlias(r.Context(), t, s.DevActor, alias, m); err != nil {
+	if err := s.Store.DeleteAlias(r.Context(), t, actor(r), alias, m); err != nil {
 		return nil, err
 	}
 	s.configChanged()

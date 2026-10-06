@@ -494,8 +494,9 @@ retire-old-secret-now are in.
 
 ## 7. Cross-cutting
 
-- **Auth and roles (decided 2026-10-05, not built).** Every write still acts
-  as `dev@localhost` and no role is enforced yet.
+- **Auth and roles (decided 2026-10-05, built 2026-10-06).** Writes act as
+  the signed-in user and every write checks the table below. Dev mode (no
+  `-oidc-issuer`) is unchanged: everyone is `dev@localhost`, owner.
   - Roles are the spec's (§5.2): `owner | admin | editor | viewer | finance |
     security`. They come from Keycloak groups in the OIDC token (the `groups`
     claim, as llm-serving-pack uses in realm `nebari`), not from roles
@@ -519,6 +520,63 @@ retire-old-secret-now are in.
     `owner` can do everything. A denied write is a 403 naming the roles
     that may do it (spec §7.6 "Permission denied"), and the console shows
     those controls disabled with that reason.
+  - What's built (2026-10-06):
+    - Sign-in is a backend-for-frontend: the control plane runs the
+      authorization code flow with PKCE as a confidential client, validates
+      the ID token (JWKS signature, issuer, audience, expiry, nonce) and
+      keeps it in an HttpOnly, SameSite=Lax cookie, renewed with the refresh
+      token. Chosen over PKCE in the browser because the console's SSE
+      stream is an `EventSource`, which can't send an `Authorization`
+      header (the token would go in the URL, into logs), and downloads
+      (exports, the close report PDF) would need the same workaround; and
+      because no token is then readable by script. Vite proxies `/api`, so
+      the cookie is same-origin with no CORS. Bearer access tokens are
+      accepted too, for scripts. Validation is our own code on the standard
+      library (`internal/auth`, about 250 lines: RS256, PS256, ES256; `none`
+      and HMAC refused), not a dependency.
+    - Groups map to roles by name: `stargate-<role>` (the
+      `-oidc-group-prefix`), full path or not. Nebari's own groups (`admin`,
+      `developer`) grant nothing, so a Nebari admin isn't a Stargate admin
+      by accident.
+    - `users` (migration 055) caches each member's email, name and roles
+      from their last token, with first and last seen; Settings → Members
+      lists it and links to Keycloak's groups page for changes.
+    - Keys have an owner (`api_keys.owner`), whoever created them. Existing
+      keys got the actor of their "Created key" audit row, else
+      `dev@localhost`: every write before sign-in was made as
+      `dev@localhost`, so that's accurate. Once people sign in nobody is
+      `dev@localhost`, so those keys are managed by admins only. There's no
+      transfer of ownership.
+    - The table lives in `internal/api/authz.go` (`routeActions`); a test
+      fails when a write route has no entry, and at run time one without is
+      owner-only. `GET /session` returns `permissions` (per action: allowed,
+      and which roles may), which the console disables controls from.
+    - A local Keycloak (`make keycloak`, compose profile `auth`, :8180)
+      imports realm `nebari` with the client, a group per role and a test
+      user in each (server/README.md).
+  - Defaults I picked, to confirm:
+    - Writes the table doesn't name: projects (create, rename, delete) are
+      editor, finance and admin; reordering and deleting rules are with
+      publishing (security, admin), since both change what's enforced;
+      providers, provider keys, connection tests and routing apply are
+      "aliases and routing" (editor, admin); price sync now, sources and
+      proposals are prices (admin).
+    - Reveal content is "capture" (security, admin). Receipt exports, the
+      close report and the onboarding gateway test (it uses the caller's own
+      gateway key) are reads: every role.
+    - Creating a key needs any role, viewer included, as "own keys" reads.
+      Say if viewers shouldn't mint keys.
+    - Someone signed in with no Stargate group reads nothing (403), but
+      `/session` answers, so the console can say who to ask. The alternative
+      is everyone in the realm being a viewer.
+    - The session cookie is a browser-session cookie holding the ID token
+      (about 1.2KB); Keycloak's SSO session (realm settings) bounds how long
+      refresh works. A refresh failure clears the cookies and the console
+      signs in again.
+  - Not built: service accounts with scoped tokens for CI (spec §6; a
+    Keycloak client-credentials token with a `stargate-*` group would work
+    as Bearer today), an audit row for sign-in itself, and changing roles
+    from Stargate (by decision: Keycloak is the source).
 - **If-Match is required (decided 2026-09-30).** Updating or deleting an
   alias, budget or rule without `If-Match` is a 428; a stale one is a 409
   with the current resource. Creating an alias with `PUT` takes
@@ -528,7 +586,7 @@ retire-old-secret-now are in.
   2026-10-05). Replacing a provider key follows them (no If-Match, my
   default); editing or deleting a backend takes If-Match like a route.
   Provider writes ("Aliases and routing" in the table above) are editor and
-  admin once roles exist.
+  admin (enforced since 2026-10-06).
   - Price writes will require `If-Match` too (decided 2026-10-05, not
     built). Two editors changing the same rate concurrently has happened.
 - **PDFs are written by `internal/pdf`, our own (2026-10-06, my default).**
@@ -596,6 +654,7 @@ retire-old-secret-now are in.
     effect for an export, and the drawer would call it the config change
     before a request. Open: show them on a page (an Access filter on
     Activity, or Settings).
-  - Reveal and export need roles once auth exists (§9.2 says capture needs
-    an elevated role; reveal and export are not in the table above yet).
-    Today everyone is `dev@localhost`.
+  - Roles (2026-10-06, my default, see Auth and roles above): reveal is
+    "capture" (security, admin), as §9.2 asks an elevated role for content;
+    export is a read (every role), since it hands out what the caller can
+    already see, audited under their name.

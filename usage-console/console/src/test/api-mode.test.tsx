@@ -120,6 +120,58 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(catalog.budgets.find((b) => b.id === 'b3')).toMatchObject({ scopeType: 'key', scope: 'k3', scopeName: 'batch-summarize' })
   })
 
+  // The suite runs without an IdP (dev mode): every caller is dev@localhost,
+  // owner, with nothing to sign in to (backend-decisions §7).
+  it('reports the dev user as owner, allowed everything, in dev mode', async () => {
+    type S = import('@/data/catalog').Session
+    const s = await catalog.api<S>('/session')
+    expect(s.actor).toMatchObject({ email: 'dev@localhost', roles: ['owner'], role: 'owner', authenticated: false })
+    expect(s.auth.mode).toBe('dev')
+    expect(s.auth.signOutUrl).toBeUndefined()
+    const actions = ['read', 'rules.draft', 'rules.publish', 'killswitch', 'capture', 'prices', 'budgets', 'routing', 'projects', 'keys.own', 'keys.any', 'members'] as const
+    for (const a of actions) expect(s.permissions[a], a).toMatchObject({ allowed: true })
+    // Who else may: owner is implicit and never listed.
+    expect(s.permissions['rules.publish'].roles).toEqual(['admin', 'security'])
+    expect(s.permissions.prices.roles).toEqual(['admin'])
+    expect(s.permissions.members.roles).toEqual([])
+    for (const a of actions) expect(catalog.can(a)).toEqual({ ok: true })
+  })
+
+  it('lists the dev user under members, and gives keys an owner', async () => {
+    type M = import('@/data/catalog').Member
+    type K = import('@/data/catalog').WireKey
+    const members = await catalog.api<M[]>('/members')
+    expect(members.find((m) => m.email === 'dev@localhost')).toMatchObject({ roles: ['owner'] })
+    for (const m of members) expect(m.lastSeenAt).toBeGreaterThanOrEqual(m.firstSeenAt)
+
+    // Seeded keys, and keys made before sign-in, belong to dev@localhost.
+    const keys = await catalog.api<K[]>('/keys')
+    for (const k of keys) expect(typeof k.owner).toBe('string')
+    expect(keys.find((k) => k.id === 'k1')?.owner).toBe('dev@localhost')
+    const { key } = await catalog.api<{ key: K }>('/keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: `api-mode-test-${Date.now().toString(36)}`, team: catalog.teams[0].id, project: 'api-mode-test', allowedModels: [catalog.models[0].id], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }),
+    })
+    try {
+      expect(key.owner).toBe('dev@localhost')
+      expect(catalog.canManageKey(key)).toEqual({ ok: true })
+    } finally {
+      await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
+    }
+
+    // Settings → Members lists the cache, and says there's no IdP.
+    window.history.pushState({}, '', '/settings')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const table = await screen.findByRole('table', { name: 'Members' })
+    const row = within(table).getByText('dev@localhost').closest('tr')!
+    expect(row.textContent).toContain('owner')
+    expect(document.body.textContent).toContain('No identity provider is configured (dev mode)')
+    expect(document.body.textContent).not.toContain('Members aren’t connected yet')
+  })
+
   const routes = ['/', '/traffic', '/spend', '/models', '/routing', '/guardrails', '/keys', '/keys?key=k1', '/activity', '/settings', '/onboarding', '/guardrails?rule=r3', '/routing?tab=backends']
   for (const route of routes) {
     it(`renders ${route}`, async () => {

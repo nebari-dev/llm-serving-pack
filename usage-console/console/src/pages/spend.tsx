@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgetLabel, budgets, dataMode, syncBudgets, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { type Budget, budgetLabel, budgets, can, dataMode, syncBudgets, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
 import { downloadText, spendCsv } from '@/lib/csv'
 import { int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -279,7 +279,7 @@ export function SpendPage() {
             : 'Monthly caps, UTC.'
         }
         actions={
-          <Button variant="outline" disabled={!liveBudgets.loaded} onClick={() => setEditing('new')}>
+          <Button variant="outline" disabled={!liveBudgets.loaded || !can('budgets').ok} title={can('budgets').reason} onClick={() => setEditing('new')}>
             Add budget
           </Button>
         }
@@ -650,10 +650,10 @@ function BudgetTable({
                 </div>
               </TableCell>
               <TableCell className="py-2 text-right whitespace-nowrap">
-                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${budgetLabel(b)}`} title="Edit cap or action" onClick={() => onEdit(b)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${budgetLabel(b)}`} title={can('budgets').reason ?? 'Edit cap or action'} disabled={!can('budgets').ok} onClick={() => onEdit(b)}>
                   <Pencil />
                 </Button>
-                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${budgetLabel(b)}`} title="Delete budget" onClick={() => onDelete(b)}>
+                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${budgetLabel(b)}`} title={can('budgets').reason ?? 'Delete budget'} disabled={!can('budgets').ok} onClick={() => onDelete(b)}>
                   <Trash2 />
                 </Button>
               </TableCell>

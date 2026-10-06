@@ -50,6 +50,8 @@ export interface ApiKey {
   unpriced24h?: number
   status: 'active' | 'revoked' | 'rotating'
   rotation?: KeyRotation
+  /** Who created it: they may revoke, rotate, extend and finish it; anyone else needs admin. */
+  owner: string
 }
 
 /** A rotating key's overlap window. Null where it wasn't recorded. */
@@ -413,7 +415,7 @@ export const routes: Route[] = [
   { name: 'research-frontier', match: 'key.team = research', targets: [{ model: 'claude-opus-4-1', backend: 'anthropic-prod', weight: 100 }], fallback: ['openai-prod'], provenance: 'console', sync: 'applying' },
 ]
 
-type SeedKey = Omit<ApiKey, 'hourly24h' | 'projectId'>
+type SeedKey = Omit<ApiKey, 'hourly24h' | 'projectId' | 'owner'>
 
 const seedKeys: SeedKey[] = [
   { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
@@ -440,7 +442,9 @@ function hourly(k: SeedKey) {
 /** A mock project's id. The control plane derives its own (demo.ProjectID). */
 export const mockProjectId = (team: string, name: string) => `p-${team}-${name}`
 
-export const keys: ApiKey[] = seedKeys.map((k) => ({ ...k, projectId: mockProjectId(k.team, k.project), hourly24h: hourly(k) }))
+// Mock keys have a few owners, so the Keys page shows whose each is.
+const mockKeyOwners: Record<string, string> = { k2: 'marco@acme.dev', k3: 'sam@acme.dev', k6: 'marco@acme.dev' }
+export const keys: ApiKey[] = seedKeys.map((k) => ({ ...k, projectId: mockProjectId(k.team, k.project), hourly24h: hourly(k), owner: mockKeyOwners[k.id] ?? 'priya@acme.dev' }))
 
 /** The seeded keys' projects, one per team and name. */
 export const projects: Project[] = [...new Map(keys.map((k) => [k.projectId, { id: k.projectId, team: k.team, name: k.project }])).values()]
@@ -1005,11 +1009,25 @@ export const degradations: Degradation[] = [
   },
 ]
 
+/** A kind of write the role table governs (server/internal/api/authz.go). */
+export type Action = 'read' | 'rules.draft' | 'rules.publish' | 'killswitch' | 'capture' | 'prices' | 'budgets' | 'routing' | 'projects' | 'detectors' | 'keys.own' | 'keys.any' | 'members'
+export const actions: Action[] = ['read', 'rules.draft', 'rules.publish', 'killswitch', 'capture', 'prices', 'budgets', 'routing', 'projects', 'detectors', 'keys.own', 'keys.any', 'members']
+
+/** Whether the caller may do an action, and which roles may (owner always may and isn't listed; none listed is owner only). */
+export interface Permission {
+  allowed: boolean
+  roles: string[]
+}
+
 // Where the console is and who's using it (GET /session in api mode).
 export interface Session {
   tenant: { id: string; name: string }
   environment: string
-  actor: { email: string; name?: string; role?: string; authenticated: boolean }
+  /** roles come from the token's Keycloak groups, most powerful first; role is the first. */
+  actor: { email: string; name?: string; role?: string; roles: string[]; authenticated: boolean }
+  /** dev: no IdP, every caller is the dev user (owner); oidc: people sign in with Keycloak. */
+  auth: { mode: 'dev' | 'oidc'; signInUrl?: string; signOutUrl?: string; accountUrl?: string; groupsUrl?: string; groupPrefix?: string }
+  permissions: Record<Action, Permission>
   versions: { controlPlane: string }
   /** null when the control plane doesn't know where Warden is. */
   warden: { connected: boolean; version?: string; snapshotAgeSeconds?: number; passthrough: boolean } | null
@@ -1020,7 +1038,10 @@ export interface Session {
 export const session: Session = {
   tenant: { id: 'acme', name: 'acme' },
   environment: 'production',
-  actor: { email: 'priya@acme.dev', name: 'Priya Shah', role: 'admin', authenticated: true },
+  actor: { email: 'priya@acme.dev', name: 'Priya Shah', role: 'admin', roles: ['admin'], authenticated: true },
+  auth: { mode: 'oidc', signOutUrl: '/api/auth/logout', groupsUrl: 'https://keycloak.acme.dev/admin/master/console/#/nebari/groups', groupPrefix: 'stargate-' },
+  // The mock admin may do everything the demo shows.
+  permissions: Object.fromEntries(actions.map((a): [Action, Permission] => [a, { allowed: true, roles: [] }])) as Record<Action, Permission>,
   versions: { controlPlane: '0.1' },
   warden: { connected: true, version: '0.4.2', snapshotAgeSeconds: 252, passthrough: false },
 }
@@ -1202,13 +1223,22 @@ export const providerKeys = [
   { backend: 'vllm-internal', provider: 'Self-hosted', auth: 'mTLS (cert-manager)', prefix: 'CN=gw-vllm', lastTested: '2026-09-20', rotateBy: '2026-11-20', oidc: true },
 ]
 
-export const members = [
-  { name: 'Priya Shah', email: 'priya@acme.dev', role: 'admin', last: 'now' },
-  { name: 'Dana Okafor', email: 'dana@acme.dev', role: 'finance', last: '2h ago' },
-  { name: 'Marco Rossi', email: 'marco@acme.dev', role: 'security', last: '5h ago' },
-  { name: 'Lee Tran', email: 'lee@acme.dev', role: 'owner', last: '3d ago' },
-  { name: 'Sam Patel', email: 'sam@acme.dev', role: 'editor', last: '1d ago' },
-  { name: 'ci-gitops', email: 'service account', role: 'viewer', last: '12m ago' },
+/** GET /members: who has used the console, with the roles their last sign-in's Keycloak groups gave them. */
+export interface Member {
+  email: string
+  name: string
+  roles: string[]
+  firstSeenAt: number
+  lastSeenAt: number
+}
+
+export const members: Member[] = [
+  { name: 'Priya Shah', email: 'priya@acme.dev', roles: ['admin'], firstSeenAt: NOW - 90 * 86_400_000, lastSeenAt: NOW },
+  { name: 'Dana Okafor', email: 'dana@acme.dev', roles: ['finance'], firstSeenAt: NOW - 60 * 86_400_000, lastSeenAt: NOW - 2 * 3_600_000 },
+  { name: 'Marco Rossi', email: 'marco@acme.dev', roles: ['security'], firstSeenAt: NOW - 80 * 86_400_000, lastSeenAt: NOW - 5 * 3_600_000 },
+  { name: 'Lee Tran', email: 'lee@acme.dev', roles: ['owner'], firstSeenAt: NOW - 120 * 86_400_000, lastSeenAt: NOW - 3 * 86_400_000 },
+  { name: 'Sam Patel', email: 'sam@acme.dev', roles: ['editor'], firstSeenAt: NOW - 30 * 86_400_000, lastSeenAt: NOW - 86_400_000 },
+  { name: 'ci-gitops', email: 'ci-gitops (service account)', roles: ['viewer'], firstSeenAt: NOW - 30 * 86_400_000, lastSeenAt: NOW - 12 * 60_000 },
 ]
 
 export const integrations = [

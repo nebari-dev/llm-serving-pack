@@ -75,7 +75,9 @@ for w in "${what[@]}"; do
       # needs aigw's path; without one it can diff routing but not apply it.
       restart_aigw=""
       if aigw_path=$(command -v "$AIGW"); then restart_aigw="AIGW=$aigw_path scripts/restart.sh aigw"; fi
-      nohup "$BIN/stargate-api" serve -warden http://localhost:8084 \
+      # STARGATE_API_FLAGS: more serve flags (make restart AUTH=oidc sets the sign-in ones).
+      # shellcheck disable=SC2086
+      nohup "$BIN/stargate-api" serve ${STARGATE_API_FLAGS:-} -warden http://localhost:8084 \
         -aigw-config "$AIGW_CONFIG" -aigw-restart "$restart_aigw" -aigw-log "tail -n 30 $LOGS/aigw.log" >>"$LOGS/stargate-api.log" 2>&1 &
       wait_up 8080 stargate-api; wait_up 8082 stargate-api ;;
     warden)

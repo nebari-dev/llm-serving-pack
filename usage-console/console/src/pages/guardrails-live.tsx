@@ -12,6 +12,7 @@ import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/
 import { toast } from '@/components/ui/toast'
 import {
   ApiError,
+  can,
   createRule,
   deleteRule,
   discardRuleDraft,
@@ -238,7 +239,7 @@ export function LiveGuardrailsPage() {
                 )}
               </ol>
               <div className="p-3">
-                <Button variant="ghost" size="sm" onClick={newRule} disabled={!!edits[NEW]}>
+                <Button variant="ghost" size="sm" onClick={newRule} disabled={!!edits[NEW] || !can('rules.draft').ok} title={can('rules.draft').reason}>
                   <Plus /> New rule
                 </Button>
               </div>
@@ -266,19 +267,19 @@ export function LiveGuardrailsPage() {
                     </Button>
                   )}
                   {view?.draft && view.version > 0 && !edit && (
-                    <Button variant="ghost" size="sm" onClick={() => setDialog('discard')}>
+                    <Button variant="ghost" size="sm" onClick={() => setDialog('discard')} disabled={!can('rules.draft').ok} title={can('rules.draft').reason}>
                       Discard draft
                     </Button>
                   )}
                   {view && !isNew && (
-                    <Button variant="ghost" size="sm" onClick={() => setDialog('delete')} disabled={isLive || busy}>
+                    <Button variant="ghost" size="sm" onClick={() => setDialog('delete')} disabled={isLive || busy || !can('rules.publish').ok} title={can('rules.publish').reason}>
                       <Trash2 /> Delete rule
                     </Button>
                   )}
-                  <Button variant="outline" size="sm" onClick={() => void save()} disabled={!dirty || busy || !draft?.failMode || !vocab.data || !!conflict}>
+                  <Button variant="outline" size="sm" onClick={() => void save()} disabled={!dirty || busy || !draft?.failMode || !vocab.data || !!conflict || !can('rules.draft').ok} title={can('rules.draft').reason}>
                     <Save /> Save draft
                   </Button>
-                  <Button size="sm" onClick={() => setDialog('publish')} disabled={!canPublish}>
+                  <Button size="sm" onClick={() => setDialog('publish')} disabled={!canPublish || !can('rules.publish').ok} title={can('rules.publish').reason}>
                     <Send /> Publish…
                   </Button>
                 </div>
@@ -374,10 +375,10 @@ function RuleRow({
   return (
     <li className="group/rule relative border-b border-border">
       <span className="absolute right-2 bottom-1.5 z-[1] flex gap-0.5 opacity-0 group-focus-within/rule:opacity-100 group-hover/rule:opacity-100">
-        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} up`} disabled={!onUp} onClick={onUp}>
+        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} up`} disabled={!onUp || !can('rules.publish').ok} title={can('rules.publish').reason} onClick={onUp}>
           <ArrowUp />
         </Button>
-        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} down`} disabled={!onDown} onClick={onDown}>
+        <Button variant="ghost" size="icon-xs" aria-label={`Move ${rule.name} down`} disabled={!onDown || !can('rules.publish').ok} title={can('rules.publish').reason} onClick={onDown}>
           <ArrowDown />
         </Button>
       </span>
@@ -651,7 +652,7 @@ function LiveVersions({ rule, onChanged }: { rule: RuleView | null; onChanged: (
         }
         actions={
           cur.version !== rule.version && (
-            <Button variant="outline" size="sm" onClick={() => setConfirm(true)}>
+            <Button variant="outline" size="sm" onClick={() => setConfirm(true)} disabled={!can('rules.publish').ok} title={can('rules.publish').reason}>
               <History /> Roll back to v{cur.version}
             </Button>
           )

@@ -27,6 +27,29 @@ services:
       interval: 2s
       retries: 30
 
+  # Console sign-in for development (opt-in: `make keycloak`, profile auth,
+  # so `make db` doesn't start it). Realm nebari, as llm-serving-pack uses,
+  # imported from keycloak/nebari-realm.json on first start: client
+  # stargate-console, a group per role (stargate-<role>) and a test user in
+  # each (password "stargate"). Admin console: http://localhost:8180/admin
+  # (admin / admin). Port 8180: 8080 is stargate-api.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    profiles: [auth]
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: http://localhost:8180
+    ports: ["8180:8080"]
+    volumes: ["./keycloak/nebari-realm.json:/opt/keycloak/data/import/nebari-realm.json:ro"]
+    healthcheck:
+      # The image has no curl; ask the management port with bash.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 3s
+      retries: 60
+
 volumes:
   configdb:
   receiptsdb:

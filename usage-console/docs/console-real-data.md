@@ -10,8 +10,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
 
 ## 1. Read-only, from data we already have
 
-- [x] **Shell.** Tenant name, environment, signed-in identity (the dev actor
-  until OIDC), notification bell (from `/degradations`), version footer
+- [x] **Shell.** Tenant name, environment, signed-in identity and roles
+  (OIDC, or the dev actor in dev mode) with sign-out, notification bell (from `/degradations`), version footer
   (console, control plane, Warden). The env switch becomes a label: one
   control plane serves one environment.
 - [x] **Overview.** The status strip shows the age of the last receipt and
@@ -125,8 +125,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     (the mockup's "7 years" isn't a policy anywhere).
   - The capture route comes from routes.
   - Warden snapshot age, from `/session`.
-  - Providers, members, and the OTel/Argo CD/Keycloak integrations say
-    they aren't connected yet. The kill-switch dialog's 24h blocked and
+  - Members come from `GET /members` (2026-10-06). Providers and the
+    OTel/Argo CD integrations say they aren't connected yet. The kill-switch dialog's 24h blocked and
     redacted counts come from `/summary`.
 - [x] **Models.**
   - Aliases from `model_aliases`, with 24h request counts (GET /aliases).
@@ -471,7 +471,25 @@ when stale; 428 without it on an update or delete). Open questions are in
     an OpenAI-style call to the same provider still gets a chat completion.
     OpenAI-style callers to Anthropic's native API stay impossible: aigw
     v1.1.0 has no translator for it (backend-decisions §6).
-- [ ] Members and auth (OIDC), sign-out.
+- [x] Members and auth (OIDC), sign-out (2026-10-06, decisions §7).
+  - Sign-in goes through the control plane (authorization code + PKCE,
+    session in an HttpOnly cookie; `GET /api/auth/login`, `/callback`,
+    `POST /api/auth/logout`), against Keycloak realm `nebari`. A 401
+    sends the console to the login and back to the same page. Sign out
+    ends the Keycloak session too.
+  - Roles come from the token's `stargate-<role>` groups. Every write
+    checks them (403 "Needs role …"); `GET /session` reports the user, roles
+    and per-action `permissions`, and the console disables what the user
+    can't do with "Needs role X". Key writes need the key's owner (new
+    `owner` on keys) or admin.
+  - Settings → Members lists `GET /members` (the `users` cache: who signed
+    in, with their last roles) and links to Keycloak's groups page, where
+    roles are assigned.
+  - Dev mode (no `-oidc-issuer`, the default for `make dev`, the test stack
+    and the api-mode suite) is unchanged: `dev@localhost`, owner, no
+    sign-in. `make keycloak` + `make dev AUTH=oidc` runs a local Keycloak
+    with a test user per role (server/README.md).
+  - Not built: service accounts for CI, ownership transfer for keys.
 - [ ] Routing reconciler: drift, adopt, provenance, reconcile events over
   SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership
   questions are answered: docs/llm-serving-pack-survey.md), and a

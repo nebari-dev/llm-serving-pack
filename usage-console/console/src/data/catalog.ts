@@ -124,7 +124,7 @@ export const seedChangeImpacts: Record<string, ChangeImpact> = dataMode === 'api
 export const seedActivityReadouts: typeof mock.activityReadouts = dataMode === 'api' ? {} : mock.activityReadouts
 /** Settings fixtures; api mode has no backend for these yet. */
 export const seedProviderKeys = dataMode === 'api' ? [] : mock.providerKeys
-export const seedMembers = dataMode === 'api' ? [] : mock.members
+export const seedMembers: mock.Member[] = dataMode === 'api' ? [] : mock.members
 export const seedIntegrations = dataMode === 'api' ? [] : mock.integrations
 export const seedRetention: mock.RetentionView | null = dataMode === 'api' ? null : mock.retention
 export const seedActivityEvents: mock.TrafficEvent[] = dataMode === 'api' ? [] : mock.activityEvents
@@ -156,9 +156,51 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
-    throw new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`, body?.current)
+    const err = new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`, body?.current)
+    if (err.status === 401 && err.code === 'unauthenticated' && signedIn) signIn(body?.error?.loginUrl)
+    throw err
   }
   return res.json() as Promise<T>
+}
+
+// ---- sign-in and roles (backend-decisions §7) ------------------------------
+// With an IdP the control plane signs the console in (OIDC code flow, an
+// HttpOnly session cookie); without one (dev mode) every caller is the dev
+// user, owner. Roles come from Keycloak groups; GET /session says which
+// actions the caller may do, and the console disables the rest.
+
+/** Set once hydrate() has a session: a later 401 means it expired mid-use. */
+let signedIn = false
+
+/** Sends the browser to Keycloak (via the control plane), coming back to where it is now. */
+export function signIn(loginUrl = '/api/auth/login') {
+  const next = window.location.pathname + window.location.search
+  window.location.assign(`${loginUrl}?next=${encodeURIComponent(next)}`)
+}
+
+/** Ends the console session and Keycloak's, then lands back on the console. */
+export async function signOut() {
+  const res = await fetch(session.auth.signOutUrl ?? '/api/auth/logout', { method: 'POST' })
+  const body = (await res.json().catch(() => null)) as { redirect?: string } | null
+  window.location.assign(body?.redirect ?? '/')
+}
+
+/** "admin or security" */
+const orList = (xs: string[]) => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`)
+
+/** Whether the caller may do `action`; if not, why, in spec §7.6's words ("Needs role admin or finance"). Mock mode may do everything. */
+export function can(action: mock.Action): { ok: boolean; reason?: string } {
+  if (dataMode !== 'api') return { ok: true }
+  const p = session.permissions?.[action]
+  if (!p || p.allowed) return { ok: true }
+  return { ok: false, reason: `Needs role ${p.roles.length ? orList(p.roles) : 'owner'}` }
+}
+
+/** Whether the caller may revoke, rotate, extend or finish `k`: its owner, or admin. */
+export function canManageKey(k: Pick<ApiKey, 'owner'>): { ok: boolean; reason?: string } {
+  if (dataMode !== 'api' || k.owner === session.actor.email) return { ok: true }
+  const any = can('keys.any')
+  return any.ok ? any : { ok: false, reason: `${any.reason}: this key belongs to ${k.owner}` }
 }
 
 /** What a signed export (§5.1, §9.2) downloaded: the zip's name, how many receipts and the key that signed them. */
@@ -257,10 +299,41 @@ export const fromWire = (k: WireKey): ApiKey => ({ ...k, lastUsed: k.lastUsedAt 
 
 const index = <T,>(xs: T[], id: (x: T) => string) => Object.fromEntries(xs.map((x) => [id(x), x]))
 
+/** hydrate() sent the browser to sign in; nothing to render meanwhile. */
+export class SigningIn extends Error {
+  constructor() {
+    super('Signing in…')
+  }
+}
+
+/** Signed in, but in no Stargate group: every read is refused. */
+export class NoRole extends Error {
+  readonly session: Session
+  constructor(s: Session) {
+    super(`${s.actor.email} has no Stargate role`)
+    this.session = s
+  }
+}
+
 /** Loads the catalog from the control plane. A no-op in mock mode. */
 export async function hydrate() {
   if (dataMode !== 'api') return
-  const [t, pr, m, b, r, k, bu, ru, rc, ts, ss, ch, se] = await Promise.all([
+  // Who's asking first: not signed in goes to Keycloak, and someone with no
+  // Stargate role can't read the rest.
+  let se: Session
+  try {
+    se = await api<Session>('/session')
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      signIn()
+      throw new SigningIn()
+    }
+    throw e
+  }
+  session = se
+  signedIn = true
+  if (!se.actor.roles?.length) throw new NoRole(se)
+  const [t, pr, m, b, r, k, bu, ru, rc, ts, ss, ch] = await Promise.all([
     api<Team[]>('/teams'),
     api<Project[]>('/projects'),
     api<Model[]>('/models'),
@@ -273,7 +346,6 @@ export async function hydrate() {
     api<SeriesPoint[]>('/series/traffic?range=24h'),
     api<SpendPoint[]>('/series/spend?days=30'),
     api<Change[]>('/changes'),
-    api<Session>('/session'),
   ])
   teams = t
   projects = pr
@@ -289,7 +361,6 @@ export async function hydrate() {
   trafficSeries = ts
   spendSeries = ss
   changes = ch
-  session = se
   const loadedAt = Date.now()
   now = () => loadedAt
 }
@@ -336,6 +407,7 @@ export async function createKey(input: NewKeyInput): Promise<{ key: ApiKey; secr
     requests24h: 0,
     hourly24h: Array(24).fill(0),
     status: 'active',
+    owner: session.actor.email,
   }
   return { key, secret }
 }

@@ -1,6 +1,6 @@
 # Local dev loop for the control plane. `make dev` starts everything; the
 # console then runs with `cd ../console && npm run dev:api`.
-.PHONY: db db-down migrate backfill api gateway upstream traffic ingest warden aigw dev dev-aigw test restart test-db test-stack test-stack-restart test-stack-down test-stack-reset
+.PHONY: db db-down migrate backfill api keycloak keycloak-down dev-oidc gateway upstream traffic ingest warden aigw dev dev-aigw test restart test-db test-stack test-stack-restart test-stack-down test-stack-reset
 
 # Agent Router CLI: https://github.com/theagentrouter/agent-router/releases
 AIGW ?= aigw
@@ -22,7 +22,27 @@ backfill: db
 	go run ./cmd/stargate-api backfill -days 7 -per-day 3000
 
 api:
-	go run ./cmd/stargate-api serve
+	go run ./cmd/stargate-api serve $(API_FLAGS)
+
+# Console sign-in against the local Keycloak (compose profile auth, :8180,
+# realm nebari). AUTH=oidc on api, dev, dev-aigw or restart signs the console
+# in with it (`make keycloak` first); without it, dev mode: everyone is
+# dev@localhost, owner. `make dev-oidc` is both. The console runs with
+# `npm run dev:api` either way.
+OIDC_FLAGS = -oidc-issuer http://localhost:8180/realms/nebari -oidc-client-id stargate-console -console-url http://localhost:5173
+ifeq ($(AUTH),oidc)
+API_FLAGS += $(OIDC_FLAGS)
+export STARGATE_OIDC_CLIENT_SECRET ?= stargate-dev-secret
+endif
+
+keycloak:
+	docker compose --profile auth up -d --wait keycloak
+
+keycloak-down:
+	docker compose --profile auth stop keycloak
+
+dev-oidc: keycloak
+	$(MAKE) dev AUTH=oidc
 
 gateway:
 	go run ./cmd/devgateway
@@ -51,7 +71,7 @@ aigw: tmp/aigw/config.yaml
 dev: migrate
 	@trap 'kill 0' INT TERM; \
 	go run ./cmd/fake-openai & \
-	go run ./cmd/stargate-api serve & \
+	go run ./cmd/stargate-api serve $(API_FLAGS) & \
 	sleep 2; go run ./cmd/devgateway & \
 	sleep 2; go run ./cmd/trafficgen & \
 	wait
@@ -66,7 +86,7 @@ dev-aigw: migrate tmp/aigw/config.yaml
 	@command -v $(AIGW) >/dev/null || { echo "aigw not found; install it or pass AIGW=/path/to/aigw"; exit 1; }
 	@trap 'kill 0' INT TERM; \
 	go run ./cmd/fake-openai & \
-	go run ./cmd/stargate-api serve -warden http://localhost:8084 -aigw-config tmp/aigw/config.yaml \
+	go run ./cmd/stargate-api serve $(API_FLAGS) -warden http://localhost:8084 -aigw-config tmp/aigw/config.yaml \
 	  -aigw-restart "AIGW=$$(command -v $(AIGW)) scripts/restart.sh aigw" -aigw-log "tail -n 30 tmp/aigw.log" & \
 	go run ./cmd/receipt-ingest & \
 	go run ./cmd/warden & \
@@ -78,7 +98,7 @@ dev-aigw: migrate tmp/aigw/config.yaml
 # port, without stopping the rest: WHAT is any of api warden ingest aigw.
 WHAT ?= api warden
 restart:
-	AIGW=$(AIGW) scripts/restart.sh $(WHAT)
+	AIGW=$(AIGW) STARGATE_API_FLAGS="$(API_FLAGS)" scripts/restart.sh $(WHAT)
 
 # A second stack on its own databases (stargate_test, receipts_test) for the
 # console's api-mode suite: api :9080, gateway :2975 (Agent Router in Docker).

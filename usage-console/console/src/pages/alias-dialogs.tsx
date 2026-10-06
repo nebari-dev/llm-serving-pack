@@ -6,7 +6,7 @@ import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type AliasView, api, ApiError, models } from '@/data/catalog'
+import { type AliasView, api, ApiError, can, models } from '@/data/catalog'
 
 // §7.4 alias writes (api mode). Create sends If-None-Match: *, edit and
 // delete the etag the row was read with; a 409 means someone else changed it.
@@ -110,7 +110,7 @@ export function AliasDialog({ alias, suggested, onClose }: { alias?: LiveAlias; 
             <Button variant="outline" type="button" onClick={() => onClose(null)}>
               Cancel
             </Button>
-            <Button type="submit" loading={busy} loadingText="Saving…">
+            <Button type="submit" loading={busy} loadingText="Saving…" disabled={!can('routing').ok} title={can('routing').reason}>
               {alias ? 'Save' : 'Create alias'}
             </Button>
           </DialogFooter>
@@ -157,7 +157,7 @@ export function DeleteAliasDialog({ alias, onClose }: { alias: LiveAlias; onClos
           <Button variant="outline" type="button" onClick={() => onClose(false)}>
             Keep alias
           </Button>
-          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…">
+          <Button variant="destructive" onClick={remove} loading={busy} loadingText="Deleting…" disabled={!can('routing').ok} title={can('routing').reason}>
             Delete alias
           </Button>
         </DialogFooter>

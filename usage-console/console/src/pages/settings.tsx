@@ -9,8 +9,8 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
-import { api, dataMode, liveRoutes, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
-import { age, int } from '@/lib/format'
+import { api, can, dataMode, liveRoutes, type Member, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
+import { age, ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
@@ -21,7 +21,7 @@ import { LiveProviderKeys } from './providers-live'
 // Against the control plane: retention is the receipts database's own jobs,
 // capture comes from routes, and the kill switch goes through
 // POST /warden/passthrough (which calls Warden and writes the audit row).
-// Providers, members and the other integrations have no backend yet.
+// Members are who has signed in (GET /members); roles are assigned in Keycloak.
 
 /** "30 days", "7 years". */
 const days = (d: number) => (d >= 365 && d % 365 === 0 ? `${d / 365} years` : `${int(d)} ${d === 1 ? 'day' : 'days'}`)
@@ -46,7 +46,20 @@ export function SettingsPage() {
   const [mockPassThrough, setMockPassThrough] = useState(false)
   const [switching, setSwitching] = useState(false)
   const passThrough = live ? !!warden?.passthrough : mockPassThrough
-  const noSwitch = !live ? null : !warden ? 'This control plane doesn’t know where Warden is, so there’s no kill switch to flip.' : !warden.connected ? 'Warden isn’t answering, so the kill switch can’t be reached.' : null
+  const killRole = can('killswitch')
+  const noSwitch = !live
+    ? null
+    : !killRole.ok
+      ? `${killRole.reason}.`
+      : !warden
+        ? 'This control plane doesn’t know where Warden is, so there’s no kill switch to flip.'
+        : !warden.connected
+          ? 'Warden isn’t answering, so the kill switch can’t be reached.'
+          : null
+  const devMode = live && session.auth.mode === 'dev'
+  const groupsUrl = session.auth.groupsUrl
+  const groupPrefix = session.auth.groupPrefix ?? 'stargate-'
+  const members = useLive<Member[]>(live ? '/members' : null, seedMembers, 60_000)
   const capturing = (dataMode === 'api' ? liveRoutes : routes).filter((r) => r.captureContent)
 
   const setPassThrough = async (on: boolean) => {
@@ -197,7 +210,14 @@ export function SettingsPage() {
       <Section id="integrations" title="Integrations">
         <ul className="divide-y divide-border rounded-md border border-border">
           {[
-            ...(live ? ['OTel collector', 'Argo CD', 'Keycloak OIDC'].map((name) => ({ name, detail: 'Not connected yet: the control plane doesn’t report on it.', ok: null })) : seedIntegrations),
+            ...(live
+              ? [
+                  ...['OTel collector', 'Argo CD'].map((name) => ({ name, detail: 'Not connected yet: the control plane doesn’t report on it.', ok: null })),
+                  devMode
+                    ? { name: 'Keycloak OIDC', detail: 'Not configured: dev mode, everyone is the dev user. Start the control plane with -oidc-issuer to sign in.', ok: null }
+                    : { name: 'Keycloak OIDC', detail: `Signed in as ${session.actor.email} · groups ${groupPrefix}<role> → roles`, ok: true },
+                ]
+              : seedIntegrations),
             wardenIntegration(warden),
           ].map((i) => (
             <li key={i.name} className="flex items-center gap-3 px-3 py-2.5 text-sm">
@@ -220,43 +240,70 @@ export function SettingsPage() {
         id="members"
         title="Members"
         actions={
-          <Button variant="outline" size="sm" disabled={live} title={live ? 'Inviting members isn’t connected yet.' : undefined}>
-            <UserPlus /> Invite member
-          </Button>
+          groupsUrl ? (
+            <Button variant="outline" size="sm" render={<a href={groupsUrl} target="_blank" rel="noreferrer" />}>
+              <UserPlus /> Manage in Keycloak
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" disabled title={devMode ? 'Dev mode: no identity provider is configured.' : 'Roles are assigned in Keycloak.'}>
+              <UserPlus /> Manage in Keycloak
+            </Button>
+          )
         }
       >
-        {live ? (
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            Members aren’t connected yet: there’s no OIDC sign-in, so every change is made as <span className="font-mono">{session.actor.email}</span>.
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-muted-foreground">
-              <tr className="border-b border-border">
-                <th className="py-1.5 pr-3 font-medium">Name</th>
-                <th className="py-1.5 pr-3 font-medium">Role</th>
-                <th className="py-1.5 pr-3 font-medium">Can</th>
-                <th className="py-1.5 text-right font-medium">Last active</th>
+        <p className="mb-3 max-w-3xl text-sm text-muted-foreground">
+          {devMode ? (
+            <>
+              No identity provider is configured (dev mode): there’s no sign-in, and every change is made as <span className="font-mono">{session.actor.email}</span>, who is{' '}
+              {session.actor.roles.join(', ') || 'no role'}. Start the control plane with <span className="font-mono">-oidc-issuer</span> to sign in with Keycloak.
+            </>
+          ) : (
+            <>
+              Roles are assigned in Keycloak, not here: someone in group <span className="font-mono">{groupPrefix}admin</span> is an admin, and so on for each role. This list is who has signed in, with the roles their last sign-in
+              carried. Only an owner assigns roles.
+            </>
+          )}
+        </p>
+        <table className="w-full text-sm" aria-label="Members">
+          <thead className="text-left text-xs text-muted-foreground">
+            <tr className="border-b border-border">
+              <th className="py-1.5 pr-3 font-medium">Name</th>
+              <th className="py-1.5 pr-3 font-medium">Roles</th>
+              <th className="py-1.5 pr-3 font-medium">Can</th>
+              <th className="py-1.5 text-right font-medium">Last active</th>
+            </tr>
+          </thead>
+          <tbody>
+            {members.data.length === 0 && (
+              <tr>
+                <td colSpan={4} className="py-2 text-xs text-muted-foreground">
+                  {members.loaded ? 'Nobody has signed in yet.' : 'Loading…'}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {seedMembers.map((m) => (
-                <tr key={m.email} className="border-b border-border last:border-0">
-                  <td className="py-2 pr-3">
-                    {m.name}
-                    <div className="text-xs text-muted-foreground">{m.email}</div>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <span className="rounded-sm border border-border bg-muted px-1.5 text-xs leading-5 text-muted-foreground-strong">{m.role}</span>
-                  </td>
-                  <td className="py-2 pr-3 text-xs text-muted-foreground">{roleHelp[m.role]}</td>
-                  <td className="py-2 text-right text-xs text-muted-foreground">{m.last}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {!live && <p className="mt-2 text-xs text-muted-foreground">Roles come from Keycloak groups. Service accounts get scoped tokens for CI.</p>}
+            )}
+            {members.data.map((m) => (
+              <tr key={m.email} className="border-b border-border last:border-0">
+                <td className="py-2 pr-3">
+                  {m.name || m.email}
+                  {m.name && <div className="text-xs text-muted-foreground">{m.email}</div>}
+                </td>
+                <td className="py-2 pr-3">
+                  <span className="inline-flex flex-wrap gap-1">
+                    {m.roles.length === 0 && <span className="text-xs text-muted-foreground">no role</span>}
+                    {m.roles.map((r) => (
+                      <span key={r} className="rounded-sm border border-border bg-muted px-1.5 text-xs leading-5 text-muted-foreground-strong">
+                        {r}
+                      </span>
+                    ))}
+                  </span>
+                </td>
+                <td className="py-2 pr-3 text-xs text-muted-foreground">{m.roles[0] ? roleHelp[m.roles[0]] : 'Nothing until an owner adds them to a group'}</td>
+                <td className="py-2 text-right text-xs text-muted-foreground">{ago(m.lastSeenAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!live && <p className="mt-2 text-xs text-muted-foreground">Service accounts get scoped tokens for CI.</p>}
       </Section>
 
       <Section id="environment" title="Environment">

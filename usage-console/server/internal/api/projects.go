@@ -34,7 +34,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, t string)
 	if err := store.ValidateProjectName(in.Name); err != nil {
 		return nil, badRequest(err.Error())
 	}
-	p, err := s.Store.CreateProject(r.Context(), t, s.DevActor, in.Team, in.Name)
+	p, err := s.Store.CreateProject(r.Context(), t, actor(r), in.Team, in.Name)
 	if errors.Is(err, store.ErrConflict) {
 		return nil, conflict("Team " + in.Team + " already has a project named " + in.Name + ".")
 	}
@@ -66,7 +66,7 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request, t string)
 	if err := store.ValidateProjectName(in.Name); err != nil {
 		return nil, badRequest(err.Error())
 	}
-	p, err := s.Store.RenameProject(r.Context(), t, s.DevActor, r.PathValue("id"), m, in.Name)
+	p, err := s.Store.RenameProject(r.Context(), t, actor(r), r.PathValue("id"), m, in.Name)
 	if errors.Is(err, store.ErrConflict) {
 		return nil, conflict("Team " + p.Team + " already has a project named " + in.Name + ".")
 	}
@@ -86,7 +86,7 @@ func (s *Server) deleteProject(_ http.ResponseWriter, r *http.Request, t string)
 		return nil, err
 	}
 	id := r.PathValue("id")
-	err = s.Store.DeleteProject(r.Context(), t, s.DevActor, id, m)
+	err = s.Store.DeleteProject(r.Context(), t, actor(r), id, m)
 	if inUse := (*store.InUseError)(nil); errors.As(err, &inUse) {
 		return nil, conflict(inUse.Reason)
 	}

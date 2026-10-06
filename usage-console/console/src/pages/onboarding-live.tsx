@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, api, ApiError, type Backend, backends as seedBackends, createKey, type LiveRoute, type Receipt, type RoutingChange, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
+import { type ApiKey, api, ApiError, type Backend, can, backends as seedBackends, createKey, type LiveRoute, type Receipt, type RoutingChange, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { useReceipts, useStreamSampling } from '@/state/app-state'
 import { useLive } from '@/state/live'
@@ -265,7 +265,7 @@ export function LiveOnboardingPage() {
                   <ProjectFields c={project} team={team} tried={tried} when="when you create the key" />
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button onClick={create} loading={creating} loadingText="Creating key…" variant={created ? 'outline' : 'default'} disabled={!team || !loaded}>
+                  <Button onClick={create} loading={creating} loadingText="Creating key…" variant={created ? 'outline' : 'default'} disabled={!team || !loaded || !can('keys.own').ok} title={can('keys.own').reason}>
                     {created ? 'Create another key' : `Create a key for ${backend.name}`}
                   </Button>
                 </div>
@@ -346,7 +346,7 @@ function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
       </p>
       {b.lastTest && !b.lastTest.ok && <p className="text-sm text-destructive-foreground">Its connection test failed: {b.lastTest.message}</p>}
       {routes.loaded && !routed && (
-        <Button onClick={route} loading={busy} loadingText="Saving the route…">
+        <Button onClick={route} loading={busy} loadingText="Saving the route…" disabled={!can('routing').ok} title={can('routing').reason}>
           Route {b.models.join(', ')} to {b.name}
         </Button>
       )}
@@ -377,7 +377,7 @@ function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
               </li>
             ))}
           </ul>
-          <Button onClick={apply} loading={busy} loadingText="Applying… the gateway is restarting" disabled={!plan.data.canApply} title={plan.data.canApply ? undefined : plan.data.reason}>
+          <Button onClick={apply} loading={busy} loadingText="Applying… the gateway is restarting" disabled={!plan.data.canApply || !can('routing').ok} title={can('routing').reason ?? (plan.data.canApply ? undefined : plan.data.reason)}>
             {n === 1 ? 'Apply 1 change' : `Apply all ${n} changes`}
           </Button>
         </>

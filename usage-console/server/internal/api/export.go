@@ -228,14 +228,14 @@ func (s *Server) exportReceipt(w http.ResponseWriter, r *http.Request, t string)
 }
 
 func (s *Server) sendExport(w http.ResponseWriter, r *http.Request, t string, f exportFilter, rs []model.Receipt, now time.Time, name string) error {
-	h := exportHeader{Tenant: t, ExportedAt: now.UnixMilli(), ExportedBy: s.DevActor, Filter: f}
+	h := exportHeader{Tenant: t, ExportedAt: now.UnixMilli(), ExportedBy: actor(r), Filter: f}
 	b, ex, err := buildExport(h, rs, s.Signer)
 	if err != nil {
 		return err
 	}
 	// No export without its audit row: the row commits before any byte goes out.
 	action, target, after := exportAudit(f, ex)
-	if err := s.Store.Audited(r.Context(), t, s.DevActor, action, target, store.AccessKind, nil, after, func() error { return nil }); err != nil {
+	if err := s.Store.Audited(r.Context(), t, actor(r), action, target, store.AccessKind, nil, after, func() error { return nil }); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/zip")
@@ -267,8 +267,8 @@ func (s *Server) revealContent(_ http.ResponseWriter, r *http.Request, t string)
 		return nil, conflict("Content wasn't captured for this request: only its hashes were stored.")
 	}
 	now := time.Now()
-	if err := s.Store.Audited(r.Context(), t, s.DevActor, "Revealed content", id, store.AccessKind, nil, map[string]any{"receipt": id}, func() error { return nil }); err != nil {
+	if err := s.Store.Audited(r.Context(), t, actor(r), "Revealed content", id, store.AccessKind, nil, map[string]any{"receipt": id}, func() error { return nil }); err != nil {
 		return nil, err
 	}
-	return RevealedContent{Content: content, RevealedBy: s.DevActor, RevealedAt: now.UnixMilli()}, nil
+	return RevealedContent{Content: content, RevealedBy: actor(r), RevealedAt: now.UnixMilli()}, nil
 }

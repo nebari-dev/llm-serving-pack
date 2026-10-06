@@ -262,6 +262,9 @@ type APIKey struct {
 	Hourly24h []int        `json:"hourly24h"`
 	Status    string       `json:"status"`
 	Rotation  *KeyRotation `json:"rotation,omitempty"`
+	// Owner may revoke, rotate, extend and finish the key; anyone else needs
+	// admin (backend-decisions §7). Whoever created it.
+	Owner string `json:"owner"`
 }
 
 // KeyRotation is a rotating key's overlap window. Each field is null when
