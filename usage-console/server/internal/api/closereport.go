@@ -344,7 +344,7 @@ func (s *Server) closeReport(w http.ResponseWriter, r *http.Request, t string) (
 	var file []byte
 	after := map[string]any{"month": rep.monthKey, "spendUsd": rep.TotalUSD, "requests": rep.Requests, "unpricedRequests": rep.Unpriced, "monthToDate": rep.Open}
 	// The audit row commits only once the file is made.
-	if err := s.Store.Audited(ctx, t, s.DevActor, "Exported close report", rep.monthKey, "Export", nil, after, func() error {
+	if err := s.Store.Audited(ctx, t, s.DevActor, "Exported close report", rep.monthKey, store.ExportKind, nil, after, func() error {
 		file = rep.PDF(now)
 		return nil
 	}); err != nil {

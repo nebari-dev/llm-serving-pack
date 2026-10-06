@@ -306,7 +306,7 @@ export function LiveGuardrailsPage() {
         </TabsPanel>
 
         <TabsPanel value="detectors">
-          <LiveDetectorsTab />
+          <LiveDetectorsTab onEntitiesChanged={vocab.reload} />
         </TabsPanel>
 
         <TabsPanel value="versions">

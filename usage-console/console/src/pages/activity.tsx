@@ -73,6 +73,7 @@ const kindResource: Record<string, string> = {
   Budget: '/spend',
   Export: '/spend',
   Key: '/keys',
+  Detector: '/guardrails',
 }
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`

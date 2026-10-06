@@ -319,9 +319,9 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </span>
             {r.redactions.length > 0 &&
               (api ? (
-                <span className="ml-auto" data-print-hide>
-                  Reporting an incorrect redaction isn't connected yet: there's no false-positive review queue.
-                </span>
+                <Link to="/guardrails" className="ml-auto underline underline-offset-4 hover:text-foreground" data-print-hide>
+                  Review this redaction on Guardrails → Detectors
+                </Link>
               ) : (
                 <button type="button" data-print-hide className="ml-auto underline underline-offset-4 hover:text-foreground" onClick={() => toast.add({ title: 'Sent to the false-positive review queue', type: 'info' })}>
                   Mark a redaction as incorrect

@@ -121,7 +121,7 @@ func (a tally) agg() Agg {
 // impactOf is a change's impact. An export (the close report) changes
 // nothing, so it has none.
 func impactOf(c model.Change, bs []store.ActivityBucket, now time.Time) ActivityImpact {
-	if c.TargetKind == "Export" {
+	if c.TargetKind == store.ExportKind {
 		return ActivityImpact{Bins: []int{}}
 	}
 	return impactAt(bs, time.UnixMilli(c.TS), now)

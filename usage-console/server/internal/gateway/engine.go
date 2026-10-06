@@ -34,6 +34,9 @@ type Snapshot struct {
 	Budgets  map[string]model.Budget
 	Rules    []model.PolicyRule // ordinal order
 	Spend    store.MonthSpend
+	// Detectors is what "contains entity" can name: built-ins plus the
+	// tenant's custom entities. Nil is the built-ins.
+	Detectors *Detectors
 }
 
 // Pair is a (model, backend), which is what a price belongs to.
@@ -229,6 +232,7 @@ func (s *Snapshot) substitute(b model.Backend, m string) string {
 type ruleCtx struct {
 	team, project, key, model, provider, region string
 	prompt                                      string
+	det                                         *Detectors
 }
 
 func (c ruleCtx) field(f string) string {
@@ -258,7 +262,7 @@ func match(r model.PolicyRule, c ruleCtx) (bool, map[string]int) {
 		case "contains entity":
 			hit := false
 			for _, e := range cond.Value {
-				if n := find(e, c.prompt); n > 0 {
+				if n := c.det.find(e, c.prompt); n > 0 {
 					found[e] += n
 					hit = true
 				}
@@ -507,7 +511,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 			rc.Rules = append(rc.Rules, ev)
 			continue
 		}
-		ok, found := match(rule, ruleCtx{team: k.Team, project: k.ProjectID, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs)})
+		ok, found := match(rule, ruleCtx{team: k.Team, project: k.ProjectID, key: k.Name, model: resolved, provider: current.Provider, region: in.Region, prompt: promptText(msgs), det: s.Detectors})
 		ev := model.RuleEval{RuleID: rule.ID, Name: rule.Name, Version: rule.Version, Matched: ok, Action: "no match"}
 		if ok && len(rule.Then) > 0 {
 			act := rule.Then[0]
@@ -532,7 +536,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 					back := strings.Contains(act.Detail, RehydrateOnReturn)
 					for ent, n := range found {
 						for i := range msgs {
-							msgs[i].Content = redact(ent, msgs[i].Content, func(label, m string) string {
+							msgs[i].Content = s.Detectors.redact(ent, msgs[i].Content, func(label, m string) string {
 								ph := names.For(label, m)
 								if back {
 									d.Vault.put(ph, m, ent)

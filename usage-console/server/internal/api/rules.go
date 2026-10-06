@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
 	"github.com/jbouder/stargate/server/internal/store"
 )
@@ -18,7 +17,12 @@ import (
 // Published versions are immutable, and rollback republishes an old one.
 
 func (s *Server) ruleEnv(ctx context.Context, t string) (store.RuleEnv, error) {
-	env := store.RuleEnv{Entities: gateway.Entities()}
+	var env store.RuleEnv
+	reg, _, err := s.detectorRegistry(ctx, t)
+	if err != nil {
+		return env, err
+	}
+	env.Entities = reg.Entities() // built-ins and custom entities
 	models, err := s.Store.Models(ctx)
 	if err != nil {
 		return env, err

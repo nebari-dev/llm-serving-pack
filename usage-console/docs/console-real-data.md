@@ -40,8 +40,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - Show the pricing snapshot (`costBasis`) and `policyMode`.
   - Export downloads the real receipt JSON; Export signed, a signed zip
     (see Signed receipt export below).
-  - Reveal content calls the server, which writes the audit row first. The
-    false-positive report isn't connected yet.
+  - Reveal content calls the server, which writes the audit row first. A
+    redaction links to the false-positive queue on Guardrails → Detectors.
   - Print works. Related rows come from the server: same session, and the
     same key in the hour before.
 - [x] **Spend.** One `GET /spend?range&by` serves the summary, the
@@ -339,17 +339,59 @@ when stale; 428 without it on an update or delete). Open questions are in
   2026-10-05, later).
 - [x] Rule version history: versions, history and rollback on Guardrails
   (2026-09-30, migration 004).
-- [ ] False-positive review queue.
+- [x] **False-positive review queue and counts (2026-10-06, config migration
+  051).** Guardrails → Detectors lists the last 7 days' detector hits (one
+  row per entity per receipt: each redaction type, and the entity a policy
+  block names; `GET /detectors/hits?entity&review=all`), unreviewed by
+  default. A reviewer marks each one "False positive" or "Correct"
+  (`POST /detectors/hits/verdict` with If-Match on the hit's review state);
+  the verdict and its audit row (kind `Detector`) commit together, and a
+  verdict can be changed later. The server refuses a verdict on an entity
+  the receipt doesn't record. `GET /detectors` adds `falsePositives30d` and
+  `confirmed30d` per detector (verdicts on receipts from the last 30 days),
+  and the table shows "N of M reviewed".
+  - What a reviewer sees, said on the page: receipts keep hashes, so the
+    matched text is never there. Each row has the entity, match count,
+    action and rule, key, team, model and time. Where the backend captured
+    content, that content is the prompt as sent upstream, with placeholders
+    in place of matches; the row links to the receipt, where revealing it is
+    audited. Blocks never reach a backend, so they have no content.
+  - Monitor-mode matches still aren't hits: the receipt says "would redact"
+    with no entity.
+  - The receipt drawer links to the queue instead of saying it isn't
+    connected.
 - [x] Detector hit counts computed from receipts (2026-10-02). `GET /detectors`
   now lists the engine's own detectors (kind, pattern, placeholder), the live
   rules naming each one, and 24h redacted and blocked requests from receipts.
   The seeded `detectors` table is no longer read. In api mode the Detectors
   tab drops the thresholds, the browser-only regex tester and the fixture
-  queue, and says custom entities and false-positive review aren't connected.
-  Monitor-mode matches aren't counted: receipts record "would redact" with no
-  entity.
-- [ ] False-positive counts, and custom detector patterns (an entity registry
-  the engine reads).
+  queue. Monitor-mode matches aren't counted: receipts record "would redact"
+  with no entity.
+- [x] **Custom entities: an entity registry the engine reads (2026-10-06,
+  config migration 050).** A security user adds an entity on Guardrails →
+  Detectors: name, regex, placeholder label, and examples it must and
+  mustn't match (`POST /entities`, `PUT`/`DELETE /entities/{id}` with
+  If-Match, audited, then Warden reloads). `?dryRun=true` checks it and tries
+  it on a sample with the engine's own regex ("Test" in the form). Warden's
+  snapshot loads them with everything else (`gateway.Detectors`), so rules
+  name them in "contains entity" like built-ins; `GET /rules/vocabulary` and
+  rule validation include them, and the builder's list reloads after a save.
+  Detectors lists them with the built-ins, marked Custom, with Edit.
+  - Pattern limits (`gateway.CheckPattern`): Go RE2 only (linear time, no
+    backreferences or lookaround), at most 512 characters and 1,000 compiled
+    instructions, and it can't match empty text (anchors or `\b` alone
+    count as empty). Every built-in passes the same check.
+  - Names: letters, digits, spaces, dashes, underscores, at most 40; unique
+    ignoring case among built-ins and custom; can't change once made. Labels:
+    capitals, digits, underscores; not another detector's. At most 20
+    examples of each kind, 500 characters each; every save checks them.
+  - Delete is refused (409, naming the rules) while a rule names the entity,
+    live, disabled or in a draft.
+  - Exit tests (api-mode, written, not yet run): add an entity from the form
+    after a server-side Test, publish a rule with it, see the provider get
+    the placeholder and the receipt record it, see it on Detectors; edits
+    need If-Match and can't rename; mark the hit a false positive on the
+    queue and see the count and the audit row; then delete it.
 - [x] Provider credentials: add a provider, list, replace, test connection
   (2026-10-05, decisions §6).
   - Onboarding is real in api mode (2026-10-05): it lists `/backends` with

@@ -522,17 +522,82 @@ export interface RuleContent {
 }
 /** A rule as GET /rules shows it: the live version, any saved draft, and the ETag covering both. */
 export type RuleView = PolicyRule & { draft: (RuleContent & { updatedAt: number; updatedBy: string }) | null; etag: string }
-/** An engine detector (GET /detectors): how it matches, the live rules using it, and its last 24h from receipts. */
+/**
+ * An engine detector (GET /detectors): how it matches, the live rules using it, its last 24h from receipts,
+ * and reviewers' verdicts on its hits from the last 30 days. A custom entity carries its registry row.
+ */
 export interface DetectorView {
   entity: string
   kind: string
   pattern: string
   placeholder: string
+  custom: boolean
   usedBy: { rule: string; version: number; mode: PolicyRule['mode']; action: string }[]
   redactedRequests24h: number
   redactedMatches24h: number
   blocked24h: number
+  falsePositives30d: number
+  confirmed30d: number
+  customEntity?: CustomEntity
 }
+/** A security user's own entity type (§5.3 registry): a regex Warden runs like a built-in, and examples it must and mustn't match. */
+export interface CustomEntity {
+  id: string
+  name: string
+  pattern: string
+  label: string
+  mustMatch: string[]
+  mustNotMatch: string[]
+  updatedAt: number
+  updatedBy: string
+  etag: string
+}
+export type EntityInput = Pick<CustomEntity, 'name' | 'pattern' | 'label' | 'mustMatch' | 'mustNotMatch'>
+/** A dry run of an entity (POST /entities?dryRun=true): it would save, and what it finds in the sample. */
+export interface EntityCheck {
+  entity: CustomEntity
+  matches: string[]
+  redacted: string
+}
+/** A reviewer's call on one detector hit. */
+export interface DetectorVerdict {
+  receiptId: string
+  entity: string
+  verdict: 'false_positive' | 'confirmed'
+  by: string
+  at: number
+}
+/** One entity a receipt recorded as redacted or blocked (GET /detectors/hits), for review. Receipts keep hashes, not text. */
+export interface DetectorHit {
+  receiptId: string
+  ts: number
+  entity: string
+  action: 'redacted' | 'blocked'
+  count: number
+  rules: string[]
+  keyName: string
+  team: string
+  model: string
+  contentCaptured: boolean
+  verdict: DetectorVerdict | null
+  etag: string
+}
+
+/** Tries an entity on the server (same RE2 engine and checks as a save) against `sample`, saving nothing. */
+export const checkEntity = (input: EntityInput, sample: string, existing?: CustomEntity) =>
+  existing
+    ? api<EntityCheck>(`/entities/${existing.id}?dryRun=true`, { method: 'PUT', body: JSON.stringify({ ...input, sample }) })
+    : api<EntityCheck>('/entities?dryRun=true', { method: 'POST', body: JSON.stringify({ ...input, sample }) })
+/** Adds a custom entity; Warden reloads, and rules can name it. Audited. */
+export const createEntity = (input: EntityInput) => api<CustomEntity>('/entities', { method: 'POST', body: JSON.stringify(input) })
+/** Changes an entity's pattern, label or examples, as the caller last saw it (If-Match). Its name can't change. */
+export const updateEntity = (e: CustomEntity, input: EntityInput) =>
+  api<CustomEntity>(`/entities/${e.id}`, { method: 'PUT', body: JSON.stringify(input), headers: { 'If-Match': e.etag } })
+/** Deletes an entity no rule names (409 says which rules do). */
+export const deleteEntity = (e: CustomEntity) => api(`/entities/${e.id}`, { method: 'DELETE', headers: { 'If-Match': e.etag } })
+/** Records a verdict on a hit, as the caller saw its review state (If-Match). Audited. */
+export const setVerdict = (h: DetectorHit, verdict: DetectorVerdict['verdict']) =>
+  api<DetectorHit>('/detectors/hits/verdict', { method: 'POST', body: JSON.stringify({ receiptId: h.receiptId, entity: h.entity, verdict }), headers: { 'If-Match': h.etag } })
 /** What a rule may name (GET /rules/vocabulary): exactly what the server's validation accepts. */
 export interface RuleVocabulary {
   entities: string[]

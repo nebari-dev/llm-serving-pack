@@ -98,14 +98,26 @@ func (s *Store) Rules(ctx context.Context, tenant string) ([]model.PolicyRule, e
 // receipts (an export, a content reveal), not changing config.
 const AccessKind = "Receipt"
 
+// ExportKind is a report exported (the close report); ReviewKind is a
+// reviewer's verdict on a detector hit. Neither changes config.
+const (
+	ExportKind = "Export"
+	ReviewKind = "Review"
+)
+
+// notChanges are the audit kinds that record reading or judging, not
+// changing config.
+var notChanges = []string{AccessKind, ExportKind, ReviewKind}
+
 // Changes is the newest audit rows, of only kind, or with no kind every
-// config change. Access rows (AccessKind) are left out then: they changed
-// nothing, so Activity, Overview and the receipt drawer mustn't present them
-// as changes with a traffic effect. Ask for kind=Receipt to list them.
+// config change. Rows of the notChanges kinds are left out then: they
+// changed nothing, so Activity, Overview and the receipt drawer mustn't
+// present them as changes with a traffic effect. Ask for their kind to list
+// them.
 func (s *Store) Changes(ctx context.Context, tenant string, limit int, kind string) ([]model.Change, error) {
 	rows, _ := s.Config.Query(ctx, `
 		SELECT id, ts, actor, action, target, target_kind, coalesce(effect, ''), coalesce(effect_tone, ''), source
-		FROM audit_log WHERE tenant_id = $1 AND ($3 = '' AND target_kind <> $4 OR target_kind = $3) ORDER BY ts DESC, id DESC LIMIT $2`, tenant, limit, kind, AccessKind)
+		FROM audit_log WHERE tenant_id = $1 AND ($3 = '' AND NOT target_kind = ANY($4) OR target_kind = $3) ORDER BY ts DESC, id DESC LIMIT $2`, tenant, limit, kind, notChanges)
 	return collect(rows, func(r pgx.Rows) (model.Change, error) {
 		var c model.Change
 		var id int64

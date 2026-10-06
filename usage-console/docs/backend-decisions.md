@@ -258,6 +258,48 @@ reports the change and says replay isn't connected.
 - Replay (§7.5.7), re-running past traffic against a new rule to see what
   it would have caught, doesn't exist yet. It's what publish's dry run should
   return; until it does, the dry run can't tell you much.
+- **Custom entities (built 2026-10-06).** §5.3's registry, as regexes: a
+  name, a pattern, a placeholder label, and examples that must and mustn't
+  match, checked on every save. Warden loads them in its snapshot; rules
+  name them like built-ins. Patterns are Go RE2 (linear time, so nothing
+  catastrophic), at most 512 characters and 1,000 compiled instructions, and
+  never match empty text. Decide:
+  - **Names can't change**, since rules name an entity by its name; make a
+    new one instead. Alternative: rename and rewrite the rules that name it.
+  - **Delete is refused while any rule names it** (live, disabled or a
+    draft), since the rule would silently stop matching. Old versions don't
+    count: rolling back to one that names a deleted entity republishes a
+    rule that never matches. Rollback doesn't re-validate today.
+  - **Examples are stored** with the entity, so the next editor sees them.
+    The form says to use made-up values, but nothing stops a real one.
+  - **Labels can't repeat another detector's**, so a placeholder names one
+    entity. Placeholders would stay unique without this.
+  - Only regexes. NER, entropy and validators like Luhn (§5.3) wait for real
+    detectors, with thresholds (§6).
+- **False-positive review (built 2026-10-06).** A reviewer marks a hit (an
+  entity a receipt recorded, redacted or blocked) "false positive" or
+  "correct"; Detectors counts both over 30 days. Verdicts live in the config
+  database, beside the audit log, so each one and its audit row commit
+  together. Decide:
+  - **What a reviewer sees.** Receipts keep hashes; the matched value is
+    never stored anywhere. The queue shows metadata only (entity, count,
+    action, rule, key, team, model, time), and links to the receipt, where
+    captured content (prompt as sent, placeholders in place of matches) can
+    be revealed with an audit row. The queue doesn't show content inline,
+    so reading it always goes through the audited reveal. Most receipts,
+    and every block, have no content; a verdict on those is a judgement on
+    metadata, and the page says so.
+  - **Granularity is per entity per request**, not per match: a request
+    with two email matches is one hit. Receipts don't record matches
+    individually.
+  - **Monitor-mode matches aren't reviewable**: the receipt records "would
+    redact" with no entity. Recording the entity there would make them so.
+  - **Window**: the queue reaches back 7 days (200 receipts with hits,
+    newest first); counts use 30 days, the raw-receipt window.
+  - A verdict can be changed, with If-Match on the review state, and the
+    audit row keeps the earlier one. There's no "un-review".
+  - Verdicts don't change detection yet. They're the data a threshold or a
+    pattern edit would be tuned on.
 
 ## 4. Aliases
 
@@ -447,8 +489,8 @@ retire-old-secret-now are in.
   are regexes (`gateway/detect.go`) with no confidence score, so a
   threshold would change nothing. They wait for real detectors
   (Presidio-style NER, per §5.3). The `detectors` table's threshold,
-  `hits_24h` and `fp` are seed values; hit and false-positive counts from
-  receipts are a §3 item.
+  `hits_24h` and `fp` are seed values nothing reads; hit counts come from
+  receipts, and false-positive counts from reviewers' verdicts (§3).
 
 ## 7. Cross-cutting
 

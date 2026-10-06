@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"log"
 	"maps"
 	"slices"
 	"sync/atomic"
@@ -63,6 +64,15 @@ func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapsho
 	}
 	if s.Spend, err = st.MonthToDate(ctx, tenant); err != nil {
 		return nil, err
+	}
+	custom, err := st.CustomEntities(ctx, tenant)
+	if err != nil {
+		return nil, err
+	}
+	// An entity that no longer passes the pattern check is left out (its
+	// rules then match nothing) and logged; the rest still load.
+	if s.Detectors, err = NewDetectors(custom); err != nil {
+		log.Printf("snapshot %s: %v", tenant, err)
 	}
 	return s, nil
 }

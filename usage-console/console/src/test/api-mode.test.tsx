@@ -2663,8 +2663,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 30_000)
 
-  it('counts real detector hits from receipts on Detectors, and says what isn’t connected', async () => {
-    type D = { entity: string; kind: string; pattern: string; usedBy: { rule: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }
+  it('counts real detector hits from receipts on Detectors, with no thresholds or fixtures', async () => {
+    type D = { entity: string; kind: string; pattern: string; custom: boolean; usedBy: { rule: string; mode: string; action: string }[]; redactedRequests24h: number; blocked24h: number }
     type V = { id: string; etag: string; version: number }
     const name = `api-mode-detect-${Date.now().toString(36)}`
     const { key, secret } = await testKey(name)
@@ -2687,7 +2687,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await rule('redact', 'email', 'redact')
       await rule('block', 'secret', 'block')
       const before = await detectors()
-      expect(Object.keys(before).sort()).toEqual(['Acme account ID', 'SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
+      // The built-ins; custom entities (another test's, say) are listed too, marked custom.
+      expect(Object.values(before).filter((d) => !d.custom).map((d) => d.entity).sort()).toEqual(['Acme account ID', 'SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
       expect(before['credit card'].kind).toBe('regex + Luhn check')
       expect(before.email.usedBy).toContainEqual({ rule: `${name}-redact`, version: 1, mode: 'enforce', action: 'redact' })
 
@@ -2695,7 +2696,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(await call(`my key is sk-${'a'.repeat(24)}`)).toBe(403)
       // The 24h totals move with background traffic and age out, so check this
       // test's own receipts carry what the counts read, and that they're counted.
-      type R = { verdict: string; redactions: { type: string; count: number }[]; errorCode?: string; errorDetail?: string }
+      type R = { id: string; verdict: string; redactions: { type: string; count: number }[]; errorCode?: string; errorDetail?: string }
       let mine: R[] = []
       for (let i = 0; i < 30 && mine.length < 2; i++) {
         mine = await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}`)
@@ -2721,8 +2722,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(page).not.toContain('Person name')
       expect(page).not.toContain('dana@acme.dev')
       expect(page).toContain('Monitor-mode matches aren’t counted')
-      expect(page).toContain('Custom entities aren’t connected yet')
-      expect(page).toContain('False-positive review isn’t connected yet')
+      // Custom entities and false-positive review are connected now.
+      expect(page).not.toContain('aren’t connected yet')
+      expect(page).not.toContain('isn’t connected yet')
+      expect(page).toContain('Receipts keep hashes, not prompts')
+      // This test's two hits are waiting for review, newest first.
+      const queue = await screen.findByRole('table', { name: 'Detector hits to review' }, { timeout: 5000 })
+      const redactedId = mine.find((r) => r.verdict === 'redacted')!.id
+      const blockedId = mine.find((r) => r.verdict === 'blocked')!.id
+      expect(within(queue).getByRole('button', { name: `Mark email on ${redactedId} a false positive` })).toBeTruthy()
+      expect(within(queue).getByRole('button', { name: `Mark secret on ${blockedId} correct` })).toBeTruthy()
     } finally {
       for (const r of made) {
         const now = (await catalog.api<V[]>('/rules')).find((x) => x.id === r.id)
@@ -2733,6 +2742,157 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }
   }, 60_000)
+
+  it('adds a custom entity on Detectors that a rule redacts through the gateway, and reviews its hit as a false positive, with audit rows', async () => {
+    type D = { entity: string; kind: string; custom: boolean; placeholder: string; usedBy: { rule: string }[]; redactedRequests24h: number; falsePositives30d: number; confirmed30d: number; customEntity?: E }
+    type E = { id: string; name: string; pattern: string; label: string; etag: string }
+    type V = { id: string; etag: string }
+    type H = { receiptId: string; entity: string; action: string; count: number; rules: string[]; etag: string; verdict: { verdict: string; by: string } | null }
+    type C = import('@/data/catalog').Change
+    const stamp = Date.now().toString(36)
+    const name = `api-mode-entity-${stamp}`
+    const entity = `badge ${stamp}`
+    const label = `BADGE_${stamp.toUpperCase()}`
+    const pattern = `\\bBDG-${stamp}-\\d{4}\\b`
+    const badge = `BDG-${stamp}-1234`
+    const detector = async () => (await catalog.api<D[]>('/detectors')).find((d) => d.entity === entity)
+
+    // Patterns are checked on the server: RE2 only, never empty, not a built-in's name, and the examples must hold.
+    const bad = { name: `${entity} x`, pattern, label: `${label}X` }
+    expect(await status(send('POST', '/entities', { ...bad, pattern: '[a-z]*' }))).toBe(400) // matches empty text
+    expect(await status(send('POST', '/entities', { ...bad, pattern: '(\\w+)\\1' }))).toBe(400) // a backreference isn't RE2
+    expect(await status(send('POST', '/entities', { ...bad, pattern: 'x'.repeat(513) }))).toBe(400)
+    expect(await status(send('POST', '/entities', { ...bad, name: 'Email' }))).toBe(400) // a built-in's name
+    expect(await status(send('POST', '/entities', { ...bad, label: 'EMAIL' }))).toBe(400) // a built-in's placeholder
+    expect(await status(send('POST', '/entities', { ...bad, mustMatch: ['no badge here'] }))).toBe(400)
+    expect(await status(send('POST', '/entities', { ...bad, mustNotMatch: [badge] }))).toBe(400)
+    // A dry run tries it on a sample with the engine's own regex, and saves nothing.
+    const dry = await send<{ matches: string[]; redacted: string }>('POST', '/entities?dryRun=true', { name: entity, pattern, label, sample: `badge ${badge} at gate 4` })
+    expect(dry).toMatchObject({ matches: [badge], redacted: `badge [${label}_1] at gate 4` })
+    expect(await detector()).toBeUndefined()
+
+    let ruleId = ''
+    let keyId = ''
+    try {
+      // Add it on Guardrails → Detectors.
+      window.history.pushState({}, '', '/guardrails')
+      render(<App />)
+      await act(async () => {})
+      fireEvent.click(screen.getByRole('tab', { name: 'Detectors' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Add entity' }, { timeout: 5000 }))
+      const form = screen.getByRole('form', { name: 'New custom entity' })
+      fireEvent.change(within(form).getByLabelText('Name'), { target: { value: entity } })
+      fireEvent.change(within(form).getByLabelText('Placeholder label'), { target: { value: label } })
+      fireEvent.change(within(form).getByLabelText('Pattern'), { target: { value: pattern } })
+      fireEvent.change(within(form).getByLabelText('Must match'), { target: { value: `badge ${badge}` } })
+      fireEvent.change(within(form).getByLabelText('Must not match'), { target: { value: `BDG-${stamp}-12\nXBDG-${stamp}-1234` } })
+      fireEvent.change(within(form).getByLabelText('Try it on'), { target: { value: `see ${badge}` } })
+      fireEvent.click(within(form).getByRole('button', { name: 'Test' }))
+      await waitFor(() => expect(within(form).getByLabelText('Pattern test').textContent).toContain(`see [${label}_1]`), { timeout: 5000 })
+      fireEvent.click(within(form).getByRole('button', { name: 'Add entity' }))
+      const table = await screen.findByRole('table', { name: 'Detectors' })
+      await waitFor(() => expect(table.textContent).toContain(`[${label}_1]`), { timeout: 5000 })
+      cleanup()
+
+      let made = (await detector())!
+      expect(made).toMatchObject({ kind: 'custom regex', custom: true, placeholder: `[${label}_1]`, customEntity: { name: entity, pattern, label } })
+      expect((await catalog.api<C[]>('/changes?kind=Detector&limit=1'))[0]).toMatchObject({ action: 'Added custom entity', target: entity, actor: catalog.session.actor.email })
+      // Rules can name it: the builder's vocabulary has it, and the rule API takes it.
+      expect((await catalog.api<{ entities: string[] }>('/rules/vocabulary')).entities).toContain(entity)
+      expect(await status(send('POST', '/entities', { name: entity.toUpperCase(), pattern, label: `${label}Y` }))).toBe(400) // the name is taken, ignoring case
+
+      const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+        name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+      })
+      keyId = key.id
+      const r = await send<V>('POST', '/rules', {
+        name, description: 'api-mode custom entity test', failMode: 'closed',
+        when: [{ field: 'key', op: 'is', value: [name] }, { field: 'prompt', op: 'contains entity', value: [entity] }],
+        then: [{ action: 'redact', detail: entity }],
+      })
+      ruleId = r.id
+      await send<V>('POST', `/rules/${r.id}/publish`, { mode: 'enforce' }, r.etag)
+
+      // Warden reloaded on the writes: the provider sees the placeholder, not the badge.
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', 'X-Fake-Echo': '1' },
+        body: JSON.stringify({ model: 'gpt-5-mini', messages: [{ role: 'user', content: `Badge ${badge} was used at gate 4` }] }),
+      })
+      expect(res.status, await res.clone().text()).toBe(200)
+      expect(decodeURIComponent((res.headers.get('x-fake-received') ?? '').replace(/\+/g, ' '))).toBe(`You said: Badge [${label}_1] was used at gate 4`)
+      type R = { id: string; redactions: { type: string; count: number }[] }
+      let receipt: R | undefined
+      await waitFor(async () => {
+        receipt = (await catalog.api<R[]>(`/receipts?limit=5&key=${key.id}`))[0]
+        expect(receipt?.redactions).toEqual([{ type: entity, count: 1 }])
+      }, { timeout: 15_000, interval: 1000 })
+      made = (await detector())!
+      expect(made.redactedRequests24h).toBe(1)
+      expect(made.usedBy).toContainEqual(expect.objectContaining({ rule: name }))
+
+      // Edits need If-Match, can't rename, and a stale one is refused; a rule naming it blocks delete.
+      const ce = made.customEntity!
+      expect(await status(send('PUT', `/entities/${ce.id}`, { name: entity, pattern, label }))).toBe(428)
+      expect(await status(send('PUT', `/entities/${ce.id}`, { name: `${entity} 2`, pattern, label }, ce.etag))).toBe(400)
+      const edited = await send<E>('PUT', `/entities/${ce.id}`, { name: entity, pattern, label, mustMatch: [badge] }, ce.etag)
+      expect(edited.etag).not.toBe(ce.etag)
+      expect((await catalog.api<C[]>('/changes?kind=Detector&limit=1'))[0]).toMatchObject({ action: 'Changed custom entity', target: entity })
+      expect(await status(send('PUT', `/entities/${ce.id}`, { name: entity, pattern, label }, ce.etag))).toBe(409)
+      await expect(send('DELETE', `/entities/${ce.id}`, undefined, edited.etag)).rejects.toMatchObject({ status: 409, message: expect.stringContaining(name) })
+
+      // The hit waits for review on Detectors; mark it a false positive there.
+      const hits = await catalog.api<H[]>(`/detectors/hits?entity=${encodeURIComponent(entity)}`)
+      expect(hits).toEqual([expect.objectContaining({ receiptId: receipt!.id, entity, action: 'redacted', count: 1, rules: [`${name} v1`], verdict: null })])
+      window.history.pushState({}, '', '/guardrails')
+      render(<App />)
+      await act(async () => {})
+      fireEvent.click(screen.getByRole('tab', { name: 'Detectors' }))
+      expect(document.body.textContent).toContain('the text a detector matched is never stored')
+      const queue = await screen.findByRole('table', { name: 'Detector hits to review' }, { timeout: 5000 })
+      fireEvent.click(await within(queue).findByRole('button', { name: `Mark ${entity} on ${receipt!.id} a false positive` }, { timeout: 5000 }))
+      await waitFor(async () => expect((await detector())?.falsePositives30d).toBe(1), { timeout: 5000 })
+      const detectorsTable = screen.getByRole('table', { name: 'Detectors' })
+      await waitFor(() => expect(within(detectorsTable).getByRole('row', { name: new RegExp(`^${entity}`) }).textContent).toContain('of 1 reviewed'), { timeout: 5000 })
+      // It leaves the unreviewed queue.
+      await waitFor(() => expect(within(queue).queryByRole('button', { name: `Mark ${entity} on ${receipt!.id} a false positive` })).toBeNull(), { timeout: 5000 })
+      cleanup()
+      expect((await catalog.api<C[]>('/changes?kind=Review&limit=1'))[0]).toMatchObject({
+        action: 'Marked detector hit a false positive', target: `${entity} on receipt ${receipt!.id}`, actor: catalog.session.actor.email,
+      })
+
+      // A verdict is checked against the review state the reviewer saw: the old one is stale now.
+      expect(await status(send('POST', '/detectors/hits/verdict', { receiptId: receipt!.id, entity, verdict: 'confirmed' }, hits[0].etag))).toBe(409)
+      expect(await status(send('POST', '/detectors/hits/verdict', { receiptId: receipt!.id, entity, verdict: 'confirmed' }))).toBe(428)
+      // Only a hit the receipt records can be judged.
+      expect(await status(send('POST', '/detectors/hits/verdict', { receiptId: receipt!.id, entity: 'SSN', verdict: 'confirmed' }, hits[0].etag))).toBe(400)
+      const [reviewed] = await catalog.api<H[]>(`/detectors/hits?review=all&entity=${encodeURIComponent(entity)}`)
+      expect(reviewed.verdict).toMatchObject({ verdict: 'false_positive', by: catalog.session.actor.email })
+      const changed = await send<H>('POST', '/detectors/hits/verdict', { receiptId: receipt!.id, entity, verdict: 'confirmed' }, reviewed.etag)
+      expect(changed.verdict).toMatchObject({ verdict: 'confirmed' })
+      expect(await detector()).toMatchObject({ falsePositives30d: 0, confirmed30d: 1 })
+      expect((await catalog.api<C[]>('/changes?kind=Review&limit=1'))[0]).toMatchObject({ action: 'Confirmed detector hit', target: `${entity} on receipt ${receipt!.id}` })
+
+      // Once no rule names it, it can be deleted, with an audit row; rules can't name it after.
+      const live = (await catalog.api<V[]>('/rules')).find((x) => x.id === ruleId)!
+      const off = await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, live.etag)
+      await send('DELETE', `/rules/${ruleId}`, undefined, off.etag)
+      ruleId = ''
+      await send('DELETE', `/entities/${ce.id}`, undefined, edited.etag)
+      expect((await catalog.api<C[]>('/changes?kind=Detector&limit=1'))[0]).toMatchObject({ action: 'Deleted custom entity', target: entity })
+      expect(await detector()).toBeUndefined()
+      expect((await catalog.api<{ entities: string[] }>('/rules/vocabulary')).entities).not.toContain(entity)
+    } finally {
+      if (ruleId) {
+        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((x) => x.id === ruleId)?.etag
+        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+      }
+      const left = (await detector())?.customEntity
+      if (left) await send('DELETE', `/entities/${left.id}`, undefined, left.etag).catch(() => {})
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`).catch(() => {})
+    }
+  }, 90_000)
 
   it('syncs prices from LiteLLM per (model, backend), with audit rows', async () => {
     type P = import('@/data/catalog').PricingView
