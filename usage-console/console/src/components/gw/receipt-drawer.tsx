@@ -142,7 +142,8 @@ function ReceiptBody({ r }: { r: Receipt }) {
     { label: 'Input', tok: inputBilled, rate: basis?.inPerM, source: basis?.sources?.input },
     { label: 'Cached input', tok: r.cachedInputTokens, rate: basis?.cachedPerM, source: basis?.sources?.cachedInput },
     ...(cacheWrites > 0 || basis?.cacheWritePerM != null ? [{ label: 'Cache write', tok: cacheWrites, rate: basis?.cacheWritePerM, source: basis?.sources?.cacheWrite }] : []),
-    { label: 'Output', tok: r.outputTokens, rate: basis?.outPerM, source: basis?.sources?.output },
+    // Output tokens include reasoning (as OpenAI and Agent Router count them), which bills at its own rate.
+    { label: 'Output', tok: Math.max(r.outputTokens - r.reasoningTokens, 0), rate: basis?.outPerM, source: basis?.sources?.output },
     { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM, source: basis?.sources?.reasoning },
   ]
   // Refused before the upstream call: blocked, or throttled for now.
@@ -324,7 +325,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
               <tr className="font-medium">
                 <td className="py-1.5">Total</td>
                 <td className="py-1.5 text-right">
-                  <TokenCount value={r.inputTokens + r.outputTokens + r.reasoningTokens} exact unknown={r.inFlight} />
+                  <TokenCount value={r.inputTokens + r.outputTokens} exact unknown={r.inFlight} />
                 </td>
                 <td />
                 <td className="py-1.5 text-right">

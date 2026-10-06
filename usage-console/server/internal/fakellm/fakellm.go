@@ -169,10 +169,11 @@ func Simulate(backend string, req ChatRequest, r *rand.Rand) Plan {
 	if strings.HasPrefix(req.Model, "claude") && r.Float64() < 0.3 {
 		u.PromptTokensDetails.CacheCreationTokens = int(float64(prompt-u.PromptTokensDetails.CachedTokens) * r.Float64())
 	}
+	// Reasoning is inside completion_tokens, as OpenAI reports it.
 	if strings.HasPrefix(req.Model, "gpt-5") && r.Float64() < 0.5 {
-		u.CompletionTokensDetails.ReasoningTokens = int(r.Float64() * 3000)
+		u = OpenAIReasoning(u, int(r.Float64()*3000))
 	}
-	u.TotalTokens = u.PromptTokens + u.CompletionTokens + u.CompletionTokensDetails.ReasoningTokens
+	u.TotalTokens = u.PromptTokens + u.CompletionTokens
 
 	// Content is roughly out tokens long, emitted in ~8-token chunks.
 	var chunks []string

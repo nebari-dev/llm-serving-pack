@@ -518,7 +518,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     for (const e of v.events) expect(text).toContain(e.title)
     // The mockup's invented readouts and traffic events are gone.
     for (const s of ['p50 latency, route default', 'traffic on new secret', 'anthropic-prod failover began', 'throttle policy engaged', ...seeded]) expect(text).not.toContain(s)
-  })
+  }, 20_000) // renders the whole Activity page; past 5s when the suite runs alongside traffic
 
   it('reports the real retention policy and capture routes on Settings', async () => {
     type R = import('@/data/catalog').RetentionView
@@ -2697,6 +2697,25 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(r.outputTokens).toBe(body.usage.completion_tokens)
       expect(r.reasoningTokens).toBe(1000)
       expect(r.outputTokens - r.reasoningTokens).toBe(visible)
+      // Reasoning bills once: the visible output at the output rate, the 1000 at the reasoning rate.
+      const full = r as unknown as import('@/data/catalog').Receipt
+      const b = full.costBasis!
+      const writes = full.cacheWriteTokens ?? 0
+      const uncached = full.inputTokens - full.cachedInputTokens - writes
+      const want = (uncached * b.inPerM! + full.cachedInputTokens * b.cachedPerM! + writes * (b.cacheWritePerM ?? 0) + visible * b.outPerM! + 1000 * b.reasoningPerM!) / 1e6
+      expect(full.costUsd).toBeCloseTo(want, 9)
+      // The receipt drawer shows the same split and adds up to the receipt's cost.
+      window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
+      render(<App />)
+      await act(async () => {
+        await new Promise((ok) => setTimeout(ok, 800))
+      })
+      const text = document.body.textContent ?? ''
+      cleanup()
+      // Each line reads label, rate source, tokens, rate, cost.
+      expect(text).toMatch(new RegExp(`Output\\D*${visible.toLocaleString('en-US')}\\$`))
+      expect(text).toMatch(/Reasoning\D*1,000\$/)
+      expect(text).toContain(`Total${(full.inputTokens + full.outputTokens).toLocaleString('en-US')}$`)
     } finally {
       await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
     }

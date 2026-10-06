@@ -1,6 +1,7 @@
 package fakellm
 
 import (
+	"math/rand/v2"
 	"strings"
 	"testing"
 )
@@ -33,5 +34,30 @@ func TestOpenAIReasoningIsInsideCompletionTokens(t *testing.T) {
 	u := p.Usage
 	if u.CompletionTokens != visible+1000 || u.CompletionTokensDetails.ReasoningTokens != 1000 || u.TotalTokens != prompt+visible+1000 {
 		t.Fatalf("usage %+v, visible %d", u, visible)
+	}
+}
+
+// Simulated traffic reports reasoning as OpenAI does, inside
+// completion_tokens, so the fake bills like the real thing.
+func TestSimulateReportsReasoningInsideCompletion(t *testing.T) {
+	seen := false
+	for seed := range uint64(200) {
+		p := Simulate("openai-prod", ChatRequest{Model: "gpt-5.5", Messages: []Message{{Role: "user", Content: "hi"}}}, rand.New(rand.NewPCG(seed, 1)))
+		u := p.Usage
+		if p.Status != 200 {
+			continue
+		}
+		if u.TotalTokens != u.PromptTokens+u.CompletionTokens {
+			t.Fatalf("total %d, want prompt %d + completion %d", u.TotalTokens, u.PromptTokens, u.CompletionTokens)
+		}
+		if r := u.CompletionTokensDetails.ReasoningTokens; r > 0 {
+			seen = true
+			if r > u.CompletionTokens {
+				t.Fatalf("reasoning %d isn't inside completion %d", r, u.CompletionTokens)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no simulated request reasoned")
 	}
 }

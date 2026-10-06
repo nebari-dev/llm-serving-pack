@@ -26,7 +26,7 @@ func TestCostSplitsInputIntoUncachedCachedAndCacheWrites(t *testing.T) {
 	// Cache reads and writes are part of input_tokens, so 1000 in with 200
 	// read and 100 written bills 700 at the input rate.
 	got := Cost(r, Tokens{Input: 1000, Cached: 200, CacheWrite: 100, Output: 500, Reasoning: 50})
-	near(t, got, (700*2+200*0.2+100*2.5+500*10+50*10)/1e6)
+	near(t, got, (700*2+200*0.2+100*2.5+450*10+50*10)/1e6) // the 50 reasoning are inside the 500 output
 }
 
 func TestCostIsNilWhenANeededRateIsMissing(t *testing.T) {
@@ -201,4 +201,14 @@ func TestParseFacts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
+}
+
+// Output counts include reasoning, as Agent Router logs OpenAI's
+// completion_tokens (decisions §1): reasoning bills once, at its own rate,
+// and the rest of the output at the output rate.
+func TestCostBillsReasoningOnceInsideOutput(t *testing.T) {
+	r := all(1, 0.1, 1.25, 10, 20) // per 1M tokens
+	near(t, Cost(r, Tokens{Output: 1000, Reasoning: 400}), (600*10+400*20)/1e6)
+	// More reasoning than output (a provider that reports them apart) never bills negative output.
+	near(t, Cost(r, Tokens{Output: 100, Reasoning: 400}), 400*20/1e6)
 }

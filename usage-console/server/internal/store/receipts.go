@@ -44,7 +44,7 @@ func receiptValues(r *model.Receipt) []any {
 	return []any{
 		r.ID, time.UnixMilli(r.TS), r.TenantID, r.TraceID, nullStr(r.SessionID), r.DurationMS, r.TTFTMS, r.KeyID, r.KeyName, r.Team, r.Project, nullStr(r.Actor),
 		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
-		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens + r.ReasoningTokens, r.CostUSD, basis, r.CacheWriteTokens,
+		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens, r.CostUSD, basis, r.CacheWriteTokens,
 		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
 		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS, nullStr(r.ProjectID),
 	}

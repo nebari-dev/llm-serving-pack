@@ -75,9 +75,10 @@ func TestReceiptAllowed(t *testing.T) {
 	if rc.SessionID != "" || rc.TTFTMS == nil || *rc.TTFTMS != 120 || rc.Verdict != "allowed" {
 		t.Errorf("session=%q ttft=%v verdict=%s", rc.SessionID, rc.TTFTMS, rc.Verdict)
 	}
-	// (700*1 + 200*0.5 + 100*2 + 500*4 + 100*4) / 1e6: cache reads and
-	// writes are part of the 1000 input tokens.
-	if want := 0.0034; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
+	// (700*1 + 200*0.5 + 100*2 + 400*4 + 100*4) / 1e6: cache reads and
+	// writes are part of the 1000 input tokens, the 100 reasoning part of
+	// the 500 output.
+	if want := 0.003; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
 		t.Errorf("cost = %v, want %v", cost(rc), want)
 	}
 	if rc.CacheWriteTokens != 100 {
@@ -92,7 +93,7 @@ func TestReceiptAllowed(t *testing.T) {
 
 func TestReceiptIsPricedForTheBackendThatServedIt(t *testing.T) {
 	rc, _ := Receipt(snap, record(map[string]string{"gen_ai.provider.name": "default/azure-openai-eu/route/aigw-run/rule/0/ref/0"}))
-	if want := (700*2 + 200*1 + 100*2 + 500*8 + 100*8) / 1e6; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
+	if want := (700*2 + 200*1 + 100*2 + 400*8 + 100*8) / 1e6; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
 		t.Errorf("cost = %v, want %v", cost(rc), want)
 	}
 }
@@ -114,7 +115,7 @@ func TestReceiptIsPricedAtItsOwnTime(t *testing.T) {
 		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 1, 1, 1, 1), From: priceFrom, To: &change},
 		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(2, 2, 2, 2, 2), From: change},
 	}}
-	tok := 700.0 + 200 + 100 + 500 + 100
+	tok := 700.0 + 200 + 100 + 400 + 100 // reasoning is inside output
 	for _, c := range []struct {
 		name string
 		at   time.Time

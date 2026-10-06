@@ -59,13 +59,14 @@ func (r Rates) Priced() bool {
 }
 
 // Tokens are a receipt's counts. Cached (cache reads) and CacheWrite are
-// part of Input, as in OpenAI's usage.
+// part of Input, and Reasoning is part of Output, as in OpenAI's usage and
+// as Agent Router logs them (decisions §1).
 type Tokens struct{ Input, Cached, CacheWrite, Output, Reasoning int }
 
 // Cost is what tokens cost at r, or nil when a rate they need is missing:
 // an unpriced request has no cost rather than $0.
 func Cost(r Rates, t Tokens) *float64 {
-	n := [NumRates]int{max(t.Input-t.Cached-t.CacheWrite, 0), t.Cached, t.CacheWrite, t.Output, t.Reasoning}
+	n := [NumRates]int{max(t.Input-t.Cached-t.CacheWrite, 0), t.Cached, t.CacheWrite, max(t.Output-t.Reasoning, 0), t.Reasoning}
 	if !r.Priced() && n == ([NumRates]int{}) {
 		return nil
 	}

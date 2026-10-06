@@ -64,11 +64,11 @@ audited. Any sync would write through the same path.
     scheduled, the synced row runs until it.
   - LiteLLM has no cached, cache-write or reasoning rate for some entries.
     Those tokens then bill at its input or output rate.
-- **Decide: reasoning tokens may be billed twice.** The cost formula adds
-  `reasoning_tokens × reasoning rate` to `output_tokens × output rate`. The
-  fake upstream's simulated traffic reports reasoning apart from completion
-  tokens, so that holds for it. OpenAI counts reasoning inside
-  `completion_tokens`, so real traffic is charged twice.
+- **Decided and built 2026-10-06: reasoning bills once, inside output.**
+  The cost formula used to add `reasoning_tokens × reasoning rate` to
+  `output_tokens × output rate`, but OpenAI (and so Agent Router) counts
+  reasoning inside `completion_tokens`, so real traffic was charged twice.
+  Now it's the recommendation below; the evidence follows.
   - **Confirmed (2026-10-05), from Agent Router's source**
     (`theagentrouter/agent-router` tag `v1.1.0`, commit `c217da8a`):
     - Our generated config (see
@@ -104,15 +104,16 @@ audited. Any sync would write through the same path.
   - The fake upstream now takes `X-Fake-Reasoning: n` to report n reasoning
     tokens OpenAI's way (`fakellm.OpenAIReasoning`). An api-mode test sends
     one and asserts `outputTokens` = `completion_tokens` and
-    `reasoningTokens` = n. Not run yet.
-  - **Recommendation.** Treat reasoning as a part of output, as cached
+    `reasoningTokens` = n, the receipt's cost, and the drawer's lines.
+  - **Built (user's go-ahead 2026-10-06).** Treat reasoning as a part of output, as cached
     input is a part of input: bill `max(output − reasoning, 0) × output rate
     + reasoning × reasoning rate`. When the reasoning rate equals the output
     rate (LiteLLM's fallback) that's `output × output rate`. Anthropic's
     reasoning is 0, so its cost doesn't change. Change with it:
     `total_tokens` = input + output, the drawer's output line shows output
     − reasoning, and `fakellm.Simulate` reports OpenAI's way (or its
-    traffic under-bills). Receipts already written keep their cost.
+    traffic under-bills). Receipts already written keep their cost; an
+    unpriced one priced later uses the new formula.
 
 **Decide: schema gaps a real price list exposes.** Per-backend prices and
 cache writes are done (above).
