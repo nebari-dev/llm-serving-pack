@@ -436,10 +436,12 @@ type Receipt struct {
 	ErrorDetail       string      `json:"errorDetail,omitempty"`
 	RequestHash       string      `json:"requestHash"`
 	ResponseHash      string      `json:"responseHash"`
-	ContentCaptured   bool        `json:"contentCaptured"`
-	Content           any         `json:"-"`
-	InFlight          bool        `json:"inFlight,omitempty"`
-	Trace             []TraceStep `json:"trace"`
+	// DataRegion is the request's x-data-region header, "" if none or not recorded.
+	DataRegion      string      `json:"dataRegion,omitempty"`
+	ContentCaptured bool        `json:"contentCaptured"`
+	Content         any         `json:"-"`
+	InFlight        bool        `json:"inFlight,omitempty"`
+	Trace           []TraceStep `json:"trace"`
 }
 
 type SeriesPoint struct {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -260,6 +261,9 @@ type RevealedContent struct {
 func (s *Server) revealContent(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	id := r.PathValue("id")
 	content, err := s.Store.ReceiptContent(r.Context(), t, id)
+	if errors.Is(err, store.ErrContentMissing) {
+		return nil, conflict("This request's route captured it, but its content isn't stored: it can take a few seconds to arrive, or Warden dropped it under load. Try again shortly.")
+	}
 	if err != nil {
 		return nil, err
 	}

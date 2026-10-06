@@ -229,8 +229,8 @@ Done: policies as §5.2 has them (built 2026-10-06). A policy is an ordered
 list of rules with one mode (draft, enforce, monitor, disabled) and one fail
 mode, and it's what is created, drafted, published (versioned, immutable),
 rolled back, reordered and deleted (when not live). First publish defaults to
-monitor mode. Publish's `dryRun` reports the change and its reroute conflicts,
-and says replay isn't connected.
+monitor mode. Publish's `dryRun` reports the change, its reroute conflicts,
+and its replay (built 2026-10-06, below).
 
 - **Console builder follows the engine (decided 2026-09-30).** In api mode the
   Guardrails builder offers, per rule, one all-of list of conditions, and says
@@ -298,9 +298,37 @@ and says replay isn't connected.
   reply isn't restored, and the receipt says so. Confirm these defaults.
 - History before migration 004 wasn't kept: seeded policies have only their
   current version, with `publishedAt`/`publishedBy` null.
-- Replay (§7.5.7), re-running past traffic against a new policy to see what
-  it would have caught, doesn't exist yet. It's what publish's dry run should
-  return; until it does, the dry run can't tell you much.
+- **Replay and per-route capture (built 2026-10-06, user's spec: capture
+  is opt-in per route; replay content exactly where a route captured, and
+  metadata-only rules over everything else; say which each result is).**
+  What shipped is in console-real-data.md (Replay). Defaults I picked:
+  - **What's stored is masked.** §4.6 says "raw prompt/response capture",
+    §9.2 says detected values never appear in what's kept. I followed §9.2:
+    every detector match is a placeholder, whether or not a rule acted on it.
+    Text no detector recognises (names, addresses) is kept as sent, and the
+    confirm dialog says so. Replay stays exact for "contains entity" because
+    each placeholder turns back into a made-up value of its entity. Catch: a
+    prompt that literally contains `[EMAIL_1]` replays as an email.
+  - **Which route.** The one the request takes as the caller sent it (model
+    and headers), among the routes the gateway runs. A request a policy
+    reroutes still counts as its original route's.
+  - **Capture applies at once**, not on the next routing apply: it changes
+    Warden, not the gateway's config. Its role is "capture" (security,
+    admin), like reveal.
+  - **The response kept is what the caller got** (rehydrated, then masked),
+    up to 1 MiB.
+  - **Replay ignores budgets, allowlists and backend health** (every backend
+    healthy), so a result is the policies' doing; it reads requests that
+    reached policy evaluation (not those refused by the key check, a budget
+    or the model), at most the newest 10,000.
+  - **The draft is replayed as enforced**, in the place of its policy (a new
+    one last), against the others as they are, monitoring ones included. The
+    publish dialog says monitor mode records rather than acts.
+  - **Replay is a read** (every role): it writes nothing and shows no
+    content, only counts and receipt links. No audit row.
+  - **Windows** 1h (default, as the spec's mockup), 24h, 7d, 30d.
+  - Receipts from before 2026-10-06 have no recorded `x-data-region`, so a
+    region rule treats them as having none.
 - **Custom entities (built 2026-10-06).** §5.3's registry, as regexes: a
   name, a pattern, a placeholder label, and examples that must and mustn't
   match, checked on every save. Warden loads them in its snapshot; rules
@@ -390,8 +418,9 @@ retire-old-secret-now are in.
     adopt, provenance (the seeded Console/Git/Adopted values are no longer
     shown in api mode), and a Kubernetes applier. The survey's direction is
     that Stargate only writes AIGatewayRoutes it owns.
-  - Not built: per-route content capture (the column stays; nothing
-    compiles it).
+  - Per-route content capture is built (2026-10-06, §3 Replay): Warden
+    decides it from the running routes; nothing about it compiles into the
+    gateway's config.
   - **Providers and their keys (decided 2026-10-05, built).** Backends are
     created, edited and deleted like routes (audit rows, If-Match; delete is
     refused while a route sends to one). Providers are API-key ones only:

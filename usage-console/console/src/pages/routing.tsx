@@ -61,7 +61,7 @@ export function CaptureMarker({ className }: { className?: string }) {
       tone="degraded"
       className={cn('font-semibold', className)}
       icon={<ShieldAlert className="size-3" aria-hidden="true" />}
-      title="Raw prompt and response content is stored for this route"
+      title="Prompts and responses on this route are kept for 30 days, with each detected value replaced by a placeholder"
     >
       Content capture on
     </StateChip>

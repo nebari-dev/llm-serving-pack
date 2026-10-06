@@ -19,7 +19,7 @@ var receiptCols = []string{
 	"requested_model", "resolved_model", "backend", "provider", "region", "route_reason", "fallback_from",
 	"input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "cost_usd", "cost_basis", "cache_write_tokens",
 	"verdict", "inbound_verdict", "redactions", "rules", "status", "error_code", "error_detail",
-	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id", "overhead_us", "project_id",
+	"request_hash", "response_hash", "content_captured", "content", "in_flight", "route_trace", "policy_mode", "secret_id", "overhead_us", "project_id", "data_region",
 }
 
 func nullStr(s string) *string {
@@ -46,7 +46,7 @@ func receiptValues(r *model.Receipt) []any {
 		r.RequestedModel, r.ResolvedModel, r.Backend, r.Provider, r.Region, r.RouteReason, nullStr(r.FallbackFrom),
 		r.InputTokens, r.CachedInputTokens, r.OutputTokens, r.ReasoningTokens, r.InputTokens + r.OutputTokens, r.CostUSD, basis, r.CacheWriteTokens,
 		r.Verdict, r.InboundVerdict, js(r.Redactions), js(r.Rules), r.Status, nullStr(r.ErrorCode), nullStr(r.ErrorDetail),
-		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS, nullStr(r.ProjectID),
+		r.RequestHash, r.ResponseHash, r.ContentCaptured, js(r.Content), r.InFlight, js(r.Trace), nullStr(r.PolicyMode), nullStr(r.SecretID), r.OverheadUS, nullStr(r.ProjectID), nullStr(r.DataRegion),
 	}
 }
 
@@ -509,23 +509,31 @@ func (s *Store) BackendStats(ctx context.Context, tenant string) (map[string]Bac
 	return out, rows.Err()
 }
 
-// ReceiptContent is the request and response stored with a receipt, or nil
+// ReceiptContent is the request and response kept for a receipt, or nil
 // when none was (content_captured false, the default: hashes only, §9.2).
-// Only the dev gateway's engine stores content today, for backends with
-// capture_content on; Agent Router's receipts (via ingest) never carry it.
+// Warden keeps it for requests on routes that capture (receipt_content); the
+// dev gateway's engine stored it on the receipt.
 func (s *Store) ReceiptContent(ctx context.Context, tenant, id string) ([]byte, error) {
 	var captured bool
 	var content []byte
-	err := s.Receipts.QueryRow(ctx, `SELECT content_captured, content FROM receipts
-		WHERE tenant_id = $1 AND id = $2 AND ts > now() - interval '30 days'`, tenant, id).Scan(&captured, &content)
+	err := s.Receipts.QueryRow(ctx, `SELECT r.content_captured, coalesce(c.content, r.content) FROM receipts r `+contentJoin+`
+		WHERE r.tenant_id = $1 AND r.id = $2 AND r.ts > now() - interval '30 days'`, tenant, id).Scan(&captured, &content)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	if err != nil || !captured || string(content) == "null" {
+	if err != nil || !captured {
 		return nil, err
+	}
+	if len(content) == 0 || string(content) == "null" {
+		return nil, ErrContentMissing
 	}
 	return content, nil
 }
+
+// ErrContentMissing: the request's route captured it, but no content is
+// stored: Warden writes it a moment after the receipt, or dropped it when its
+// queue was full.
+var ErrContentMissing = errors.New("content captured but not stored")
 
 // ReceiptAnyTenant fetches by id + ts only; the notify listener uses it.
 func (s *Store) ReceiptAnyTenant(ctx context.Context, id string, tsMS int64) (model.Receipt, error) {
@@ -534,4 +542,14 @@ func (s *Store) ReceiptAnyTenant(ctx context.Context, id string, tsMS int64) (mo
 		return r, ErrNotFound
 	}
 	return r, err
+}
+
+// CapturedContent is one request's content, as Warden keeps it for a route
+// that captures (spec §9.2): masked, with no detected value in it.
+type CapturedContent struct {
+	Tenant    string
+	ReceiptID string
+	Route     string
+	TS        time.Time // the request's start
+	Content   json.RawMessage
 }

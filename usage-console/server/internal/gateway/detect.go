@@ -20,17 +20,20 @@ type detector struct {
 	valid  func(string) bool
 	label  string // placeholder written over a redacted match
 	custom bool   // from the tenant's registry (store.CustomEntity)
+	// sample is a made-up value this detector matches, and no other does:
+	// replay puts it back where a placeholder stands (Unmask).
+	sample string
 }
 
 var detectors = map[string]detector{
-	"email":           {re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`), label: "EMAIL"},
-	"SSN":             {re: regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), label: "SSN"},
-	"phone":           {re: regexp.MustCompile(`\(\d{3}\) \d{3}-\d{4}|\b\d{3}-\d{3}-\d{4}\b`), label: "PHONE"},
-	"credit card":     {re: regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`), valid: luhn, label: "CARD"},
-	"secret":          {re: regexp.MustCompile(`\b(?:sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36})\b`), label: "SECRET"},
-	"private key":     {re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), label: "PRIVATE_KEY"},
-	"source code":     {re: regexp.MustCompile("(?m)^```[a-z]*\\n(?:.*\\n)*?```"), label: "CODE"},
-	"Acme account ID": {re: regexp.MustCompile(`\bACME-\d{8}\b`), label: "ACCOUNT"},
+	"email":           {re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`), label: "EMAIL", sample: "replay@example.com"},
+	"SSN":             {re: regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), label: "SSN", sample: "078-05-1120"},
+	"phone":           {re: regexp.MustCompile(`\(\d{3}\) \d{3}-\d{4}|\b\d{3}-\d{3}-\d{4}\b`), label: "PHONE", sample: "(555) 010-0199"},
+	"credit card":     {re: regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`), valid: luhn, label: "CARD", sample: "4111 1111 1111 1111"},
+	"secret":          {re: regexp.MustCompile(`\b(?:sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36})\b`), label: "SECRET", sample: "sk-REPLAYSAMPLE0000000000"},
+	"private key":     {re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), label: "PRIVATE_KEY", sample: "-----BEGIN PRIVATE KEY-----"},
+	"source code":     {re: regexp.MustCompile("(?m)^```[a-z]*\\n(?:.*\\n)*?```"), label: "CODE", sample: "\n```\nsample()\n```\n"},
+	"Acme account ID": {re: regexp.MustCompile(`\bACME-\d{8}\b`), label: "ACCOUNT", sample: "ACME-00000000"},
 }
 
 func luhn(s string) bool {
@@ -73,7 +76,11 @@ func NewDetectors(custom []store.CustomEntity) (*Detectors, error) {
 			errs = append(errs, fmt.Errorf("custom entity %s: %w", e.Name, err))
 			continue
 		}
-		d.byName[e.Name] = detector{re: regexp.MustCompile(e.Pattern), label: e.Label, custom: true}
+		var sample string
+		if len(e.MustMatch) > 0 {
+			sample = e.MustMatch[0]
+		}
+		d.byName[e.Name] = detector{re: regexp.MustCompile(e.Pattern), label: e.Label, custom: true, sample: sample}
 	}
 	return d, errors.Join(errs...)
 }

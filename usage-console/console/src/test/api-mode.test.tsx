@@ -539,7 +539,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   it('reveals captured content only after writing an audit row, and says when nothing was captured (§7.5.4, §9.2)', async () => {
     type R = { id: string; contentCaptured: boolean }
     // The test stack's backfill runs the dev gateway's engine, which stores
-    // content for vllm-internal (capture_content); Agent Router's receipts never carry it.
+    // content for vllm-internal (capture_content). Agent Router's come from
+    // routes that capture; the next test covers those.
     let captured: R | undefined
     for (const daysAgo of [0, 1, 3, 6]) {
       const rows = await catalog.api<R[]>(`/receipts?backend=vllm-internal&limit=1000&before=${Date.now() - daysAgo * 86_400_000}`)
@@ -574,6 +575,203 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const [row] = await catalog.api<{ action: string; target: string; actor: string }[]>('/changes?kind=Receipt&limit=1')
     expect(row).toMatchObject({ action: 'Revealed content', target: captured!.id, actor: 'dev@localhost' })
   })
+
+  // §9.2 and §7.5.7 through the real path: a route that captures keeps each
+  // request's content in Warden, masked, and replay runs a draft exactly over
+  // it, and on metadata alone over requests from routes that don't capture.
+  it('captures content per route, masked, and replays a draft exactly where it was captured (§7.5.7, §9.2)', async () => {
+    type Route = import('@/data/catalog').LiveRoute & { etag: string }
+    type C = import('@/data/catalog').Change
+    type Replay = import('@/data/catalog').ReplayView
+    type R = { id: string; contentCaptured: boolean }
+    const gw = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+    const name = `api-mode-capture-${Date.now().toString(36)}`
+    const send2 = <T,>(method: string, path: string, body?: unknown, ifMatch?: string) =>
+      catalog.api<T>(path, { method, body: body === undefined ? undefined : JSON.stringify(body), headers: ifMatch ? { 'If-Match': ifMatch } : {} })
+    const { key, secret } = await send2<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    const ask = async (content: string, headers: Record<string, string> = {}) => {
+      const res = await fetch(`${gw}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ model: 'gpt-5-mini', max_tokens: 20, messages: [{ role: 'user', content }] }),
+      })
+      expect(res.status, await res.text()).toBe(200)
+    }
+    const receipts = (n: number) =>
+      waitFor(async () => {
+        const rs = await catalog.api<R[]>(`/receipts?limit=${n}&key=${key.id}`)
+        expect(rs.length).toBe(n)
+        return rs // newest first
+      }, { timeout: 15_000, interval: 500 })
+    const route = (await catalog.api<Route[]>('/routes')).find((r) => r.match.models.includes('gpt-5-mini') && r.match.headers.length === 0)!
+    expect(route, 'a route serves gpt-5-mini to everyone').toBeTruthy()
+    expect(route.captureContent ?? false).toBe(false)
+    let etag = route.etag
+    let policyId = ''
+    try {
+      // Turning capture on is its own write: If-Match, an audit row, at once.
+      expect(await status(send2('PUT', `/routes/${route.name}/capture`, { captureContent: true }))).toBe(428)
+      const on = await send2<Route>('PUT', `/routes/${route.name}/capture`, { captureContent: true }, etag)
+      etag = on.etag
+      expect(on.captureContent).toBe(true)
+      expect(on.sync).toBe(route.sync) // nothing to apply: the gateway's config doesn't change
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Turned on content capture', target: route.name, targetKind: 'Route' })
+
+      await ask('mail ana@example.com or call (555) 123-4567 about the invoice', { 'X-Data-Region': 'eu' })
+      const [captured] = await receipts(1)
+      expect(captured.contentCaptured).toBe(true)
+      // Warden writes the content beside the receipt, so it can land a moment later.
+      const shown = await waitFor(async () => JSON.stringify(await catalog.api<{ content: unknown }>(`/receipts/${captured.id}/reveal`, { method: 'POST' })), { timeout: 10_000, interval: 500 })
+      expect(shown).toContain('mail [EMAIL_1] or call [PHONE_1] about the invoice')
+      for (const v of ['ana@example.com', '123-4567']) expect(shown).not.toContain(v) // §9.2: detected values are never stored
+
+      const off = await send2<Route>('PUT', `/routes/${route.name}/capture`, { captureContent: false }, etag)
+      etag = off.etag
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Turned off content capture', target: route.name })
+      await ask('call (555) 987-6543 too')
+      const [plain] = await receipts(2)
+      expect(plain.contentCaptured).toBe(false)
+
+      // A draft that blocks this key's phone numbers: exact on the captured
+      // request; the other has no content, so the rule can't run on it, and
+      // says so. (Emails wouldn't do: no-pii-out redacts them first.)
+      const mine = { field: 'key', op: 'is', value: [name] }
+      const made = await send2<{ id: string }>('POST', '/policies', {
+        name, description: 'api-mode replay', failMode: 'closed',
+        rules: [{ name: 'no-phone', when: [mine, { field: 'prompt', op: 'contains entity', value: ['phone'] }], then: [{ action: 'block', detail: '' }] }],
+      })
+      policyId = made.id
+      const r = await send2<Replay>('POST', `/policies/${policyId}/replay?window=1h`)
+      expect(r).toMatchObject({ window: '1h', replayed: 'draft', limit: 10_000 })
+      expect(r.total).toBe(r.exact.requests + r.metadata.requests)
+      expect(r.exact.requests).toBeGreaterThanOrEqual(1)
+      expect(r.affected).toEqual([expect.objectContaining({ id: captured.id, kind: 'exact', from: 'redacted 1 email · rerouted to eu-private', to: `blocked by ${name}/no-phone`, team: 'support', key: name })])
+      expect(r.skippedRules).toContain(`${name}/no-phone`)
+
+      // Rules on who, and on the region header, run on everything.
+      const eu = await send2<Replay>('POST', `/policies/${policyId}/replay?window=1h`, {
+        name, description: 'unsaved', failMode: 'closed',
+        rules: [{ name: 'eu', when: [mine, { field: 'header x-data-region', op: 'equals', value: ['eu'] }], then: [{ action: 'block', detail: '' }] }],
+      })
+      expect(eu.replayed).toBe('unsaved')
+      expect(eu.affected.map((a) => [a.id, a.kind])).toEqual([[captured.id, 'exact']])
+      const who = await send2<Replay>('POST', `/policies/${policyId}/replay?window=1h`, {
+        name, description: 'unsaved', failMode: 'closed', rules: [{ name: 'who', when: [mine], then: [{ action: 'block', detail: '' }] }],
+      })
+      expect(who.affected.map((a) => [a.id, a.kind])).toEqual([[plain.id, 'metadata'], [captured.id, 'exact']])
+      expect(who.metadata.newlyBlocked).toBe(1)
+      expect(who.exact.newlyBlocked).toBe(1)
+      expect(await status(send2('POST', `/policies/${policyId}/replay?window=2h`))).toBe(400)
+
+      // The publish dry run carries the same replay (§6).
+      const dry = await send2<{ replay: Replay }>('POST', `/policies/${policyId}/publish?dryRun=true`, { mode: 'enforce' })
+      expect(dry.replay.affected.map((a) => a.id)).toEqual([captured.id])
+    } finally {
+      const cur = (await catalog.api<Route[]>('/routes')).find((r) => r.name === route.name)!
+      if (cur.captureContent) await send2('PUT', `/routes/${route.name}/capture`, { captureContent: false }, cur.etag)
+      if (policyId) {
+        const p = (await catalog.api<{ id: string; etag: string }[]>('/policies')).find((x) => x.id === policyId)
+        if (p) await send2('DELETE', `/policies/${policyId}`, undefined, p.etag).catch(() => {})
+      }
+      await send2('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
+
+  it('turns content capture on and off from Routing, with a warning, and marks the route wherever it appears (§7.6, §9.2)', async () => {
+    type Route = import('@/data/catalog').LiveRoute
+    type C = import('@/data/catalog').Change
+    const route = (await catalog.api<Route[]>('/routes')).find((r) => r.match.models.includes('gpt-5-mini') && r.match.headers.length === 0)!
+    const card = () => screen.getByRole('heading', { name: route.name }).closest('li')!
+    try {
+      window.history.pushState({}, '', '/routing')
+      render(<App />)
+      await screen.findByRole('heading', { name: route.name })
+      expect(within(card()).queryByText('Content capture on')).toBeNull()
+      fireEvent.click(within(card()).getByRole('button', { name: `Content capture for ${route.name}` }))
+      let dialog = await formDialog()
+      expect(dialog.textContent).toContain(`Capture content on ${route.name}?`)
+      expect(dialog.textContent).toMatch(/replaced by a placeholder/)
+      expect(dialog.textContent).toMatch(/kept 30 days/)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Turn on capture' }))
+      await formDialogClosed()
+      await waitFor(() => expect(within(card()).getByText('Content capture on')).toBeTruthy())
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Turned on content capture', target: route.name })
+      cleanup()
+
+      // Traffic and Settings carry the marker while it's on.
+      window.history.pushState({}, '', '/traffic')
+      render(<App />)
+      await waitFor(() => expect(screen.getByRole('status', { name: 'Content capture' }).textContent).toContain(route.name), { timeout: 5000 })
+      cleanup()
+      window.history.pushState({}, '', '/settings')
+      render(<App />)
+      await waitFor(() => expect(document.body.textContent).toContain(route.name), { timeout: 5000 })
+      expect(document.body.textContent).not.toContain('Changing capture isn’t connected yet')
+      cleanup()
+
+      window.history.pushState({}, '', '/routing')
+      render(<App />)
+      await screen.findByRole('heading', { name: route.name })
+      await waitFor(() => expect(within(card()).getByText('Content capture on')).toBeTruthy(), { timeout: 5000 })
+      fireEvent.click(within(card()).getByRole('button', { name: `Content capture for ${route.name}` }))
+      dialog = await formDialog()
+      expect(dialog.textContent).toContain(`Stop capturing content on ${route.name}?`)
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Turn off capture' }))
+      await formDialogClosed()
+      await waitFor(() => expect(within(card()).queryByText('Content capture on')).toBeNull())
+    } finally {
+      const cur = (await catalog.api<Route[]>('/routes')).find((r) => r.name === route.name)!
+      if (cur.captureContent) await catalog.api(`/routes/${route.name}/capture`, { method: 'PUT', body: JSON.stringify({ captureContent: false }), headers: { 'If-Match': cur.etag } })
+    }
+  }, 30_000)
+
+  it('replays a policy from Guardrails and says which results are exact and which metadata only (§7.5.7)', async () => {
+    type C = import('@/data/catalog').Change
+    const gw = (import.meta.env.VITE_STARGATE_GATEWAY as string | undefined) ?? 'http://localhost:1975'
+    const name = `api-mode-replay-${Date.now().toString(36)}`
+    const { key, secret } = await catalog.api<{ key: { id: string }; secret: string }>('/keys', {
+      method: 'POST', body: JSON.stringify({ name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01' }),
+    })
+    let policyId = ''
+    try {
+      const res = await fetch(`${gw}/v1/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-5-mini', max_tokens: 20, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      expect(res.status).toBe(200)
+      const [receipt] = await waitFor(async () => {
+        const rs = await catalog.api<{ id: string }[]>(`/receipts?limit=1&key=${key.id}`)
+        expect(rs.length).toBe(1)
+        return rs
+      }, { timeout: 15_000, interval: 500 })
+      policyId = (await catalog.api<{ id: string }>('/policies', {
+        method: 'POST', body: JSON.stringify({ name, description: 'api-mode replay UI', failMode: 'closed', rules: [{ name: 'stop', when: [{ field: 'key', op: 'is', value: [name] }], then: [{ action: 'block', detail: '' }] }] }),
+      })).id
+      const before = (await catalog.api<C[]>('/changes'))[0]
+
+      window.history.pushState({}, '', `/guardrails?rule=${policyId}`)
+      render(<App />)
+      const pane = await screen.findByRole('complementary', { name: 'Replay' })
+      expect(pane.textContent).toMatch(/Replay reads raw receipts, kept 30 days/)
+      await waitFor(() => expect(screen.getByLabelText<HTMLInputElement>('Policy name').value).toBe(name), { timeout: 5000 })
+      fireEvent.click(await within(pane).findByRole('button', { name: 'Replay draft' }))
+      await waitFor(() => expect(pane.textContent).toMatch(/Replayed against [\d,]+ requests? from the last hour\. [\d,]+ had content available; [\d,]+ evaluated on metadata only\./), { timeout: 10_000 })
+      const meta = within(pane).getByRole('region', { name: 'Metadata only' })
+      expect(meta.textContent).toMatch(/Would newly block 1/)
+      const link = within(pane).getByRole('link', { name: new RegExp(`allowed → blocked by ${name}/stop`) })
+      expect(link.getAttribute('href')).toBe(`/traffic?receipt=${receipt.id}`)
+      expect(link.textContent).toContain('Metadata only')
+      // Replay writes nothing.
+      expect((await catalog.api<C[]>('/changes'))[0]).toEqual(before)
+    } finally {
+      if (policyId) {
+        const p = (await catalog.api<{ id: string; etag: string }[]>('/policies')).find((x) => x.id === policyId)
+        if (p) await catalog.api(`/policies/${policyId}`, { method: 'DELETE', headers: { 'If-Match': p.etag } }).catch(() => {})
+      }
+      await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' }).catch(() => {})
+    }
+  }, 40_000)
 
   it('serves Spend from the aggregates, matching Overview, with its basis', async () => {
     type View = import('@/data/catalog').SpendView
@@ -2427,15 +2625,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(await latest()).toMatchObject({ action: 'Created policy', target: name, targetKind: 'Policy' })
       expect(await status(send('POST', '/policies', policy))).toBe(409) // names are unique
 
-      const dry = await send<{ dryRun: boolean; changes: { field: string; from: unknown; to: unknown }[]; warnings: string[]; replay: null; note: string }>(
+      const dry = await send<{ dryRun: boolean; changes: { field: string; from: unknown; to: unknown }[]; warnings: string[]; replay: import('@/data/catalog').ReplayView }>(
         'POST', `/policies/${id}/publish?dryRun=true`, { mode: 'enforce' },
       )
       expect(dry.changes).toEqual(expect.arrayContaining([{ field: 'mode', from: 'draft', to: 'enforce' }, { field: 'version', from: 0, to: 1 }]))
       expect(dry.changes.map((c) => c.field)).toContain('rules')
       // The seeded eu-only reroutes too, earlier in order: the later reroute wins, and authoring says so.
       expect(dry.warnings).toEqual(expect.arrayContaining([expect.stringContaining('Policy eu-only runs before this one and reroutes too')]))
-      expect(dry.replay).toBeNull()
-      expect(dry.note).toMatch(/Replay .* isn't connected yet/)
+      // §6: a policy's dry run carries its replay (§7.5.7) over the last hour.
+      expect(dry.replay).toMatchObject({ window: '1h', replayed: 'draft' })
+      expect(dry.replay.total).toBe(dry.replay.exact.requests + dry.replay.metadata.requests)
       expect((await catalog.api<V[]>('/policies')).find((r) => r.id === id)).toMatchObject({ mode: 'draft', version: 0 })
 
       // First publish: monitor mode by default. Traffic isn't blocked.
@@ -2534,7 +2733,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       render(<App />)
       await act(async () => {})
       // What the engine doesn't do is stated, not simulated.
-      await screen.findByText(/Replay isn’t connected yet/)
+      // Replay runs the draft over recorded traffic (§7.5.7).
+      await within(await screen.findByRole('complementary', { name: 'Replay' })).findByRole('button', { name: 'Replay draft' })
       const builder = screen.getByRole('region', { name: 'Policy builder' })
       // r1 (a policy of one rule since migration 045) rehydrates on return, and Warden does it.
       await waitFor(() => expect(builder.textContent).toContain('Warden puts the values back in the response'), { timeout: 5000 })
@@ -2593,7 +2793,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await waitFor(() => expect(publish).toHaveProperty('disabled', false))
       fireEvent.click(publish)
       let dialog = await formDialog()
-      await waitFor(() => expect(dialog.textContent).toMatch(/Replay against recorded traffic isn.t connected yet/), { timeout: 5000 })
+      await waitFor(() => expect(dialog.textContent).toMatch(/Replayed against [\d,]+ requests? from the last hour|No requests in the last hour reached the policies/), { timeout: 5000 })
       expect(dialog.textContent).toMatch(/Mode\s*draft\s*→\s*monitor/)
       fireEvent.click(within(dialog).getByRole('radio', { name: /^Enforce/ }))
       await waitFor(() => expect(dialog.textContent).toMatch(/Mode\s*draft\s*→\s*enforce/), { timeout: 5000 })

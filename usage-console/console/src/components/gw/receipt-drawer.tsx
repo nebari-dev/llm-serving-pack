@@ -411,7 +411,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border-strong p-3">
                   <p className="text-sm text-muted-foreground-strong">
-                    Content was stored for this request (backend <span className="font-mono">{r.backend}</span> captures it). Revealing it writes an audit record naming you first.
+                    Content was kept for this request: its route captures content, with each detected value replaced by a placeholder. Revealing it writes an audit record naming you first.
                   </p>
                   <Button variant="outline" size="sm" onClick={reveal} disabled={busy === 'reveal' || !can('capture').ok} title={can('capture').reason} data-print-hide>
                     <Eye /> {busy === 'reveal' ? 'Revealing…' : 'Reveal content'}

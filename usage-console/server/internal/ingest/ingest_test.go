@@ -425,3 +425,16 @@ func TestReceiptNativeTwinIsItsBackend(t *testing.T) {
 		t.Errorf("odd-native: %s %s", rc.Backend, rc.Provider)
 	}
 }
+
+// Warden says whether the request's route captured content, and which
+// x-data-region it carried; replay (§7.5.7) needs both back.
+func TestReceiptRecordsCaptureAndRegion(t *testing.T) {
+	p := `{"mode":"enforced","verdict":"allowed","rules":[],"redactions":[],"dataRegion":"eu","contentCaptured":true,"trace":[]}`
+	rc, err := Receipt(snap, record(map[string]string{"stargate.key_id": "k1", "stargate.team": "support", "stargate.project": "p", "stargate.policy": p}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rc.ContentCaptured || rc.DataRegion != "eu" {
+		t.Errorf("captured %v region %q", rc.ContentCaptured, rc.DataRegion)
+	}
+}

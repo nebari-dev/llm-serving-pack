@@ -100,12 +100,15 @@ func main() {
 		}
 	}}
 	w.SetPassthrough(*passthrough)
+	// Content from routes that capture (§9.2) is written off the request path.
+	contents := st.NewContentWriter(ctx, 1024)
+	w.Capture = contents.Put
 
 	age := func() float64 { return time.Since(time.Unix(0, loadedAt.Load())).Seconds() }
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(rw).Encode(map[string]any{"snapshotAgeSeconds": age(), "passthrough": w.Passthrough(), "deadlineMs": deadline.Milliseconds(), "version": buildinfo.Get()})
+		json.NewEncoder(rw).Encode(map[string]any{"snapshotAgeSeconds": age(), "passthrough": w.Passthrough(), "deadlineMs": deadline.Milliseconds(), "captureDropped": contents.Dropped.Load(), "version": buildinfo.Get()})
 	})
 	mux.HandleFunc("GET /metrics", func(rw http.ResponseWriter, _ *http.Request) {
 		pt := 0

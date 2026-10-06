@@ -203,7 +203,7 @@ func (s *Server) createRoute(w http.ResponseWriter, r *http.Request, t string) (
 	if err != nil {
 		return nil, err
 	}
-	in.CaptureContent = false // not editable yet: it compiles to nothing in the gateway
+	in.CaptureContent = false // capture is its own write (PUT /routes/{name}/capture), for an elevated role
 	if dryRun(r) {
 		return RouteDryRun{true, in, routing.RuleYAML(in, backends)}, nil
 	}
@@ -361,7 +361,7 @@ func (s *Server) applyRouting(w http.ResponseWriter, r *http.Request, t string) 
 	if applyErr != nil {
 		msg = applyErr.Error()
 	}
-	if err := s.Store.RecordApply(ctx, t, actor(r), applyErr == nil, msg, p.Changes, tries); err != nil {
+	if err := s.Store.RecordApply(ctx, t, actor(r), applyErr == nil, msg, p.Changes, tries, rs); err != nil {
 		return nil, err
 	}
 	if applyErr != nil {

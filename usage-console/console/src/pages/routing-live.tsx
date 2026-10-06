@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowRight, ArrowUp, Download, FileCode, KeyRound, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { ArrowDown, ArrowRight, ArrowUp, Download, FileCode, KeyRound, Pencil, Plus, ShieldAlert, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { DiffView } from '@/components/gw/diff-view'
@@ -16,7 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { api, ApiError, can, type Backend, backends as seedBackends, type LiveRoute, liveRoutes, type RouteTarget, type RoutingPlan } from '@/data/catalog'
+import { api, ApiError, can, type Backend, backends as seedBackends, type LiveRoute, liveRoutes, type RouteTarget, type RoutingPlan, setRouteCapture } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -118,7 +118,7 @@ export function LiveRoutingPage() {
 
       <TabsPanel value="routes">
         <ApplyBar plan={plan.data} onApplied={reload} />
-        <RoutesList routes={routes.data} loaded={routes.loaded} onNew={() => setEditing('new')} onEdit={setEditing} onDeleted={reload} />
+        <RoutesList routes={routes.data} loaded={routes.loaded} onNew={() => setEditing('new')} onEdit={setEditing} onChanged={reload} />
       </TabsPanel>
       <TabsPanel value="backends">
         <BackendsTable items={backends.data} onOpen={setSelected} />
@@ -309,16 +309,17 @@ function RoutesList({
   loaded,
   onNew,
   onEdit,
-  onDeleted,
+  onChanged,
 }: {
   routes: LiveRoute[]
   loaded: boolean
   onNew: () => void
   onEdit: (r: LiveRoute) => void
-  onDeleted: () => void
+  onChanged: () => void
 }) {
   const [yamlFor, setYamlFor] = useState<LiveRoute | null>(null)
   const [deleting, setDeleting] = useState<LiveRoute | null>(null)
+  const [capturing, setCapturing] = useState<LiveRoute | null>(null)
   return (
     <>
       <div className="flex items-center justify-between px-6 pt-4">
@@ -341,6 +342,16 @@ function RoutesList({
                 <div className="ml-auto flex gap-1">
                   <Button variant="ghost" size="xs" aria-label={`Edit ${r.name}`} disabled={!can('routing').ok} title={can('routing').reason} onClick={() => onEdit(r)}>
                     <Pencil /> Edit route
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    aria-label={`Content capture for ${r.name}`}
+                    disabled={!can('capture').ok}
+                    title={can('capture').reason}
+                    onClick={() => setCapturing(r)}
+                  >
+                    <ShieldAlert /> {r.captureContent ? 'Stop capture' : 'Capture content'}
                   </Button>
                   <Button variant="ghost" size="xs" onClick={() => setYamlFor(r)}>
                     <FileCode /> View YAML
@@ -397,12 +408,21 @@ function RoutesList({
           onClose={() => setYamlFor(null)}
         />
       )}
+      {capturing && (
+        <CaptureDialog
+          route={capturing}
+          onClose={(changed) => {
+            setCapturing(null)
+            if (changed) onChanged()
+          }}
+        />
+      )}
       {deleting && (
         <DeleteRouteDialog
           route={deleting}
           onClose={(deleted) => {
             setDeleting(null)
-            if (deleted) onDeleted()
+            if (deleted) onChanged()
           }}
         />
       )}
@@ -644,6 +664,63 @@ function RouteEditor({ route, backends, onClose }: { route?: LiveRoute; backends
   )
 }
 
+/**
+ * §9.2: content capture is per route, an elevated role's action, audited, and
+ * takes effect at once (the gateway's config doesn't change, so there's
+ * nothing to apply). Turning it on says plainly what is kept.
+ */
+function CaptureDialog({ route, onClose }: { route: LiveRoute; onClose: (changed: boolean) => void }) {
+  const on = !route.captureContent
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const submit = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await setRouteCapture(route, on)
+      toast.add({
+        title: on ? 'Content capture on' : 'Content capture off',
+        description: on ? `${route.name}: new requests are kept, masked.` : `${route.name}: new requests aren’t kept. What was kept stays until it ages out.`,
+        type: 'success',
+      })
+      onClose(true)
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 409 ? 'Someone else changed this route since the page loaded. Close and try again on the current version.' : e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{on ? `Capture content on ${route.name}?` : `Stop capturing content on ${route.name}?`}</DialogTitle>
+          <DialogDescription>
+            {on
+              ? 'From now on, the prompt and response of every request on this route are kept 30 days, with each value a detector finds (emails, card numbers, keys and the like) replaced by a placeholder. Text no detector recognises is kept as sent. Anyone with the security or admin role can read it from the receipt; each read is audited. Replay uses it to test rules exactly.'
+              : 'New requests on this route are no longer kept. Content already kept stays until it is 30 days old.'}
+          </DialogDescription>
+        </DialogHeader>
+        {on && <p className="text-sm">Takes effect within seconds. Nothing to apply: the gateway’s config doesn’t change.</p>}
+        {error && (
+          <Alert variant="destructive">
+            <AlertTitle>Not changed</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <DialogFooter>
+          <Button variant="outline" type="button" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button variant={on ? 'destructive' : 'default'} onClick={submit} loading={busy} loadingText="Saving…" disabled={!can('capture').ok} title={can('capture').reason}>
+            {on ? 'Turn on capture' : 'Turn off capture'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function DeleteRouteDialog({ route, onClose }: { route: LiveRoute; onClose: (deleted: boolean) => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -717,7 +794,6 @@ function BackendsTable({ items, onOpen }: { items: Backend[]; onOpen: (name: str
                     <button type="button" className="font-mono font-medium hover:underline" onClick={(e) => (e.stopPropagation(), onOpen(b.name))}>
                       {b.name}
                     </button>
-                    {b.captureContent && <CaptureMarker />}
                   </div>
                   <div className="text-xs text-muted-foreground">{b.models.join(', ')}</div>
                 </td>
@@ -768,7 +844,6 @@ function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: bool
       <DrawerHeader className="flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <SyncStateIndicator state={b.sync} />
-          {b.captureContent && <CaptureMarker />}
         </div>
         <DrawerTitle className="font-mono">{b.name}</DrawerTitle>
         <DrawerDescription>

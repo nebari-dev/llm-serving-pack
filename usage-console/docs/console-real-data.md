@@ -176,7 +176,7 @@ when stale; 428 without it on an update or delete). Open questions are in
     response field aren't offered, and the page says why. A rule takes one or
     more actions, one of each kind (below). A redact action has a "Rehydrate
     on return" switch (off for a new one), which Warden honours (rehydration,
-    below). Replay says it isn't connected.
+    below). The Replay pane runs the builder's rules (below).
   - Exit tests (api-mode, not yet run): the API test drafts a two-rule policy
     (redact and reroute in one rule, then a block), checks the refusals
     (block with others says what wins), the reroute warning against seeded
@@ -293,10 +293,54 @@ when stale; 428 without it on an update or delete). Open questions are in
 
 ## 3. New systems
 
-- [ ] Replay: run Warden's evaluator over stored receipts, to see what a new
-  rule would have caught. Needs content capture, or a replay over
-  hashes/metadata only. Until it exists, publish's dry run can't tell you
-  much.
+- [x] Replay (§7.5.7) and per-route content capture (§9.2), 2026-10-06.
+  - Capture is per route: `PUT /routes/{name}/capture {captureContent}`,
+    If-Match, role security or admin ("capture"), audit row "Turned on/off
+    content capture". It takes effect at Warden's reload, with no apply: the
+    gateway's config doesn't change. Routing has a "Capture content" action
+    per route with a confirm that says what is kept; the "Content capture on"
+    marker shows on the route, on Traffic (a status line naming the routes),
+    on Settings, and on each captured receipt. The backend-level marker is
+    gone in api mode (the gateway path never used it).
+  - Warden decides per request: the route the request takes as the caller
+    sent it, matched among the routes of the last apply that took
+    (`routing_applies.routes`, config migration 060; the desired routes
+    before any apply recorded them), and whether that route captures now.
+    On one that does, it keeps the prompt and the response as the caller got
+    it (rehydrated), and writes them with every detector match replaced by
+    its placeholder (`Detectors.Mask`): no detected value is stored. The
+    write is off the request path (a queue of 1,024; full drops and counts
+    in Warden's /healthz `captureDropped`), into `receipt_content` (receipts
+    migration 009: a hypertable, 30-day retention), keyed by the receipt id.
+    Refused requests are kept too, with no response. Responses are kept up
+    to 1 MiB; a compressed one isn't kept, and says so.
+    A stream that ends before the response does keeps what arrived and says
+    so. A receipt whose content hasn't landed (or was dropped) reveals as a
+    409 saying exactly that, not "wasn't captured". Drops are logged on the
+    first and every 1,000th.
+  - Warden's decision now carries `contentCaptured` and `dataRegion` (the
+    `x-data-region` header); ingest stores both on the receipt
+    (`receipts.data_region`; NULL before this).
+  - Replay: `POST /policies/{id}/replay?window=1h|24h|7d|30d` (body: the
+    builder's rules, unsaved; or none for the saved draft, else the live
+    version). It loads a fresh snapshot, reads the window's receipts that
+    reached policy evaluation (newest 10,000), and runs each through
+    `Decision.runPolicies`, the loop Warden's `AdmitKey` runs, twice: the
+    policies as they are, and with the draft in its place, enforced. A
+    receipt with captured content replays exactly: each placeholder becomes a
+    made-up value its detector matches (`Detectors.Unmask`). One without
+    replays on metadata only: rules that read the prompt are left out on both
+    sides, and the result names them. The result counts each kind apart
+    (newly or no longer blocked, redacted, rerouted) and lists up to 50
+    changed requests, each linking to its receipt and labelled Exact or
+    Metadata only. 10,000 receipts replay in about 70 ms on the test stack.
+  - Publish's dry run returns the same replay for the version it would
+    publish (`replay`; `note` is gone), and the publish dialog shows it.
+  - Exit tests (api-mode, run): capture through Agent Router with a masked
+    reveal and its audit rows; replay exact on the captured request and
+    metadata-only on the other, including a region rule and the dry run; the
+    Routing toggle with its markers on Traffic and Settings; the Guardrails
+    pane. 76/76.
 - [x] Projects table (§5.2), so project budgets can exist before keys
   (decided 2026-10-05, decisions §2).
   - Config migration 011 makes each team's free-text project names on keys
@@ -375,10 +419,9 @@ when stale; 428 without it on an update or delete). Open questions are in
   and the table shows "N of M reviewed".
   - What a reviewer sees, said on the page: receipts keep hashes, so the
     matched text is never there. Each row has the entity, match count,
-    action and rule, key, team, model and time. Where the backend captured
-    content, that content is the prompt as sent upstream, with placeholders
-    in place of matches; the row links to the receipt, where revealing it is
-    audited. Blocks never reach a backend, so they have no content.
+    action and rule, key, team, model and time. Where the route captured
+    content, that content has a placeholder in place of every detector
+    match; the row links to the receipt, where revealing it is audited.
   - Monitor-mode matches still aren't hits: the receipt says "would redact"
     with no entity.
   - The receipt drawer links to the queue instead of saying it isn't
@@ -519,7 +562,7 @@ when stale; 428 without it on an update or delete). Open questions are in
   SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership
   questions are answered: docs/llm-serving-pack-survey.md), and a
   Kubernetes KeyStore writing Secrets. Cloud-credential providers (Bedrock,
-  Azure, Vertex). Content capture per route compiles to nothing yet.
+  Azure, Vertex).
 - [x] Signed receipt export, and revealing content with an audit row
   (2026-10-06, decisions §7).
   - `POST /receipts/export` (Traffic's filters and window) and
@@ -534,9 +577,10 @@ when stale; 428 without it on an update or delete). Open questions are in
     gitignored), never returned.
   - Each export writes an audit row before the file goes out ("Exported
     receipts": who, the filter, the count, the file's SHA-256, the key id).
-  - Content capture: the dev gateway's engine (and `backfill`) stores
-    content for backends with `capture_content` (the seed's vllm-internal).
-    Agent Router's receipts never carry it. So the drawer's Reveal content
+  - Content capture: Warden keeps content for routes that capture (see
+    Replay, above); the dev gateway's engine (and `backfill`) still stores it
+    for backends with `capture_content` (the seed's vllm-internal), unmasked
+    demo text. So the drawer's Reveal content
     is live where content exists: `POST /receipts/{id}/reveal` writes
     "Revealed content" first, then returns it, and the drawer says who and
     when. Elsewhere it says "Not captured for this request".

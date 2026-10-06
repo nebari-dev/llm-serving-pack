@@ -202,7 +202,8 @@ type RoutingApply struct {
 
 // RecordApply logs an apply, what it tried, and its audit row. Changes keep
 // their kind, name and change, not their diffs.
-func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, applyErr string, changes []routing.Change, tried map[string]string) error {
+// routes is what a successful apply put in front of the gateway (nil when it failed).
+func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, applyErr string, changes []routing.Change, tried map[string]string, routes []model.Route) error {
 	brief := make([]routing.Change, len(changes))
 	var names []string
 	for i, c := range changes {
@@ -220,7 +221,11 @@ func (s *Store) RecordApply(ctx context.Context, tenant, actor string, ok bool, 
 		errCol = &applyErr
 	}
 	tj, _ := json.Marshal(tried)
-	if _, err := tx.Exec(ctx, `INSERT INTO routing_applies (tenant_id, actor, ok, error, changes, attempted) VALUES ($1,$2,$3,$4,$5,$6)`, tenant, actor, ok, errCol, cj, tj); err != nil {
+	var rj []byte
+	if ok && routes != nil {
+		rj, _ = json.Marshal(routes)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO routing_applies (tenant_id, actor, ok, error, changes, attempted, routes) VALUES ($1,$2,$3,$4,$5,$6,$7)`, tenant, actor, ok, errCol, cj, tj, rj); err != nil {
 		return err
 	}
 	action, target := "Applied routing", fmt.Sprintf("%d %s: %s", len(changes), plural(len(changes), "change", "changes"), strings.Join(names, ", "))

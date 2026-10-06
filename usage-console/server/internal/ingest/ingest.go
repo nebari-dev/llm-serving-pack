@@ -218,6 +218,7 @@ func withPolicy(rc *model.Receipt, p gateway.Policy) bool {
 	rc.RouteReason = cmp.Or(p.RouteReason, rc.RouteReason)
 	rc.RequestHash = cmp.Or(p.RequestHash, rc.RequestHash)
 	rc.Actor, rc.SessionID = cmp.Or(p.Actor, rc.Actor), cmp.Or(rc.SessionID, p.SessionID)
+	rc.DataRegion, rc.ContentCaptured = p.DataRegion, p.ContentCaptured
 	b := p.Blocked
 	if b == nil {
 		return false

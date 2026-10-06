@@ -17,11 +17,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toast'
-import { ApiError, backends, dataMode, downloadSignedExport, keys, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
+import { ApiError, backends, dataMode, downloadSignedExport, keys, type LiveRoute, liveRoutes, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
 import { type Dim, exportQuery, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
+import { useLive } from '@/state/live'
 
 // §7.5.3 Traffic — a dense virtualized table over a live stream.
 
@@ -132,6 +133,7 @@ export function TrafficPage() {
   const until = params.get('until') ? Number(params.get('until')) : null
   const window_ = useWindow(range, since, day, until)
   const feed = useTrafficFeed(filters, window_)
+  const capturing = useLive<LiveRoute[]>(dataMode === 'api' ? '/routes' : null, liveRoutes, 60_000).data.filter((r) => r.captureContent)
   const rows = feed.rows
 
   const frozen = !live || hovering || focusWithin
@@ -339,6 +341,15 @@ export function TrafficPage() {
           </span>
         </div>
 
+        {/* §7.6: content capture on gets a persistent marker wherever its route's traffic appears. */}
+        {capturing.length > 0 && (
+          <div role="status" aria-label="Content capture" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
+            <span className="font-medium">Content capture on</span>
+            <span className="text-foreground/80">
+              for {capturing.map((r) => r.name).join(', ')}: those requests’ prompts and responses are kept, masked, for 30 days.
+            </span>
+          </div>
+        )}
         {/* §7.5.3 backpressure: never silently drop. Only the live rows are sampled; counts come from the database. */}
         {feed.sampling ? (
           <div role="status" aria-label="Stream sampling" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">

@@ -76,6 +76,10 @@ type Server struct {
 	// the snapshot doesn't have yet. It must not block.
 	Refresh func()
 	Now     func() time.Time
+	// Capture, when set, receives the content of each request on a route
+	// that captures (spec §9.2), masked. It's called on the request path, so
+	// it must not block.
+	Capture func(store.CapturedContent)
 
 	passthrough atomic.Bool
 	// throttle is each key's recent requests while a throttle budget is over
@@ -105,6 +109,8 @@ func (s *Server) now() time.Time {
 func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
 	var headers map[string]string
 	var back responseState
+	// A stream that ends before the response does keeps what arrived.
+	defer func() { back.capture.flush() }()
 	for {
 		req, err := stream.Recv()
 		if errors.Is(err, io.EOF) || status.Code(err) == codes.Canceled {
@@ -120,9 +126,15 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			resp = &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: &extprocv3.HeadersResponse{}}}
 		case *extprocv3.ProcessingRequest_RequestBody:
 			d := s.decideWith(headers, v.RequestBody.GetBody())
-			resp, back = d.resp, responseState{vault: d.vault, policy: d.policy, api: gateway.APIOf(headers[":path"])}
+			resp, back = d.resp, responseState{vault: d.vault, policy: d.policy, api: gateway.APIOf(headers[":path"]), capture: d.capture}
+			if resp.GetImmediateResponse() != nil {
+				back.capture.finish() // refused: there's no response to wait for
+			}
 		case *extprocv3.ProcessingRequest_ResponseHeaders:
 			resp = back.headers(headerMap(v.ResponseHeaders.GetHeaders()))
+			if v.ResponseHeaders.GetEndOfStream() {
+				back.capture.finish() // a response with no body
+			}
 		case *extprocv3.ProcessingRequest_ResponseBody:
 			resp = back.body(v.ResponseBody)
 		default:
@@ -138,9 +150,10 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 // verdict is the answer to a request body, and what the response needs from
 // it: the vault to rehydrate from and the decision to add the count to.
 type verdict struct {
-	resp   *extprocv3.ProcessingResponse
-	vault  *gateway.Vault
-	policy gateway.Policy
+	resp    *extprocv3.ProcessingResponse
+	vault   *gateway.Vault
+	policy  gateway.Policy
+	capture *capture // nil unless the request's route captures
 }
 
 func (s *Server) decide(headers map[string]string, body []byte) *extprocv3.ProcessingResponse {
@@ -243,9 +256,12 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	}
 	d := eval(snap, k, in)
 	p := d.Policy(snap, s.now())
+	p.DataRegion = h["x-data-region"]
+	c := s.newCapture(snap, h, cr, api, now)
+	p.ContentCaptured = c != nil
 	md := metadata(p)
 	if d.Reject != nil {
-		return verdict{resp: reject(api, d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md, d.Reject.RetryAfter)}
+		return verdict{resp: reject(api, d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md, d.Reject.RetryAfter), capture: c}
 	}
 
 	common := &extprocv3.CommonResponse{}
@@ -268,15 +284,16 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	return verdict{resp: &extprocv3.ProcessingResponse{
 		Response:        &extprocv3.ProcessingResponse_RequestBody{RequestBody: &extprocv3.BodyResponse{Response: common}},
 		DynamicMetadata: md,
-	}, vault: d.Vault, policy: p}
+	}, vault: d.Vault, policy: p, capture: c}
 }
 
 // responseState is what a request leaves for its response.
 type responseState struct {
-	vault  *gateway.Vault
-	policy gateway.Policy
-	api    string          // the caller's, which the response is in
-	rh     *bodyRehydrator // nil: the body passes as sent
+	vault   *gateway.Vault
+	policy  gateway.Policy
+	api     string          // the caller's, which the response is in
+	rh      *bodyRehydrator // nil: the body passes as sent
+	capture *capture        // nil: the response isn't kept
 }
 
 // headers decides whether the body needs Warden. With nothing to restore it
@@ -284,14 +301,26 @@ type responseState struct {
 // through if it comes anyway. Restoring changes the body's length, so
 // content-length goes and Envoy sends it chunked.
 func (st *responseState) headers(h map[string]string) *extprocv3.ProcessingResponse {
+	// A capture needs the body too, but passes it as sent.
+	keep := false
+	if st.capture != nil {
+		st.capture.headers(h)
+		keep = st.capture.note == ""
+	}
+	skip := func(md *structpb.Struct) *extprocv3.ProcessingResponse {
+		if keep {
+			return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{ResponseHeaders: &extprocv3.HeadersResponse{}}, DynamicMetadata: md}
+		}
+		return skipBody(md)
+	}
 	if st.vault.Len() == 0 {
-		return skipBody(nil)
+		return skip(nil)
 	}
 	if enc := h["content-encoding"]; enc != "" && enc != "identity" {
-		return skipBody(metadata(st.final("not restored: the response is " + enc + "-encoded")))
+		return skip(metadata(st.final("not restored: the response is " + enc + "-encoded")))
 	}
 	if st.rh = newBodyRehydrator(st.vault, h["content-type"], st.api); st.rh == nil {
-		return skipBody(metadata(st.final(fmt.Sprintf("not restored: a %q response isn't JSON or an event stream", h["content-type"]))))
+		return skip(metadata(st.final(fmt.Sprintf("not restored: a %q response isn't JSON or an event stream", h["content-type"]))))
 	}
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{ResponseHeaders: &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{HeaderMutation: &extprocv3.HeaderMutation{RemoveHeaders: []string{"content-length"}}},
@@ -304,15 +333,28 @@ func (st *responseState) body(b *extprocv3.HttpBody) *extprocv3.ProcessingRespon
 	br := &extprocv3.BodyResponse{}
 	resp := &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseBody{ResponseBody: br}}
 	if st.rh == nil {
+		if st.capture != nil {
+			st.capture.add(b.GetBody())
+			if b.GetEndOfStream() {
+				st.capture.finish()
+			}
+		}
 		return resp
 	}
 	m := &extprocv3.BodyMutation{Mutation: &extprocv3.BodyMutation_ClearBody{ClearBody: true}}
-	if out := st.rh.Feed(b.GetBody(), b.GetEndOfStream()); len(out) > 0 {
+	out := st.rh.Feed(b.GetBody(), b.GetEndOfStream())
+	if len(out) > 0 {
 		m.Mutation = &extprocv3.BodyMutation_Body{Body: out}
 	}
 	br.Response = &extprocv3.CommonResponse{BodyMutation: m}
+	if st.capture != nil {
+		// Kept as the caller gets it, restored: masking then names each
+		// value as the prompt does.
+		st.capture.add(out)
+	}
 	if b.GetEndOfStream() {
 		resp.DynamicMetadata = metadata(st.final(""))
+		st.capture.finish()
 	}
 	return resp
 }

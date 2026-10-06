@@ -31,9 +31,13 @@ type Snapshot struct {
 	Aliases  map[string]string
 	Backends []model.Backend
 	Routes   []model.Route
-	Budgets  map[string]model.Budget
-	Policies []model.Policy // ordinal order, each with its live rules
-	Spend    store.MonthSpend
+	// RunningRoutes is the routes as the gateway last applied them, which
+	// decide which route a request takes; Routes is the desired state,
+	// which says whether each captures. Nil means they're the same.
+	RunningRoutes []model.Route
+	Budgets       map[string]model.Budget
+	Policies      []model.Policy // ordinal order, each with its live rules
+	Spend         store.MonthSpend
 	// Detectors is what "contains entity" can name: built-ins plus the
 	// tenant's custom entities. Nil is the built-ins.
 	Detectors *Detectors
@@ -121,17 +125,17 @@ type Decision struct {
 	// for the response to put back.
 	Vault *Vault
 
-	start       time.Time
-	requested   string
-	rerouted    bool
-	aliased     bool
-	blockedBy   string
-	rulesMS     float64
-	budgetStep  model.TraceStep
-	identity    model.TraceStep
-	rulesStep   model.TraceStep
-	promptToks  int
-	captureCont bool
+	start      time.Time
+	requested  string
+	rerouted   bool
+	aliased    bool
+	blockedBy  string
+	rulesMS    float64
+	budgetStep model.TraceStep
+	identity   model.TraceStep
+	rulesStep  model.TraceStep
+	promptToks int
+	rerouteTo  string // the last reroute's target, as its rule names it
 	// pastDeadline: a rule wasn't evaluated in time and its fail mode decided.
 	pastDeadline bool
 }
@@ -182,27 +186,32 @@ func (s *Snapshot) backend(name string) (model.Backend, bool) {
 	return model.Backend{}, false
 }
 
-// routeFor picks the route the gateway would: the one with the most header
-// conditions that all hold, then the first in rule order. The dev gateway
-// knows only the key's team (x-stargate-team) and x-data-region.
+// routeFor is RouteFor for the dev gateway, which knows only the key's
+// team (x-stargate-team) and x-data-region.
 func (s *Snapshot) routeFor(requested, team, region string) *model.Route {
-	known := map[string]string{"x-stargate-team": team, "x-data-region": region}
-	var best *model.Route
-	for i := range s.Routes {
-		r := &s.Routes[i]
-		ok := slices.ContainsFunc(r.Match.Models, func(m string) bool {
-			return m == requested || m == "*" || strings.HasSuffix(m, "*") && strings.HasPrefix(requested, strings.TrimSuffix(m, "*"))
-		})
-		for _, h := range r.Match.Headers {
-			if v, k := known[h.Name]; !k || v != h.Value {
-				ok = false
-			}
-		}
-		if ok && (best == nil || len(r.Match.Headers) > len(best.Match.Headers)) {
-			best = r
+	return RouteFor(s.Routes, requested, map[string]string{"x-stargate-team": team, "x-data-region": region})
+}
+
+// CaptureRoute is the name of the route a request takes, as the caller sent
+// it, when that route captures content (spec §9.2), else "". The route is
+// matched among the running routes: a route edit waiting for an apply hasn't
+// moved any request yet. Capture itself is the desired state's, since
+// turning it on or off takes effect at once.
+func (s *Snapshot) CaptureRoute(requested string, headers map[string]string) string {
+	running := s.RunningRoutes
+	if running == nil {
+		running = s.Routes
+	}
+	r := RouteFor(running, requested, headers)
+	if r == nil {
+		return ""
+	}
+	for _, d := range s.Routes {
+		if d.Name == r.Name && d.CaptureContent {
+			return r.Name
 		}
 	}
-	return best
+	return ""
 }
 
 // substitute picks the model a fallback backend should serve in place of m:
@@ -488,6 +497,42 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 		return d.block(503, "no_healthy_backend", "no healthy backend serves "+resolved)
 	}
 
+	var admitted bool
+	if resolved, current, admitted = d.runPolicies(s, k, in, resolved, current); !admitted {
+		return d
+	}
+
+	// Candidates: the chosen backend, then other healthy backends for the same
+	// model, then the matching route's fallback list.
+	d.Candidates = []Candidate{{current, resolved}}
+	seen := map[string]bool{current.Name: true}
+	for _, b := range s.Backends {
+		if !seen[b.Name] && b.Health != "down" && slices.Contains(b.Models, resolved) {
+			d.Candidates = append(d.Candidates, Candidate{b, resolved})
+			seen[b.Name] = true
+		}
+	}
+	if rt := s.routeFor(in.Req.Model, k.Team, in.Region); rt != nil && !d.rerouted {
+		for _, t := range rt.Fallback {
+			if b, ok := s.backend(t.Backend); ok && !seen[t.Backend] && b.Health != "down" {
+				m := t.Model
+				if m == "" {
+					m = s.substitute(b, resolved)
+				}
+				d.Candidates = append(d.Candidates, Candidate{b, m})
+				seen[t.Backend] = true
+			}
+		}
+	}
+	return d
+}
+
+// runPolicies evaluates the policies (§5.3) for a request whose model
+// resolved to resolved on current, and returns where it goes now. false
+// means a rule refused it (d.Reject). Warden's decision and replay both run
+// it, so replay is this evaluator, not a second one.
+func (d *Decision) runPolicies(s *Snapshot, k *store.KeyRecord, in Input, resolved string, current model.Backend) (string, model.Backend, bool) {
+	rc := d.Receipt
 	// Policies (§5.3): in order, and each policy's rules in order. The first
 	// block wins and short-circuits, redacts accumulate, and the last reroute
 	// wins. A monitoring policy only records what it would do.
@@ -511,7 +556,8 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 					ev.Action = "not evaluated · deadline · fails closed"
 					rc.Rules = append(rc.Rules, ev)
 					d.blockedBy = ref + " not evaluated before the deadline · fails closed"
-					return d.block(503, "policy_deadline", fmt.Sprintf("Rule %s couldn't be evaluated in time and fails closed. Retry the request.", ref))
+					d.block(503, "policy_deadline", fmt.Sprintf("Rule %s couldn't be evaluated in time and fails closed. Retry the request.", ref))
+					return resolved, current, false
 				}
 				rc.Rules = append(rc.Rules, ev)
 				continue
@@ -531,10 +577,12 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 					if ent == "" {
 						// Matched on who or where, not on content.
 						d.blockedBy = "blocked by " + ref
-						return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s blocks this request.", ref))
+						d.block(403, "policy_blocked", fmt.Sprintf("Rule %s blocks this request.", ref))
+						return resolved, current, false
 					}
 					d.blockedBy = fmt.Sprintf("blocked by %s on entity %q", ref, ent)
-					return d.block(403, "policy_blocked", fmt.Sprintf("Rule %s matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", ref, ent))
+					d.block(403, "policy_blocked", fmt.Sprintf("Rule %s matched entity %q. Remove it from the prompt, or route through a self-hosted backend.", ref, ent))
+					return resolved, current, false
 				} else {
 					for _, act := range rule.Then {
 						switch act.Action {
@@ -567,7 +615,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 									}
 								}
 							}
-							d.rerouted = true
+							d.rerouted, d.rerouteTo = true, act.Detail
 							outcomes = append(outcomes, fmt.Sprintf("%s matched → route to %s", ruleName(p, rule), act.Detail))
 						}
 					}
@@ -588,29 +636,7 @@ func AdmitKey(s *Snapshot, k *store.KeyRecord, in Input, r *rand.Rand) *Decision
 		d.rulesStep.Outcome, d.rulesStep.State = strings.Join(outcomes, " · "), "warn"
 	}
 
-	// Candidates: the chosen backend, then other healthy backends for the same
-	// model, then the matching route's fallback list.
-	d.Candidates = []Candidate{{current, resolved}}
-	seen := map[string]bool{current.Name: true}
-	for _, b := range s.Backends {
-		if !seen[b.Name] && b.Health != "down" && slices.Contains(b.Models, resolved) {
-			d.Candidates = append(d.Candidates, Candidate{b, resolved})
-			seen[b.Name] = true
-		}
-	}
-	if rt := s.routeFor(in.Req.Model, k.Team, in.Region); rt != nil && !d.rerouted {
-		for _, t := range rt.Fallback {
-			if b, ok := s.backend(t.Backend); ok && !seen[t.Backend] && b.Health != "down" {
-				m := t.Model
-				if m == "" {
-					m = s.substitute(b, resolved)
-				}
-				d.Candidates = append(d.Candidates, Candidate{b, m})
-				seen[t.Backend] = true
-			}
-		}
-	}
-	return d
+	return resolved, current, true
 }
 
 // RuleCount is how many rules the snapshot's enforcing and monitoring
@@ -698,10 +724,16 @@ type Policy struct {
 	Rules          []model.RuleEval  `json:"rules"`
 	Redactions     []model.Redaction `json:"redactions"`
 	RequestHash    string            `json:"requestHash,omitempty"`
-	Actor          string            `json:"actor,omitempty"`
-	SessionID      string            `json:"sessionId,omitempty"`
-	Trace          []model.TraceStep `json:"trace"` // the steps after identity
-	Blocked        *PolicyBlock      `json:"blocked,omitempty"`
+	// DataRegion is the request's x-data-region header, which rules can
+	// match on and replay (§7.5.7) needs back.
+	DataRegion string `json:"dataRegion,omitempty"`
+	// ContentCaptured: the request's route captures content (§9.2), so Warden
+	// kept it, masked, under the receipt's id.
+	ContentCaptured bool              `json:"contentCaptured,omitempty"`
+	Actor           string            `json:"actor,omitempty"`
+	SessionID       string            `json:"sessionId,omitempty"`
+	Trace           []model.TraceStep `json:"trace"` // the steps after identity
+	Blocked         *PolicyBlock      `json:"blocked,omitempty"`
 }
 
 // PolicyBlock is the rest of a receipt for a request the engine refused: it

@@ -705,12 +705,49 @@ export interface PolicyVersion extends PolicyContent {
   publishedBy: string | null
 }
 export type PublishMode = 'monitor' | 'enforce' | 'disabled'
-/** What a publish would leave live (§6 dryRun), with its reroute conflicts. Replay isn't connected, and `note` says so. */
+/** What a publish would leave live (§6 dryRun), with its reroute conflicts and its replay over the last hour (§7.5.7). */
 export interface PolicyPublishPlan {
   policy: PolicySummary & { rules: PolicyRuleContent[] }
   changes: { field: string; from: unknown; to: unknown }[]
   warnings: string[]
-  note: string
+  replay: ReplayView
+}
+
+/** The change on one kind of replayed request: exact (captured content) or metadata only. */
+export interface ReplayPart {
+  requests: number
+  changed: number
+  newlyBlocked: number
+  noLongerBlocked: number
+  newlyRedacted: number
+  noLongerRedacted: number
+  newlyRerouted: number
+  noLongerRerouted: number
+}
+export type ReplayWindow = '1h' | '24h' | '7d' | '30d'
+/**
+ * A policy's draft replayed over recorded requests against the policies as
+ * they are (§7.5.7), with Warden's evaluator. Exact where the request's route
+ * captured content; otherwise only rules that don't read the prompt ran.
+ */
+export interface ReplayView {
+  window: ReplayWindow
+  since: number
+  until: number
+  total: number
+  exact: ReplayPart
+  metadata: ReplayPart
+  /** Rules that read the prompt, so didn't run on metadata-only requests. */
+  skippedRules: string[]
+  /** Requests the draft changes, newest first (at most 50). */
+  affected: { id: string; ts: number; team: string; key: string; model: string; kind: 'exact' | 'metadata'; from: string; to: string }[]
+  /** The window held more than `limit` requests; the newest were replayed. */
+  limited: boolean
+  limit: number
+  replayed: 'unsaved' | 'draft' | 'live'
+  /** Routes capturing content now. */
+  captureRoutes: string[]
+  ms: number
 }
 
 const json = (method: string, body?: unknown, etag?: string): RequestInit => ({
@@ -734,4 +771,9 @@ export const planPublish = (p: PolicyView, mode: PublishMode) => api<PolicyPubli
 export const publishPolicy = (p: PolicyView, mode: PublishMode) => api<PolicyView>(`/policies/${p.id}/publish`, json('POST', { mode }, p.etag))
 export const rollbackPolicy = (p: PolicyView, version: number) => api<PolicyView>(`/policies/${p.id}/rollback`, json('POST', { version }, p.etag))
 export const deletePolicy = (p: PolicyView) => api<{ id: string }>(`/policies/${p.id}`, json('DELETE', undefined, p.etag))
+/** Replays `c` (the builder's rules, saved or not) in place of policy `id` over the window. Writes nothing. */
+export const replayPolicy = (id: string, c: PolicyContent, window: ReplayWindow) => api<ReplayView>(`/policies/${id}/replay?window=${window}`, json('POST', c))
+/** §9.2: turns a route's content capture on or off, at once (no apply). An elevated role's action, audited. */
+export const setRouteCapture = (r: LiveRoute, on: boolean) =>
+  api<LiveRoute>(`/routes/${encodeURIComponent(r.name)}/capture`, json('PUT', { captureContent: on }, r.etag))
 

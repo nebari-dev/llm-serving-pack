@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -174,15 +175,14 @@ func (s *Server) discardPolicyDraft(w http.ResponseWriter, r *http.Request, t st
 
 // PolicyPublishDryRun is what a publish would change (§6 dryRun), with the
 // reroute conflicts it would have against the other enforcing policies
-// (§5.3). The replay against recorded traffic (§7.5.7) isn't connected yet,
-// and says so.
+// (§5.3), and the replay (§7.5.7) of the version it would publish over the
+// last hour (?window= for another).
 type PolicyPublishDryRun struct {
-	DryRun   bool           `json:"dryRun"`
-	Policy   model.Policy   `json:"policy"`
-	Changes  []PolicyChange `json:"changes"`
-	Warnings []string       `json:"warnings"`
-	Replay   *struct{}      `json:"replay"`
-	Note     string         `json:"note"`
+	DryRun   bool            `json:"dryRun"`
+	Policy   model.Policy    `json:"policy"`
+	Changes  []PolicyChange  `json:"changes"`
+	Warnings []string        `json:"warnings"`
+	Replay   *ReplayResponse `json:"replay"`
 }
 
 type PolicyChange struct {
@@ -231,8 +231,16 @@ func (s *Server) publishPolicy(w http.ResponseWriter, r *http.Request, t string)
 		if err != nil {
 			return nil, publishErr(err)
 		}
-		return PolicyPublishDryRun{DryRun: true, Policy: next, Changes: policyChanges(cur, next), Warnings: warnings,
-			Note: "Replay against recorded traffic isn't connected yet, so this shows the policy change only."}, nil
+		window := cmp.Or(r.URL.Query().Get("window"), "1h")
+		if _, ok := replayWindows[window]; !ok {
+			return nil, badRequest("window must be 1h, 24h, 7d or 30d")
+		}
+		rp, err := s.replay(r.Context(), t, next, window)
+		if err != nil {
+			return nil, err
+		}
+		rp.Replayed = "draft"
+		return PolicyPublishDryRun{DryRun: true, Policy: next, Changes: policyChanges(cur, next), Warnings: warnings, Replay: rp}, nil
 	}
 	m, err := ifMatch(r)
 	if err != nil {

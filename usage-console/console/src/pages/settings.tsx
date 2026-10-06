@@ -9,11 +9,12 @@ import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
-import { api, can, dataMode, liveRoutes, type Member, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
+import { api, can, dataMode, type LiveRoute, liveRoutes, type Member, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
 import { age, ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
+import { Link } from 'react-router-dom'
 import { LiveProviderKeys } from './providers-live'
 
 // §7.4 Settings → Providers · Retention · Integrations · Members.
@@ -60,7 +61,8 @@ export function SettingsPage() {
   const groupsUrl = session.auth.groupsUrl
   const groupPrefix = session.auth.groupPrefix ?? 'stargate-'
   const members = useLive<Member[]>(live ? '/members' : null, seedMembers, 60_000)
-  const capturing = (dataMode === 'api' ? liveRoutes : routes).filter((r) => r.captureContent)
+  const liveRouteList = useLive<LiveRoute[]>(live ? '/routes' : null, liveRoutes, 60_000).data
+  const capturing = (live ? liveRouteList : routes).filter((r) => r.captureContent)
 
   const setPassThrough = async (on: boolean) => {
     if (!live) {
@@ -202,7 +204,9 @@ export function SettingsPage() {
                 </StateChip>
               </>
             )}
-            <span className="text-xs text-muted-foreground">{live ? 'Changing capture isn’t connected yet.' : 'Changing capture requires the security role.'}</span>
+            <span className="text-xs text-muted-foreground">
+              Turn it on or off per route on <Link to="/routing" className="underline">Routing</Link>; it needs the security or admin role. Kept content is masked and dropped after 30 days.
+            </span>
           </dd>
         </dl>
       </Section>

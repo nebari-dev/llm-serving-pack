@@ -52,6 +52,9 @@ func LoadSnapshot(ctx context.Context, st *store.Store, tenant string) (*Snapsho
 	if s.Routes, err = st.Routes(ctx, tenant); err != nil {
 		return nil, err
 	}
+	if s.RunningRoutes, err = st.RunningRoutes(ctx, tenant); err != nil {
+		return nil, err
+	}
 	budgets, err := st.Budgets(ctx, tenant)
 	if err != nil {
 		return nil, err

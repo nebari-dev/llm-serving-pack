@@ -53,7 +53,7 @@ var actionRules = map[Action]rule{
 	ActDraftRules:   {[]auth.Role{auth.Security, auth.Editor}, "to draft rules"},
 	ActPublishRules: {[]auth.Role{auth.Admin, auth.Security}, "to publish, reorder, roll back or delete policies"},
 	ActKillSwitch:   {[]auth.Role{auth.Admin, auth.Security}, "to use the kill switch"},
-	ActCapture:      {[]auth.Role{auth.Admin, auth.Security}, "to reveal captured content"},
+	ActCapture:      {[]auth.Role{auth.Admin, auth.Security}, "to turn content capture on or off, or reveal captured content"},
 	ActPrices:       {[]auth.Role{auth.Admin}, "to change prices"},
 	ActBudgets:      {[]auth.Role{auth.Admin, auth.Finance}, "to change budgets"},
 	ActRouting:      {[]auth.Role{auth.Admin, auth.Editor}, "to change aliases, routing and providers"},
@@ -85,6 +85,7 @@ var routeActions = map[string]Action{
 	"POST /routes":               ActRouting,
 	"PUT /routes/{name}":         ActRouting,
 	"DELETE /routes/{name}":      ActRouting,
+	"PUT /routes/{name}/capture": ActCapture,
 	"POST /routing/apply":        ActRouting,
 
 	"POST /pricing/sync":                     ActPrices,
@@ -111,6 +112,8 @@ var routeActions = map[string]Action{
 	"PUT /policies/order":          ActPublishRules,
 	"POST /policies/{id}/publish":  ActPublishRules,
 	"POST /policies/{id}/rollback": ActPublishRules,
+	// Replay writes nothing and shows no content: counts and receipt links.
+	"POST /policies/{id}/replay": ActRead,
 	// Deleting a policy stops it being enforced, like a publish.
 	"DELETE /policies/{id}": ActPublishRules,
 

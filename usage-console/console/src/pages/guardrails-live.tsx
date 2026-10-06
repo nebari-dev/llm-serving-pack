@@ -34,6 +34,7 @@ import { ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
 import { PolicyBuilder } from './guardrails-builder'
+import { ReplayPane, ReplaySummary } from './guardrails-replay-live'
 import { LiveDetectorsTab } from './guardrails-detectors-live'
 import { blankPolicyDraft, fromPolicyContent, lineDiff, modeChip, type PolicyDraft, policyLines, ruleProblems, samePolicy, toPolicyContent } from './guardrails-model'
 
@@ -42,8 +43,8 @@ import { blankPolicyDraft, fromPolicyContent, lineDiff, modeChip, type PolicyDra
 // policies in evaluation order; opening one shows its rules in order to edit
 // as a draft, which publishes as the policy's next immutable version (monitor
 // mode first) and rolls back as a unit. It offers only what the engine
-// evaluates; replay isn't connected, and the page says so rather than
-// simulating it.
+// evaluates. Replay runs the builder's rules over recorded traffic with
+// Warden's evaluator (guardrails-replay-live.tsx).
 
 const NEW = 'new'
 
@@ -312,13 +313,11 @@ export function LiveGuardrailsPage() {
               )}
             </section>
 
-            <aside aria-label="Replay" className="min-w-0 px-5 py-4 lg:col-span-2 xl:col-span-1">
-              <h2 className="text-base font-semibold">Replay</h2>
-              <p className="mt-2 text-sm text-muted-foreground">
-                Replay isn’t connected yet: Warden’s evaluator doesn’t run over stored receipts, so there’s no before-and-after for a draft. Publish in monitor mode
-                to record what the policy would do on live traffic without changing any request.
-              </p>
-            </aside>
+            <ReplayPane
+              policyId={isNew || !view ? null : view.id}
+              content={draft && draft.failMode && !problems.length ? toPolicyContent(draft) : null}
+              blocked={!draft ? 'Open a policy to replay it.' : !draft.failMode ? 'Choose a fail mode to replay.' : ''}
+            />
           </div>
         </TabsPanel>
 
@@ -563,7 +562,11 @@ function PublishDialog({ policy, onClose, onPublished }: { policy: PolicyView; o
                 />
               )}
               {shown.data.warnings.length > 0 && <Warnings items={shown.data.warnings} />}
-              <p className="text-xs text-muted-foreground">{shown.data.note}</p>
+              <div>
+                <h3 className="mb-1 text-xs text-muted-foreground">Replay</h3>
+                {mode === 'monitor' && <p className="mb-2 text-xs text-muted-foreground">In monitor mode nothing changes yet: these are what it would record, then do once enforced.</p>}
+                {mode === 'disabled' ? <p className="text-sm text-muted-foreground">Disabling stops every rule in it; the replay doesn’t apply.</p> : <ReplaySummary replay={shown.data.replay} maxAffected={5} />}
+              </div>
             </>
           )}
           {error && <p className="text-sm text-destructive-foreground">{error}</p>}
