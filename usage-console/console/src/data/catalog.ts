@@ -161,6 +161,35 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+/** What a signed export (§5.1, §9.2) downloaded: the zip's name, how many receipts and the key that signed them. */
+export interface SignedExport {
+  filename: string
+  count: number
+  keyId: string
+}
+
+/**
+ * POSTs to a receipt export endpoint (/receipts/export?…, /receipts/{id}/export)
+ * and saves the zip it returns: receipts.jsonl, its Ed25519 signature, the
+ * public key and a README saying how to verify. The server writes the audit
+ * row before it answers.
+ */
+export async function downloadSignedExport(path: string): Promise<SignedExport> {
+  const res = await fetch(API_BASE + path, { method: 'POST' })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new ApiError(res.status, body?.error?.code ?? 'http_error', body?.error?.message ?? `${res.status} ${res.statusText}`)
+  }
+  const filename = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'receipts.zip'
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+  return { filename, count: Number(res.headers.get('X-Stargate-Export-Count') ?? 0), keyId: res.headers.get('X-Stargate-Signing-Key') ?? '' }
+}
+
 /** The control plane sends lastUsedAt (epoch ms); screens show "12s ago". */
 export type WireKey = Omit<ApiKey, 'lastUsed'> & { lastUsedAt: number | null }
 export const fromWire = (k: WireKey): ApiKey => ({ ...k, lastUsed: k.lastUsedAt ? ago(k.lastUsedAt) : 'never' })

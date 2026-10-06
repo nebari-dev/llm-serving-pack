@@ -31,15 +31,17 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
   - Filters run on the server, for the list and the stream. The matching
     count comes from `receipts_5m` when the filters allow, and otherwise the
     page says "N loaded".
-  - The stream reports receipts it dropped for a slow consumer.
+  - The stream reports receipts it dropped for a slow consumer, and samples
+    above 40 matching requests a second (see Traffic sampling below).
   - Shared links carry the range.
   - Rows are virtualized and live updates batched: about 2,500 rows/min held
     p95 frame time at 17 ms, p99 at 33 ms.
 - [x] **Receipt drawer.**
   - Show the pricing snapshot (`costBasis`) and `policyMode`.
-  - Export downloads the real receipt JSON.
-  - Revealing content, the false-positive report and signing aren't
-    connected yet.
+  - Export downloads the real receipt JSON; Export signed, a signed zip
+    (see Signed receipt export below).
+  - Reveal content calls the server, which writes the audit row first. The
+    false-positive report isn't connected yet.
   - Print works. Related rows come from the server: same session, and the
     same key in the hour before.
 - [x] **Spend.** One `GET /spend?range&by` serves the summary, the
@@ -433,10 +435,48 @@ when stale; 428 without it on an update or delete). Open questions are in
   questions are answered: docs/llm-serving-pack-survey.md), and a
   Kubernetes KeyStore writing Secrets. Cloud-credential providers (Bedrock,
   Azure, Vertex). Content capture per route compiles to nothing yet.
-- [ ] Signed receipt export, and revealing content with an audit row.
-- [ ] Traffic sampling (§7.5.3): above a rate threshold the stream sends 1 in
-  N, with the rate in the header. Today the stream only counts and reports
-  what it dropped.
+- [x] Signed receipt export, and revealing content with an audit row
+  (2026-10-06, decisions §7).
+  - `POST /receipts/export` (Traffic's filters and window) and
+    `POST /receipts/{id}/export` (the drawer) return a zip: `receipts.jsonl`
+    (a line describing the export, then each settled receipt, oldest first,
+    as the API returns it), a detached Ed25519 signature over those exact
+    bytes, the public key and a README with the `openssl` command. Over
+    10,000 receipts is refused with "narrow the time range". The public key
+    is `GET /receipts/signing-key`; verification steps are in
+    `server/README.md`.
+  - The key is made on first start in `tmp/receipt-signing.pem` (owner-only,
+    gitignored), never returned.
+  - Each export writes an audit row before the file goes out ("Exported
+    receipts": who, the filter, the count, the file's SHA-256, the key id).
+  - Content capture: the dev gateway's engine (and `backfill`) stores
+    content for backends with `capture_content` (the seed's vllm-internal).
+    Agent Router's receipts never carry it. So the drawer's Reveal content
+    is live where content exists: `POST /receipts/{id}/reveal` writes
+    "Revealed content" first, then returns it, and the drawer says who and
+    when. Elsewhere it says "Not captured for this request".
+  - These access rows are left out of `GET /changes` (Activity, Overview,
+    the drawer's "most recent config change"): they changed nothing.
+    `GET /changes?kind=Receipt` lists them; no page shows them yet.
+  - Exit tests (api-mode, not yet run): the range export verifies against
+    the published key and fails with a byte changed, with its audit row; the
+    drawer's and Traffic's buttons download and audit; reveal is a 409 with
+    no row when nothing was captured, and shows content after its row.
+- [x] Traffic sampling (§7.5.3, 2026-10-06). Above 40 matching requests a
+  second (2,400 a minute, just under the 2,500 a minute the table was
+  measured to hold), the stream sends 1 in N, N a round number (2, 5, 10,
+  20…) that brings it back under. It ends below 30 a second.
+  - The rate is per connection, after its filters, so "Add a filter to see
+    everything matching" is true. The header says "Sampling 1 in 20. Add a
+    filter to see everything matching." with the measured rate. Only new live
+    rows are sampled: counts and totals come from the database.
+  - Paused, the pill says "N new (sampled 1 in 20)". After sampling ends,
+    the list says it has gaps and offers Reload.
+  - A request's in-flight and settled copies are kept or skipped together.
+    Onboarding, which waits for a key's first request on the tab's stream,
+    also asks the server while the stream is sampled.
+  - Exit test (api-mode, not yet run): a `sampling` event shows the banner
+    and the pill, and the count stays the database's.
 - [x] Model modalities and deprecation dates (2026-10-05). The daily
   LiteLLM sync also saves, per priced-from key, the input modalities
   (`supports_vision`/`_audio_input`/`_pdf_input`, transcription = audio

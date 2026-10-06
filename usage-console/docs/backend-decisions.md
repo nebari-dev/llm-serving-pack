@@ -493,3 +493,32 @@ retire-old-secret-now are in.
   disabled in api mode. Budgets, rules and rotation are connected. (Sharing one SSE
   stream per tab is done.)
 - Restarting after a server change: `make restart` (see server/README.md).
+- **Traffic sampling (2026-10-06, my defaults).** The stream samples each
+  connection above 40 matching requests a second, measured after its
+  filters. 40/s is just under the 2,500 rows a minute the virtualized table
+  was measured to hold at a p95 of 17ms a frame: below it, the console keeps
+  up, so sampling would hide rows for nothing. Sampling ends below 30/s, so a
+  rate near 40 doesn't flap. N is a round number, not the exact ratio.
+  Requests are kept by a hash of their id. Change `sampleThreshold` in
+  `internal/api/stream.go` if you'd rather sample earlier, for readability.
+- **Receipt signing key (2026-10-06, my default; check).** One Ed25519 key
+  per control plane, made on first start in an owner-only PKCS#8 file
+  (`-signing-key`, default `tmp/receipt-signing.pem`, gitignored; refused at
+  start if group or others can read it). Not the config database: anyone
+  with read access to it, or a backup of it, could then sign exports, and
+  provider keys already stay out of it for the same reason (§6). A file maps
+  to a Kubernetes Secret mounted read-only. Open: two API replicas would
+  each make their own key, so in Kubernetes the Secret must exist before
+  they start; key rotation (publishing old public keys) isn't built.
+  - Signatures are per export, over the exported bytes, not §5.1's
+    per-receipt `receipt_signature` at write time. An export proves what the
+    control plane handed out, not that the database wasn't changed earlier.
+    Signing each receipt at ingest would prove that; say if you want it.
+  - Exports and reveals are audited with target kind `Receipt` and left out
+    of `GET /changes` by default: Activity would otherwise compute a traffic
+    effect for an export, and the drawer would call it the config change
+    before a request. Open: show them on a page (an Access filter on
+    Activity, or Settings).
+  - Reveal and export need roles once auth exists (§9.2 says capture needs
+    an elevated role; reveal and export are not in the table above yet).
+    Today everyone is `dev@localhost`.

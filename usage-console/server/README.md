@@ -231,6 +231,11 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
 - `GET budgets` adds `currentUsd` (month to date, UTC) and `projectedUsd` (plus `trailingDailyUsd`, its basis: month to date + trailing 7-day average × days left).
 - `GET degradations` lists what the banner should show, worst first: Warden unreachable, its kill switch on, or its config cache stale (when `serve -warden` names Warden's admin URL, as `make dev-aigw` does), plus, from the last 15 minutes of receipts, requests Warden passed or refused because it couldn't decide, and backends failing at least 5% of 20+ requests.
 - `GET stream/traffic` is SSE, with the same filters as `receipts`. Each insert or settle sends a `receipt` event. Streamed requests arrive twice: first in flight, then settled. A connection that falls behind misses receipts, and a `dropped` event with `{count}` says how many.
+  Above 40 matching requests a second (measured per connection, after its filters, over 5-second windows; the first is 1 second) the connection is sampled: it gets 1 in N, N the smallest of 2, 5, 10, 20, 50… that brings it back under, and a `sampling` event `{oneIn, ratePerSec, thresholdPerSec}` says so, again every window while it lasts, and once more with `oneIn: 1` when the rate falls under 30 a second. A request is kept by a hash of its id, so its in-flight and settled copies agree, and a row sent in flight always gets its settle. Counts (`receipts/count`, Spend, Overview) come from the database and are never sampled.
+- `GET receipts/signing-key` gives `{keyId, algorithm: "Ed25519", publicKeyPem}`: the key signed exports verify against. The private key never leaves the server.
+- `POST receipts/export` with `receipts`' filters (`limit` ignored), and `POST receipts/{id}/export` for one receipt, return a zip (see "Signed receipt exports" below). Over 10,000 receipts is a 400 saying to narrow it. Each writes an audit row first ("Exported receipts", target kind `Receipt`, with the filter, count, SHA-256 and key id).
+- `POST receipts/{id}/reveal` returns `{content, revealedBy, revealedAt}` after writing a "Revealed content" audit row; a receipt with no stored content is a 409 and writes nothing. Only `cmd/devgateway`'s engine (and `backfill`) stores content, for backends with `capture_content` on (the seed's `vllm-internal`); receipts from Agent Router never carry it.
+- `GET changes` leaves out those access rows (target kind `Receipt`): they changed nothing. `GET changes?kind=Receipt` lists them.
 
 Writes (the console doesn't call most of them yet):
 
@@ -255,6 +260,46 @@ Aliases, budgets and rules carry an `etag`. Updating or deleting one needs
 `If-Match: <etag>` (428 without it; 409 with the current resource when it's
 stale); creating an alias with `PUT` needs `If-None-Match: *`. Every mutation
 writes an `audit_log` row in the same transaction.
+
+## Signed receipt exports
+
+`stargate-api serve` signs exports with an Ed25519 key it makes on first start
+at `-signing-key` (default `tmp/receipt-signing.pem`; the test stack uses
+`tmp/receipt-signing-test.pem`): PKCS#8 PEM, mode 0600, gitignored. It refuses
+to start if the file is readable by group or others. Deleting it makes a new
+key at the next start, and exports signed with the old one then only verify
+against a copy of the old public key.
+
+An export (Traffic's "Export signed", or the receipt drawer's) is a zip:
+
+- `receipts.jsonl`: line 1 is `{"export": {tenant, exportedAt, exportedBy, filter, count, inFlightLeftOut, keyId, algorithm}}`; each other line is one settled receipt, oldest first, exactly as `GET receipts/{id}` returns it. Never content.
+- `receipts.jsonl.sig`: the Ed25519 signature, 64 raw bytes, over `receipts.jsonl` exactly.
+- `signing-key.pem` and `README.txt`.
+
+To verify, take the public key from the API rather than trusting the copy in
+the zip, then use OpenSSL 3:
+
+```sh
+curl -s localhost:8080/api/v1/demo/receipts/signing-key | jq -r .publicKeyPem > stargate.pem
+unzip receipts-demo-*.zip -d export && cd export
+openssl pkeyutl -verify -pubin -inkey ../stargate.pem -rawin -in receipts.jsonl -sigfile receipts.jsonl.sig
+# Signature Verified Successfully   (one changed byte: Signature Verification Failure)
+```
+
+or Python (`pip install cryptography`):
+
+```python
+import zipfile
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+z = zipfile.ZipFile("receipts-demo-20261006T120000Z.zip")
+key = load_pem_public_key(open("stargate.pem", "rb").read())
+key.verify(z.read("receipts.jsonl.sig"), z.read("receipts.jsonl"))  # raises InvalidSignature if changed
+```
+
+The key id is the first 16 hex of the SHA-256 of the DER public key:
+`openssl pkey -pubin -in stargate.pem -outform DER | shasum -a 256 | cut -c1-16`.
+The signature proves the control plane exported these bytes; it can't prove
+the rows weren't changed in the database before the export.
 
 ## Not yet (by design for this slice)
 

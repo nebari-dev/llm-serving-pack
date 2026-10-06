@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { api, dataMode, keys, type Receipt } from '@/data/catalog'
 import { useLive } from './live'
-import { receiptStream } from './app-state'
+import { receiptStream, type StreamSampling } from './app-state'
 
 // The Traffic list (§7.5.3). In api mode the filters are the server query:
 // GET /receipts pages older rows with ?before=, GET /stream/traffic brings new
@@ -31,6 +31,10 @@ export interface TrafficFeed {
   count: number | null
   /** Receipts the server dropped from this stream because the console fell behind. */
   dropped: number
+  /** The live stream sends 1 in N matching receipts (§7.5.3); null while it sends all of them. */
+  sampling: StreamSampling | null
+  /** The stream was sampled at some point since the list loaded, so the list has gaps until reloaded. */
+  wasSampled: boolean
   /** Fetches the list again from the top, e.g. after drops. */
   reload: () => void
 }
@@ -67,6 +71,11 @@ function queryString(f: Filters, w: TrafficWindow | null) {
   return q
 }
 
+/** POST /receipts/export's query for this view: its filters and window (every matching receipt, from the database). */
+export function exportQuery(f: Filters, w: TrafficWindow) {
+  return queryString(f, w).toString()
+}
+
 export function useTrafficFeed(filters: Filters, window: TrafficWindow): TrafficFeed {
   const api_ = useApiFeed(dataMode === 'api' ? filters : null, window)
   const mock = useMockFeed(dataMode === 'api' ? null : filters, window)
@@ -80,7 +89,7 @@ function useMockFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
   // Only subscribed in mock mode: in api mode the global stream would re-render the page on every receipt.
   const all = useSyncExternalStore(filters ? receiptStream.subscribe : noSubscribe, filters ? receiptStream.getSnapshot : () => none)
   const rows = useMemo(() => (filters ? all.filter((r) => matches(r, filters, w)) : []), [all, filters, w])
-  return { rows, loaded: true, loadingOlder: false, reachedEnd: true, loadOlder: () => {}, count: rows.length, dropped: 0, reload: () => {} }
+  return { rows, loaded: true, loadingOlder: false, reachedEnd: true, loadOlder: () => {}, count: rows.length, dropped: 0, sampling: null, wasSampled: false, reload: () => {} }
 }
 
 function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
@@ -94,6 +103,13 @@ function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [dropped, setDropped] = useState(0)
   const [nonce, setNonce] = useState(0)
+  // Only read while tailing, and from its own listeners: not a render per receipt.
+  const sampling = useSyncExternalStore(filters ? receiptStream.subscribeSampling : noSubscribe, filters ? receiptStream.getSampling : () => null)
+  const [sampledFor, setSampledFor] = useState<string | null>(null)
+  const loadKey = `${key}#${nonce}`
+  useEffect(() => {
+    if (sampling) setSampledFor(loadKey)
+  }, [sampling, loadKey])
   const keyRef = useRef(key)
   keyRef.current = key
 
@@ -170,6 +186,8 @@ function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
     loadOlder,
     count,
     dropped,
+    sampling,
+    wasSampled: sampling !== null || sampledFor === loadKey,
     reload: () => setNonce((n) => n + 1),
   }
 }

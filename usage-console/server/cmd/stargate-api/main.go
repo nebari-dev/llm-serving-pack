@@ -28,6 +28,7 @@ import (
 	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/receiptsig"
 	"github.com/jbouder/stargate/server/internal/routing"
 	"github.com/jbouder/stargate/server/internal/store"
 	"github.com/jbouder/stargate/server/internal/traffic"
@@ -82,6 +83,7 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	aigwRestart := fs.String("aigw-restart", "", "shell command that restarts aigw on -aigw-config (e.g. 'scripts/restart.sh aigw'); empty: routing can't be applied")
 	aigwLog := fs.String("aigw-log", "", "shell command printing the end of aigw's log, quoted when an apply fails (e.g. 'tail -n 20 tmp/aigw.log')")
 	providerKeys := fs.String("provider-keys", "", "the owner-only env file aigw is started with, holding the provider keys set from the console once routing is applied (they wait in provider-keys.pending.env beside it until then); default provider-keys.env next to -aigw-config")
+	signingKey := fs.String("signing-key", "tmp/receipt-signing.pem", "the Ed25519 key receipt exports are signed with, as an owner-only PKCS#8 PEM file; made on first start")
 	fs.Parse(args)
 	if *providerKeys == "" && *aigwConfig != "" {
 		*providerKeys = filepath.Join(filepath.Dir(*aigwConfig), "provider-keys.env")
@@ -123,6 +125,12 @@ func serve(ctx context.Context, st *store.Store, args []string) {
 	// Reloading before the key mutation responds means a revoked key is
 	// refused from the moment the console shows it revoked.
 	srv := &api.Server{Store: st, Hub: hub, Tenants: []string{demo.Tenant}, DevActor: "dev@localhost", ConfigChanged: reload, WardenURL: *warden, Environment: *environment, LiteLLMURL: *litellm, GatewayURL: *gatewayURL}
+	signer, err := receiptsig.LoadOrCreate(*signingKey)
+	if err != nil {
+		log.Fatalf("receipt signing key: %v", err)
+	}
+	log.Printf("receipt exports are signed with Ed25519 key %s (%s)", signer.KeyID(), *signingKey)
+	srv.Signer = signer
 	var keys *routing.LocalKeyFile
 	if *providerKeys != "" {
 		// server/.env holds keys set by hand (OPENROUTER_API_KEY); it's read

@@ -507,6 +507,24 @@ func (s *Store) BackendStats(ctx context.Context, tenant string) (map[string]Bac
 	return out, rows.Err()
 }
 
+// ReceiptContent is the request and response stored with a receipt, or nil
+// when none was (content_captured false, the default: hashes only, §9.2).
+// Only the dev gateway's engine stores content today, for backends with
+// capture_content on; Agent Router's receipts (via ingest) never carry it.
+func (s *Store) ReceiptContent(ctx context.Context, tenant, id string) ([]byte, error) {
+	var captured bool
+	var content []byte
+	err := s.Receipts.QueryRow(ctx, `SELECT content_captured, content FROM receipts
+		WHERE tenant_id = $1 AND id = $2 AND ts > now() - interval '30 days'`, tenant, id).Scan(&captured, &content)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil || !captured || string(content) == "null" {
+		return nil, err
+	}
+	return content, nil
+}
+
 // ReceiptAnyTenant fetches by id + ts only; the notify listener uses it.
 func (s *Store) ReceiptAnyTenant(ctx context.Context, id string, tsMS int64) (model.Receipt, error) {
 	r, err := scanReceipt(s.Receipts.QueryRow(ctx, selectReceipt+` WHERE id = $1 AND ts = $2`, id, time.UnixMilli(tsMS)))

@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/receiptsig"
 	"github.com/jbouder/stargate/server/internal/routing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
@@ -51,7 +52,10 @@ type Server struct {
 	Routing routing.Applier
 	// Keys stores provider keys where the gateway reads them; nil when there's
 	// nowhere to (keys can't be set, and tests of a keyed backend can't run).
-	Keys    routing.KeyStore
+	Keys routing.KeyStore
+	// Signer signs receipt exports; nil when there's no key (exports are
+	// then refused, 503).
+	Signer  *receiptsig.Signer
 	syncMu  sync.Mutex
 	applyMu sync.Mutex
 }
@@ -172,6 +176,10 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/changes", s.changes)
 	h("GET "+p+"/receipts", s.receipts)
 	h("GET "+p+"/receipts/count", s.receiptCount)
+	h("GET "+p+"/receipts/signing-key", s.signingKey)
+	h("POST "+p+"/receipts/export", s.exportReceipts)
+	h("POST "+p+"/receipts/{id}/export", s.exportReceipt)
+	h("POST "+p+"/receipts/{id}/reveal", s.revealContent)
 	h("GET "+p+"/receipts/{id}", s.receipt)
 	h("GET "+p+"/series/traffic", s.trafficSeries)
 	h("GET "+p+"/series/spend", s.spendSeries)

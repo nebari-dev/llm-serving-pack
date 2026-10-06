@@ -42,6 +42,33 @@ class FakeEventSource {
   }
 }
 
+/** A signed export's files, read from the zip's central directory (Go writes sizes there, not in the local headers). */
+async function unzipExport(zip: ArrayBuffer): Promise<Record<string, Uint8Array>> {
+  // The suite runs in Node; the app's tsconfig has no Node types, hence the cast.
+  const { inflateRawSync } = (await import(/* @vite-ignore */ 'node:' + 'zlib')) as { inflateRawSync: (b: Uint8Array) => Uint8Array }
+  const b = new Uint8Array(zip)
+  const v = new DataView(zip)
+  let eocd = b.length - 22
+  while (eocd >= 0 && v.getUint32(eocd, true) !== 0x06054b50) eocd--
+  const entries = v.getUint16(eocd + 10, true)
+  let p = v.getUint32(eocd + 16, true)
+  const out: Record<string, Uint8Array> = {}
+  for (let i = 0; i < entries; i++) {
+    const method = v.getUint16(p + 10, true)
+    const size = v.getUint32(p + 20, true)
+    const nameLen = v.getUint16(p + 28, true)
+    const extraLen = v.getUint16(p + 30, true)
+    const commentLen = v.getUint16(p + 32, true)
+    const local = v.getUint32(p + 42, true)
+    const name = new TextDecoder().decode(b.subarray(p + 46, p + 46 + nameLen))
+    const start = local + 30 + v.getUint16(local + 26, true) + v.getUint16(local + 28, true)
+    const data = b.subarray(start, start + size)
+    out[name] = method === 8 ? new Uint8Array(inflateRawSync(data)) : data
+    p += 46 + nameLen + extraLen + commentLen
+  }
+  return out
+}
+
 describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against a live control plane', () => {
   let App: typeof import('@/App').default
   let catalog: typeof import('@/data/catalog')
@@ -187,7 +214,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     // Priced at the snapshot for the backend that served it, or plainly unpriced.
     expect(text).toMatch(/rates (on \S+ )?recorded with this receipt|had no price when this request arrived/)
     expect(text).toContain('Policy mode:')
-    expect(text).toContain("Signed export isn't connected yet")
+    expect(text).not.toContain("Signed export isn't connected yet") // built: the drawer exports it signed
     expect(text).not.toContain('model_pricing row effective')
     expect(text).not.toContain('Simulate burst')
   })
@@ -340,6 +367,160 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     await act(async () => {})
     expect(FakeEventSource.open.size).toBe(1)
     expect([...FakeEventSource.open][0].url).not.toContain('?')
+  })
+
+  it('says when the stream samples, and at what rate, while counts stay exact (§7.5.3)', async () => {
+    window.history.pushState({}, '', '/traffic?verdict=blocked')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    const counted = document.body.textContent?.match(/([\d,]+) matching/)?.[1]
+    expect(counted).toBeTruthy()
+    const [es] = FakeEventSource.open
+    es.emit('sampling', { oneIn: 20, ratePerSec: 812.4, thresholdPerSec: 40 })
+    await act(async () => {})
+    const banner = () => screen.queryByRole('status', { name: 'Stream sampling' })?.textContent ?? ''
+    expect(banner()).toContain('Sampling 1 in 20. Add a filter to see everything matching.')
+    expect(banner()).toContain('About 812 requests a second match, more than the 40 a second')
+    // The count is the database's, not the sampled rows'.
+    expect(document.body.textContent).toContain(`${counted} matching`)
+
+    // Paused, the "N new" pill says the new rows are a sample.
+    fireEvent.click(screen.getByRole('button', { name: /^Live/ }))
+    await act(async () => {})
+    es.emit('receipt', { ...catalog.seedReceipts[0], id: 'sse-sampled', verdict: 'blocked', inFlight: false, ts: Date.now() + 1000 })
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 400))
+    })
+    expect(document.body.textContent).toContain('1 new (sampled 1 in 20) · click to resume')
+
+    // When it stops, the list says it has gaps until reloaded.
+    es.emit('sampling', { oneIn: 1, ratePerSec: 12, thresholdPerSec: 40 })
+    await act(async () => {})
+    expect(banner()).toContain('The live rows were sampled for a while')
+    fireEvent.click(within(screen.getByRole('status', { name: 'Stream sampling' })).getByRole('button', { name: /Reload the list/ }))
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 500))
+    })
+    expect(screen.queryByRole('status', { name: 'Stream sampling' })).toBeNull()
+  })
+
+  it('exports a filtered range as signed JSON Lines that verify against the published key, with an audit row (§5.1, §9.2)', async () => {
+    type PublicKey = { readonly type: 'public' }
+    const { createPublicKey, verify } = (await import(/* @vite-ignore */ 'node:' + 'crypto')) as {
+      createPublicKey: (pem: string) => PublicKey
+      verify: (alg: null, data: Uint8Array, key: PublicKey, sig: Uint8Array) => boolean
+    }
+    const key = await catalog.api<{ keyId: string; algorithm: string; publicKeyPem: string }>('/receipts/signing-key')
+    expect(key.algorithm).toBe('Ed25519')
+    expect(key.keyId).toMatch(/^[0-9a-f]{16}$/)
+    expect(key.publicKeyPem).toMatch(/^-----BEGIN PUBLIC KEY-----/)
+    expect(key.publicKeyPem).not.toContain('PRIVATE')
+
+    const since = Date.now() - 3_600_000
+    const res = await fetch(`${catalog.API_BASE}/receipts/export?since=${since}&verdict=blocked`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('application/zip')
+    expect(res.headers.get('X-Stargate-Signing-Key')).toBe(key.keyId)
+    const count = Number(res.headers.get('X-Stargate-Export-Count'))
+    const files = await unzipExport(await res.arrayBuffer())
+    expect(Object.keys(files).sort()).toEqual(['README.txt', 'receipts.jsonl', 'receipts.jsonl.sig', 'signing-key.pem'])
+    const jsonl = files['receipts.jsonl']
+    const pub = createPublicKey(key.publicKeyPem)
+    expect(verify(null, jsonl, pub, files['receipts.jsonl.sig'])).toBe(true)
+    // One changed byte fails.
+    const tampered = jsonl.slice()
+    tampered[tampered.length - 3] ^= 1
+    expect(verify(null, tampered, pub, files['receipts.jsonl.sig'])).toBe(false)
+    expect(new TextDecoder().decode(files['README.txt'])).toContain('openssl pkeyutl -verify')
+
+    const lines = new TextDecoder().decode(jsonl).trimEnd().split('\n')
+    const head = JSON.parse(lines[0]).export
+    expect(head).toMatchObject({ tenant: 'demo', exportedBy: 'dev@localhost', count, keyId: key.keyId, algorithm: 'Ed25519', filter: { since, verdict: ['blocked'] } })
+    expect(lines).toHaveLength(count + 1)
+    for (const l of lines.slice(1)) {
+      const rc = JSON.parse(l)
+      expect(rc.verdict).toBe('blocked')
+      expect(rc.inFlight).toBeFalsy() // settled receipts only
+    }
+
+    // The audit row says who, what and how many; it isn't a config change.
+    const [row] = await catalog.api<{ action: string; target: string; actor: string; targetKind: string }[]>('/changes?kind=Receipt&limit=1')
+    expect(row).toMatchObject({ action: 'Exported receipts', target: `${count} ${count === 1 ? 'receipt' : 'receipts'}`, actor: 'dev@localhost', targetKind: 'Receipt' })
+    const changes = await catalog.api<{ targetKind: string }[]>('/changes?limit=500')
+    expect(changes.some((c) => c.targetKind === 'Receipt')).toBe(false)
+  })
+
+  it('exports one receipt signed from the drawer, and from Traffic’s header', async () => {
+    const saved: string[] = []
+    // jsdom has no object URLs; the download itself is the browser's.
+    Object.assign(URL, { createObjectURL: () => 'blob:test', revokeObjectURL: () => {} })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download)
+    })
+    const [r] = await catalog.api<{ id: string }[]>('/receipts?limit=5&verdict=allowed')
+    window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    const drawer = document.querySelector<HTMLElement>('[data-print-receipt]')!
+    fireEvent.click(within(drawer).getByRole('button', { name: /Export signed/ }))
+    await waitFor(() => expect(document.body.textContent).toContain('Signed receipt exported'))
+    expect(saved).toContain(`receipt-${r.id}.zip`)
+    const [row] = await catalog.api<{ action: string; target: string }[]>('/changes?kind=Receipt&limit=1')
+    expect(row).toMatchObject({ action: 'Exported receipt', target: r.id })
+    cleanup()
+
+    window.history.pushState({}, '', '/traffic?verdict=blocked')
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Export signed/ }))
+    await waitFor(() => expect(document.body.textContent).toMatch(/Exported [\d,]+ receipts?, signed/))
+    expect(saved.at(-1)).toMatch(/^receipts-demo-\d{8}T\d{6}Z\.zip$/)
+    click.mockRestore()
+  })
+
+  it('reveals captured content only after writing an audit row, and says when nothing was captured (§7.5.4, §9.2)', async () => {
+    type R = { id: string; contentCaptured: boolean }
+    // The test stack's backfill runs the dev gateway's engine, which stores
+    // content for vllm-internal (capture_content); Agent Router's receipts never carry it.
+    let captured: R | undefined
+    for (const daysAgo of [0, 1, 3, 6]) {
+      const rows = await catalog.api<R[]>(`/receipts?backend=vllm-internal&limit=1000&before=${Date.now() - daysAgo * 86_400_000}`)
+      captured = rows.find((x) => x.contentCaptured)
+      if (captured) break
+    }
+    expect(captured).toBeTruthy()
+    const [plain] = (await catalog.api<R[]>('/receipts?limit=50')).filter((x) => !x.contentCaptured)
+
+    // Nothing captured: a 409, and no audit row.
+    const before = await catalog.api<{ id: string }[]>('/changes?kind=Receipt&limit=1')
+    await expect(catalog.api(`/receipts/${plain.id}/reveal`, { method: 'POST' })).rejects.toMatchObject({ status: 409 })
+    expect(await catalog.api<{ id: string }[]>('/changes?kind=Receipt&limit=1')).toEqual(before)
+    window.history.pushState({}, '', `/traffic?receipt=${plain.id}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    expect(document.body.textContent).toContain('Not captured for this request: only its hashes were stored.')
+    expect(screen.queryByRole('button', { name: /Reveal content/ })).toBeNull()
+    cleanup()
+
+    window.history.pushState({}, '', `/traffic?receipt=${captured!.id}`)
+    render(<App />)
+    await act(async () => {
+      await new Promise((ok) => setTimeout(ok, 300))
+    })
+    expect(screen.queryByLabelText('Revealed content')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Reveal content/ }))
+    await waitFor(() => expect(document.body.textContent).toContain('Reveal recorded in the audit log as dev@localhost'))
+    expect(screen.getByLabelText('Revealed content').textContent).toContain('[user]')
+    const [row] = await catalog.api<{ action: string; target: string; actor: string }[]>('/changes?kind=Receipt&limit=1')
+    expect(row).toMatchObject({ action: 'Revealed content', target: captured!.id, actor: 'dev@localhost' })
   })
 
   it('serves Spend from the aggregates, matching Overview, with its basis', async () => {

@@ -98,7 +98,7 @@ up() {
   for c in warden receipt-ingest trafficgen; do go build -o "$BIN/$c" "./cmd/$c"; done
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \
-      -gateway http://localhost:2975 -environment test \
+      -gateway http://localhost:2975 -environment test -signing-key tmp/receipt-signing-test.pem \
       -aigw-config "$AIGW_DIR/config.yaml" -aigw-restart "scripts/test-stack.sh aigw" -aigw-log "docker logs --tail 30 $CONTAINER 2>&1" \
       >>"$LOGS/test-stargate-api.log" 2>&1 &
     wait_up 9080 stargate-api

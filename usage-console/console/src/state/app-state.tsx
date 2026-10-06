@@ -51,6 +51,17 @@ export interface Tailer {
   onDropped: (count: number) => void
 }
 
+/**
+ * The stream's "sampling" event (§7.5.3 backpressure): above the server's
+ * threshold of matching requests a second, it sends 1 in `oneIn` of them.
+ * Null while it sends everything.
+ */
+export interface StreamSampling {
+  oneIn: number
+  ratePerSec: number
+  thresholdPerSec: number
+}
+
 class ReceiptStream {
   private rows: Receipt[] = seedReceipts
   private listeners = new Set<Listener>()
@@ -67,6 +78,24 @@ class ReceiptStream {
   }
 
   getSnapshot = () => this.rows
+
+  /** Whether the tab's stream is sampled now; see StreamSampling. */
+  sampling: StreamSampling | null = null
+  getSampling = () => this.sampling
+  // Its own listeners: a page reading only this mustn't re-render per receipt.
+  private samplingListeners = new Set<Listener>()
+  subscribeSampling = (l: Listener) => {
+    this.samplingListeners.add(l)
+    return () => {
+      this.samplingListeners.delete(l)
+    }
+  }
+
+  private setSampling(s: StreamSampling | null) {
+    if (s?.oneIn === this.sampling?.oneIn && s?.ratePerSec === this.sampling?.ratePerSec) return
+    this.sampling = s
+    for (const l of this.samplingListeners) l()
+  }
 
   private start() {
     if (this.started) return
@@ -99,6 +128,8 @@ class ReceiptStream {
     this.flush()
     const es = new EventSource(`${API_BASE}/stream/traffic${this.query ? `?${this.query}` : ''}`)
     this.es = es
+    // A new connection starts unsampled; the server says if that changes.
+    this.setSampling(null)
     es.addEventListener('receipt', (e) => {
       this.queue.push(JSON.parse((e as MessageEvent<string>).data) as Receipt)
       this.timer ??= window.setTimeout(() => this.flush(), 250)
@@ -106,6 +137,10 @@ class ReceiptStream {
     es.addEventListener('dropped', (e) => {
       const { count } = JSON.parse((e as MessageEvent<string>).data) as { count: number }
       this.tailer?.onDropped(count)
+    })
+    es.addEventListener('sampling', (e) => {
+      const n = JSON.parse((e as MessageEvent<string>).data) as StreamSampling
+      this.setSampling(n.oneIn > 1 ? n : null)
     })
   }
 
@@ -215,6 +250,11 @@ export const receiptStream = new ReceiptStream()
 
 export function useReceipts() {
   return useSyncExternalStore(receiptStream.subscribe, receiptStream.getSnapshot)
+}
+
+/** The tab's stream sampling (null: everything is sent). Rows from useReceipts are a sample while it isn't null. */
+export function useStreamSampling() {
+  return useSyncExternalStore(receiptStream.subscribeSampling, receiptStream.getSampling)
 }
 
 // ---- context -------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { Columns3, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
+import { Columns3, FileSignature, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
@@ -17,11 +17,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toast'
-import { backends, keys, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
+import { ApiError, backends, dataMode, downloadSignedExport, keys, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
-import { type Dim, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
+import { type Dim, exportQuery, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
 
 // §7.5.3 Traffic — a dense virtualized table over a live stream.
 
@@ -189,6 +189,24 @@ export function TrafficPage() {
     toast.add({ title: 'Link to this view copied', description: 'Filters and the time range are part of the link.', type: 'success' })
   }
 
+  const [exporting, setExporting] = useState(false)
+  // Every matching receipt in the window, from the database: never the sampled live rows.
+  const exportSigned = () => {
+    setExporting(true)
+    downloadSignedExport(`/receipts/export?${exportQuery(filters, window_)}`)
+      .then((ex) =>
+        toast.add({
+          title: `Exported ${ex.count.toLocaleString()} ${ex.count === 1 ? 'receipt' : 'receipts'}, signed`,
+          description: `${ex.filename}: the README inside says how to verify it. The export is recorded in the audit log.`,
+          type: 'success',
+        }),
+      )
+      .catch((e: unknown) =>
+        toast.add({ title: "The receipts couldn't be exported", description: e instanceof ApiError ? e.message : `${String(e)}. Try again.`, type: 'error' }),
+      )
+      .finally(() => setExporting(false))
+  }
+
   const activeDims = dims.filter((d) => filters[d.dim].length > 0 || primaryDims.includes(d.dim))
   const extraDims = dims.filter((d) => !primaryDims.includes(d.dim) && filters[d.dim].length === 0)
   const shownCols = allCols.filter((c) => cols.includes(c.id))
@@ -210,6 +228,17 @@ export function TrafficPage() {
             <Button variant="outline" size="sm" onClick={shareView}>
               <Link2 /> Share this view
             </Button>
+            {dataMode === 'api' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportSigned}
+                disabled={exporting}
+                title="Every receipt matching these filters in this window, as JSON Lines with an Ed25519 signature anyone can verify."
+              >
+                <FileSignature /> {exporting ? 'Exporting…' : 'Export signed'}
+              </Button>
+            )}
             <DensityPicker density={density} setDensity={setDensity} />
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger variant="outline" className="h-7 px-2.5 text-xs" aria-label="Columns">
@@ -300,12 +329,37 @@ export function TrafficPage() {
             {feed.count !== null ? (
               <span className="num font-mono">{feed.count.toLocaleString()} matching</span>
             ) : (
-              <span className="num font-mono" title="Project, model, provider and route reason filters can't be counted from the 5-minute aggregate, so this is what has loaded so far.">
+              <span
+                className="num font-mono"
+                title={`Project, model, provider and route reason filters can't be counted from the 5-minute aggregate, so this is what has loaded so far.${feed.wasSampled ? ' Live rows were sampled, so it is less than what happened.' : ''}`}
+              >
                 {rows.length.toLocaleString()} loaded
               </span>
             )}
           </span>
         </div>
+
+        {/* §7.5.3 backpressure: never silently drop. Only the live rows are sampled; counts come from the database. */}
+        {feed.sampling ? (
+          <div role="status" aria-label="Stream sampling" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
+            <span className="font-medium">
+              Sampling 1 in {feed.sampling.oneIn}. Add a filter to see everything matching.
+            </span>
+            <span className="text-foreground/80">
+              About {Math.round(feed.sampling.ratePerSec).toLocaleString()} requests a second match, more than the {feed.sampling.thresholdPerSec} a second this list shows in full. Only new live rows are
+              sampled: counts and totals come from the database and stay exact.
+            </span>
+          </div>
+        ) : (
+          feed.wasSampled && (
+            <div role="status" aria-label="Stream sampling" className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted px-3 py-1.5 text-sm text-muted-foreground-strong">
+              <span>The live rows were sampled for a while, so this list has gaps. Every receipt is stored.</span>
+              <Button variant="outline" size="xs" className="ml-auto" onClick={feed.reload}>
+                <RotateCw /> Reload the list
+              </Button>
+            </div>
+          )
+        )}
 
         {feed.dropped > 0 && (
           <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
@@ -333,7 +387,11 @@ export function TrafficPage() {
               className="pointer-events-auto inline-flex h-7 items-center gap-1.5 rounded-full border border-border-strong bg-popover px-3 text-xs font-medium shadow-md hover:bg-muted"
             >
               {live ? <Pause className="size-3" aria-hidden="true" /> : <Play className="size-3" aria-hidden="true" />}
-              {newCount > 0 ? `${newCount} new · click to resume` : live ? 'Paused while you look' : 'Paused · click to resume'}
+              {newCount > 0
+                ? `${newCount} new${feed.sampling ? ` (sampled 1 in ${feed.sampling.oneIn})` : ''} · click to resume`
+                : live
+                  ? 'Paused while you look'
+                  : 'Paused · click to resume'}
             </button>
           </div>
         )}
