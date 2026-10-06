@@ -80,6 +80,39 @@ func TestAllowedRequestCostsFromPricing(t *testing.T) {
 	}
 }
 
+// WithPrices swaps in fresh rows, grouped per pair and ordered by time, and
+// a request is priced at the row in effect when it started.
+func TestCostAtTheRequestsTime(t *testing.T) {
+	change := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	one, two := 1.0, 2.0
+	all := func(v *float64) (r [5]*float64) {
+		for i := range r {
+			r[i] = v
+		}
+		return r
+	}
+	base := DemoSnapshot()
+	s := base.WithPrices([]store.PriceRow{
+		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: all(&two), From: change},
+		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: all(&one), From: change.Add(-time.Hour), To: &change},
+	})
+	if s == base || len(base.Prices[Pair{"gpt-5-mini", "openai-prod"}]) != 1 {
+		t.Fatal("WithPrices changed the snapshot it was called on")
+	}
+	tok := TokensOf(&model.Receipt{InputTokens: 1_000_000})
+	for _, c := range []struct {
+		at   time.Time
+		want float64
+	}{{change.Add(-time.Second), 1}, {change.Add(time.Second), 2}} {
+		if got, _ := s.Cost("gpt-5-mini", "openai-prod", c.at, tok); got == nil || *got != c.want {
+			t.Errorf("at %s: cost %v, want %v", c.at, got, c.want)
+		}
+	}
+	if got, _ := s.Cost("gpt-5-mini", "openai-prod", change.Add(-2*time.Hour), tok); got != nil {
+		t.Errorf("before the first row: cost %v, want none", *got)
+	}
+}
+
 func TestUnknownKeyHasNoReceipt(t *testing.T) {
 	d := Admit(DemoSnapshot(), Input{Secret: "Bearer nope", Req: chat("gpt-5-mini", "x"), Now: time.Now()}, rand.New(rand.NewPCG(1, 2)))
 	if d.Reject == nil || d.Reject.Status != 401 || d.Receipt != nil {

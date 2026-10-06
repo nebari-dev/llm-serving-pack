@@ -2289,4 +2289,172 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       if (await passthrough()) await post(false)
     }
   })
+
+  type PricedReceipt = {
+    id: string
+    status: number
+    ts: number
+    costUsd: number | null
+    costBasis?: { effectiveFrom: number; inPerM: number | null; pricedLater?: boolean }
+    outputTokens: number
+    reasoningTokens: number
+  }
+  /** One echoed chat request through the gateway; X-Fake-Echo makes the fake upstream answer deterministically. */
+  const echo = async (secret: string, model: string, headers: Record<string, string> = {}) => {
+    const res = await fetch(`${gateway}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json', 'X-Fake-Echo': '1', ...headers },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    const text = await res.text()
+    expect(res.status, text).toBe(200)
+    return JSON.parse(text) as { usage: { completion_tokens: number; completion_tokens_details?: { reasoning_tokens: number } } }
+  }
+  const receiptsOf = (keyId: string, n: number) =>
+    waitFor(
+      async () => {
+        const rs = await catalog.api<PricedReceipt[]>(`/receipts?limit=${n}&key=${keyId}`)
+        expect(rs.length).toBe(n)
+        return rs // newest first
+      },
+      { timeout: 15_000, interval: 1000 },
+    )
+
+  // §5.1: a receipt carries the price in effect when its request started. A
+  // change scheduled a few seconds out splits two requests either side of it,
+  // the second sent within the 5 seconds a config snapshot used to lag.
+  it('prices each receipt at the rate in effect when its request started', async () => {
+    type P = import('@/data/catalog').PricingView
+    const [m, b] = ['gpt-5-mini', 'openai-prod']
+    const path = `/pricing/${m}/${b}`
+    const get = async () => (await catalog.api<P>('/pricing')).prices.find((p) => p.model === m && p.backend === b)!
+    const cur = await get()
+    const was = cur.rates.input!.perM
+    const next = +(was + 1).toFixed(6)
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name: `api-mode-price-at-${Date.now().toString(36)}`, team: 'support', project: 'api-mode-test', allowedModels: [m], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    const at = Math.ceil((Date.now() + 6000) / 1000) * 1000
+    let set = false
+    try {
+      await send('POST', path, { rates: { input: next }, effectiveFrom: new Date(at).toISOString() }, cur.etag)
+      set = true
+      await echo(secret, m) // before the change
+      await new Promise((ok) => setTimeout(ok, Math.max(0, at - Date.now()) + 1000))
+      await echo(secret, m) // a second after it
+      const [after, before] = await receiptsOf(key.id, 2)
+      expect(before.ts).toBeLessThan(at)
+      expect(after.ts).toBeGreaterThanOrEqual(at)
+      expect(before.costBasis).toMatchObject({ inPerM: was })
+      expect(before.costBasis!.effectiveFrom).toBeLessThan(at)
+      expect(after.costBasis).toMatchObject({ inPerM: next, effectiveFrom: at })
+      expect(after.costBasis!.pricedLater ?? false).toBe(false)
+    } finally {
+      if (set) {
+        // Not in effect yet: cancel it. In effect: put input back on LiteLLM.
+        if (Date.now() < at) await send('DELETE', `${path}/${at}`).catch(() => {})
+        else await send('POST', path, { rates: { input: null } }, (await get()).etag).catch(() => {})
+      }
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
+
+  // §5.1 and decisions §1: a request whose (model, backend) has no price has
+  // no cost. Every total leaves it out and says so; a single cost reads "No
+  // price", never $0; Overview lists the pair with a way to price it.
+  it('shows unpriced requests as no price and leaves them out of every total, saying so', async () => {
+    type P = import('@/data/catalog').PricingView
+    type V = import('@/data/catalog').SpendView
+    type S = import('@/data/catalog').Summary
+    type K = import('@/data/catalog').WireKey
+    type B = import('@/data/catalog').Budget & { etag: string }
+    // The sync retires llama's seed price on vllm-internal (no LiteLLM entry).
+    const prices = await send<P>('POST', '/pricing/sync')
+    expect(prices.prices.find((p) => p.model === 'llama-3.3-70b' && p.backend === 'vllm-internal')!.priced).toBe(false)
+    const name = `api-mode-unpriced-${Date.now().toString(36)}`
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name, team: 'batch', project: 'api-mode-test', allowedModels: ['llama-3.3-70b'], allowedRegions: ['eu-private'], expiresAt: '2027-01-01',
+    })
+    let budget: B | null = null
+    try {
+      await echo(secret, 'llama-3.3-70b')
+      await echo(secret, 'llama-3.3-70b')
+      const rs = await receiptsOf(key.id, 2)
+      for (const r of rs) expect(r).toMatchObject({ status: 200, costUsd: null })
+
+      // Spend: in the requests, not the spend, and counted per row.
+      const byKey = await catalog.api<V>('/spend?range=1h&by=key')
+      expect(byKey.rows.find((r) => r.id === name)).toMatchObject({ requests: 2, unpriced: 2, spendUsd: 0 })
+      expect(byKey.unpriced).toBeGreaterThanOrEqual(2)
+      expect(byKey.period.unpriced).toBeGreaterThanOrEqual(2)
+      expect(byKey.trend.unpriced).toBeGreaterThanOrEqual(2)
+      const byModel = await catalog.api<V>('/spend?range=1h&by=model')
+      expect(byModel.rows.find((r) => r.id === 'llama-3.3-70b')!.unpriced).toBeGreaterThanOrEqual(2)
+      // Overview: the window's total says how many it leaves out, and the pair is listed.
+      const summary = await catalog.api<S>('/summary?range=1h')
+      expect(summary.current.unpriced).toBeGreaterThanOrEqual(2)
+      expect(summary.unpricedPairs!.find((p) => p.model === 'llama-3.3-70b' && p.backend === 'vllm-internal')!.requests).toBeGreaterThanOrEqual(2)
+      // Keys: 24h spend leaves them out and counts them.
+      expect((await catalog.api<K[]>('/keys')).find((k) => k.id === key.id)).toMatchObject({ spend24hUsd: 0, unpriced24h: 2 })
+      // Budgets: not counted against the cap, and counted.
+      budget = await send<B>('POST', '/budgets', { scopeType: 'key', scope: key.id, capUsd: 100, onExceed: 'warn' })
+      expect((await catalog.api<B[]>('/budgets')).find((x) => x.id === budget!.id)).toMatchObject({ currentUsd: 0, unpricedRequests: 2 })
+      // Activity and Overview's featured change: cost per request is over priced requests, or null.
+      const activity = await catalog.api<{ changes: { impact: { before: { costPerRequestUsd: number | null; unpriced: number } } }[] }>('/activity?range=1h')
+      for (const c of activity.changes) {
+        expect(c.impact.before.costPerRequestUsd === null || typeof c.impact.before.costPerRequestUsd === 'number').toBe(true)
+        expect(typeof c.impact.before.unpriced).toBe('number')
+      }
+
+      const page = async (route: string) => {
+        window.history.pushState({}, '', route)
+        render(<App />)
+        await act(async () => {
+          await new Promise((ok) => setTimeout(ok, 800))
+        })
+        const text = document.body.textContent ?? ''
+        cleanup()
+        return text
+      }
+      // Spend's total says what it leaves out.
+      expect(await page('/spend')).toMatch(/\d[\d,]* requests have no price and aren't in this total/)
+      // Overview: the note under Spend, and the pair in Needs attention with its action.
+      const overview = await page('/')
+      expect(overview).toMatch(/requests? (has|have) no price and (isn't|aren't) in this total/)
+      expect(overview).toContain('llama-3.3-70b on vllm-internal has no price')
+      expect(overview).toContain('Set a price')
+      // The key's 24h spend reads no price, not $0.
+      const keyPage = await page(`/keys?key=${key.id}`)
+      expect(keyPage).toContain('No price')
+      // Traffic and the receipt drawer. Traffic finds a key by the names the console loaded, so load again.
+      await catalog.hydrate()
+      expect(await page(`/traffic?key=${name}`)).toContain('No price')
+      expect(await page(`/traffic?receipt=${rs[0].id}`)).toContain('had no price when this request arrived')
+    } finally {
+      if (budget) await send('DELETE', `/budgets/${budget.id}`, undefined, budget.etag).catch(() => {})
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 90_000)
+
+  // Decisions §1, "reasoning tokens may be billed twice": OpenAI counts
+  // reasoning inside completion_tokens. X-Fake-Reasoning makes the fake
+  // upstream report it that way, so this shows what Agent Router logs.
+  it('records what Agent Router logs for an OpenAI reasoning response: reasoning inside output', async () => {
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name: `api-mode-reasoning-${Date.now().toString(36)}`, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    try {
+      const body = await echo(secret, 'gpt-5-mini', { 'X-Fake-Reasoning': '1000' })
+      expect(body.usage.completion_tokens_details?.reasoning_tokens).toBe(1000)
+      const visible = body.usage.completion_tokens - 1000
+      expect(visible).toBeGreaterThan(0)
+      const [r] = await receiptsOf(key.id, 1)
+      // llm_output_token is completion_tokens, reasoning included; llm_reasoning_token is the same 1000 again.
+      expect(r.outputTokens).toBe(body.usage.completion_tokens)
+      expect(r.reasoningTokens).toBe(1000)
+      expect(r.outputTokens - r.reasoningTokens).toBe(visible)
+    } finally {
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 60_000)
 })

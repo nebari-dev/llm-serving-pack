@@ -1,7 +1,9 @@
 // fake-openai serves OpenAI-compatible chat completions for every demo
 // backend at /{backend}/v1/chat/completions, sleeping through the simulated
 // latency and streaming chunks when asked. With an X-Fake-Echo header it
-// repeats the prompt instead (fakellm.Echo). Like a real provider, it rejects a
+// repeats the prompt instead (fakellm.Echo). X-Fake-Reasoning: n adds n
+// reasoning tokens counted inside completion_tokens, as OpenAI reports them
+// (fakellm.OpenAIReasoning). Like a real provider, it rejects a
 // Stargate API key: the gateway must never forward the caller's credentials.
 // GET /{backend}/v1/models lists a backend's models. The "keyed" backend
 // (fakellm.KeyedBackend) wants its own provider key, as a real provider does,
@@ -132,6 +134,10 @@ func handle(w http.ResponseWriter, req *http.Request) {
 		if n := fakellm.KeyedKeyNumber(req.Header.Get("Authorization")); n > 0 {
 			w.Header().Set("X-Fake-Key", strconv.Itoa(n))
 		}
+	}
+	if n, err := strconv.Atoi(req.Header.Get("X-Fake-Reasoning")); err == nil && n > 0 && p.Status == 200 {
+		// As a real reasoning model reports it: inside completion_tokens.
+		p.Usage = fakellm.OpenAIReasoning(p.Usage, n)
 	}
 	ctx := req.Context()
 	sleep := func(d time.Duration) bool {

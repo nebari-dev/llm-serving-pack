@@ -59,6 +59,9 @@ type SpendRow struct {
 	PrevSpendUSD float64 `json:"prevSpendUsd"`
 	Requests     int     `json:"requests"`
 	Tokens       int     `json:"tokens"`
+	// Unpriced counts the group's served requests with no price: in
+	// Requests, not in SpendUSD.
+	Unpriced int `json:"unpriced"`
 	// NoDrill is set when Traffic has no filter for the group: requests
 	// without a key identity, or refused before routing.
 	NoDrill bool `json:"noDrill,omitempty"`
@@ -71,6 +74,9 @@ type SpendTrend struct {
 	// its color when the range changes.
 	Order  []string          `json:"order"`
 	Labels map[string]string `json:"labels"`
+	// Unpriced counts requests over the charted buckets that have no price,
+	// so aren't in the bars.
+	Unpriced int `json:"unpriced"`
 }
 
 type TrendPoint struct {
@@ -81,6 +87,7 @@ type TrendPoint struct {
 // Projection is month-end spend and its basis: month to date plus the
 // trailing daily average for each day left. The month is the UTC calendar
 // month. TrailingDays is under projectionDays when there's less history.
+// Unpriced counts the month's requests with no price, which it leaves out.
 type Projection struct {
 	PeriodStart      int64   `json:"periodStart"`
 	PeriodEnd        int64   `json:"periodEnd"`
@@ -89,6 +96,7 @@ type Projection struct {
 	TrailingDays     float64 `json:"trailingDays"`
 	RemainingDays    float64 `json:"remainingDays"`
 	ProjectedUSD     float64 `json:"projectedUsd"`
+	Unpriced         int     `json:"unpriced"`
 }
 
 // grouper names the group a cell belongs to under each dimension, using the
@@ -142,6 +150,17 @@ func (g grouper) budgetScopes(c store.SpendCell) []string {
 		ids = append(ids, "key:"+k.ID, "project:"+k.ProjectID)
 	}
 	return ids
+}
+
+// unpricedByScope counts unpriced requests per budget scope id.
+func unpricedByScope(g grouper, cells []store.UnpricedCell) map[string]int {
+	out := map[string]int{}
+	for _, c := range cells {
+		for _, id := range g.budgetScopes(c.SpendCell) {
+			out[id] += c.Requests
+		}
+	}
+	return out
 }
 
 // scopeName is how the console shows a budget's scope: a key's or project's
@@ -254,13 +273,31 @@ func (s *Server) spend(_ http.ResponseWriter, r *http.Request, t string) (any, e
 	if err != nil {
 		return nil, err
 	}
-	if out.Unpriced, err = s.Store.UnpricedCount(ctx, t, from, now); err != nil {
+	unpriced, err := s.Store.UnpricedCells(ctx, t, from, now, 0)
+	if err != nil {
 		return nil, err
 	}
 	prev, err := s.Store.SpendCells(ctx, t, prevFrom, from)
 	if err != nil {
 		return nil, err
 	}
+	out.Rows = spendRows(g, by, cur, prev, unpriced)
+	for _, c := range unpriced {
+		out.Unpriced += c.Requests
+	}
+
+	if out.Trend, err = s.spendTrend(ctx, t, name, by, g, now); err != nil {
+		return nil, err
+	}
+	if out.Period, _, err = s.projection(ctx, t, now, nil); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// spendRows groups the window's cells (and the previous window's, for the
+// deltas) into the breakdown, biggest spend first.
+func spendRows(g grouper, by string, cur, prev []store.SpendCell, unpriced []store.UnpricedCell) []SpendRow {
 	rows := map[string]*SpendRow{}
 	row := func(id string) *SpendRow {
 		if rows[id] == nil {
@@ -277,21 +314,18 @@ func (s *Server) spend(_ http.ResponseWriter, r *http.Request, t string) (any, e
 	for _, c := range prev {
 		row(g.key(c, by)).PrevSpendUSD += c.USD
 	}
+	for _, c := range unpriced {
+		row(g.key(c.SpendCell, by)).Unpriced += c.Requests
+	}
+	out := []SpendRow{}
 	for id, x := range rows {
 		x.Label, x.Sub = g.label(id, by)
 		x.NoDrill = id == unattributed || id == notRouted || id == "(unknown key)"
 		x.SpendUSD, x.PrevSpendUSD = round2(x.SpendUSD), round2(x.PrevSpendUSD)
-		out.Rows = append(out.Rows, *x)
+		out = append(out, *x)
 	}
-	slices.SortFunc(out.Rows, func(a, b SpendRow) int { return cmp.Or(cmp.Compare(b.SpendUSD, a.SpendUSD), cmp.Compare(a.ID, b.ID)) })
-
-	if out.Trend, err = s.spendTrend(ctx, t, name, by, g, now); err != nil {
-		return nil, err
-	}
-	if out.Period, _, err = s.projection(ctx, t, now, nil); err != nil {
-		return nil, err
-	}
-	return out, nil
+	slices.SortFunc(out, func(a, b SpendRow) int { return cmp.Or(cmp.Compare(b.SpendUSD, a.SpendUSD), cmp.Compare(a.ID, b.ID)) })
+	return out
 }
 
 func (s *Server) spendTrend(ctx context.Context, t, rangeName, by string, g grouper, now time.Time) (SpendTrend, error) {
@@ -309,6 +343,9 @@ func (s *Server) spendTrend(ctx context.Context, t, rangeName, by string, g grou
 		if i := int(b.Start.Sub(start) / tb.bucket); i >= 0 && i < tb.points {
 			tr.Points[i].Values[g.key(b.SpendCell, by)] += b.USD
 		}
+	}
+	if tr.Unpriced, err = s.Store.UnpricedCount(ctx, t, start, now); err != nil {
+		return tr, err
 	}
 	month, err := s.Store.SpendCells(ctx, t, now.Add(-30*24*time.Hour), now)
 	if err != nil {
@@ -374,6 +411,9 @@ func (s *Server) projection(ctx context.Context, t string, now time.Time, scope 
 		return Projection{}, nil, err
 	}
 	p := Projection{PeriodStart: start.UnixMilli(), PeriodEnd: end.UnixMilli(), TrailingDays: math.Round(trailDays*10) / 10, RemainingDays: end.Sub(now).Hours() / 24}
+	if p.Unpriced, err = s.Store.UnpricedCount(ctx, t, start, now); err != nil {
+		return p, nil, err
+	}
 	per := map[string][2]float64{}
 	for _, c := range mtd {
 		p.MonthToDateUSD += c.USD
@@ -437,11 +477,18 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 	if err != nil {
 		return nil, err
 	}
+	month, _ := monthBounds(now)
+	cells, err := s.Store.UnpricedCells(ctx, t, month, now, 0)
+	if err != nil {
+		return nil, err
+	}
+	unpriced := unpricedByScope(g, cells)
 	for i := range bs {
 		b := &bs[i]
 		b.ScopeName = g.scopeName(*b, projects)
 		v := per[b.ScopeType+":"+b.Scope]
 		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
+		b.UnpricedRequests = unpriced[b.ScopeType+":"+b.Scope]
 		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))
 		b.ETag = store.BudgetETag(*b)
 	}

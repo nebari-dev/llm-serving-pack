@@ -1,4 +1,4 @@
-import type { PriceChange } from '@/data/catalog'
+import type { PriceChange, SpendView } from '@/data/catalog'
 
 type Cell = string | number | boolean | null | undefined
 
@@ -18,6 +18,25 @@ export function priceChangesCsv(changes: PriceChange[]): string {
   return toCsv([
     ['model', 'backend', 'rate', 'from_usd_per_1m', 'to_usd_per_1m', 'source', 'effective', 'scheduled'],
     ...changes.map((c) => [c.model, c.backend, c.field, c.from, c.to, c.source, c.effective, c.scheduled]),
+  ])
+}
+
+/**
+ * Spend's breakdown. spend_usd leaves out each row's unpriced requests, and
+ * reads "no price" when the row has some and no priced spend, never $0.
+ */
+export function spendCsv(view: SpendView): string {
+  return toCsv([
+    [view.by, 'detail', 'spend_usd', 'previous_spend_usd', 'requests', 'unpriced_requests', 'tokens'],
+    ...view.rows.map((r) => [
+      r.label,
+      r.sub ?? '',
+      r.unpriced && !r.spendUsd ? 'no price' : r.spendUsd.toFixed(2),
+      r.prevSpendUsd.toFixed(2),
+      r.requests,
+      r.unpriced ?? 0,
+      r.tokens,
+    ]),
   ])
 }
 

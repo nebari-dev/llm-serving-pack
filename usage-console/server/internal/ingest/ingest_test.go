@@ -18,15 +18,15 @@ func per(v ...float64) (r pricing.Rates) {
 	return r
 }
 
-var priceFrom = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+var priceFrom = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
 var snap = &gateway.Snapshot{
 	Tenant: "demo",
 	Models: map[string]model.Model{"gpt-5-mini": {ID: "gpt-5-mini", Display: "GPT-5 mini", Provider: "OpenAI"}},
-	Prices: map[gateway.Pair]store.PriceRow{
-		{Model: "gpt-5-mini", Backend: "openai-prod"}: {ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 0.5, 2, 4, 4),
-			Sources: pricing.Sources{"litellm", "litellm", "litellm", "manual", "litellm"}, From: priceFrom},
-		{Model: "gpt-5-mini", Backend: "azure-openai-eu"}: {ModelID: "gpt-5-mini", Backend: "azure-openai-eu", Rates: per(2, 1, 2, 8, 8), From: priceFrom},
+	Prices: map[gateway.Pair][]store.PriceRow{
+		{Model: "gpt-5-mini", Backend: "openai-prod"}: {{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 0.5, 2, 4, 4),
+			Sources: pricing.Sources{"litellm", "litellm", "litellm", "manual", "litellm"}, From: priceFrom}},
+		{Model: "gpt-5-mini", Backend: "azure-openai-eu"}: {{ModelID: "gpt-5-mini", Backend: "azure-openai-eu", Rates: per(2, 1, 2, 8, 8), From: priceFrom}},
 	},
 	Backends: []model.Backend{{Name: "openai-prod", Provider: "OpenAI", Region: "us-east"}, {Name: "azure-openai-eu", Provider: "Azure", Region: "eu-west"}, {Name: "vllm-internal", Provider: "Self-hosted", Region: "eu-private"}},
 }
@@ -101,6 +101,44 @@ func TestReceiptWithNoPriceHasNoCost(t *testing.T) {
 	rc, _ := Receipt(snap, record(map[string]string{"gen_ai.provider.name": "default/vllm-internal/route/aigw-run/rule/0/ref/0"}))
 	if rc.Status != 200 || rc.CostUSD != nil || rc.CostBasis != nil {
 		t.Errorf("an unpriced pair has no cost, not $0: cost=%v basis=%+v", rc.CostUSD, rc.CostBasis)
+	}
+}
+
+// A receipt is priced at the row in effect when the request started, not
+// whichever row the config snapshot had when the record arrived (spec §5.1).
+func TestReceiptIsPricedAtItsOwnTime(t *testing.T) {
+	change := time.Date(2026, 9, 25, 15, 24, 18, 0, time.UTC)
+	pair := gateway.Pair{Model: "gpt-5-mini", Backend: "openai-prod"}
+	s := *snap
+	s.Prices = map[gateway.Pair][]store.PriceRow{pair: {
+		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 1, 1, 1, 1), From: priceFrom, To: &change},
+		{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(2, 2, 2, 2, 2), From: change},
+	}}
+	tok := 700.0 + 200 + 100 + 500 + 100
+	for _, c := range []struct {
+		name string
+		at   time.Time
+		rate float64
+		from time.Time
+	}{
+		{"1s before the change", change.Add(-time.Second), 1, priceFrom},
+		{"1s after the change", change.Add(time.Second), 2, change},
+	} {
+		rc, err := Receipt(&s, record(map[string]string{"start_time": c.at.Format(time.RFC3339Nano)}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := tok * c.rate / 1e6; cost(rc) < want-1e-12 || cost(rc) > want+1e-12 {
+			t.Errorf("%s: cost = %v, want %v", c.name, cost(rc), want)
+		}
+		if rc.CostBasis == nil || rc.CostBasis.EffectiveFrom != c.from.UnixMilli() {
+			t.Errorf("%s: cost basis = %+v, want the row from %s", c.name, rc.CostBasis, c.from)
+		}
+	}
+	// Before the pair's first price there's none.
+	rc, _ := Receipt(&s, record(map[string]string{"start_time": priceFrom.Add(-time.Second).Format(time.RFC3339Nano)}))
+	if rc.CostUSD != nil {
+		t.Errorf("before any price: cost = %v, want none", *rc.CostUSD)
 	}
 }
 

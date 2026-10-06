@@ -413,6 +413,30 @@ when stale; 428 without it on an update or delete). Open questions are in
     `pricedLater`.
   - Cache writes count on receipts (Agent Router's `CacheCreationInputToken`)
     and bill at their own rate.
+- [x] Price at the request's time (2026-10-05, spec §5.1). Ingest prices
+  each receipt at the row in effect at its `start_time`, reading the rows
+  from the db per OTLP batch, not at the 5-second config snapshot. The
+  priced-later ticker uses the row in effect at the receipt's time if that
+  prices it, else the first row set after it (then `pricedLater`).
+- [x] Unpriced requests everywhere (2026-10-05, spec §5.1). Unpriced counts
+  come from raw receipts (`UnpricedCells`), since the aggregates sum cost and
+  can't tell no price from $0.
+  - Spend: `unpriced` on the view, each row, the trend and the projection.
+    The totals say "N requests have no price and aren't in this total" with
+    a link to Models → Pricing. A row with no priced spend shows "No price";
+    one with some shows "+ N no price". Cost / request is over priced
+    requests. CSV has `unpriced_requests`, and `spend_usd` is "no price" when
+    a row has nothing priced.
+  - Overview: `current.unpriced` under the Spend number; `unpricedPairs` in
+    Needs attention, each with "Set a price". The featured change's cost /
+    request is over priced requests (null: "no price").
+  - Keys: `unpriced24h`; the 24h spend and per-model cost read "No price"
+    when nothing is priced. Budgets: `unpricedRequests` this month, not
+    counted against the cap, noted on Spend, Keys, Overview and the edit
+    dialog.
+  - Activity: `costPerRequestUsd` is null with no priced requests, and
+    `unpriced` per side; the effect doesn't count cost/request then.
+  - Traffic and the receipt drawer already read "No price".
 - [x] Redaction rehydration (§4.5 step 5, 2026-10-05, decisions §3).
   - Engine: placeholders are numbered per request, not per message, and the
     same value always gets the same one; a placeholder the caller typed is

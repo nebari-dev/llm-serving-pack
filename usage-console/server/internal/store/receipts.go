@@ -328,10 +328,12 @@ func (s *Store) SpendSeries(ctx context.Context, tenant string, days int, teams 
 }
 
 // KeyUsage is a key's traffic over the rolling 24h: totals, and requests in
-// 24 hourly bins (oldest first) that sum to Requests24h.
+// 24 hourly bins (oldest first) that sum to Requests24h. Spend24hUSD leaves
+// out the Unpriced24h requests, which have no price.
 type KeyUsage struct {
 	Requests24h int
 	Spend24hUSD float64
+	Unpriced24h int
 	Hourly      [24]int
 	LastUsed    *time.Time
 }
@@ -371,6 +373,15 @@ func (s *Store) KeyUsage(ctx context.Context, tenant string) (map[string]KeyUsag
 		u := out[c.id]
 		u.add(from, c.bucket, c.n, c.cost)
 		out[c.id] = u
+	}
+	unpriced, err := s.UnpricedCells(ctx, tenant, from, time.Now(), 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range unpriced {
+		u := out[c.KeyID]
+		u.Unpriced24h += c.Requests
+		out[c.KeyID] = u
 	}
 	rows, _ = s.Receipts.Query(ctx, `
 		SELECT key_id, max(ts) FROM receipts

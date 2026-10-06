@@ -202,6 +202,17 @@ func Simulate(backend string, req ChatRequest, r *rand.Rand) Plan {
 	}
 }
 
+// OpenAIReasoning is u with n reasoning tokens counted the way OpenAI counts
+// them: inside completion_tokens, with completion_tokens_details saying how
+// many of them were reasoning. (Simulate reports reasoning on top of
+// completion instead.)
+func OpenAIReasoning(u Usage, n int) Usage {
+	u.CompletionTokens += n
+	u.CompletionTokensDetails.ReasoningTokens = n
+	u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	return u
+}
+
 // Echo answers with the last user message as it arrived, so a check through
 // the gateway can see what the provider was sent. It never fails, and it
 // streams in four-character chunks, so a placeholder spans several.

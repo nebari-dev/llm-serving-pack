@@ -28,7 +28,7 @@ import {
   updateBudget,
   type WireKey,
 } from '@/data/catalog'
-import { money } from '@/lib/format'
+import { money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
 
@@ -186,6 +186,7 @@ function PreviewPanel({ preview, loading, error, input, edit }: { preview: Budge
       {(api || edit) && (
         <span className="text-muted-foreground-strong">
           Spent {money(b.currentUsd)} this month, {pct}% of this cap. Projected {money(b.projectedUsd)} by month end at the trailing 7-day average.
+          {!!b.unpricedRequests && ` ${unpricedNote(b.unpricedRequests, 'what it has spent')}.`}
         </span>
       )}
       {preview.overCap && (

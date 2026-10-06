@@ -10,7 +10,9 @@ import (
 // ActivityBucket is one backend's traffic in one 5-minute bucket of
 // receipts_5m. Errors are 5xx and 429 responses; Served is what was neither
 // blocked nor an error, so cost per request isn't diluted by requests that
-// never reached a model.
+// never reached a model. Unpriced are served requests with no cost yet,
+// which receipts_5m can't tell from free ones: the caller fills it in from
+// UnpricedCells.
 type ActivityBucket struct {
 	Start           time.Time
 	Backend         string
@@ -18,6 +20,7 @@ type ActivityBucket struct {
 	Served          int
 	Errors          int
 	BlockedRedacted int
+	Unpriced        int
 	CostUSD         float64
 }
 

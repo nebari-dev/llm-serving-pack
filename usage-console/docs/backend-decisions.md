@@ -10,9 +10,9 @@ defaults I picked that you may want to change.
 **Today.** `model_pricing` holds effective-dated rows per model: input,
 cached input, output, reasoning, per 1M tokens. The only rows are the demo
 seed (`internal/demo`, effective 2026-01-01). receipt-ingest costs each
-settled receipt at the row in effect when its snapshot loaded (reloaded
-every 5s), and stores that row on the receipt as `cost_basis`, so later
-price changes never reprice history. New in this pass:
+settled receipt at the row in effect at its request's start time (rows read
+per OTLP batch; 2026-10-05, spec §5.1), and stores that row on the receipt
+as `cost_basis`, so later price changes never reprice history. New in this pass:
 `POST /pricing/{model}` adds the next row (now or scheduled) and
 `DELETE /pricing/{model}/{effectiveAt}` cancels a scheduled one, both
 audited. Any sync would write through the same path.
@@ -66,11 +66,53 @@ audited. Any sync would write through the same path.
     Those tokens then bill at its input or output rate.
 - **Decide: reasoning tokens may be billed twice.** The cost formula adds
   `reasoning_tokens × reasoning rate` to `output_tokens × output rate`. The
-  fake upstream reports reasoning apart from completion tokens, so that
-  holds today. OpenAI counts reasoning inside `completion_tokens`, so with
-  real traffic reasoning would be charged twice. Fix: bill `output −
-  reasoning` at the output rate (as for cached input), once we confirm what
-  Agent Router logs as `llm_output_token`.
+  fake upstream's simulated traffic reports reasoning apart from completion
+  tokens, so that holds for it. OpenAI counts reasoning inside
+  `completion_tokens`, so real traffic is charged twice.
+  - **Confirmed (2026-10-05), from Agent Router's source**
+    (`theagentrouter/agent-router` tag `v1.1.0`, commit `c217da8a`):
+    - Our generated config (see
+      `server/internal/routing/testdata/config-2026-10-05.yaml:253-256`), as
+      `aigw run`'s `internal/autoconfig/config.yaml.tmpl:220-225`, maps
+      `llm_output_token` to cost type `OutputToken` and
+      `llm_reasoning_token` to `ReasoningToken`. Our access log
+      (`server/aigw/base.yaml:111-112`) logs them as
+      `gen_ai.usage.output_tokens` and `gen_ai.usage.reasoning_tokens`.
+    - `internal/extproc/processor_impl.go:850-871` (`evalCost`) copies each
+      counter as is: `OutputToken` is `costs.OutputTokens()`, `ReasoningToken`
+      is `costs.ReasoningTokens()`. Nothing is subtracted. They're written once,
+      at end of stream, on success (`processor_impl.go:638-647`). A missing
+      count is written as 0.
+    - OpenAI schema (`internal/translator/openai_openai.go:165-174`,
+      streaming `207-218`): `SetOutputTokens(completion_tokens)` and
+      `SetReasoningTokens(completion_tokens_details.reasoning_tokens)`. So
+      for usage `{completion_tokens: C, reasoning_tokens: R}`,
+      `llm_output_token` = **C** (reasoning included) and
+      `llm_reasoning_token` = **R**, a part of C.
+    - Anthropic, native `/v1/messages` (`anthropic_anthropic.go:118-124`
+      via `internal/metrics/metrics.go:292-307`): output = `output_tokens`,
+      which includes thinking; reasoning is never set, so 0. Input is
+      `input_tokens` + cache reads + cache writes. An OpenAI-schema request
+      to Bedrock or Vertex Anthropic (`anthropic_helper.go:1303`, streaming
+      `1181-1182`) sets reasoning from `output_tokens_details.thinking_tokens`
+      when the upstream sends it (inside output again), else 0.
+    - So today an OpenAI reasoning response bills R twice. Anthropic doesn't,
+      but its thinking never sees a reasoning rate (it bills at output, which
+      is what Anthropic charges). `receipts.total_tokens` (input + output +
+      reasoning, `store/receipts.go`) and the drawer's cost lines count R
+      twice too.
+  - The fake upstream now takes `X-Fake-Reasoning: n` to report n reasoning
+    tokens OpenAI's way (`fakellm.OpenAIReasoning`). An api-mode test sends
+    one and asserts `outputTokens` = `completion_tokens` and
+    `reasoningTokens` = n. Not run yet.
+  - **Recommendation.** Treat reasoning as a part of output, as cached
+    input is a part of input: bill `max(output − reasoning, 0) × output rate
+    + reasoning × reasoning rate`. When the reasoning rate equals the output
+    rate (LiteLLM's fallback) that's `output × output rate`. Anthropic's
+    reasoning is 0, so its cost doesn't change. Change with it:
+    `total_tokens` = input + output, the drawer's output line shows output
+    − reasoning, and `fakellm.Simulate` reports OpenAI's way (or its
+    traffic under-bills). Receipts already written keep their cost.
 
 **Decide: schema gaps a real price list exposes.** Per-backend prices and
 cache writes are done (above).
@@ -80,9 +122,20 @@ cache writes are done (above).
   change reprices everyone. There are no roles yet (see §7); it should be a
   platform-admin action.
 
-Minor: ingest prices at snapshot load, not at the receipt's timestamp, so
-for up to 5s after a change takes effect receipts can carry the old rate.
-Pricing by the receipt's `ts` would fix it; say if it matters.
+Fixed 2026-10-05: ingest prices at the receipt's start time (spec §5.1),
+from the rows in the db per OTLP batch, not the snapshot loaded up to 5s
+earlier. Defaults I picked:
+- A receipt that arrives unpriced is priced later at the row in effect at
+  its own time if that prices it (ingest hadn't seen the row yet; not
+  marked `pricedLater`), else at the first row set after it that does, once
+  that row is in effect.
+- Unpriced requests are counted from raw receipts, not new aggregate
+  columns: rebuilding `receipts_5m`/`receipts_daily` would lose history
+  past raw retention (30 days). So unpriced counts reach back 30 days; a
+  month-to-date count on the 31st can miss the first day's.
+- Spend CSV writes `spend_usd` as "no price" for a row with nothing priced,
+  and adds `unpriced_requests`. Budgets don't count unpriced requests
+  against the cap (they have no cost); the budget shows how many.
 
 ## 2. Budgets
 

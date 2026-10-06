@@ -454,10 +454,10 @@ func (s *Server) RunPriceSync(ctx context.Context) {
 	}
 }
 
-// PriceLaterOnce prices receipts that arrived without a price, at their
-// pair's row in effect now.
+// PriceLaterOnce prices receipts that arrived without a price
+// (store.PriceLater).
 func (s *Server) PriceLaterOnce(ctx context.Context) (int, error) {
-	prices, err := s.Store.PricesNow(ctx)
+	prices, err := s.Store.PriceRows(ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -469,7 +469,7 @@ func (s *Server) PriceLaterOnce(ctx context.Context) (int, error) {
 	for _, m := range models {
 		byID[m.ID] = m
 	}
-	n, err := s.Store.PriceUnpriced(ctx, prices, byID)
+	n, err := s.Store.PriceUnpriced(ctx, prices, byID, time.Now())
 	if n > 0 {
 		log.Printf("priced %d receipts that arrived without a price", n)
 	}

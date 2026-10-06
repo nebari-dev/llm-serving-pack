@@ -15,7 +15,8 @@ import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, Table
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { type Budget, budgetLabel, budgets, dataMode, syncBudgets, throttleShare, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
-import { int, money } from '@/lib/format'
+import { downloadText, spendCsv } from '@/lib/csv'
+import { int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
@@ -76,17 +77,8 @@ function pctChange(now: number, prev: number) {
 }
 
 function downloadCsv(view: SpendView) {
-  const esc = (v: string | number) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v))
-  const lines = [
-    [view.by, 'detail', 'spend_usd', 'previous_spend_usd', 'requests', 'tokens'].join(','),
-    ...view.rows.map((r) => [r.label, r.sub ?? '', r.spendUsd.toFixed(2), r.prevSpendUsd.toFixed(2), r.requests, r.tokens].map(esc).join(',')),
-  ]
   const name = `spend-${view.by}-${view.range}.csv`
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], { type: 'text/csv' }))
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(a.href)
+  downloadText(name, spendCsv(view))
   toast.add({ title: 'CSV downloaded', description: `${name}: ${view.rows.length} rows, ${new Date(view.from).toISOString()} to ${new Date(view.to).toISOString()}`, type: 'success' })
 }
 
@@ -160,14 +152,7 @@ export function SpendPage() {
                 <Skeleton className="my-1.5 h-5 w-28" />
               )}
             </dd>
-            {!!view.unpriced && (
-              <dd className="mt-0.5 text-xs text-muted-foreground">
-                Leaves out {view.unpriced.toLocaleString('en-US')} request{view.unpriced === 1 ? '' : 's'} with{' '}
-                <Link to="/models?tab=pricing" className="underline underline-offset-4">
-                  no price yet
-                </Link>
-              </dd>
-            )}
+            {!!view.unpriced && <UnpricedNote n={view.unpriced} />}
           </div>
           <div className="md:px-4">
             <dt className="text-xs text-muted-foreground">Month to date</dt>
@@ -181,6 +166,7 @@ export function SpendPage() {
                 <Skeleton className="my-1.5 h-5 w-28" />
               )}
             </dd>
+            {loaded && !!period.unpriced && <UnpricedNote n={period.unpriced} />}
           </div>
           <div className="pt-3 md:px-4 md:pt-0">
             <dt className="text-xs text-muted-foreground">Projected at period end</dt>
@@ -203,6 +189,7 @@ export function SpendPage() {
                   Month to date plus the trailing {period.trailingDays < 7 ? `${period.trailingDays}-day` : '7-day'} average of{' '}
                   <Money value={period.trailingDailyUsd} className="text-foreground" />
                   /day × {period.remainingDays.toFixed(1)} days remaining in the UTC month. Assumes current prices and no budget enforcement.
+                  {!!period.unpriced && ' Requests with no price add nothing to it.'}
                 </>
               ) : (
                 <Skeleton className="h-8 w-full" />
@@ -244,6 +231,14 @@ export function SpendPage() {
               </Alert>
             )}
             {loaded ? <TrendChart view={view} dim={dim} surge={!!seedSpendSurge} /> : <Skeleton shape="block" className="h-[252px]" />}
+            {loaded && !!view.trend.unpriced && (
+              <p className="text-xs text-muted-foreground">
+                {unpricedNote(view.trend.unpriced, 'these bars')}.{' '}
+                <Link to="/models?tab=pricing" className="underline underline-offset-4">
+                  Set prices
+                </Link>
+              </p>
+            )}
             {view.trend.bucketMs === DAY && (range === '15m' || range === '1h' || range === '6h' || range === '24h') && (
               <p className="text-xs text-muted-foreground">
                 Spend is charted at daily grain, so ranges under 7 days show the last {view.trend.points.length} days for context. Totals above use{' '}
@@ -317,6 +312,25 @@ export function SpendPage() {
   )
 }
 
+/** Under a total that leaves unpriced requests out: how many, and where to price them. */
+function UnpricedNote({ n }: { n: number }) {
+  return (
+    <dd className="mt-0.5 text-xs text-muted-foreground">
+      {unpricedNote(n)}.{' '}
+      <Link to="/models?tab=pricing" className="underline underline-offset-4">
+        Set prices
+      </Link>
+    </dd>
+  )
+}
+
+/** Cost per priced request; null (no price) when every served request in the row lacks one. */
+function costPerRequest(r: SpendRow) {
+  const priced = r.requests - (r.unpriced ?? 0)
+  if (r.unpriced && priced <= 0) return null
+  return priced > 0 ? r.spendUsd / priced : 0
+}
+
 const palette = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
 
 function TrendChart({ view, dim, surge }: { view: SpendView; dim: Dim; surge: boolean }) {
@@ -372,6 +386,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'spend', dir: 'desc' })
   const total = rows.reduce((a, r) => a + r.spendUsd, 0)
   const totalRequests = rows.reduce((a, r) => a + r.requests, 0)
+  const totalUnpriced = rows.reduce((a, r) => a + (r.unpriced ?? 0), 0)
   // Latency isn't in the spend aggregates; only the mock fixtures carry it.
   const hasP50 = rows.some((r) => r.p50Ms !== undefined)
   const val = (r: SpendRow, k: SortKey): number | string => {
@@ -383,7 +398,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
       case 'delta':
         return pctChange(r.spendUsd, r.prevSpendUsd) ?? Infinity
       case 'costPerRequest':
-        return r.requests ? r.spendUsd / r.requests : 0
+        return costPerRequest(r) ?? -1
       case 'p50':
         return r.p50Ms ?? 0
       default:
@@ -449,7 +464,13 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
                 {r.sub && <div className="text-xs text-muted-foreground">{r.sub}</div>}
               </TableCell>
               <TableCell className="h-10 py-1.5 text-right">
-                <Money value={r.spendUsd} />
+                {/* No priced spend but unpriced requests: no price, not $0. */}
+                <Money value={r.unpriced && !r.spendUsd ? null : r.spendUsd} />
+                {!!r.unpriced && !!r.spendUsd && (
+                  <div className="text-xs text-muted-foreground" title={unpricedNote(r.unpriced)}>
+                    + {int(r.unpriced)} no price
+                  </div>
+                )}
               </TableCell>
               <TableCell className="h-10 w-40 py-1.5">
                 <div className="flex items-center justify-end gap-2">
@@ -467,7 +488,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
                 <TokenCount value={r.tokens} />
               </TableCell>
               <TableCell className="h-10 py-1.5 text-right">
-                <Money value={r.requests ? r.spendUsd / r.requests : 0} precision="micro" />
+                <Money value={costPerRequest(r)} precision="micro" />
               </TableCell>
               {hasP50 && (
                 <TableCell className="h-10 py-1.5 text-right">
@@ -483,6 +504,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
           <TableCell className="font-medium">Total</TableCell>
           <TableCell className="text-right font-medium">
             <Money value={total} />
+            {!!totalUnpriced && <div className="text-xs font-normal text-muted-foreground">{unpricedNote(totalUnpriced)}</div>}
           </TableCell>
           <TableCell colSpan={2} />
           <TableCell className="num text-right font-mono font-medium">{int(totalRequests)}</TableCell>
@@ -593,6 +615,11 @@ function BudgetTable({
               <TableCell className="py-2 text-right">
                 <Money value={b.currentUsd} />
                 <div className="num font-mono text-xs text-muted-foreground">{pct.toFixed(0)}%</div>
+                {!!b.unpricedRequests && (
+                  <div className="text-xs text-muted-foreground" title={`${unpricedNote(b.unpricedRequests, 'what this budget has spent')}, so they don't count toward its cap.`}>
+                    + {int(b.unpricedRequests)} no price
+                  </div>
+                )}
               </TableCell>
               <TableCell className="py-2 text-right">
                 <Money value={b.capUsd} />

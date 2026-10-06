@@ -39,6 +39,8 @@ export interface ApiKey {
   hourly24h: number[]
   /** Api mode only; mock mode derives it from the spend fixtures. */
   spend24hUsd?: number
+  /** Api mode: requests over the same 24h with no price, which spend24hUsd leaves out. */
+  unpriced24h?: number
   status: 'active' | 'revoked' | 'rotating'
   rotation?: KeyRotation
 }
@@ -448,6 +450,8 @@ export interface Budget {
   projectedUsd: number
   /** The scope's daily average the projection uses. */
   trailingDailyUsd: number
+  /** Api mode: this month's requests in scope with no price, which currentUsd leaves out. */
+  unpricedRequests?: number
   /** The version an edit or delete names in If-Match (api mode). */
   etag?: string
 }
@@ -823,6 +827,8 @@ export interface SpendRow {
   prevSpendUsd: number
   requests: number
   tokens: number
+  /** Api mode: served requests with no price, counted in requests but not in spendUsd. */
+  unpriced?: number
   /** Only in mock mode: the aggregates carry no latency. */
   p50Ms?: number
   /** Traffic has no filter for this group (no key identity, or never routed). */
@@ -844,6 +850,8 @@ export interface SpendView {
     /** Every group, ranked by its last 30 days, so colors don't follow the range. */
     order: string[]
     labels: Record<string, string>
+    /** Api mode: requests over the charted buckets with no price, which the bars leave out. */
+    unpriced?: number
   }
   period: {
     periodStart: number
@@ -853,6 +861,8 @@ export interface SpendView {
     trailingDays: number
     remainingDays: number
     projectedUsd: number
+    /** Api mode: this month's requests with no price, which month to date and the projection leave out. */
+    unpriced?: number
   }
 }
 
@@ -1016,6 +1026,8 @@ export interface WindowTotals {
   blocked: number
   redacted: number
   spendUsd: number
+  /** Api mode: served requests with no price, which spendUsd leaves out. */
+  unpriced?: number
 }
 
 export interface KeyAnomaly {
@@ -1036,6 +1048,16 @@ export interface Summary {
   previous: WindowTotals
   topTeamIncrease: { team: string; deltaUsd: number } | null
   keyAnomalies: KeyAnomaly[]
+  /** Api mode: (model, backend) pairs that served requests in the range with no price. */
+  unpricedPairs?: UnpricedPair[]
+}
+
+export interface UnpricedPair {
+  model: string
+  backend: string
+  requests: number
+  /** The first of them, epoch ms. */
+  since: number
 }
 
 const seriesTotals = trafficSeries.reduce(
@@ -1066,7 +1088,10 @@ export const summary: Summary = {
 export interface Impact {
   requests: number
   p50Ms: number
-  costPerRequestUsd: number
+  /** Over successful requests with a price; null when none had one (api mode). */
+  costPerRequestUsd: number | null
+  /** Api mode: successful requests with no price, left out of costPerRequestUsd. */
+  unpriced?: number
   errorRate: number
   blockedRedactedShare: number
 }
@@ -1095,7 +1120,10 @@ export const changeImpacts: Record<string, ChangeImpact> = {
 
 export interface ActivityAgg {
   requests: number
-  costPerRequestUsd: number
+  /** Over served requests with a price; null when none had one (api mode). */
+  costPerRequestUsd: number | null
+  /** Api mode: served requests with no price, left out of costPerRequestUsd. */
+  unpriced?: number
   errorRate: number
   blockedRedactedShare: number
 }

@@ -20,7 +20,7 @@ import {
   type TrafficEvent,
   trafficSeries,
 } from '@/data/catalog'
-import { ago, clock, int } from '@/lib/format'
+import { ago, clock, int, perRequest } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive, useNow } from '@/state/live'
@@ -84,7 +84,9 @@ function readoutOf(c: Change | ActivityChange): Readout | null {
     return {
       lines: [
         { metric: 'requests', before: int(b.requests), after: int(a.requests) },
-        { metric: 'cost/request', before: `$${b.costPerRequestUsd.toFixed(4)}`, after: `$${a.costPerRequestUsd.toFixed(4)}` },
+        { metric: 'cost/request', before: perRequest(b.costPerRequestUsd), after: perRequest(a.costPerRequestUsd) },
+        // Cost/request is over priced requests; say how many it leaves out.
+        ...(b.unpriced || a.unpriced ? [{ metric: 'requests with no price', before: int(b.unpriced ?? 0), after: int(a.unpriced ?? 0) }] : []),
         { metric: 'error rate', before: pct(b.errorRate), after: pct(a.errorRate) },
         { metric: 'blocked + redacted', before: pct(b.blockedRedactedShare), after: pct(a.blockedRedactedShare) },
       ],

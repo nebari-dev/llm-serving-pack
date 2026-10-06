@@ -43,7 +43,7 @@ func TestImpactComparesAnHourEitherSide(t *testing.T) {
 		t.Fatalf("bins %v split %d", im.Bins, im.Split)
 	}
 	// Cost per served request: $0.02 before, $0.05 after.
-	if !near(im.Before.CostPerRequestUSD, 0.02) || !near(im.After.CostPerRequestUSD, 0.05) {
+	if !nearp(im.Before.CostPerRequestUSD, 0.02) || !nearp(im.After.CostPerRequestUSD, 0.05) {
 		t.Fatalf("cost/request %v → %v", im.Before.CostPerRequestUSD, im.After.CostPerRequestUSD)
 	}
 	if !near(im.Before.ErrorRate, 0) || !near(im.After.ErrorRate, 0.2) || !near(im.After.BlockedRedactedShare, 0.1) {
@@ -72,15 +72,36 @@ func TestImpactWindowStopsAtNow(t *testing.T) {
 	}
 }
 
+// Cost per request is over priced requests only: an unpriced one has no
+// cost, not $0, so it would read as a drop in cost.
+func TestCostPerRequestLeavesOutUnpriced(t *testing.T) {
+	before := flat(12, store.ActivityBucket{Requests: 10, Served: 10, Unpriced: 5, CostUSD: 0.5})
+	after := flat(12, store.ActivityBucket{Requests: 10, Served: 10, Unpriced: 10})
+	im := impactAt(buckets(t0.Add(-time.Hour), "a", append(before, after...)...), t0, t0.Add(3*time.Hour))
+	if !nearp(im.Before.CostPerRequestUSD, 0.1) || im.Before.Unpriced != 60 {
+		t.Fatalf("before: cost/request %v unpriced %d", im.Before.CostPerRequestUSD, im.Before.Unpriced)
+	}
+	if im.After.CostPerRequestUSD != nil || im.After.Unpriced != 120 {
+		t.Fatalf("after: everything unpriced has no cost/request, got %v", *im.After.CostPerRequestUSD)
+	}
+	if im.Effect != "Nothing moved by 5% or more." {
+		t.Fatalf("effect %q: cost/request with no price on one side isn't a move", im.Effect)
+	}
+}
+
+func usd(v float64) *float64 { return &v }
+
+func nearp(a *float64, b float64) bool { return a != nil && near(*a, b) }
+
 func TestEffectRules(t *testing.T) {
-	base := Agg{Requests: 100, CostPerRequestUSD: 0.02, ErrorRate: 0.02, BlockedRedactedShare: 0.1}
+	base := Agg{Requests: 100, CostPerRequestUSD: usd(0.02), ErrorRate: 0.02, BlockedRedactedShare: 0.1}
 	better := base
-	better.CostPerRequestUSD, better.ErrorRate = 0.01, 0.01
+	better.CostPerRequestUSD, better.ErrorRate = usd(0.01), 0.01
 	if tone, text, ok := effectOf(base, better); !ok || tone != "good" || text != "cost/request −50%, error rate −50%" {
 		t.Fatalf("improved: %q %q %v", tone, text, ok)
 	}
 	mixed := base
-	mixed.CostPerRequestUSD, mixed.BlockedRedactedShare = 0.01, 0.2
+	mixed.CostPerRequestUSD, mixed.BlockedRedactedShare = usd(0.01), 0.2
 	if tone, _, _ := effectOf(base, mixed); tone != "bad" {
 		t.Fatalf("any metric worse is a regression: %q", tone)
 	}

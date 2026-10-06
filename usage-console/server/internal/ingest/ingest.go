@@ -183,7 +183,7 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		}
 		up.Outcome, up.State = fmt.Sprintf("%d", rc.Status), "fail"
 	default:
-		rc.CostUSD, rc.CostBasis = s.Cost(rc.ResolvedModel, rc.Backend, gateway.TokensOf(rc))
+		rc.CostUSD, rc.CostBasis = s.Cost(rc.ResolvedModel, rc.Backend, start, gateway.TokensOf(rc))
 	}
 	// Warden's steps are the request's, except rehydration: that's the response.
 	var after []model.TraceStep

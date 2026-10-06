@@ -9,6 +9,16 @@ export function microMoney(usd: number) {
   return '$' + usd.toFixed(4)
 }
 
+/** Cost per request to 4 places; null is "no price" (none of the requests had one), never $0. */
+export function perRequest(usd: number | null) {
+  return usd === null ? 'no price' : `$${usd.toFixed(4)}`
+}
+
+/** "3 requests have no price and aren't in this total", for a total that leaves them out. */
+export function unpricedNote(n: number, what = 'this total') {
+  return `${n.toLocaleString('en-US')} request${n === 1 ? ' has' : 's have'} no price and ${n === 1 ? "isn't" : "aren't"} in ${what}`
+}
+
 export function tokens(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
   if (n >= 10_000) return Math.round(n / 1000) + 'k'

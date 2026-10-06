@@ -24,7 +24,7 @@ func (s *Store) Teams(ctx context.Context, tenant string) ([]model.Team, error) 
 	})
 }
 
-// Models returns the catalog. Prices are per (model, backend): PricesNow.
+// Models returns the catalog. Prices are per (model, backend): PriceRows.
 func (s *Store) Models(ctx context.Context) ([]model.Model, error) {
 	rows, _ := s.Config.Query(ctx, `
 		SELECT id, display, provider, family, context FROM model_catalog

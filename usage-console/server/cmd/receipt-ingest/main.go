@@ -138,6 +138,14 @@ func (r *receiver) Export(ctx context.Context, req *collogs.ExportLogsServiceReq
 		}
 	}
 	snap := r.snapshotFor(keyIDs)
+	// Price at the rows in the db now, not the snapshot's: a price that took
+	// effect since the last reload applies to requests from its start
+	// (spec §5.1). The batch's requests started within the last day.
+	if rows, err := r.store.PriceRowsSince(ctx, time.Now().Add(-24*time.Hour)); err == nil {
+		snap = snap.WithPrices(rows)
+	} else {
+		log.Printf("load prices (pricing from the last reload): %v", err)
+	}
 	var rejected int64
 	for _, attrs := range records {
 		rc, err := ingest.Receipt(snap, attrs)

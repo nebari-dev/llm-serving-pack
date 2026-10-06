@@ -250,6 +250,9 @@ type APIKey struct {
 	LastUsedAt     *int64   `json:"lastUsedAt"` // epoch ms; the console formats it
 	Requests24h    int      `json:"requests24h"`
 	Spend24hUSD    float64  `json:"spend24hUsd"`
+	// Unpriced24h is requests over the same 24h with no price, which
+	// Spend24hUSD leaves out.
+	Unpriced24h int `json:"unpriced24h"`
 	// Hourly24h is requests per hour over the same rolling 24h, oldest first.
 	Hourly24h []int        `json:"hourly24h"`
 	Status    string       `json:"status"`
@@ -285,7 +288,10 @@ type Budget struct {
 	ProjectedUSD float64 `json:"projectedUsd"`
 	// TrailingDailyUSD is the scope's daily average the projection uses.
 	TrailingDailyUSD float64 `json:"trailingDailyUsd"`
-	ETag             string  `json:"etag,omitempty"` // for If-Match
+	// UnpricedRequests is this month's requests in scope with no price:
+	// not in CurrentUSD, and not counted against the cap.
+	UnpricedRequests int    `json:"unpricedRequests"`
+	ETag             string `json:"etag,omitempty"` // for If-Match
 }
 
 type Cond struct {

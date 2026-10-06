@@ -27,7 +27,7 @@ type Snapshot struct {
 	Tenant   string
 	KeyBy    map[string]*store.KeyRecord // by secret hash (current and rotating)
 	Models   map[string]model.Model
-	Prices   map[Pair]store.PriceRow // the row in effect for each priced pair
+	Prices   map[Pair][]store.PriceRow // each pair's rows, oldest first
 	Aliases  map[string]string
 	Backends []model.Backend
 	Routes   []model.Route
@@ -39,10 +39,26 @@ type Snapshot struct {
 // Pair is a (model, backend), which is what a price belongs to.
 type Pair struct{ Model, Backend string }
 
-// Cost prices a served request at its pair's row in effect: nil, nil when
-// the pair has no price (or lacks a rate the tokens need).
-func (s *Snapshot) Cost(modelID, backend string, t pricing.Tokens) (*float64, *model.CostBasis) {
-	row, ok := s.Prices[Pair{modelID, backend}]
+// WithPrices is a copy of s that prices from rows (store.PriceRowsSince)
+// instead of the ones it loaded with.
+func (s *Snapshot) WithPrices(rows []store.PriceRow) *Snapshot {
+	c := *s
+	c.Prices = map[Pair][]store.PriceRow{}
+	for _, p := range rows {
+		k := Pair{p.ModelID, p.Backend}
+		c.Prices[k] = append(c.Prices[k], p)
+	}
+	for _, ps := range c.Prices {
+		slices.SortFunc(ps, func(a, b store.PriceRow) int { return a.From.Compare(b.From) })
+	}
+	return &c
+}
+
+// Cost prices a served request at its pair's row in effect when it started
+// (spec §5.1): nil, nil when there was no price then (or the row lacks a
+// rate the tokens need).
+func (s *Snapshot) Cost(modelID, backend string, at time.Time, t pricing.Tokens) (*float64, *model.CostBasis) {
+	row, ok := store.PriceAt(s.Prices[Pair{modelID, backend}], at)
 	if !ok {
 		return nil, nil
 	}
@@ -208,7 +224,8 @@ func (s *Snapshot) substitute(b model.Backend, m string) string {
 	best, price := "", -1.0
 	for _, x := range b.Models {
 		in := 0.0
-		if r := s.Prices[Pair{x, b.Name}].Rates[pricing.Input]; r != nil {
+		p, _ := store.PriceAt(s.Prices[Pair{x, b.Name}], time.Now())
+		if r := p.Rates[pricing.Input]; r != nil {
 			in = *r
 		}
 		if s.Models[x].Family == fam && in > price {
@@ -744,7 +761,7 @@ func (d *Decision) Finish(s *Snapshot, final *Candidate, res Result, failed []st
 		rc.OutputTokens = fakellm.EstimateTokens(res.Content) // stream cut before usage arrived
 	}
 	if res.Status == 200 {
-		rc.CostUSD, rc.CostBasis = s.Cost(m, b.Name, TokensOf(rc))
+		rc.CostUSD, rc.CostBasis = s.Cost(m, b.Name, d.start, TokensOf(rc))
 	} else {
 		rc.ErrorCode = "upstream_error"
 		if res.Status == 429 {

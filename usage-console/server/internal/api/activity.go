@@ -37,10 +37,13 @@ var budgetLevels = []float64{0.8, 1}
 
 // Agg is tenant traffic over one side of a change.
 type Agg struct {
-	Requests             int     `json:"requests"`
-	CostPerRequestUSD    float64 `json:"costPerRequestUsd"`    // over served requests
-	ErrorRate            float64 `json:"errorRate"`            // 5xx and 429, share 0–1
-	BlockedRedactedShare float64 `json:"blockedRedactedShare"` // share 0–1
+	Requests int `json:"requests"`
+	// CostPerRequestUSD is over served requests with a price; null when
+	// there were none. Unpriced counts the served ones it leaves out.
+	CostPerRequestUSD    *float64 `json:"costPerRequestUsd"`
+	Unpriced             int      `json:"unpriced"`
+	ErrorRate            float64  `json:"errorRate"`            // 5xx and 429, share 0–1
+	BlockedRedactedShare float64  `json:"blockedRedactedShare"` // share 0–1
 }
 
 // ActivityImpact compares the buckets either side of a change. The change's
@@ -85,12 +88,12 @@ type ActivityView struct {
 }
 
 type tally struct {
-	requests, served, errors, blockedRedacted int
-	cost                                      float64
+	requests, served, errors, blockedRedacted, unpriced int
+	cost                                                float64
 }
 
 func (a *tally) add(b store.ActivityBucket) {
-	a.merge(tally{b.Requests, b.Served, b.Errors, b.BlockedRedacted, b.CostUSD})
+	a.merge(tally{b.Requests, b.Served, b.Errors, b.BlockedRedacted, b.Unpriced, b.CostUSD})
 }
 
 func (a *tally) merge(b tally) {
@@ -98,13 +101,15 @@ func (a *tally) merge(b tally) {
 	a.served += b.served
 	a.errors += b.errors
 	a.blockedRedacted += b.blockedRedacted
+	a.unpriced += b.unpriced
 	a.cost += b.cost
 }
 
 func (a tally) agg() Agg {
-	g := Agg{Requests: a.requests}
-	if a.served > 0 {
-		g.CostPerRequestUSD = a.cost / float64(a.served)
+	g := Agg{Requests: a.requests, Unpriced: a.unpriced}
+	if priced := a.served - a.unpriced; priced > 0 {
+		v := a.cost / float64(priced)
+		g.CostPerRequestUSD = &v
 	}
 	if a.requests > 0 {
 		g.ErrorRate = float64(a.errors) / float64(a.requests)
@@ -152,19 +157,22 @@ func impactAt(bs []store.ActivityBucket, at, now time.Time) ActivityImpact {
 // effectOf states what moved. Every metric is better lower, so any metric
 // up by 5% or more is a regression, and an improvement is something down by
 // that much with nothing up. A metric that was 0 before has no share to move
-// by, so it isn't counted.
+// by, so it isn't counted, nor is cost/request when either side had no
+// priced requests.
 func effectOf(before, after Agg) (tone, text string, comparable bool) {
 	if before.Requests < minCompare || after.Requests < minCompare {
 		return "neutral", fmt.Sprintf("Too little traffic to compare (%d before, %d after).", before.Requests, after.Requests), false
 	}
-	metrics := []struct {
+	type metric struct {
 		label string
 		b, a  float64
-	}{
-		{"cost/request", before.CostPerRequestUSD, after.CostPerRequestUSD},
-		{"error rate", before.ErrorRate, after.ErrorRate},
-		{"blocked + redacted", before.BlockedRedactedShare, after.BlockedRedactedShare},
 	}
+	var metrics []metric
+	if before.CostPerRequestUSD != nil && after.CostPerRequestUSD != nil {
+		metrics = append(metrics, metric{"cost/request", *before.CostPerRequestUSD, *after.CostPerRequestUSD})
+	}
+	metrics = append(metrics, metric{"error rate", before.ErrorRate, after.ErrorRate},
+		metric{"blocked + redacted", before.BlockedRedactedShare, after.BlockedRedactedShare})
 	var moved []string
 	worse := false
 	for _, m := range metrics {
@@ -388,6 +396,31 @@ func dollars(v float64) string {
 	return "$" + s
 }
 
+// activityBuckets is store.ActivityBuckets with each bucket's unpriced
+// requests, which only raw receipts know.
+func (s *Server) activityBuckets(ctx context.Context, t string, from, to time.Time) ([]store.ActivityBucket, error) {
+	bs, err := s.Store.ActivityBuckets(ctx, t, from, to)
+	if err != nil {
+		return nil, err
+	}
+	unpriced, err := s.Store.UnpricedCells(ctx, t, from, to, bucket5m)
+	if err != nil {
+		return nil, err
+	}
+	type at struct {
+		start   int64
+		backend string
+	}
+	n := map[at]int{}
+	for _, c := range unpriced {
+		n[at{c.Start.UnixMilli(), c.Backend}] += c.Requests
+	}
+	for i, b := range bs {
+		bs[i].Unpriced = n[at{b.Start.UnixMilli(), b.Backend}]
+	}
+	return bs, nil
+}
+
 func (s *Server) activity(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	ctx := r.Context()
 	_, d := rangeDuration(r)
@@ -400,7 +433,7 @@ func (s *Server) activity(_ http.ResponseWriter, r *http.Request, t string) (any
 	// Enough buckets before since for the earliest change's before window
 	// and the first backend window.
 	from := since.Truncate(bucket5m).Add(-impactBuckets * bucket5m)
-	bs, err := s.Store.ActivityBuckets(ctx, t, from, now.Add(bucket5m))
+	bs, err := s.activityBuckets(ctx, t, from, now.Add(bucket5m))
 	if err != nil {
 		return nil, err
 	}

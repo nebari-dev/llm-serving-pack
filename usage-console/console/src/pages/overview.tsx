@@ -6,7 +6,7 @@ import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { type ActivityView, backends, budgetLabel, budgets, type Change, type ChangeImpact, changes, dataMode, rules, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
-import { age, ago, clock, int, money } from '@/lib/format'
+import { age, ago, clock, int, money, perRequest, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
 import { useDegradations } from '@/state/degradations'
@@ -133,7 +133,14 @@ export function OverviewPage() {
           label="Spend"
           value={money(current.spendUsd)}
           delta={delta(current.spendUsd, previous.spendUsd, 'down')}
-          note={summary.topTeamIncrease && previous.spendUsd > 0 ? `${summary.topTeamIncrease.team} is driving the increase` : none(previous.spendUsd)}
+          note={
+            // Unpriced requests aren't in the number; saying so beats the driver.
+            current.unpriced
+              ? unpricedNote(current.unpriced)
+              : summary.topTeamIncrease && previous.spendUsd > 0
+                ? `${summary.topTeamIncrease.team} is driving the increase`
+                : none(previous.spendUsd)
+          }
         />
         <BigNumber
           to="/traffic?verdict=blocked&verdict=redacted"
@@ -190,7 +197,7 @@ export function OverviewPage() {
       </Section>
 
       {/* 5. Attention list — each row has one action. */}
-      <Section title="Needs attention" description="Budgets over 80%, anomalous spend, rules above baseline, failing backends.">
+      <Section title="Needs attention" description="Budgets over 80%, anomalous spend, models with no price, rules above baseline, failing backends.">
         <AttentionList onGo={navigate} summary={summary} />
       </Section>
     </div>
@@ -291,14 +298,14 @@ function FeaturedChange({ change: c }: { change: Change }) {
   const { data: impact, loaded } = useLive<ChangeImpact | null>(dataMode === 'api' ? `/changes/${c.id}/impact` : null, seedChangeImpacts[c.id] ?? null, 60_000)
   const metrics = impact
     ? [
-        { label: 'p50 latency', before: impact.before.p50Ms, after: impact.after.p50Ms, fmt: (n: number) => `${int(Math.round(n))}ms`, goodWhen: 'down' as const },
-        { label: 'Cost / request', before: impact.before.costPerRequestUsd, after: impact.after.costPerRequestUsd, fmt: (n: number) => `$${n.toFixed(4)}`, goodWhen: 'down' as const },
-        { label: 'Error rate', before: impact.before.errorRate * 100, after: impact.after.errorRate * 100, fmt: (n: number) => `${n.toFixed(1)}%`, goodWhen: 'down' as const },
+        { label: 'p50 latency', before: impact.before.p50Ms, after: impact.after.p50Ms, fmt: (n: number | null) => `${int(Math.round(n ?? 0))}ms`, goodWhen: 'down' as const },
+        { label: 'Cost / request', before: impact.before.costPerRequestUsd, after: impact.after.costPerRequestUsd, fmt: perRequest, goodWhen: 'down' as const },
+        { label: 'Error rate', before: impact.before.errorRate * 100, after: impact.after.errorRate * 100, fmt: (n: number | null) => `${(n ?? 0).toFixed(1)}%`, goodWhen: 'down' as const },
         {
           label: 'Blocked + redacted',
           before: impact.before.blockedRedactedShare * 100,
           after: impact.after.blockedRedactedShare * 100,
-          fmt: (n: number) => `${n.toFixed(1)}%`,
+          fmt: (n: number | null) => `${(n ?? 0).toFixed(1)}%`,
           goodWhen: 'down' as const,
         },
       ]
@@ -320,13 +327,14 @@ function FeaturedChange({ change: c }: { change: Change }) {
         <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
             {metrics.map((m) => {
-              const pct = m.before > 0 ? ((m.after - m.before) / m.before) * 100 : 0
+              // A side with no price (null) has nothing to compare.
+              const pct = m.before !== null && m.after !== null && m.before > 0 ? ((m.after - m.before) / m.before) * 100 : null
               return (
                 <div key={m.label} className="flex flex-col gap-0.5">
                   <dt className="text-xs text-muted-foreground">{m.label}</dt>
                   <dd className="flex items-baseline gap-2">
                     <span className="num font-mono text-base">{m.fmt(m.after)}</span>
-                    {Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">steady</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
+                    {pct === null ? null : Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">steady</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
                   </dd>
                   <dd className="num font-mono text-xs text-muted-foreground">was {m.fmt(m.before)}</dd>
                 </div>
@@ -335,6 +343,8 @@ function FeaturedChange({ change: c }: { change: Change }) {
           </dl>
           <p className="text-xs text-muted-foreground">
             Whole tenant, {w} minutes before vs after ({int(impact!.before.requests + impact!.after.requests)} requests), not only what this change touched.
+            {!!((impact!.before.unpriced ?? 0) + (impact!.after.unpriced ?? 0)) &&
+              ` Cost / request leaves out ${int((impact!.before.unpriced ?? 0) + (impact!.after.unpriced ?? 0))} requests with no price.`}
           </p>
         </>
       ) : (
@@ -377,9 +387,11 @@ function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary:
             Budget <span className="font-mono">{budgetLabel(b)}</span> at {pct}% of <Money value={b.capUsd} precision="whole" />
           </>
         ),
-        detail: exceeded
-          ? `${b.onExceed === 'throttle' ? 'Throttling' : b.onExceed === 'block' ? 'Blocking' : 'Warning on'} new requests since the cap was crossed. Projected ${money(b.projectedUsd, 0)} by period end.`
-          : `Projected ${money(b.projectedUsd, 0)} by period end; ${b.onExceed === 'block' ? 'blocks new requests' : b.onExceed === 'throttle' ? 'throttles' : 'warns'} at ${money(b.capUsd, 0)}.`,
+        detail:
+          (exceeded
+            ? `${b.onExceed === 'throttle' ? 'Throttling' : b.onExceed === 'block' ? 'Blocking' : 'Warning on'} new requests since the cap was crossed. Projected ${money(b.projectedUsd, 0)} by period end.`
+            : `Projected ${money(b.projectedUsd, 0)} by period end; ${b.onExceed === 'block' ? 'blocks new requests' : b.onExceed === 'throttle' ? 'throttles' : 'warns'} at ${money(b.capUsd, 0)}.`) +
+          (b.unpricedRequests ? ` ${unpricedNote(b.unpricedRequests, 'what it has spent')}.` : ''),
         action: exceeded ? 'Review budget' : 'Adjust cap',
         to: '/spend',
       }
@@ -395,6 +407,19 @@ function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary:
       detail: `${money(a.spendUsd)} in the last 24 hours against a ${money(a.baselineUsd)} daily average. ${Math.round(a.topModelShare * 100)}% of it on ${a.topModel}.`,
       action: 'Open key',
       to: `/keys?key=${a.keyId}`,
+    })),
+    // Api mode: requests with no price aren't in spend or budgets until their pair has one.
+    ...(summary.unpricedPairs ?? []).map((p) => ({
+      id: `unpriced-${p.model}@${p.backend}`,
+      tone: 'degraded' as const,
+      what: (
+        <>
+          <span className="font-mono">{p.model}</span> on <span className="font-mono">{p.backend}</span> has no price
+        </>
+      ),
+      detail: `${unpricedNote(p.requests, 'spend or budgets')}, the first ${ago(p.since)}. They're costed once it has a price.`,
+      action: 'Set a price',
+      to: '/models?tab=pricing',
     })),
     ...rules
       .filter((r) => r.mode !== 'draft' && r.mode !== 'disabled' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)

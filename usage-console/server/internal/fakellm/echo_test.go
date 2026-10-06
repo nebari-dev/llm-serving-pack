@@ -22,3 +22,16 @@ func TestEchoRepeatsTheLastUserMessageInSmallChunks(t *testing.T) {
 		t.Fatalf("chunks %q, usage %+v", p.Chunks, p.Usage)
 	}
 }
+
+// OpenAI counts reasoning inside completion_tokens; total is prompt plus
+// completion. Simulate reports reasoning apart, so this is the shape to check
+// what Agent Router logs for a real reasoning model.
+func TestOpenAIReasoningIsInsideCompletionTokens(t *testing.T) {
+	p := Echo(ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	visible, prompt := p.Usage.CompletionTokens, p.Usage.PromptTokens
+	p.Usage = OpenAIReasoning(p.Usage, 1000)
+	u := p.Usage
+	if u.CompletionTokens != visible+1000 || u.CompletionTokensDetails.ReasoningTokens != 1000 || u.TotalTokens != prompt+visible+1000 {
+		t.Fatalf("usage %+v, visible %d", u, visible)
+	}
+}

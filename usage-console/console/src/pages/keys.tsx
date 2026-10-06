@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleShare, fromWire, governingBudget, keys as seedKeys, revokeKey, teams } from '@/data/catalog'
-import { clock, int } from '@/lib/format'
+import { clock, int, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
 import { useLive, useNow } from '@/state/live'
@@ -28,6 +28,22 @@ function expiryInfo(k: ApiKey) {
 }
 
 const spend24h = (k: ApiKey) => (k.status === 'revoked' ? 0 : (k.spend24hUsd ?? keySpend24h(k.id)))
+
+/** 24h spend as a cell shows it: no price, not $0, when it's all requests with no price (api mode). */
+function Spend24h({ k, className }: { k: ApiKey; className?: string }) {
+  const spend = spend24h(k)
+  const unpriced = k.status === 'revoked' ? 0 : (k.unpriced24h ?? 0)
+  return (
+    <>
+      <Money value={unpriced && !spend ? null : spend} className={className} />
+      {!!unpriced && !!spend && (
+        <div className="text-xs text-muted-foreground" title={unpricedNote(unpriced)}>
+          + {int(unpriced)} no price
+        </div>
+      )}
+    </>
+  )
+}
 
 function StatusCell({ k }: { k: ApiKey }) {
   const now = useNow(60_000)
@@ -197,7 +213,7 @@ export function KeysPage() {
                   <TableCell className="py-1.5 text-sm whitespace-nowrap">{k.lastUsed}</TableCell>
                   <TableCell className="num py-1.5 text-right font-mono">{int(k.requests24h)}</TableCell>
                   <TableCell className="py-1.5 text-right">
-                    <Money value={spend24h(k)} />
+                    <Spend24h k={k} />
                   </TableCell>
                   <TableCell className="py-1.5">
                     <StatusCell k={k} />
@@ -261,16 +277,17 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
   const budget = governingBudget(k)
   const e = expiryInfo(k)
   const revoked = k.status === 'revoked'
-  const spend = spend24h(k)
 
   const topModels = useMemo(() => {
-    const m = new Map<string, { model: string; n: number; tokens: number; cost: number; ms: number[] }>()
+    const m = new Map<string, { model: string; n: number; tokens: number; cost: number; unpriced: number; ms: number[] }>()
     for (const r of receipts) {
       if (r.inFlight) continue
-      const g = m.get(r.resolvedModel) ?? { model: r.resolvedModel, n: 0, tokens: 0, cost: 0, ms: [] }
+      const g = m.get(r.resolvedModel) ?? { model: r.resolvedModel, n: 0, tokens: 0, cost: 0, unpriced: 0, ms: [] }
       g.n++
       g.tokens += r.inputTokens + r.outputTokens + r.reasoningTokens
-      g.cost += r.costUsd ?? 0 // unpriced requests aren't in spend either
+      // Unpriced requests aren't in spend either; the cell says how many.
+      if (r.costUsd === null) g.unpriced++
+      else g.cost += r.costUsd
       g.ms.push(r.durationMs)
       m.set(r.resolvedModel, g)
     }
@@ -323,7 +340,7 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
           <div className="md:px-4">
             <dt className="text-xs text-muted-foreground">Spend, last 24h</dt>
             <dd>
-              <Money value={spend} className="text-xl font-semibold" />
+              <Spend24h k={k} className="text-xl font-semibold" />
             </dd>
           </div>
           <div className="md:px-4">
@@ -343,6 +360,9 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
                   <Money value={budget.currentUsd} /> of <Money value={budget.capUsd} precision="whole" />{' '}
                   <span className="font-mono text-xs text-muted-foreground">{budgetLabel(budget)}</span>
                 </span>
+                {!!budget.unpricedRequests && (
+                  <span className="text-xs text-muted-foreground">{unpricedNote(budget.unpricedRequests, 'what it has spent')}</span>
+                )}
                 <Meter value={budget.currentUsd} cap={budget.capUsd} projected={budget.projectedUsd} />
                 <Link to="/spend#budgets" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
                   {budgetWords(budget)}
@@ -394,7 +414,8 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
                     <TokenCount value={m.tokens} />
                   </TableCell>
                   <TableCell className="h-9 py-1 text-right">
-                    <Money value={m.cost} precision="micro" />
+                    <Money value={m.unpriced && !m.cost ? null : m.cost} precision="micro" />
+                    {!!m.unpriced && !!m.cost && <div className="text-xs text-muted-foreground">+ {int(m.unpriced)} no price</div>}
                   </TableCell>
                   <TableCell className="h-9 py-1 text-right">
                     <Duration ms={m.p50} />

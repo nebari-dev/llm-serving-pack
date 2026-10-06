@@ -89,3 +89,52 @@ func TestBudgetScopeNames(t *testing.T) {
 		}
 	}
 }
+
+// Unpriced requests are in a row's requests but not its spend, and each row
+// says how many it has, so the console never shows them as $0.
+func TestSpendRowsCountUnpriced(t *testing.T) {
+	g := grouper{keys: map[string]model.APIKey{"k1": {ID: "k1", Name: "support-bot", Team: "support", Project: "helpdesk", ProjectID: "p1"}}, teams: map[string]model.Team{}, models: map[string]model.Model{}, backends: map[string]model.Backend{}}
+	mini := store.SpendCell{Team: "support", KeyID: "k1", Model: "gpt-5-mini", Backend: "openai-prod", USD: 0.3, Requests: 3}
+	llama := store.SpendCell{Team: "support", KeyID: "k1", Model: "llama-3.3-70b", Backend: "vllm-internal", Requests: 2}
+	cur := []store.SpendCell{mini, llama}
+	unpriced := []store.UnpricedCell{{SpendCell: store.SpendCell{Team: "support", KeyID: "k1", Model: "llama-3.3-70b", Backend: "vllm-internal", Requests: 2}}}
+	byModel := map[string]SpendRow{}
+	for _, r := range spendRows(g, "model", cur, nil, unpriced) {
+		byModel[r.ID] = r
+	}
+	if r := byModel["llama-3.3-70b"]; r.SpendUSD != 0 || r.Requests != 2 || r.Unpriced != 2 {
+		t.Errorf("unpriced model row: %+v", r)
+	}
+	if r := byModel["gpt-5-mini"]; r.SpendUSD != 0.3 || r.Unpriced != 0 {
+		t.Errorf("priced model row: %+v", r)
+	}
+	team := spendRows(g, "team", cur, nil, unpriced)
+	if len(team) != 1 || team[0].SpendUSD != 0.3 || team[0].Requests != 5 || team[0].Unpriced != 2 {
+		t.Errorf("team row: %+v", team)
+	}
+	// A budget's scopes count the unpriced requests they can't bill.
+	got := unpricedByScope(g, unpriced)
+	if got["team:support"] != 2 || got["key:k1"] != 2 || got["project:p1"] != 2 {
+		t.Errorf("unpriced by scope: %v", got)
+	}
+}
+
+// Overview lists each pair that has unpriced requests, most first.
+func TestUnpricedPairs(t *testing.T) {
+	at := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	cell := func(team, m, b string, n int, first time.Time) store.UnpricedCell {
+		return store.UnpricedCell{SpendCell: store.SpendCell{Team: team, Model: m, Backend: b, Requests: n}, First: first}
+	}
+	got := unpricedPairs([]store.UnpricedCell{
+		cell("support", "claude-opus-4-1", "anthropic-prod", 1, at),
+		cell("support", "llama-3.3-70b", "vllm-internal", 4, at.Add(time.Hour)),
+		cell("batch", "llama-3.3-70b", "vllm-internal", 3, at),
+	})
+	want := []UnpricedPair{
+		{Model: "llama-3.3-70b", Backend: "vllm-internal", Requests: 7, Since: at.UnixMilli()},
+		{Model: "claude-opus-4-1", Backend: "anthropic-prod", Requests: 1, Since: at.UnixMilli()},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("got %+v\nwant %+v", got, want)
+	}
+}

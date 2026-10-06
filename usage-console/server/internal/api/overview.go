@@ -31,6 +31,41 @@ type Summary struct {
 	// window, or nil when none rose.
 	TopTeamIncrease *TeamIncrease `json:"topTeamIncrease"`
 	KeyAnomalies    []KeyAnomaly  `json:"keyAnomalies"`
+	// UnpricedPairs are the (model, backend) pairs that served requests in
+	// the range with no price, for the attention list.
+	UnpricedPairs []UnpricedPair `json:"unpricedPairs"`
+}
+
+// UnpricedPair is a (model, backend) whose requests have no price: Requests
+// of them in the range, the first at Since.
+type UnpricedPair struct {
+	Model    string `json:"model"`
+	Backend  string `json:"backend"`
+	Requests int    `json:"requests"`
+	Since    int64  `json:"since"`
+}
+
+// unpricedPairs sums unpriced cells by pair, most requests first.
+func unpricedPairs(cells []store.UnpricedCell) []UnpricedPair {
+	by := map[[2]string]*UnpricedPair{}
+	for _, c := range cells {
+		k := [2]string{c.Model, c.Backend}
+		p := by[k]
+		if p == nil {
+			p = &UnpricedPair{Model: c.Model, Backend: c.Backend, Since: c.First.UnixMilli()}
+			by[k] = p
+		}
+		p.Requests += c.Requests
+		p.Since = min(p.Since, c.First.UnixMilli())
+	}
+	out := []UnpricedPair{}
+	for _, p := range by {
+		out = append(out, *p)
+	}
+	slices.SortFunc(out, func(a, b UnpricedPair) int {
+		return cmp.Or(cmp.Compare(b.Requests, a.Requests), cmp.Compare(a.Model, b.Model), cmp.Compare(a.Backend, b.Backend))
+	})
+	return out
 }
 
 type TeamIncrease struct {
@@ -68,6 +103,11 @@ func (s *Server) summary(_ http.ResponseWriter, r *http.Request, t string) (any,
 	if out.Previous, err = s.Store.Totals(ctx, t, now.Add(-2*span), now.Add(-span)); err != nil {
 		return nil, err
 	}
+	unpriced, err := s.Store.UnpricedCells(ctx, t, now.Add(-span), now, 0)
+	if err != nil {
+		return nil, err
+	}
+	out.UnpricedPairs = unpricedPairs(unpriced)
 	cur, err := s.Store.SpendBy(ctx, t, now.Add(-span), now)
 	if err != nil {
 		return nil, err

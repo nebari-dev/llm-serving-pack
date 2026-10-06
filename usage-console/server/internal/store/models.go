@@ -84,11 +84,44 @@ func (s *Store) PriceRows(ctx context.Context) ([]PriceRow, error) {
 	return collect(rows, func(r pgx.Rows) (PriceRow, error) { return scanPrice(r) })
 }
 
-// PricesNow returns the row in effect now for each priced pair.
-func (s *Store) PricesNow(ctx context.Context) ([]PriceRow, error) {
+// PriceRowsSince returns the rows in effect at or after since (scheduled
+// ones too), per pair oldest first: what pricing a request from since on
+// can need.
+func (s *Store) PriceRowsSince(ctx context.Context, since time.Time) ([]PriceRow, error) {
 	rows, _ := s.Config.Query(ctx, `SELECT `+priceCols+` FROM model_pricing
-		WHERE effective_from <= now() AND (effective_to IS NULL OR effective_to > now())`)
+		WHERE effective_to IS NULL OR effective_to > $1 ORDER BY model_id, backend, effective_from`, since)
 	return collect(rows, func(r pgx.Rows) (PriceRow, error) { return scanPrice(r) })
+}
+
+// PriceAt is the row of one pair's rows in effect at at.
+func PriceAt(rows []PriceRow, at time.Time) (PriceRow, bool) {
+	for _, p := range rows {
+		if !p.From.After(at) && (p.To == nil || p.To.After(at)) {
+			return p, true
+		}
+	}
+	return PriceRow{}, false
+}
+
+// PriceLater prices a receipt from ts that settled without a cost, from one
+// pair's rows (oldest first): at the row in effect at ts if that prices its
+// tokens (ingest hadn't loaded it yet), else at the first row set after ts
+// that does, once it's in effect by now. nil cost: still unpriced.
+func PriceLater(rows []PriceRow, ts, now time.Time, t pricing.Tokens) (PriceRow, *float64) {
+	if p, ok := PriceAt(rows, ts); ok {
+		if c := pricing.Cost(p.Rates, t); c != nil {
+			return p, c
+		}
+	}
+	for _, p := range rows {
+		if !p.From.After(ts) || p.From.After(now) {
+			continue
+		}
+		if c := pricing.Cost(p.Rates, t); c != nil {
+			return p, c
+		}
+	}
+	return PriceRow{}, nil
 }
 
 // Basis is the cost_basis a receipt records for m priced at row.

@@ -76,3 +76,60 @@ func TestPriceChangeAuditWording(t *testing.T) {
 		t.Errorf("retired: got %q\nwant %q", got, want)
 	}
 }
+
+func TestPriceAtTheBoundary(t *testing.T) {
+	change := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	old := PriceRow{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(1, 1, 1, 1, 1), From: change.Add(-30 * 24 * time.Hour), To: &change}
+	cur := PriceRow{ModelID: "gpt-5-mini", Backend: "openai-prod", Rates: per(2, 2, 2, 2, 2), From: change}
+	rows := []PriceRow{old, cur}
+	for _, c := range []struct {
+		name string
+		at   time.Time
+		want *PriceRow
+	}{
+		{"1s before the change", change.Add(-time.Second), &old},
+		{"at the change", change, &cur},
+		{"1s after the change", change.Add(time.Second), &cur},
+		{"before the first price", old.From.Add(-time.Second), nil},
+	} {
+		got, ok := PriceAt(rows, c.at)
+		if ok != (c.want != nil) || ok && !got.From.Equal(c.want.From) {
+			t.Errorf("%s: got %v (ok %v), want %v", c.name, got.From, ok, c.want)
+		}
+	}
+	// A retired price ends with nothing after it.
+	if _, ok := PriceAt([]PriceRow{old}, change.Add(time.Second)); ok {
+		t.Error("a retired price is still in effect after it ended")
+	}
+}
+
+func TestPriceLater(t *testing.T) {
+	ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	now := ts.Add(time.Hour)
+	tok := pricing.Tokens{Input: 1000, Output: 100, Reasoning: 10}
+	partial := per(1, 1, 1, 4, 4)
+	partial[pricing.Reasoning] = nil
+	set := ts.Add(30 * time.Minute)
+	for _, c := range []struct {
+		name     string
+		rows     []PriceRow
+		wantFrom time.Time // zero: stays unpriced
+	}{
+		{"no price yet", nil, time.Time{}},
+		{"priced at the first row set after it", []PriceRow{{Rates: per(1, 1, 1, 4, 4), From: set}}, set},
+		{"a scheduled price waits until it takes effect", []PriceRow{{Rates: per(1, 1, 1, 4, 4), From: now.Add(time.Hour)}}, time.Time{}},
+		{"its own row lacked a rate it needs", []PriceRow{{Rates: partial, From: ts.Add(-time.Hour), To: &set}, {Rates: per(1, 1, 1, 4, 4), From: set}}, set},
+		{"its own row prices it (ingest hadn't loaded it yet)", []PriceRow{{Rates: per(1, 1, 1, 4, 4), From: ts.Add(-time.Second)}}, ts.Add(-time.Second)},
+	} {
+		row, cost := PriceLater(c.rows, ts, now, tok)
+		if c.wantFrom.IsZero() {
+			if cost != nil {
+				t.Errorf("%s: priced at %v, want unpriced", c.name, row.From)
+			}
+			continue
+		}
+		if cost == nil || !row.From.Equal(c.wantFrom) {
+			t.Errorf("%s: got row %v cost %v, want row %v", c.name, row.From, cost, c.wantFrom)
+		}
+	}
+}

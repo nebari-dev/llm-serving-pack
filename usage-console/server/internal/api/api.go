@@ -395,7 +395,7 @@ func withUsage(k model.APIKey, u store.KeyUsage) model.APIKey {
 	if k.Status == "revoked" {
 		u = store.KeyUsage{}
 	}
-	k.Requests24h, k.Spend24hUSD, k.Hourly24h = u.Requests24h, u.Spend24hUSD, u.Hourly[:]
+	k.Requests24h, k.Spend24hUSD, k.Unpriced24h, k.Hourly24h = u.Requests24h, u.Spend24hUSD, u.Unpriced24h, u.Hourly[:]
 	return k
 }
 

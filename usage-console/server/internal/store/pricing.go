@@ -590,17 +590,18 @@ func RateByName(n string) (pricing.Rate, bool) {
 }
 
 // PriceUnpriced costs the settled receipts that had no price when they
-// arrived, at their pair's row in effect now (prices), and refreshes the
-// aggregates over the days it touched. Receipts whose tokens need a rate the
-// row still lacks stay unpriced. It returns how many it priced.
+// arrived (PriceLater, from every pair's rows oldest first), and refreshes
+// the aggregates over the days it touched. Receipts whose tokens need a rate
+// no row has yet stay unpriced. It returns how many it priced.
 //
 // Each receipt is updated by its exact (id, ts): Timescale then decompresses
 // only the batch holding it, where a filter on model and backend would
 // decompress whole chunks.
-func (s *Store) PriceUnpriced(ctx context.Context, prices []PriceRow, models map[string]model.Model) (int, error) {
-	byPair := map[[2]string]PriceRow{}
+func (s *Store) PriceUnpriced(ctx context.Context, prices []PriceRow, models map[string]model.Model, now time.Time) (int, error) {
+	byPair := map[[2]string][]PriceRow{}
 	for _, p := range prices {
-		byPair[[2]string{p.ModelID, p.Backend}] = p
+		k := [2]string{p.ModelID, p.Backend}
+		byPair[k] = append(byPair[k], p)
 	}
 	type waiting struct {
 		id    string
@@ -622,16 +623,12 @@ func (s *Store) PriceUnpriced(ctx context.Context, prices []PriceRow, models map
 	b := &pgx.Batch{}
 	var from, to time.Time
 	for _, w := range got {
-		row, ok := byPair[[2]string{w.model, w.back}]
-		if !ok {
-			continue
-		}
-		cost := pricing.Cost(row.Rates, w.tok)
+		row, cost := PriceLater(byPair[[2]string{w.model, w.back}], w.ts, now, w.tok)
 		if cost == nil {
 			continue
 		}
 		basis := Basis(models[w.model], row)
-		basis.PricedLater = true
+		basis.PricedLater = row.From.After(w.ts)
 		b.Queue(`UPDATE receipts SET cost_usd = $3, cost_basis = $4 WHERE id = $1 AND ts = $2 AND cost_usd IS NULL`, w.id, w.ts, *cost, basis)
 		if from.IsZero() || w.ts.Before(from) {
 			from = w.ts

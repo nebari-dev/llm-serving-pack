@@ -92,11 +92,46 @@ func (s *Store) FirstSpendDay(ctx context.Context, tenant string) (time.Time, er
 	return t.UTC(), err
 }
 
+// unpricedWhere is the served requests that have no cost yet because their
+// (model, backend) had no price. $1 is the tenant, [$2, $3) the window.
+const unpricedWhere = `cost_usd IS NULL AND tenant_id = $1 AND ts >= $2 AND ts < $3 AND status = 200 AND NOT in_flight`
+
 // UnpricedCount counts the tenant's served requests in [from, to) that have
 // no cost yet because their (model, backend) had no price.
 func (s *Store) UnpricedCount(ctx context.Context, tenant string, from, to time.Time) (int, error) {
 	var n int
-	err := s.Receipts.QueryRow(ctx, `SELECT count(*)::int FROM receipts
-		WHERE cost_usd IS NULL AND tenant_id = $1 AND ts >= $2 AND ts < $3 AND status = 200 AND NOT in_flight`, tenant, from, to).Scan(&n)
+	err := s.Receipts.QueryRow(ctx, `SELECT count(*)::int FROM receipts WHERE `+unpricedWhere, tenant, from, to).Scan(&n)
 	return n, err
+}
+
+// UnpricedCell counts one cell's unpriced requests (Requests) within one
+// bucket starting at Start; Start is zero when unbucketed.
+type UnpricedCell struct {
+	Start time.Time
+	SpendCell
+	First time.Time // the earliest one
+}
+
+// UnpricedCells counts unpriced requests over [from, to) by team, key, model
+// and backend, and by buckets of width `bucket` when it's non-zero. The
+// aggregates sum cost_usd, so they can't tell an unpriced request from a
+// free one: this reads raw receipts, which the partial index on unpriced
+// rows keeps cheap. Raw receipts go back 30 days (§4.6).
+func (s *Store) UnpricedCells(ctx context.Context, tenant string, from, to time.Time, bucket time.Duration) ([]UnpricedCell, error) {
+	start, args := `NULL::timestamptz`, []any{tenant, from, to}
+	if bucket > 0 {
+		start, args = `time_bucket($4::interval, ts)`, append(args, bucket)
+	}
+	rows, _ := s.Receipts.Query(ctx, `
+		SELECT `+start+`, team, key_id, resolved_model, backend, count(*)::int, min(ts)
+		FROM receipts WHERE `+unpricedWhere+` GROUP BY 1, 2, 3, 4, 5`, args...)
+	return collect(rows, func(r pgx.Rows) (UnpricedCell, error) {
+		var c UnpricedCell
+		var at *time.Time
+		err := r.Scan(&at, &c.Team, &c.KeyID, &c.Model, &c.Backend, &c.Requests, &c.First)
+		if at != nil {
+			c.Start = *at
+		}
+		return c, err
+	})
 }
