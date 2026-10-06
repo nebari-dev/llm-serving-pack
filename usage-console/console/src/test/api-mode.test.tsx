@@ -257,7 +257,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       // The key goes in one of the team's projects: its "onboarding" project,
       // picked, or made with the key when the team has none by that name.
       await waitFor(() => expect(screen.getByRole('button', { name: 'Create a key for local' })).toHaveProperty('disabled', false), { timeout: 5000 })
-      const picked = screen.getByRole('combobox', { name: 'Project' }).textContent ?? ''
+      const picked = (screen.getByRole('combobox', { name: 'Project' }).textContent ?? '').replace('▼', '').trim() // the trigger's chevron is text
       expect(picked === 'onboarding' || (picked === 'New project…' && (screen.getByLabelText('New project name') as HTMLInputElement).value === 'onboarding')).toBe(true)
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: 'Create a key for local' }))

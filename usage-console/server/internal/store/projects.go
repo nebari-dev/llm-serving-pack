@@ -160,8 +160,8 @@ func (s *Store) RenameProject(ctx context.Context, tenant, actor, id, ifMatch, n
 	if err != nil {
 		return was, err
 	}
-	if err := checkMatch(ifMatch, was); err != nil {
-		return was, err
+	if ifMatch != "" && ifMatch != was.ETag {
+		return was, &StaleError{Current: was}
 	}
 	if name == was.Name {
 		return was, nil
@@ -190,8 +190,8 @@ func (s *Store) DeleteProject(ctx context.Context, tenant, actor, id, ifMatch st
 	if err != nil {
 		return err
 	}
-	if err := checkMatch(ifMatch, was); err != nil {
-		return err
+	if ifMatch != "" && ifMatch != was.ETag {
+		return &StaleError{Current: was}
 	}
 	// Keys and budgets are read in the same transaction; the project row is
 	// locked, so a key can't join it meanwhile (key creation reads it FOR SHARE).
