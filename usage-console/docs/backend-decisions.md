@@ -659,8 +659,9 @@ retire-old-secret-now are in.
   default); editing or deleting a backend takes If-Match like a route.
   Provider writes ("Aliases and routing" in the table above) are editor and
   admin (enforced since 2026-10-06).
-  - Price writes will require `If-Match` too (decided 2026-10-05, not
-    built). Two editors changing the same rate concurrently has happened.
+  - Setting a price requires `If-Match` too (decided 2026-10-05, built with
+    the pricing slice): two editors changing the same rate concurrently has
+    happened.
 - **PDFs are written by `internal/pdf`, our own (2026-10-06, my default).**
   About 400 lines: text and rules, standard Helvetica (not embedded),
   WinAnsi, uncompressed streams, so the text in a report can be searched
