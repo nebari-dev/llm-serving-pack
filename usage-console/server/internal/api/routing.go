@@ -50,10 +50,10 @@ type RoutingPlan struct {
 // withRouteSync sets each route's sync: synced when the gateway runs its
 // rule as it is; failed when the last apply failed trying this version of it
 // (failed maps "route/<name>" to the version tried); else pending.
-func withRouteSync(rs []model.Route, running []routing.Object, failed map[string]string) []model.Route {
+func withRouteSync(rs []model.Route, bs []model.Backend, running []routing.Object, failed map[string]string) []model.Route {
 	for i := range rs {
 		switch {
-		case routing.RouteInSync(running, rs[i]):
+		case routing.RouteInSync(running, rs[i], bs):
 			rs[i].Sync = "synced"
 		case tried(failed, "route/"+rs[i].Name, rs[i].ETag):
 			rs[i].Sync = "failed"
@@ -92,7 +92,7 @@ func tried(failed map[string]string, key, version string) bool {
 func attempted(running []routing.Object, rs []model.Route, bs []model.Backend) map[string]string {
 	out := map[string]string{}
 	for _, r := range rs {
-		if !routing.RouteInSync(running, r) {
+		if !routing.RouteInSync(running, r, bs) {
 			out["route/"+r.Name] = r.ETag
 		}
 	}
@@ -125,19 +125,23 @@ func (s *Server) routeViews(ctx context.Context, t string) ([]RouteView, error) 
 	if err != nil {
 		return nil, err
 	}
+	bs, err := s.Store.Backends(ctx, t)
+	if err != nil {
+		return nil, err
+	}
 	running, failed, ok, err := s.observed(ctx, t)
 	if err != nil {
 		return nil, err
 	}
 	if ok {
-		rs = withRouteSync(rs, running, failed)
+		rs = withRouteSync(rs, bs, running, failed)
 	}
 	out := make([]RouteView, len(rs))
 	for i, r := range rs {
 		if !ok {
 			r.Sync = NotReconciled
 		}
-		out[i] = RouteView{Route: r, YAML: routing.RuleYAML(r)}
+		out[i] = RouteView{Route: r, YAML: routing.RuleYAML(r, bs)}
 	}
 	return out, nil
 }
@@ -161,10 +165,10 @@ func (s *Server) routeView(w http.ResponseWriter, ctx context.Context, t, name s
 
 // readRoute takes {name, match: {models, headers}, targets, fallback} and
 // checks it against the backends and the other routes.
-func (s *Server) readRoute(r *http.Request, t, name string) (model.Route, []model.Route, error) {
+func (s *Server) readRoute(r *http.Request, t, name string) (model.Route, []model.Route, []model.Backend, error) {
 	var in model.Route
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		return in, nil, badRequest("invalid JSON body")
+		return in, nil, nil, badRequest("invalid JSON body")
 	}
 	if name != "" {
 		in.Name = name
@@ -175,16 +179,16 @@ func (s *Server) readRoute(r *http.Request, t, name string) (model.Route, []mode
 	}
 	routes, err := s.Store.Routes(r.Context(), t)
 	if err != nil {
-		return in, nil, err
+		return in, nil, nil, err
 	}
 	backends, err := s.Store.Backends(r.Context(), t)
 	if err != nil {
-		return in, nil, err
+		return in, nil, nil, err
 	}
 	if err := routing.ValidateRoute(in, routes, backends); err != nil {
-		return in, nil, badRequest(err.Error())
+		return in, nil, nil, badRequest(err.Error())
 	}
-	return in, routes, nil
+	return in, routes, backends, nil
 }
 
 // RouteDryRun is the rule a route write would compile to, without writing.
@@ -195,13 +199,13 @@ type RouteDryRun struct {
 }
 
 func (s *Server) createRoute(w http.ResponseWriter, r *http.Request, t string) (any, error) {
-	in, _, err := s.readRoute(r, t, "")
+	in, _, backends, err := s.readRoute(r, t, "")
 	if err != nil {
 		return nil, err
 	}
 	in.CaptureContent = false // not editable yet: it compiles to nothing in the gateway
 	if dryRun(r) {
-		return RouteDryRun{true, in, routing.RuleYAML(in)}, nil
+		return RouteDryRun{true, in, routing.RuleYAML(in, backends)}, nil
 	}
 	if _, err := s.Store.CreateRoute(r.Context(), t, s.DevActor, in); err != nil {
 		return nil, err
@@ -220,7 +224,7 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request, t string) (
 			return nil, err
 		}
 	}
-	in, routes, err := s.readRoute(r, t, r.PathValue("name"))
+	in, routes, backends, err := s.readRoute(r, t, r.PathValue("name"))
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +237,7 @@ func (s *Server) updateRoute(w http.ResponseWriter, r *http.Request, t string) (
 		if match != "" && match != routes[i].ETag {
 			return nil, &store.StaleError{Current: routes[i]}
 		}
-		return RouteDryRun{true, in, routing.RuleYAML(in)}, nil
+		return RouteDryRun{true, in, routing.RuleYAML(in, backends)}, nil
 	}
 	if _, err := s.Store.UpdateRoute(r.Context(), t, s.DevActor, match, in); err != nil {
 		return nil, err

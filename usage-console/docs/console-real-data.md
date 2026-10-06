@@ -389,7 +389,24 @@ when stale; 428 without it on an update or delete). Open questions are in
     `fakellm.KeyedKey` or `KeyedKey2` (saying which in `X-Fake-Key`) and
     answers 401 otherwise; and a `keyed-anthropic` backend speaking
     Anthropic's native API (`GET /v1/models`, `POST /v1/messages`, x-api-key
-    and anthropic-version).
+    and anthropic-version) and, like Anthropic's OpenAI-compatible
+    endpoint, chat completions with the same key as a bearer token, both
+    echoing with `X-Fake-Received`. Every backend answers
+    `POST /{backend}/v1/messages` (streamed as Anthropic's events), and a
+    streamed chat completion's usage comes in a chunk of its own with no
+    choices, as OpenAI sends it (Agent Router's Messages translation reads
+    usage only from that).
+  - Anthropic-style callers (2026-10-06, backend-decisions §6): the
+    Anthropic SDK with base URL `<gateway>/anthropic` and a gateway key.
+    An Anthropic provider compiles to a second AIServiceBackend,
+    `<name>-native` (schema Anthropic, `AnthropicAPIKey`), and every rule
+    to a pair, the copy for `x-stargate-api: anthropic`, which the key
+    check sets. The key check reads `x-api-key` and refuses in Anthropic's
+    error shape; Warden reads and rehydrates Messages bodies and streams;
+    receipts name the backend, not its twin. Console: the Anthropic tile
+    and its base URL say it serves both SDKs; the backend drawer's API row
+    shows both APIs; onboarding shows the Anthropic SDK's base URL for an
+    Anthropic backend.
   - Exit tests (api mode): an API test adds a provider at fake-openai's
     keyed backend (wrong key → 401 verbatim, right key → models; saving the
     wrong key → 422, nothing stored), saves it, checks no response carries
@@ -400,8 +417,16 @@ when stale; 428 without it on an update or delete). Open questions are in
     onboarding test connects one, applies all N pending changes (listed,
     one not about it) and sends the first request through it; an Anthropic
     test checks the connection test is native and a failing key is refused.
-    Anthropic through the gateway's OpenAI→Anthropic translation is a
-    `todo`: aigw v1.1.0 can't (backend-decisions §6).
+    Another adds an Anthropic provider at keyed-anthropic and checks the
+    plan adds `<name>-native` and its `AnthropicAPIKey` policy; an
+    Anthropic-style request with the gateway key as x-api-key reaches the
+    native fake (a Messages id); its receipt has the backend, the fake's
+    tokens and the price set for the pair; a bad key and a disallowed model
+    are refused in Anthropic's shape; a redact-and-rehydrate rule redacts a
+    text block before the provider and restores it, whole and streamed; and
+    an OpenAI-style call to the same provider still gets a chat completion.
+    OpenAI-style callers to Anthropic's native API stay impossible: aigw
+    v1.1.0 has no translator for it (backend-decisions §6).
 - [ ] Members and auth (OIDC), sign-out.
 - [ ] Routing reconciler: drift, adopt, provenance, reconcile events over
   SSE, and an applier for Kubernetes (held until llm-serving-pack's ownership

@@ -31,9 +31,32 @@ const (
 	HintRouteName = "stargate-hints"
 )
 
-// MaxRules is Gateway API's limit on rules per HTTPRoute, which each
-// AIGatewayRoute becomes.
-const MaxRules = 16
+// APIHeader is set by the key check to AnthropicAPI on a request in
+// Anthropic's Messages API (POST /anthropic/v1/messages, what the Anthropic
+// SDK sends with the gateway as its base URL), and left off OpenAI-style
+// ones. aigw/base.yaml strips any the caller sends.
+const (
+	APIHeader    = "x-stargate-api"
+	AnthropicAPI = "anthropic"
+)
+
+// NativeSuffix names an Anthropic backend's second AIServiceBackend, on
+// Anthropic's own Messages API: <name>-native. Agent Router can't translate
+// OpenAI's API to it (aigw v1.1.0 translates to Anthropic only for GCP and
+// AWS), so OpenAI-style callers keep the backend's OpenAI-compatible
+// endpoint, and Anthropic-style ones get this.
+const NativeSuffix = "-native"
+
+// Native is whether a backend gets a native twin: an Anthropic one the
+// gateway can reach.
+func Native(b model.Backend) bool { return b.Provider == "Anthropic" && b.Endpoint != nil }
+
+// MaxRules is how many rules an AIGatewayRoute gets. Each becomes an
+// HTTPRoute, which Gateway API limits to 16 rules, and aigw adds one of its
+// own (route-not-found, internal/controller/ai_gateway_route.go:332): with 16,
+// aigw v1.1.0 refuses the config ("Too many: 17"). 15 would fit; 14 keeps a
+// rule and its Anthropic-style copy (Compile) in the same AIGatewayRoute.
+const MaxRules = 14
 
 // Object is one resource of the gateway's config, comments stripped.
 type Object struct {
@@ -198,7 +221,10 @@ type headerMutation struct {
 type securityPolicySpec struct {
 	TargetRefs []groupRef `yaml:"targetRefs"`
 	Type       string     `yaml:"type"`
-	APIKey     apiKey     `yaml:"apiKey"`
+	// One of these, by Type: APIKey sends a bearer token, AnthropicAPIKey
+	// x-api-key.
+	APIKey          *apiKey `yaml:"apiKey,omitempty"`
+	AnthropicAPIKey *apiKey `yaml:"anthropicAPIKey,omitempty"`
 }
 
 type apiKey struct {
@@ -217,6 +243,15 @@ func intp(i int) *int { return &i }
 
 // Compile is the gateway config for the desired state: the AIGatewayRoute,
 // then each backend's resources. A backend with no endpoint is left out.
+//
+// With an Anthropic backend among them, Anthropic-style callers get a copy
+// of every rule and hint (anthropicRule), right after it. Rules match headers
+// only, never the path, so the copy tells them apart by the key check's
+// APIHeader; with one more header match than its original, it always
+// outranks the originals for them, and among the copies the originals'
+// precedence holds (more header matches first, then route name, then order,
+// which the copies keep). MaxRules is even, so a rule and its copy share an
+// AIGatewayRoute: editing a route is one change.
 func Compile(backends []model.Backend, routes []model.Route) []Object {
 	var hints, rules []rule
 	for _, b := range backends {
@@ -230,10 +265,51 @@ func Compile(backends []model.Backend, routes []model.Route) []Object {
 	for _, r := range routes {
 		rules = append(rules, compileRule(r))
 	}
+	if native := natives(backends); len(native) > 0 {
+		rules, hints = withAnthropicRules(rules, native), withAnthropicRules(hints, native)
+	}
 	out := aiGatewayRoutes(RouteName, rules)
 	out = append(out, aiGatewayRoutes(HintRouteName, hints)...)
 	for _, b := range backends {
 		out = append(out, backendObjects(b)...)
+	}
+	return out
+}
+
+// natives is the backends with a native twin, by name.
+func natives(backends []model.Backend) map[string]bool {
+	out := map[string]bool{}
+	for _, b := range backends {
+		if Native(b) {
+			out[b.Name] = true
+		}
+	}
+	return out
+}
+
+// anthropicRule is r for Anthropic-style callers: each match also wants
+// APIHeader, and each Anthropic backend is its native twin. Other backends
+// stay: Agent Router translates the Messages API to their OpenAI one.
+func anthropicRule(r rule, native map[string]bool) rule {
+	out := rule{}
+	for _, m := range r.Matches {
+		hs := append(slices.Clone(m.Headers), header{Name: APIHeader, Value: AnthropicAPI})
+		out.Matches = append(out.Matches, match{Headers: hs})
+	}
+	for _, br := range r.BackendRefs {
+		if native[br.Name] {
+			br.Name += NativeSuffix
+		}
+		out.BackendRefs = append(out.BackendRefs, br)
+	}
+	return out
+}
+
+// withAnthropicRules is each rule followed by its anthropicRule.
+func withAnthropicRules(rs []rule, native map[string]bool) []rule {
+	out := make([]rule, 0, 2*len(rs))
+	for _, r := range rs {
+		out = append(out, r, anthropicRule(r, native))
 	}
 	return out
 }
@@ -271,8 +347,9 @@ func backendObjects(b model.Backend) []Object {
 			BackendRef:     ref{Name: b.Name, Kind: "Backend", Group: "gateway.envoyproxy.io"},
 		}),
 	}
+	secret := b.Name + "-key"
+	secretRef := &apiKey{SecretRef: meta{Name: secret, Namespace: Namespace}}
 	if e.APIKeyEnv != "" {
-		secret := b.Name + "-key"
 		sm := meta{Name: secret, Namespace: Namespace}
 		if e.KeyVersion != "" {
 			sm.Annotations = map[string]string{KeyVersionAnnotation: e.KeyVersion}
@@ -281,13 +358,30 @@ func backendObjects(b model.Backend) []Object {
 			newObject("aigateway.envoyproxy.io/v1beta1", "BackendSecurityPolicy", secret, securityPolicySpec{
 				TargetRefs: []groupRef{{Group: "aigateway.envoyproxy.io", Kind: "AIServiceBackend", Name: b.Name}},
 				Type:       "APIKey",
-				APIKey:     apiKey{SecretRef: meta{Name: secret, Namespace: Namespace}},
+				APIKey:     secretRef,
 			}),
 			Object{Kind: "Secret", Name: secret, node: toNode(doc{
 				APIVersion: "v1", Kind: "Secret", Metadata: sm, Type: "Opaque",
 				StringData: map[string]string{"apiKey": "${" + e.APIKeyEnv + ":-not-set}"},
 			})},
 		)
+	}
+	if Native(b) {
+		// The same host and key on Anthropic's Messages API ({prefix}/messages),
+		// the key as x-api-key.
+		twin := b.Name + NativeSuffix
+		out = append(out, newObject("aigateway.envoyproxy.io/v1beta1", "AIServiceBackend", twin, serviceBackendSpec{
+			Schema:         schema{Name: "Anthropic", Prefix: e.Prefix},
+			HeaderMutation: headerMutation{Remove: []string{HintHeader}},
+			BackendRef:     ref{Name: b.Name, Kind: "Backend", Group: "gateway.envoyproxy.io"},
+		}))
+		if e.APIKeyEnv != "" {
+			out = append(out, newObject("aigateway.envoyproxy.io/v1beta1", "BackendSecurityPolicy", twin+"-key", securityPolicySpec{
+				TargetRefs:      []groupRef{{Group: "aigateway.envoyproxy.io", Kind: "AIServiceBackend", Name: twin}},
+				Type:            "AnthropicAPIKey",
+				AnthropicAPIKey: secretRef,
+			}))
+		}
 	}
 	return out
 }
@@ -338,8 +432,19 @@ func compileRule(r model.Route) rule {
 	return out
 }
 
-// RuleYAML is the AIGatewayRoute rule a route compiles to.
-func RuleYAML(r model.Route) string { return encode(toNode(compileRule(r))) }
+// RuleYAML is the AIGatewayRoute rule a route compiles to, among backends.
+// When it sends to an Anthropic backend, Anthropic-style callers' copy
+// follows, since it goes elsewhere (its native twin); a copy that differs
+// only by APIHeader isn't shown.
+func RuleYAML(r model.Route, backends []model.Backend) string {
+	c := compileRule(r)
+	out := encode(toNode(c))
+	native := natives(backends)
+	if slices.ContainsFunc(c.BackendRefs, func(br backendRef) bool { return native[br.Name] }) {
+		out += "---\n# Anthropic-style callers (POST /anthropic/v1/messages)\n" + encode(toNode(anthropicRule(c, native)))
+	}
+	return out
+}
 
 // Owned is the routing in a gateway config file: every AIGatewayRoute,
 // AIServiceBackend and BackendSecurityPolicy, and the Backends and Secrets
@@ -371,7 +476,11 @@ func Owned(file []byte) ([]Object, error) {
 		case "AIServiceBackend":
 			backends[scalar(get(spec, "backendRef"), "name")] = true
 		case "BackendSecurityPolicy":
-			secrets[scalar(get(get(spec, "apiKey"), "secretRef"), "name")] = true
+			for _, k := range []string{"apiKey", "anthropicAPIKey"} {
+				if n := scalar(get(get(spec, k), "secretRef"), "name"); n != "" {
+					secrets[n] = true
+				}
+			}
 		}
 	}
 	var out []Object
@@ -612,11 +721,21 @@ func find(objs []Object, kind, name string) (Object, bool) {
 	return Object{}, false
 }
 
-// RouteInSync is whether a running AIGatewayRoute has the route's rule as it
-// is now.
-func RouteInSync(running []Object, r model.Route) bool {
+// RouteInSync is whether the running AIGatewayRoutes have the route's rule
+// as it is now among backends, and Anthropic-style callers' copy of it when
+// there is one.
+func RouteInSync(running []Object, r model.Route, backends []model.Backend) bool {
+	c := compileRule(r)
+	if !ruleRunning(running, c) {
+		return false
+	}
+	native := natives(backends)
+	return len(native) == 0 || ruleRunning(running, anthropicRule(c, native))
+}
+
+func ruleRunning(running []Object, r rule) bool {
 	var want any
-	_ = toNode(compileRule(r)).Decode(&want)
+	_ = toNode(r).Decode(&want)
 	for _, o := range running {
 		if o.Kind != "AIGatewayRoute" {
 			continue

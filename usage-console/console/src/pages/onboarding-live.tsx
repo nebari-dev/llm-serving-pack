@@ -279,7 +279,7 @@ export function LiveOnboardingPage() {
             )}
           </Step>
 
-          {created && <KeyStep gatewayUrl={gatewayUrl} secret={created.secret} keyName={created.key.name} team={created.key.team} model={created.backend.models[0]} />}
+          {created && <KeyStep gatewayUrl={gatewayUrl} secret={created.secret} keyName={created.key.name} team={created.key.team} model={created.backend.models[0]} anthropic={created.backend.provider === 'Anthropic'} />}
           {created && (
             <FirstRequestLive gatewayUrl={gatewayUrl} keyId={created.key.id} secret={created.secret} model={created.backend.models[0]} landedId={firstId} onLand={setFirstId} />
           )}
@@ -394,9 +394,11 @@ function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
   )
 }
 
-function KeyStep({ gatewayUrl, secret, keyName, team, model }: { gatewayUrl: string; secret: string; keyName: string; team: string; model: string }) {
+function KeyStep({ gatewayUrl, secret, keyName, team, model, anthropic }: { gatewayUrl: string; secret: string; keyName: string; team: string; model: string; anthropic?: boolean }) {
   const [lang, setLang] = useState<Lang>(readLang)
   const all = useMemo(() => snippets(gatewayUrl || '<gateway URL>', model), [gatewayUrl, model])
+  // Anthropic's SDK posts to {base}/v1/messages; the gateway serves that under /anthropic.
+  const anthropicUrl = gatewayUrl ? gatewayUrl.replace(/\/v1\/?$/, '') + '/anthropic' : ''
   const changeLang = (v: Lang) => {
     setLang(v)
     try {
@@ -417,6 +419,18 @@ function KeyStep({ gatewayUrl, secret, keyName, team, model }: { gatewayUrl: str
             </Button>
           )}
         </dd>
+        {anthropic && anthropicUrl && (
+          <>
+            <dt className="text-muted-foreground">Anthropic SDK</dt>
+            <dd className="flex flex-wrap items-center gap-x-2">
+              <span className="font-mono">{anthropicUrl}</span>
+              <Button size="xs" variant="ghost" onClick={() => copy(anthropicUrl, 'Anthropic base URL')}>
+                <Copy /> Copy
+              </Button>
+              <span className="w-full text-xs text-muted-foreground">Its base_url, with the same key as its api_key: requests go to Anthropic’s own Messages API.</span>
+            </dd>
+          </>
+        )}
       </dl>
       <div className="mt-4 flex flex-col gap-1.5">
         <div className="text-sm font-medium">Your gateway key</div>

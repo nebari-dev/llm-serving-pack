@@ -43,7 +43,7 @@ func feedAll(r *bodyRehydrator, chunks ...string) []string {
 
 func TestJSONBodyRehydratesContentAndToolArguments(t *testing.T) {
 	v := vault(t)
-	r := newBodyRehydrator(v, "application/json")
+	r := newBodyRehydrator(v, "application/json", gateway.APIOpenAI)
 	body := `{"id":"chatcmpl-1","object":"chat.completion","created":1730000000,"model":"gpt-5-mini","choices":[{"index":0,"finish_reason":"tool_calls",` +
 		`"message":{"role":"assistant","content":"Sent to [EMAIL_1] <ok>","tool_calls":[{"id":"t1","type":"function","function":{"name":"send","arguments":"{\"to\":\"[EMAIL_2]\"}"}}]}}],` +
 		`"usage":{"prompt_tokens":12,"completion_tokens":9007199254740993}}`
@@ -85,7 +85,7 @@ func TestJSONBodyRehydratesContentAndToolArguments(t *testing.T) {
 // A body with no placeholder in it goes back byte for byte.
 func TestJSONBodyWithoutPlaceholdersIsUnchanged(t *testing.T) {
 	body := `{"choices": [{"index": 0, "message": {"content": "no [list] here"}}]}`
-	out := feedAll(newBodyRehydrator(vault(t), "application/json; charset=utf-8"), body[:10], body[10:])
+	out := feedAll(newBodyRehydrator(vault(t), "application/json; charset=utf-8", gateway.APIOpenAI), body[:10], body[10:])
 	if out[1] != body {
 		t.Fatalf("got %q", out[1])
 	}
@@ -140,7 +140,7 @@ func contents(t *testing.T, stream string) []string {
 // The model streams a placeholder over two events: the first event goes out
 // without the partial placeholder, the next carries the restored value.
 func TestSSEPlaceholderSplitAcrossEvents(t *testing.T) {
-	r := newBodyRehydrator(vault(t), "text/event-stream")
+	r := newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	out := feedAll(r, chunk("Write to [EM"), chunk("AIL_1] and [EMAIL_2]."), chunk("", "stop"), "data: [DONE]\n\n")
 	got := contents(t, strings.Join(out, ""))
 	want := []string{"Write to ", "a@b.com and c@d.org.", "<stop>", "[DONE]"}
@@ -152,7 +152,7 @@ func TestSSEPlaceholderSplitAcrossEvents(t *testing.T) {
 // Transport chunks don't follow events: one event can arrive in pieces, or
 // several in one.
 func TestSSEEventSplitAcrossTransportChunks(t *testing.T) {
-	r := newBodyRehydrator(vault(t), "text/event-stream")
+	r := newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	all := chunk("Hi [EMAIL_1]") + chunk(" bye", "stop") + "data: [DONE]\n\n"
 	out := feedAll(r, all[:17], all[17:60], all[60:])
 	if out[0] != "" {
@@ -167,7 +167,7 @@ func TestSSEEventSplitAcrossTransportChunks(t *testing.T) {
 // A tail still held when the choice finishes goes out with the finishing
 // event, as written: it never became a placeholder.
 func TestSSEHeldTailFlushedAtFinish(t *testing.T) {
-	r := newBodyRehydrator(vault(t), "text/event-stream")
+	r := newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	out := feedAll(r, chunk("almost [EMAIL_"), chunk("", "length"), "data: [DONE]\n\n")
 	got := contents(t, strings.Join(out, ""))
 	if strings.Join(got, "|") != "almost |[EMAIL_<length>|[DONE]" {
@@ -178,12 +178,12 @@ func TestSSEHeldTailFlushedAtFinish(t *testing.T) {
 // A stream that ends without a finish_reason still gets its held tail, in an
 // event of its own before [DONE] (or at the very end).
 func TestSSEHeldTailFlushedBeforeDone(t *testing.T) {
-	r := newBodyRehydrator(vault(t), "text/event-stream")
+	r := newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	out := feedAll(r, chunk("cut at [EM"), "data: [DONE]\n\n")
 	if got := contents(t, strings.Join(out, "")); strings.Join(got, "|") != "cut at |[EM|[DONE]" {
 		t.Fatalf("got %q", got)
 	}
-	r = newBodyRehydrator(vault(t), "text/event-stream")
+	r = newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	out = feedAll(r, chunk("cut at [EM"), "")
 	if got := contents(t, strings.Join(out, "")); strings.Join(got, "|") != "cut at |[EM" {
 		t.Fatalf("got %q", got)
@@ -192,7 +192,7 @@ func TestSSEHeldTailFlushedBeforeDone(t *testing.T) {
 
 // Events with nothing to restore pass as sent, comments and all.
 func TestSSEUntouchedEventsPassAsSent(t *testing.T) {
-	r := newBodyRehydrator(vault(t), "text/event-stream")
+	r := newBodyRehydrator(vault(t), "text/event-stream", gateway.APIOpenAI)
 	in := ": keep-alive\n\n" + chunk("plain") + "data: [DONE]\n\n"
 	if out := strings.Join(feedAll(r, in[:5], in[5:]), ""); out != in {
 		t.Fatalf("got %q", out)
@@ -200,7 +200,7 @@ func TestSSEUntouchedEventsPassAsSent(t *testing.T) {
 }
 
 func TestOtherContentTypesAreNotRehydrated(t *testing.T) {
-	if newBodyRehydrator(vault(t), "text/plain") != nil {
+	if newBodyRehydrator(vault(t), "text/plain", gateway.APIOpenAI) != nil {
 		t.Fatal("text/plain rehydrated")
 	}
 }

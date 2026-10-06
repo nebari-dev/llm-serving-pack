@@ -104,9 +104,17 @@ func ModelsFor(backend string) []string {
 }
 
 // Authorized is whether a request with this Authorization header gets past
-// the backend's key check. Only KeyedBackend checks one.
+// the backend's key check. Only KeyedBackend checks one, and AnthropicBackend
+// on its chat completions, which take its key as a bearer token as
+// Anthropic's OpenAI-compatible endpoint does.
 func Authorized(backend, authorization string) bool {
-	return backend != KeyedBackend || KeyedKeyNumber(authorization) != 0
+	switch backend {
+	case KeyedBackend:
+		return KeyedKeyNumber(authorization) != 0
+	case AnthropicBackend:
+		return authorization == "Bearer "+AnthropicKey
+	}
+	return true
 }
 
 // Unauthorized is the 401 body a provider sends for a wrong key.

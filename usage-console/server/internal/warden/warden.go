@@ -6,6 +6,9 @@
 // reroute rewrites the model and sets a backend hint the AIGatewayRoute
 // matches on. When a redacting rule rehydrates on return, the response comes
 // back through it too, and the redacted values go back in (rehydrate.go).
+// Requests come in OpenAI's chat completions, or, on /anthropic/...,
+// Anthropic's Messages API (anthropic.go); refusals and responses are in the
+// caller's.
 //
 // It must run before Agent Router's own ext_proc, which reads the model and
 // keeps a copy of the body it replays on retries; aigw/base.yaml orders the
@@ -117,7 +120,7 @@ func (s *Server) Process(stream extprocv3.ExternalProcessor_ProcessServer) error
 			resp = &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: &extprocv3.HeadersResponse{}}}
 		case *extprocv3.ProcessingRequest_RequestBody:
 			d := s.decideWith(headers, v.RequestBody.GetBody())
-			resp, back = d.resp, responseState{vault: d.vault, policy: d.policy}
+			resp, back = d.resp, responseState{vault: d.vault, policy: d.policy, api: gateway.APIOf(headers[":path"])}
 		case *extprocv3.ProcessingRequest_ResponseHeaders:
 			resp = back.headers(headerMap(v.ResponseHeaders.GetHeaders()))
 		case *extprocv3.ProcessingRequest_ResponseBody:
@@ -155,6 +158,7 @@ func (s *Server) decideWith(headers map[string]string, body []byte) verdict {
 		limit = 50 * time.Millisecond
 	}
 	keyID := headers[strings.ToLower(gateway.HeaderKeyID)]
+	api := gateway.APIOf(headers[":path"])
 	// The model, once the body is parsed, so a request refused for want of a
 	// decision still says what it asked for.
 	var requested atomic.Pointer[string]
@@ -170,7 +174,7 @@ func (s *Server) decideWith(headers map[string]string, body []byte) verdict {
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("warden: panic evaluating %s: %v", headers["x-request-id"], r)
-				done <- verdict{resp: s.failMode(snap, keyID, requestedModel(), "evaluation panicked")}
+				done <- verdict{resp: s.failMode(snap, api, keyID, requestedModel(), "evaluation panicked")}
 			}
 		}()
 		done <- s.evaluateRequest(snap, headers, body, start, start.Add(limit), &requested)
@@ -182,14 +186,15 @@ func (s *Server) decideWith(headers map[string]string, body []byte) verdict {
 		return r
 	case <-t.C:
 		log.Printf("warden: %s not decided within %v", headers["x-request-id"], limit)
-		return verdict{resp: s.failMode(snap, keyID, requestedModel(), fmt.Sprintf("not decided within %v", limit))}
+		return verdict{resp: s.failMode(snap, api, keyID, requestedModel(), fmt.Sprintf("not decided within %v", limit))}
 	}
 }
 
 func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, body []byte, now, deadline time.Time, requested *atomic.Pointer[string]) verdict {
 	keyID := h[strings.ToLower(gateway.HeaderKeyID)]
+	api := gateway.APIOf(h[":path"])
 	fail := func(requested, reason string) verdict {
-		return verdict{resp: s.failMode(snap, keyID, requested, reason)}
+		return verdict{resp: s.failMode(snap, api, keyID, requested, reason)}
 	}
 	if _, ok := h[headerAfterAgentRouter]; ok {
 		// Agent Router would route on the old model and replay the body it
@@ -197,9 +202,17 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 		log.Printf("warden: running after Agent Router's ext_proc; check the filter order in aigw/base.yaml")
 		return fail("", "Warden runs after Agent Router's ext_proc")
 	}
+	// The caller's API: OpenAI chat completions, or Anthropic's Messages.
 	var cr fakellm.ChatRequest
-	if err := json.Unmarshal(body, &cr); err != nil || cr.Model == "" {
-		// Not a chat request the detectors can read (another endpoint, or
+	var mr *messagesRequest
+	var err error
+	if api == gateway.APIAnthropic {
+		mr, cr, err = parseMessages(body)
+	} else {
+		err = json.Unmarshal(body, &cr)
+	}
+	if err != nil || cr.Model == "" {
+		// Not a request the detectors can read (another endpoint, or OpenAI
 		// content parts). Nothing was inspected, so the fail mode decides.
 		return fail(cr.Model, "request body not inspectable")
 	}
@@ -232,12 +245,17 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	p := d.Policy(snap, s.now())
 	md := metadata(p)
 	if d.Reject != nil {
-		return verdict{resp: reject(d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md, d.Reject.RetryAfter)}
+		return verdict{resp: reject(api, d.Reject.Status, d.Reject.Code, d.Reject.Message, keyID, md, d.Reject.RetryAfter)}
 	}
 
 	common := &extprocv3.CommonResponse{}
 	if len(p.Redactions) > 0 || d.Rerouted() {
-		nb, err := rewrite(body, d.Req, d.Rerouted())
+		var nb []byte
+		if mr != nil {
+			nb, err = mr.rewrite(d.Req, d.Rerouted())
+		} else {
+			nb, err = rewrite(body, d.Req, d.Rerouted())
+		}
 		if err != nil {
 			return fail(cr.Model, "couldn't rewrite the request body: "+err.Error())
 		}
@@ -257,6 +275,7 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 type responseState struct {
 	vault  *gateway.Vault
 	policy gateway.Policy
+	api    string          // the caller's, which the response is in
 	rh     *bodyRehydrator // nil: the body passes as sent
 }
 
@@ -271,8 +290,8 @@ func (st *responseState) headers(h map[string]string) *extprocv3.ProcessingRespo
 	if enc := h["content-encoding"]; enc != "" && enc != "identity" {
 		return skipBody(metadata(st.final("not restored: the response is " + enc + "-encoded")))
 	}
-	if st.rh = newBodyRehydrator(st.vault, h["content-type"]); st.rh == nil {
-		return skipBody(metadata(st.final(fmt.Sprintf("not restored: a %q response isn't a chat completion", h["content-type"]))))
+	if st.rh = newBodyRehydrator(st.vault, h["content-type"], st.api); st.rh == nil {
+		return skipBody(metadata(st.final(fmt.Sprintf("not restored: a %q response isn't JSON or an event stream", h["content-type"]))))
 	}
 	return &extprocv3.ProcessingResponse{Response: &extprocv3.ProcessingResponse_ResponseHeaders{ResponseHeaders: &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{HeaderMutation: &extprocv3.HeaderMutation{RemoveHeaders: []string{"content-length"}}},
@@ -335,7 +354,7 @@ func skipBody(md *structpb.Struct) *extprocv3.ProcessingResponse {
 
 // failMode decides a request Warden couldn't evaluate. It can't tell which
 // rules would have matched, so it fails closed if any enforced rule does.
-func (s *Server) failMode(snap *gateway.Snapshot, keyID, requested, reason string) *extprocv3.ProcessingResponse {
+func (s *Server) failMode(snap *gateway.Snapshot, api, keyID, requested, reason string) *extprocv3.ProcessingResponse {
 	var closed *model.PolicyRule
 	for i, r := range snap.Rules {
 		if r.Mode == "enforce" && r.FailMode == "closed" {
@@ -351,7 +370,7 @@ func (s *Server) failMode(snap *gateway.Snapshot, keyID, requested, reason strin
 		Trace: []model.TraceStep{{Step: "Rules evaluated", Input: fmt.Sprintf("%d rules", len(snap.Rules)), Outcome: outcome, State: "fail"}},
 		Blocked: &gateway.PolicyBlock{Status: 503, ErrorCode: "policy_unavailable", ErrorDetail: "Policy couldn't be evaluated (" + reason + ") and fails closed.",
 			ResolvedModel: snap.Resolve(requested), Backend: "—", Provider: "—", Region: "—"}}
-	return reject(503, p.Blocked.ErrorCode, p.Blocked.ErrorDetail, keyID, metadata(p), 0)
+	return reject(api, 503, p.Blocked.ErrorCode, p.Blocked.ErrorDetail, keyID, metadata(p), 0)
 }
 
 // unpoliced lets the request through untouched, saying why in the receipt.
@@ -394,11 +413,12 @@ func rewrite(body []byte, req fakellm.ChatRequest, rerouted bool) ([]byte, error
 	return json.Marshal(top)
 }
 
-// reject answers the caller directly. keyID goes on the response the way the
-// key check's 403 does, so the access log records the refusal. retryAfter,
-// in seconds, is set for a refusal worth retrying (a throttle); 0 omits it.
-func reject(code int, errCode, msg, keyID string, md *structpb.Struct, retryAfter int) *extprocv3.ProcessingResponse {
-	body, _ := json.Marshal(map[string]any{"error": map[string]any{"code": errCode, "message": msg}})
+// reject answers the caller directly, in its API's error shape. keyID goes
+// on the response the way the key check's 403 does, so the access log
+// records the refusal. retryAfter, in seconds, is set for a refusal worth
+// retrying (a throttle); 0 omits it.
+func reject(api string, code int, errCode, msg, keyID string, md *structpb.Struct, retryAfter int) *extprocv3.ProcessingResponse {
+	body := gateway.ErrorBody(api, code, errCode, msg)
 	hm := &extprocv3.HeaderMutation{SetHeaders: []*corev3.HeaderValueOption{setHeader("content-type", "application/json")}}
 	if keyID != "" {
 		hm.SetHeaders = append(hm.SetHeaders, setHeader(gateway.HeaderKeyID, keyID))

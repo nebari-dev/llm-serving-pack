@@ -19,8 +19,10 @@ import (
 )
 
 // Providers the console can add: each is a base URL speaking OpenAI's API
-// (Anthropic through its OpenAI-compatible endpoint) and an optional key the
-// gateway sends as a bearer token.
+// and an optional key the gateway sends as a bearer token. Anthropic's base
+// URL serves both its OpenAI-compatible endpoint, for OpenAI-style callers,
+// and its own Messages API, for Anthropic-style ones (Compile's native twin,
+// which sends the key as x-api-key).
 var Providers = []string{"OpenAI", "Anthropic", "OpenAI-compatible", "Self-hosted"}
 
 // CloudProviders need cloud credentials (AWS, Azure, GCP identities) rather
@@ -108,6 +110,11 @@ func ValidateBackend(b model.Backend, was *model.Backend) error {
 		return errors.New("name must be lowercase letters, digits, dots and dashes")
 	case len(b.Name) > 59:
 		return errors.New("name must be at most 59 characters") // its Secret is <name>-key
+	case b.Provider == "Anthropic" && len(b.Name) > 63-len(NativeSuffix+"-key"):
+		// Its native twin's policy is <name>-native-key.
+		return fmt.Errorf("an Anthropic backend's name must be at most %d characters", 63-len(NativeSuffix+"-key"))
+	case was == nil && strings.HasSuffix(b.Name, NativeSuffix):
+		return fmt.Errorf("names ending in %s are kept for Anthropic backends' native twins", NativeSuffix)
 	case strings.TrimSpace(b.Provider) == "":
 		return errors.New("say which provider it is")
 	case !regionRE.MatchString(b.Region):

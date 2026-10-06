@@ -1373,8 +1373,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed route', target: `${name} · gpt-5.5 if x-stargate-team = support → vllm-internal as llama-3.3-70b` })
 
       const plan = await catalog.api<RoutingPlan>('/routing')
-      expect(plan.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual(['changed AIGatewayRoute/aigw-run'])
+      // One change: the route's rule, and Anthropic-style callers' copy of it
+      // right after, in aigw-run (or aigw-run-2… once that has its 7 routes).
+      expect(plan.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual([expect.stringMatching(/^(changed|added) AIGatewayRoute\/aigw-run(-\d+)?$/)])
       expect(plan.changes[0].diff).toMatch(/^\+\s+value: support$/m)
+      expect(plan.changes[0].diff).toMatch(/^\+\s+value: anthropic$/m)
       expect(plan.changes[0].diff).not.toMatch(/^-/m)
 
       expect(await status(send('POST', '/routing/apply', {}))).toBe(428)
@@ -1384,7 +1387,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<LiveRoute[]>('/routes')).find((r) => r.name === name)?.sync).toBe('synced')
       expect((await catalog.api<RoutingPlan>('/routing')).changes).toEqual([])
       expect((await catalog.api<RoutingPlan>('/routing')).lastApply).toMatchObject({ ok: true, actor: catalog.session.actor.email })
-      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Applied routing', targetKind: 'Routing', target: '1 change: changed AIGatewayRoute aigw-run' })
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
+        action: 'Applied routing', targetKind: 'Routing', target: `1 change: ${plan.changes[0].change} AIGatewayRoute ${plan.changes[0].name}`,
+      })
 
       // The gateway now routes by it.
       const made2 = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
@@ -1949,12 +1954,167 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await dropBackends(name)
     }
   }, 60_000)
-  // The gateway can't translate OpenAI-style calls to Anthropic's native
-  // Messages API yet: aigw v1.1.0 (and ai-gateway main as of 2026-10-05) has
-  // no OpenAI→Anthropic translator for schema Anthropic, only for GCPAnthropic
-  // and AWSAnthropic, so Anthropic still compiles to its OpenAI-compatible
-  // endpoint. See docs/backend-decisions.md §6.
-  it.todo('routes an OpenAI-style call through the gateway to keyed-anthropic’s /v1/messages (schema Anthropic, AnthropicAPIKey)')
+  // One Anthropic provider serves both kinds of caller (docs/backend-decisions.md
+  // §6): it compiles to its OpenAI-compatible AIServiceBackend, for OpenAI-style
+  // callers, and <name>-native (schema Anthropic, AnthropicAPIKey) for
+  // Anthropic-style ones, which the Anthropic SDK is with base URL
+  // <gateway>/anthropic. aigw v1.1.0 can't translate OpenAI's API to Anthropic's
+  // for a direct Anthropic backend, so OpenAI-style callers stay on the
+  // compatible endpoint. Needs fake-openai from this branch: keyed-anthropic
+  // echoes on both APIs (X-Fake-Received) and takes its key as a bearer token on
+  // chat completions.
+  it('serves the Anthropic SDK natively through one Anthropic provider, with the key check, Warden and receipts, and OpenAI-style callers still on its compatible endpoint', async () => {
+    type V = { id: string; mode: string; version: number; etag: string }
+    type P = import('@/data/catalog').PricingView
+    type Rc = import('@/data/catalog').Receipt
+    type Msg = { id: string; type: string; model: string; content: { type: string; text: string }[]; usage: { input_tokens: number; output_tokens: number } }
+    const name = `anthropic-sdk-${Date.now().toString(36)}`
+    const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, models: ['claude-echo'] }
+    const email = 'jordan.lee@example.com'
+    const messages = (secret: string, body: object, headers: Record<string, string> = {}) =>
+      fetch(`${gateway}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'x-api-key': secret, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({ model: 'claude-echo', max_tokens: 64, ...body }),
+      })
+    const received = (res: Response) => decodeURIComponent((res.headers.get('x-fake-received') ?? '').replace(/\+/g, ' '))
+    let keyId = ''
+    let ruleId = ''
+    await applyPending()
+    try {
+      // One provider, both APIs: the plan adds the native twin and its x-api-key policy.
+      const made = await send<BackendResult>('POST', '/backends', { ...provider, apiKey: ANTHROPIC_KEY })
+      expect(made.test).toMatchObject({ ok: true })
+      const plan = await catalog.api<RoutingPlan>('/routing')
+      expect(plan.changes.map((c) => `${c.change} ${c.kind}/${c.name}`)).toEqual(
+        expect.arrayContaining([
+          `added AIServiceBackend/${name}`, `added BackendSecurityPolicy/${name}-key`, `added Secret/${name}-key`,
+          `added AIServiceBackend/${name}-native`, `added BackendSecurityPolicy/${name}-native-key`,
+        ]),
+      )
+      const native = plan.changes.find((c) => c.name === `${name}-native` && c.kind === 'AIServiceBackend')!.diff
+      expect(native).toContain('name: Anthropic')
+      expect(native).toContain('prefix: /keyed-anthropic/v1')
+      const policy = plan.changes.find((c) => c.name === `${name}-native-key`)!.diff
+      expect(policy).toContain('type: AnthropicAPIKey')
+      expect(policy).toContain(`name: ${name}-key`) // the same Secret as the OpenAI-compatible twin
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.yaml).toContain(`name: ${name}-native`)
+
+      // A route's rule shows where Anthropic-style callers go.
+      const route = await send<LiveRoute & { yaml: string }>('POST', '/routes', { name, match: { models: ['claude-echo'], headers: [] }, targets: [{ backend: name }], fallback: [] })
+      expect(route.yaml).toContain('value: anthropic')
+      expect(route.yaml).toContain(`name: ${name}-native`)
+      await applyPending()
+      expect((await catalog.api<BackendView[]>('/backends')).find((b) => b.name === name)?.sync).toBe('synced')
+      expect((await catalog.api<LiveRoute[]>('/routes')).find((r) => r.name === name)?.sync).toBe('synced')
+
+      // A price, so the receipt's cost can be checked.
+      const pair = (await catalog.api<P>('/pricing')).prices.find((p) => p.model === 'claude-echo' && p.backend === name)!
+      await send('POST', `/pricing/claude-echo/${name}`, { rates: { input: 3, cachedInput: 0.3, cacheWrite: 3.75, output: 15, reasoning: 15 } }, pair.etag)
+
+      const k = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+        name, team: 'security', project: 'api-mode-test', allowedModels: ['claude-echo'], allowedRegions: ['local'], expiresAt: '2027-01-01',
+      })
+      keyId = k.key.id
+
+      // The Anthropic SDK's request, the gateway key as x-api-key: it reaches the
+      // native fake (a Messages id, not a translated chat completion's), which
+      // got the provider key, never the gateway's.
+      let res: Response | undefined
+      for (let i = 0; i < 20 && res?.status !== 200; i++) {
+        if (i) await new Promise((ok) => setTimeout(ok, 1000)) // the key check reloads keys every 5s
+        res = await messages(k.secret, { messages: [{ role: 'user', content: 'hello anthropic' }] })
+      }
+      const text = await res!.text()
+      expect(res!.status, text).toBe(200)
+      const msg = JSON.parse(text) as Msg
+      expect(msg).toMatchObject({ type: 'message', model: 'claude-echo', content: [{ type: 'text', text: 'You said: hello anthropic' }] })
+      expect(msg.id).toMatch(/^msg_fake/)
+      expect(received(res!)).toBe('You said: hello anthropic')
+
+      // Its receipt: the backend as the console names it, the fake's tokens, the price.
+      const rc = await waitFor(async () => {
+        const [r] = await catalog.api<Rc[]>(`/receipts?limit=1&key=${keyId}`)
+        expect(r).toMatchObject({ backend: name, provider: 'Anthropic', resolvedModel: 'claude-echo', requestedModel: 'claude-echo', status: 200 })
+        return r
+      }, { timeout: 20_000, interval: 1000 })
+      expect(rc.inputTokens).toBe(msg.usage.input_tokens)
+      expect(rc.outputTokens).toBe(msg.usage.output_tokens)
+      expect(rc.reasoningTokens).toBe(0)
+      expect(rc.costUsd).toBeCloseTo((msg.usage.input_tokens * 3 + msg.usage.output_tokens * 15) / 1e6, 9)
+      expect(rc.trace.find((t) => t.step === 'Route selected')?.outcome).toContain('Anthropic Messages API')
+
+      // The key check refuses in Anthropic's error shape, so the SDK raises its usual errors.
+      const bad = await messages('ngw_live_0000_not_a_key', { messages: [{ role: 'user', content: 'hi' }] })
+      expect(bad.status).toBe(401)
+      expect(await bad.json()).toMatchObject({ type: 'error', error: { type: 'authentication_error', code: 'invalid_api_key' } })
+      const notAllowed = await messages(k.secret, { model: 'gpt-5.5', messages: [{ role: 'user', content: 'hi' }] })
+      expect(notAllowed.status).toBe(403)
+      expect(await notAllowed.json()).toMatchObject({ type: 'error', error: { type: 'permission_error', code: 'model_not_allowed' } })
+
+      // Warden reads an Anthropic body: a redact-and-rehydrate rule redacts the
+      // text block before the provider, and the reply comes back restored, whole
+      // and streamed.
+      const made2 = await send<V>('POST', '/rules', {
+        name, description: 'api-mode Anthropic SDK test', failMode: 'closed',
+        when: [{ field: 'prompt', op: 'contains entity', value: ['email'] }, { field: 'key', op: 'is', value: [name] }],
+        then: [{ action: 'redact', detail: 'email · rehydrate on return' }],
+      })
+      ruleId = made2.id
+      await send<V>('POST', `/rules/${ruleId}/publish`, { mode: 'enforce' }, made2.etag)
+      const ask = { system: [{ type: 'text', text: 'Be brief.' }], messages: [{ role: 'user', content: [{ type: 'text', text: `Write to ${email} today` }] }] }
+      const whole = await messages(k.secret, ask)
+      expect(whole.status).toBe(200)
+      expect(received(whole)).toBe('You said: Write to [EMAIL_1] today') // the provider never saw the address
+      expect(((await whole.json()) as Msg).content[0].text).toBe(`You said: Write to ${email} today`)
+      const streamed = await messages(k.secret, { ...ask, stream: true })
+      expect(streamed.status).toBe(200)
+      expect(received(streamed)).toBe('You said: Write to [EMAIL_1] today')
+      let reply = ''
+      for (const line of (await streamed.text()).split('\n')) {
+        if (!line.startsWith('data: ')) continue
+        const ev = JSON.parse(line.slice(6)) as { type: string; delta?: { text?: string } }
+        if (ev.type === 'content_block_delta') reply += ev.delta?.text ?? ''
+      }
+      expect(reply).toBe(`You said: Write to ${email} today`)
+      await waitFor(async () => {
+        const rs = await catalog.api<Rc[]>(`/receipts?limit=10&key=${keyId}`)
+        const redacted = rs.filter((r) => r.verdict === 'redacted')
+        expect(redacted.length).toBe(2)
+        for (const r of redacted) {
+          expect(r).toMatchObject({ backend: name, status: 200, redactions: [{ type: 'email', count: 1, rehydrated: 1 }] })
+          expect(r.outputTokens).toBeGreaterThan(0) // the stream's usage too
+        }
+      }, { timeout: 20_000, interval: 1000 })
+
+      // OpenAI-style callers to the same provider still reach its OpenAI-compatible
+      // endpoint (a chat completion, the key as a bearer token), redacted the same.
+      const chat = await fetch(`${gateway}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${k.secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-echo', messages: [{ role: 'user', content: `Write to ${email} today` }] }),
+      })
+      const chatText = await chat.text()
+      expect(chat.status, chatText).toBe(200)
+      const completion = JSON.parse(chatText) as { id: string; object: string; choices: { message: { content: string } }[] }
+      expect(completion.object).toBe('chat.completion')
+      expect(completion.choices[0].message.content).toBe(`You said: Write to ${email} today`)
+      expect(received(chat)).toBe('You said: Write to [EMAIL_1] today')
+      await waitFor(async () => {
+        const [r] = await catalog.api<Rc[]>(`/receipts?limit=1&key=${keyId}`)
+        expect(r).toMatchObject({ backend: name, resolvedModel: 'claude-echo', status: 200, verdict: 'redacted' })
+        expect(r.trace.find((t) => t.step === 'Route selected')?.outcome).not.toContain('Anthropic Messages API')
+      }, { timeout: 20_000, interval: 1000 })
+    } finally {
+      if (ruleId) {
+        const etagNow = async () => (await catalog.api<V[]>('/rules')).find((r) => r.id === ruleId)?.etag
+        await send('POST', `/rules/${ruleId}/publish`, { mode: 'disabled' }, await etagNow()).catch(() => {})
+        await send('DELETE', `/rules/${ruleId}`, undefined, await etagNow()).catch(() => {})
+      }
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`, {}).catch(() => {})
+      await dropBackends(name)
+    }
+  }, 300_000)
 
   it('lists provider keys by prefix and last test on Settings, not as not connected', async () => {
     window.history.pushState({}, '', '/settings')

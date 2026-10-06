@@ -32,7 +32,7 @@ interface Tile {
 
 const tiles: Tile[] = [
   { id: 'OpenAI', label: 'OpenAI', url: 'https://api.openai.com/v1', hint: 'API key' },
-  { id: 'Anthropic', label: 'Anthropic', url: 'https://api.anthropic.com/v1', hint: 'API key · OpenAI-compatible endpoint' },
+  { id: 'Anthropic', label: 'Anthropic', url: 'https://api.anthropic.com/v1', hint: 'API key · for OpenAI and Anthropic SDKs' },
   { id: 'OpenAI-compatible', label: 'OpenAI-compatible', url: '', hint: 'OpenRouter, Together, vLLM, Ollama…' },
   { id: 'Self-hosted', label: 'Self-hosted', url: 'http://localhost:8000/v1', hint: 'Usually no key' },
   { id: 'Bedrock', label: 'Bedrock', url: '', hint: '', disabled: 'Needs AWS cloud credentials, which the console can’t set up yet.' },
@@ -227,7 +227,12 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
             <Field className="sm:col-span-2">
               <FieldLabel>Base URL</FieldLabel>
               <Input value={draft.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} placeholder="https://api.together.xyz/v1" className="font-mono" autoComplete="off" spellCheck={false} />
-              <FieldDescription>What an OpenAI SDK takes as base_url. localhost means this control plane’s machine.</FieldDescription>
+              <FieldDescription>
+                {draft.provider === 'Anthropic'
+                  ? 'Anthropic’s API, which serves both kinds of caller: OpenAI SDKs reach its OpenAI-compatible endpoint, and Anthropic SDKs (pointed at the gateway’s /anthropic) its own Messages API, with the same key.'
+                  : 'What an OpenAI SDK takes as base_url.'}{' '}
+                localhost means this control plane’s machine.
+              </FieldDescription>
             </Field>
             <Field>
               <FieldLabel>Region</FieldLabel>

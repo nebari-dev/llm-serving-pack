@@ -787,9 +787,27 @@ function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: bool
                 {e.tls && <span className="ml-2 font-sans text-muted-foreground">TLS</span>}
               </dd>
               <dt className="text-muted-foreground">API</dt>
-              <dd className="font-mono text-xs break-all">
-                {e.schema} {e.prefix}
-              </dd>
+              {b.provider === 'Anthropic' ? (
+                // Compiled twice (routing.NativeSuffix): one backend, both kinds of caller.
+                <dd className="flex flex-col gap-0.5 text-xs">
+                  <span>
+                    <span className="font-mono">
+                      {e.schema} {e.prefix}
+                    </span>{' '}
+                    <span className="text-muted-foreground">for OpenAI-style callers</span>
+                  </span>
+                  <span>
+                    <span className="font-mono">Anthropic {e.prefix}</span>{' '}
+                    <span className="text-muted-foreground">
+                      for Anthropic-style callers, as <span className="font-mono">{b.name}-native</span>
+                    </span>
+                  </span>
+                </dd>
+              ) : (
+                <dd className="font-mono text-xs break-all">
+                  {e.schema} {e.prefix}
+                </dd>
+              )}
               <dt className="text-muted-foreground">Provider key</dt>
               <dd className="text-xs">
                 <KeyText b={b} />
@@ -868,7 +886,7 @@ function BackendDetail({ b, onChanged }: { b: Backend; onChanged: (deleted: bool
         />
       )}
       {yaml && b.yaml && (
-        <YamlDialog title={b.name} yaml={b.yaml} description="The gateway resources this backend compiles to: its Backend and AIServiceBackend, and a provider key’s policy and Secret." onClose={() => setYaml(false)} />
+        <YamlDialog title={b.name} yaml={b.yaml} description={`The gateway resources this backend compiles to: its Backend and AIServiceBackend, and a provider key’s policy and Secret${b.provider === 'Anthropic' ? `, plus ${b.name}-native and its policy for Anthropic-style callers` : ''}.`} onClose={() => setYaml(false)} />
       )}
     </>
   )

@@ -12,8 +12,10 @@ import (
 
 // bodyRehydrator puts a request's redacted values back into its response
 // (spec §4.5 step 5). Warden sees the response after Agent Router has
-// translated it, so it's OpenAI chat completions either way: one JSON body,
-// or server-sent events of chunks. Only strings inside the choices change.
+// translated it, so it's in the caller's API whichever backend answered:
+// OpenAI chat completions for OpenAI-style callers, Anthropic messages for
+// Anthropic-style ones. Either way it's one JSON body or server-sent events.
+// Only strings inside the choices (OpenAI) or content (Anthropic) change.
 //
 // Envoy streams the body in chunks that follow neither events nor
 // placeholders. A JSON body is held whole and rewritten at the end. Events
@@ -22,6 +24,7 @@ import (
 // next shows whether it is one.
 type bodyRehydrator struct {
 	v     *gateway.Vault
+	api   string // gateway.APIOpenAI or gateway.APIAnthropic
 	sse   bool
 	buf   []byte
 	texts map[textKey]*gateway.Rehydrator
@@ -34,17 +37,17 @@ type bodyRehydrator struct {
 // textKey is one text a streamed reply builds up across deltas: a field of a
 // choice's delta ("content"), or of a tool call's function ("arguments").
 // Choice and tool are their "index" values as sent; tool is "" for a delta
-// field.
+// field. In a Messages stream, choice is the content block's index.
 type textKey struct{ choice, tool, field string }
 
-// newBodyRehydrator is nil for a body it can't read.
-func newBodyRehydrator(v *gateway.Vault, contentType string) *bodyRehydrator {
+// newBodyRehydrator is nil for a body it can't read. api is the caller's.
+func newBodyRehydrator(v *gateway.Vault, contentType, api string) *bodyRehydrator {
 	mt, _, _ := mime.ParseMediaType(contentType)
 	switch mt {
 	case "application/json":
-		return &bodyRehydrator{v: v}
+		return &bodyRehydrator{v: v, api: api}
 	case "text/event-stream":
-		return &bodyRehydrator{v: v, sse: true, texts: map[textKey]*gateway.Rehydrator{}}
+		return &bodyRehydrator{v: v, api: api, sse: true, texts: map[textKey]*gateway.Rehydrator{}}
 	}
 	return nil
 }
@@ -56,7 +59,11 @@ func (b *bodyRehydrator) Feed(chunk []byte, end bool) []byte {
 		if !end {
 			return nil
 		}
-		out := rehydrateJSON(b.v, b.buf)
+		field := "choices"
+		if b.api == gateway.APIAnthropic {
+			field = "content"
+		}
+		out := rehydrateJSON(b.v, b.buf, field)
 		b.buf = nil
 		return out
 	}
@@ -74,7 +81,11 @@ func (b *bodyRehydrator) Feed(chunk []byte, end bool) []byte {
 			out = append(out, b.event(b.buf)...)
 			b.buf = nil
 		}
-		out = append(out, b.flushAll()...)
+		if b.api == gateway.APIAnthropic {
+			out = append(out, b.flushBlocks()...)
+		} else {
+			out = append(out, b.flushAll()...)
+		}
 	}
 	return out
 }
@@ -109,6 +120,9 @@ func (b *bodyRehydrator) event(ev []byte) []byte {
 	obj, ok := decodeObject([]byte(payload))
 	if !ok {
 		return ev
+	}
+	if b.api == gateway.APIAnthropic {
+		return b.messagesEvent(ev, lines, obj)
 	}
 	b.last = map[string]any{"object": "chat.completion.chunk"}
 	for _, k := range []string{"id", "object", "model", "created"} {
@@ -161,19 +175,7 @@ func (b *bodyRehydrator) event(ev []byte) []byte {
 	if !changed {
 		return ev
 	}
-	var out []string
-	wrote := false
-	for _, l := range lines {
-		if strings.HasPrefix(l, "data:") {
-			if !wrote {
-				out = append(out, "data: "+string(encode(obj)))
-				wrote = true
-			}
-			continue
-		}
-		out = append(out, l)
-	}
-	return []byte(strings.Join(out, "\n") + "\n\n")
+	return withData(lines, obj)
 }
 
 func (b *bodyRehydrator) text(k textKey) *gateway.Rehydrator {
@@ -236,18 +238,19 @@ func (b *bodyRehydrator) flushAll() []byte {
 	return []byte("data: " + string(encode(ev)) + "\n\n")
 }
 
-// rehydrateJSON restores placeholders in a chat completion's choices, or
-// returns body as sent when it has none (or isn't JSON).
-func rehydrateJSON(v *gateway.Vault, body []byte) []byte {
+// rehydrateJSON restores placeholders in a response's field (a chat
+// completion's choices, a message's content), or returns body as sent when
+// it has none (or isn't JSON).
+func rehydrateJSON(v *gateway.Vault, body []byte, field string) []byte {
 	obj, ok := decodeObject(body)
 	if !ok {
 		return body
 	}
-	choices, changed := swapStrings(obj["choices"], v.Swap)
+	x, changed := swapStrings(obj[field], v.Swap)
 	if !changed {
 		return body
 	}
-	obj["choices"] = choices
+	obj[field] = x
 	return encode(obj)
 }
 

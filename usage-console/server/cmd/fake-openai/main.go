@@ -8,10 +8,13 @@
 // GET /{backend}/v1/models lists a backend's models. The "keyed" backend
 // (fakellm.KeyedBackend) wants its own provider key, as a real provider does,
 // answers 401 without it, and echoes the prompt, saying which of its two keys
-// it got in X-Fake-Key. The "keyed-anthropic" backend
-// (fakellm.AnthropicBackend) speaks Anthropic's native API instead: GET
-// /{backend}/v1/models and POST /{backend}/v1/messages, with x-api-key and
-// anthropic-version.
+// it got in X-Fake-Key. Every backend also answers Anthropic's Messages API
+// at POST /{backend}/v1/messages (streamed as Anthropic's events), for
+// Anthropic-style callers the gateway sends to an Anthropic backend natively.
+// The "keyed-anthropic" backend (fakellm.AnthropicBackend) is Anthropic as
+// the console adds it: GET /{backend}/v1/models and POST /{backend}/v1/messages
+// with x-api-key and anthropic-version, and its OpenAI-compatible chat
+// completions with the same key as a bearer token, both echoing the prompt.
 package main
 
 import (
@@ -70,23 +73,86 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// messages is Anthropic's Messages API, on the Anthropic backend only.
+// stargateKeyLeaked answers 401 when the caller's Stargate key reached the
+// provider: the gateway must never forward it.
+func stargateKeyLeaked(w http.ResponseWriter, req *http.Request) bool {
+	for _, h := range []string{"Authorization", "X-Api-Key"} {
+		if strings.Contains(req.Header.Get(h), "ngw_") {
+			log.Printf("%s: caller's Stargate key reached the provider in %s", req.URL.Path, h)
+			http.Error(w, `{"error":{"message":"a Stargate API key reached the provider","code":401}}`, http.StatusUnauthorized)
+			return true
+		}
+	}
+	return false
+}
+
+// messages is Anthropic's Messages API. The Anthropic backend wants its key
+// as x-api-key and echoes the prompt, saying what arrived in X-Fake-Received
+// as chat completions do; the rest simulate their profile (anthropic-prod is
+// an Anthropic backend, which Anthropic-style callers reach natively) and
+// echo with X-Fake-Echo. Streams follow Anthropic's events.
 func messages(w http.ResponseWriter, req *http.Request) {
-	if !fakellm.IsAnthropic(req.PathValue("backend")) {
-		http.NotFound(w, req)
+	if stargateKeyLeaked(w, req) {
 		return
 	}
-	if !anthropicAuthorized(w, req) {
+	backend := req.PathValue("backend")
+	if fakellm.IsAnthropic(backend) && !anthropicAuthorized(w, req) {
 		return
 	}
 	var mr fakellm.AnthropicRequest
-	if err := json.NewDecoder(req.Body).Decode(&mr); err != nil || mr.Stream {
+	if err := json.NewDecoder(req.Body).Decode(&mr); err != nil || mr.Model == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"invalid JSON, or stream (not simulated)"}}`))
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"invalid JSON, or no model"}}`))
 		return
 	}
-	writeJSON(w, fakellm.AnthropicReply(mr))
+	cr := fakellm.AnthropicChat(mr)
+	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	p := fakellm.Simulate(backend, cr, r)
+	if req.Header.Get("X-Fake-Echo") != "" || fakellm.IsAnthropic(backend) {
+		p = fakellm.Echo(cr)
+		w.Header().Set("X-Fake-Received", url.QueryEscape(p.Content()))
+	}
+	ctx := req.Context()
+	sleep := func(d time.Duration) bool {
+		select {
+		case <-time.After(d):
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	if p.Status != 200 {
+		sleep(p.Duration)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(p.Status)
+		w.Write([]byte(fakellm.AnthropicFailure(p)))
+		return
+	}
+	id := fmt.Sprintf("msg_fake%016x", r.Uint64())
+	if !mr.Stream {
+		if sleep(p.Duration) {
+			writeJSON(w, fakellm.AnthropicMessage(id, mr.Model, p))
+		}
+		return
+	}
+	flusher, _ := w.(http.Flusher)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	if !sleep(p.TTFT) {
+		return
+	}
+	gap := (p.Duration - p.TTFT) / time.Duration(max(len(p.Chunks), 1))
+	for _, e := range fakellm.AnthropicEvents(id, mr.Model, p) {
+		if e.Name == "content_block_delta" && !sleep(gap) {
+			return
+		}
+		b, _ := json.Marshal(e.Data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.Name, b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 }
 
 func listModels(w http.ResponseWriter, req *http.Request) {
@@ -108,12 +174,8 @@ func listModels(w http.ResponseWriter, req *http.Request) {
 }
 
 func handle(w http.ResponseWriter, req *http.Request) {
-	for _, h := range []string{"Authorization", "X-Api-Key"} {
-		if strings.Contains(req.Header.Get(h), "ngw_") {
-			log.Printf("%s: caller's Stargate key reached the provider in %s", req.URL.Path, h)
-			http.Error(w, `{"error":{"message":"a Stargate API key reached the provider","code":401}}`, http.StatusUnauthorized)
-			return
-		}
+	if stargateKeyLeaked(w, req) {
+		return
 	}
 	if !authorized(w, req) {
 		return
@@ -125,7 +187,7 @@ func handle(w http.ResponseWriter, req *http.Request) {
 	}
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	p := fakellm.Simulate(req.PathValue("backend"), cr, r)
-	if req.Header.Get("X-Fake-Echo") != "" || req.PathValue("backend") == fakellm.KeyedBackend {
+	if req.Header.Get("X-Fake-Echo") != "" || req.PathValue("backend") == fakellm.KeyedBackend || fakellm.IsAnthropic(req.PathValue("backend")) {
 		// For checks through the gateway: reply with the prompt as it arrived,
 		// and say so in a header too, which nothing on the way back rewrites
 		// (Warden restores redacted values in the body).
@@ -193,12 +255,13 @@ func handle(w http.ResponseWriter, req *http.Request) {
 		send(map[string]any{"id": id, "object": "chat.completion.chunk", "model": cr.Model,
 			"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": c}}}})
 	}
-	final := map[string]any{"id": id, "object": "chat.completion.chunk", "model": cr.Model,
-		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+	send(map[string]any{"id": id, "object": "chat.completion.chunk", "model": cr.Model,
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}})
 	if cr.StreamOptions != nil && cr.StreamOptions.IncludeUsage {
-		final["usage"] = p.Usage
+		// As OpenAI sends it: a chunk of its own with no choices. Agent
+		// Router's Messages translation reads usage only from that.
+		send(map[string]any{"id": id, "object": "chat.completion.chunk", "model": cr.Model, "choices": []any{}, "usage": p.Usage})
 	}
-	send(final)
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	if flusher != nil {
 		flusher.Flush()

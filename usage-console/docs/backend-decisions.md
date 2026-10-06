@@ -96,6 +96,12 @@ audited. Any sync would write through the same path.
       to Bedrock or Vertex Anthropic (`anthropic_helper.go:1303`, streaming
       `1181-1182`) sets reasoning from `output_tokens_details.thinking_tokens`
       when the upstream sends it (inside output again), else 0.
+    - An Anthropic-style caller (Messages API, §6) translated to an
+      OpenAI-schema backend (`anthropic_openai.go:124-129`, streaming
+      `openai_helper.go:737-750`): input = `prompt_tokens`, output =
+      `completion_tokens`, cached input and reasoning never set, so 0. Its
+      cached input bills at the input rate and its reasoning at the output
+      rate, inside output.
     - So today an OpenAI reasoning response bills R twice. Anthropic doesn't,
       but its thinking never sees a reasoning rate (it bills at output, which
       is what Anthropic charges). `receipts.total_tokens` (input + output +
@@ -316,19 +322,82 @@ retire-old-secret-now are in.
         provider = the backend's, context 0 = unknown) with no price and no
         LiteLLM key: "no price" until someone sets a rate or a key on Models.
         No LiteLLM key is guessed, even for OpenAI.
-      - Anthropic still goes through its OpenAI-compatible endpoint
-        (`https://api.anthropic.com/v1`) with the key as a bearer token. Its
-        connection test is native (`GET /v1/models` with `x-api-key` and
-        `anthropic-version`). Switching to `schema: Anthropic` with a
-        `BackendSecurityPolicy` of type `AnthropicAPIKey` (which aigw
-        v1.1.0 has, sending `x-api-key`) is blocked: aigw v1.1.0, and
-        ai-gateway's main branch as of 2026-10-05, translate OpenAI chat
-        completions to Anthropic only for `GCPAnthropic` and `AWSAnthropic`.
-        A `schema: Anthropic` backend serves only Anthropic-style callers
-        (`/anthropic/v1/messages`); an OpenAI-style call to it fails with
-        "unsupported API schema". Open question for the user: keep the
-        OpenAI-compatible endpoint until upstream adds the translator, or
-        add a second, native Anthropic backend for Anthropic-style callers.
+      - Anthropic serves both kinds of caller from one provider (built
+        2026-10-06, the user's ask: Anthropic-style callers with the same
+        governance). Its connection test is native (`GET /v1/models` with
+        `x-api-key` and `anthropic-version`). What aigw v1.1.0 does,
+        checked in its source (`github.com/envoyproxy/ai-gateway@v1.1.0`)
+        and against a probe gateway:
+        - It serves Anthropic's Messages API at `/anthropic/v1/messages`
+          (and `/count_tokens`, `/anthropic/v1/models`;
+          `cmd/extproc/mainlib/main.go:347-353`), from the same
+          AIGatewayRoutes as `/v1/chat/completions`: every generated
+          HTTPRoute rule matches path prefix `/` plus the rule's headers
+          (`internal/controller/ai_gateway_route.go:316-320`), and an
+          AIGatewayRoute rule can match headers only.
+        - The backend's schema then decides (`endpointspec.go:400-417`):
+          Messages to `schema: Anthropic` passes through to
+          `{prefix}/messages`; Messages to `schema: OpenAI` is translated
+          to chat completions and back (also AWSBedrock, GCP/AWS
+          Anthropic). Chat completions to `schema: Anthropic` fails: the
+          probe got a 500, "unsupported API schema" (`endpointspec.go:164-180`
+          has no OpenAI→Anthropic translator for a direct backend, only
+          `GCPAnthropic`/`AWSAnthropic`; ai-gateway's main branch as of
+          2026-10-05 neither). One rule can list both kinds of backend; on
+          a mismatch the request fails rather than skipping the backend.
+          Priority failover from a native to a translated backend worked
+          in the probe once passive health checking ejected the first.
+        - Dynamic metadata: `backend_name` is the AIServiceBackend's
+          route-scoped name; native Messages log input = `input_tokens` +
+          cache reads + writes, cached, cache writes and output (thinking
+          inside, reasoning 0), streamed too (message_start and
+          message_delta usage). Translated Messages log only input and
+          output (`anthropic_openai.go:124-129`; streamed, from the usage
+          chunk with no choices, `openai_helper.go:737-750`): cached input
+          and reasoning are 0, so they bill at the input and output rates.
+          `x-ai-eg-model` is set for Messages as for chat.
+        - Envoy Gateway's HTTP ext_authz gets only `Authorization` and the
+          request line unless `headersToExtAuth` names more: the probe got
+          401s for `x-api-key` until it did.
+        - aigw adds a route-not-found rule to each AIGatewayRoute's
+          HTTPRoute, so one with 16 rules is refused ("spec.rules: Too
+          many: 17"). The old split at 16 (`routing.MaxRules`) never hit it
+          with 9 rules in use; the doubled seed did. It's 14 now, keeping
+          pairs together.
+
+        What's built: an Anthropic backend compiles to `<name>` (schema
+        OpenAI, `APIKey`, for OpenAI-style callers, as before) and
+        `<name>-native` (schema Anthropic, the same prefix, Backend and
+        Secret, and a `BackendSecurityPolicy` `<name>-native-key` of type
+        `AnthropicAPIKey`). The key check takes the gateway key from
+        `Authorization` or `x-api-key`, answers `/anthropic/...` callers in
+        Anthropic's error shape (with our `code` alongside), and marks them
+        `x-stargate-api: anthropic` (the ClientTrafficPolicy strips any a
+        caller sends). Each rule and reroute hint gets a copy right after
+        it that also matches that header and sends to the `-native` twins:
+        one more header match always outranks the originals for
+        Anthropic-style callers and keeps their order among the copies, and
+        OpenAI-style callers never match one, so their routing is
+        unchanged. A rule and its copy share an AIGatewayRoute (7 routes
+        each), so a route edit is one change; with no Anthropic backend
+        there are no copies. Warden reads Messages bodies (system prompt,
+        text blocks, tool results; images and the model's own tool calls go
+        as sent), rewrites them in place, refuses in Anthropic's error
+        shape, and rehydrates Messages responses (content blocks; in the
+        event stream, text, partial_json and thinking deltas, flushing held
+        text before content_block_stop). Receipts map `<name>-native` back
+        to `<name>`, priced as it, and the route step says "Anthropic
+        Messages API".
+        Defaults I picked, to confirm: the native twin is automatic for
+        provider Anthropic (no toggle); `-native` names are reserved for
+        new backends and an Anthropic backend's name is at most 52
+        characters (its policy is `<name>-native-key`); the seeded
+        `anthropic-prod` (a fake) gets a twin too, which fake-openai now
+        serves.
+        Still open: OpenAI-style callers can't reach Anthropic's native API
+        until upstream adds the translator, so they keep the
+        OpenAI-compatible endpoint (no prompt caching or thinking blocks
+        there).
       - `localhost`/`127.0.0.1` in a base URL compiles to
         `${STARGATE_HOST:-…}`, like the seeded fake backends, so the Docker
         test gateway can reach the host.
@@ -343,7 +412,7 @@ retire-old-secret-now are in.
       unseen is applied). Applying only that provider's changes was
       considered and not done: the applier applies one whole config, and a
       partial one would have to splice this provider's rules into the
-      shared AIGatewayRoutes (ordered, split at 16 rules) while leaving
+      shared AIGatewayRoutes (ordered, split at 14 rules) while leaving
       other pending edits out, a config nobody reviewed as a whole.
   - Rule order: the gateway tries rules with more header matches first;
     among equals, in rule order. A new route goes ahead of any catch-all

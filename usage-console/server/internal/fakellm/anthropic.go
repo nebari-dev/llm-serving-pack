@@ -82,19 +82,77 @@ func text(raw json.RawMessage) string {
 // AnthropicReply answers a Messages request by echoing its last user message,
 // in Anthropic's response shape with its usage fields.
 func AnthropicReply(req AnthropicRequest) any {
-	last, in := "", EstimateTokens(text(req.System))
+	return AnthropicMessage("msg_fake"+strconv.FormatInt(time.Now().UnixNano(), 36), req.Model, Echo(AnthropicChat(req)))
+}
+
+// AnthropicChat is a Messages request as the simulator reads it: the system
+// prompt, then each message, as text.
+func AnthropicChat(req AnthropicRequest) ChatRequest {
+	cr := ChatRequest{Model: req.Model, MaxTokens: req.MaxTokens, Stream: req.Stream}
+	if s := text(req.System); s != "" {
+		cr.Messages = append(cr.Messages, Message{Role: "system", Content: s})
+	}
 	for _, m := range req.Messages {
-		t := text(m.Content)
-		in += EstimateTokens(t) + 4
-		if m.Role == "user" {
-			last = t
-		}
+		cr.Messages = append(cr.Messages, Message{Role: m.Role, Content: text(m.Content)})
 	}
-	out := "You said: " + last
+	return cr
+}
+
+// anthropicUsage is a plan's usage as Anthropic reports it: input_tokens
+// leaves out the cache reads and writes, which have fields of their own.
+func anthropicUsage(u Usage) map[string]int {
+	cached, written := u.PromptTokensDetails.CachedTokens, u.PromptTokensDetails.CacheCreationTokens
+	return map[string]int{"input_tokens": u.PromptTokens - cached - written, "cache_read_input_tokens": cached,
+		"cache_creation_input_tokens": written, "output_tokens": u.CompletionTokens}
+}
+
+// AnthropicMessage is a successful plan as a Messages response.
+func AnthropicMessage(id, model string, p Plan) any {
 	return map[string]any{
-		"id": "msg_fake" + strconv.FormatInt(time.Now().UnixNano(), 36), "type": "message", "role": "assistant", "model": req.Model,
-		"content":     []any{map[string]string{"type": "text", "text": out}},
+		"id": id, "type": "message", "role": "assistant", "model": model,
+		"content":     []any{map[string]string{"type": "text", "text": p.Content()}},
 		"stop_reason": "end_turn", "stop_sequence": nil,
-		"usage": map[string]int{"input_tokens": in, "output_tokens": EstimateTokens(out), "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+		"usage": anthropicUsage(p.Usage),
 	}
+}
+
+// AnthropicEvent is one server-sent event of a Messages stream.
+type AnthropicEvent struct {
+	Name string
+	Data any
+}
+
+// AnthropicEvents is a successful plan as a Messages stream: input usage on
+// message_start, a text block with a delta per chunk, output usage on
+// message_delta.
+func AnthropicEvents(id, model string, p Plan) []AnthropicEvent {
+	start := anthropicUsage(p.Usage)
+	start["output_tokens"] = 1 // as Anthropic sends it; the total comes on message_delta
+	evs := []AnthropicEvent{
+		{"message_start", map[string]any{"type": "message_start", "message": map[string]any{
+			"id": id, "type": "message", "role": "assistant", "model": model, "content": []any{},
+			"stop_reason": nil, "stop_sequence": nil, "usage": start}}},
+		{"content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}}},
+	}
+	for _, c := range p.Chunks {
+		evs = append(evs, AnthropicEvent{"content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": c}}})
+	}
+	return append(evs,
+		AnthropicEvent{"content_block_stop", map[string]any{"type": "content_block_stop", "index": 0}},
+		AnthropicEvent{"message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+			"usage": map[string]int{"output_tokens": p.Usage.CompletionTokens}}},
+		AnthropicEvent{"message_stop", map[string]any{"type": "message_stop"}},
+	)
+}
+
+// AnthropicFailure is a failed plan's body, in Anthropic's error shape.
+func AnthropicFailure(p Plan) string {
+	kind := "api_error"
+	switch p.Status {
+	case 429:
+		kind = "rate_limit_error"
+	case 529:
+		kind = "overloaded_error"
+	}
+	return anthropicError(kind, p.Error)
 }

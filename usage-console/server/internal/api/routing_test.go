@@ -17,7 +17,7 @@ func TestSyncFromWhatTheGatewayRuns(t *testing.T) {
 	rs := append(slices.Clone(demo.Routes), added)
 
 	// Before any failed apply, what isn't running is pending.
-	got := withRouteSync(slices.Clone(rs), running, nil)
+	got := withRouteSync(slices.Clone(rs), demo.Backends, running, nil)
 	if got[0].Sync != "synced" || got[len(got)-1].Sync != "pending" {
 		t.Errorf("no failed apply: seeded %q, new %q", got[0].Sync, got[len(got)-1].Sync)
 	}
@@ -25,17 +25,17 @@ func TestSyncFromWhatTheGatewayRuns(t *testing.T) {
 	tried := added
 	tried.ETag = "v1"
 	failed := map[string]string{"route/new": "v1"}
-	if got := withRouteSync([]model.Route{tried}, running, failed); got[0].Sync != "failed" {
+	if got := withRouteSync([]model.Route{tried}, demo.Backends, running, failed); got[0].Sync != "failed" {
 		t.Errorf("a route the failed apply tried: %q, want failed", got[0].Sync)
 	}
 	edited := tried
 	edited.ETag = "v2"
-	if got := withRouteSync([]model.Route{edited}, running, failed); got[0].Sync != "pending" {
+	if got := withRouteSync([]model.Route{edited}, demo.Backends, running, failed); got[0].Sync != "pending" {
 		t.Errorf("a route edited since the failed apply: %q, want pending", got[0].Sync)
 	}
 	later := added
 	later.Name, later.ETag = "later", "v1"
-	if got := withRouteSync([]model.Route{later}, running, failed); got[0].Sync != "pending" {
+	if got := withRouteSync([]model.Route{later}, demo.Backends, running, failed); got[0].Sync != "pending" {
 		t.Errorf("a route made after the failed apply: %q, want pending", got[0].Sync)
 	}
 

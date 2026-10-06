@@ -141,7 +141,7 @@ spec:
 # same priority until passive health checking ejects the backend; only then does
 # traffic fail over to the next priority. It targets the Gateway, so it covers
 # every HTTPRoute generated from the console's AIGatewayRoutes, however many
-# the routing splits into (16 rules each).
+# the routing splits into (14 rules each).
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: BackendTrafficPolicy
 metadata:
@@ -172,10 +172,10 @@ spec:
       maxEjectionPercent: 100
 ---
 # Envoy Gateway's default 32KiB buffer is too small for LLM bodies (spec §13).
-# The identity headers are the key check's to set and the backend hint is
-# Warden's, so drop any the caller sends before a filter sees them. Warden
-# reads x-ai-eg-original-path as proof it ran after Agent Router, so that goes
-# too.
+# The identity headers and x-stargate-api are the key check's to set and the
+# backend hint is Warden's, so drop any the caller sends before a filter sees
+# them. Warden reads x-ai-eg-original-path as proof it ran after Agent Router,
+# so that goes too.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: ClientTrafficPolicy
 metadata:
@@ -190,12 +190,21 @@ spec:
     bufferLimit: 50Mi
   headers:
     earlyRequestHeaders:
-      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id, x-stargate-backend, x-ai-eg-original-path]
+      remove: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id, x-stargate-backend, x-stargate-api, x-ai-eg-original-path]
 ---
 # Key check: every request goes to stargate-api's ext_authz service (:8082)
-# with its body, since the model lives there. 401 for a bad key, 403 for a model
+# with its body, since the model lives there. The key is a bearer token
+# (OpenAI's SDK) or x-api-key (Anthropic's). 401 for a bad key, 403 for a model
 # the key may not call; on 200 the identity headers are added and the caller's
-# Authorization is removed, so the provider never sees it.
+# Authorization and x-api-key are removed, so the provider never sees them.
+#
+# Anthropic-style callers (Anthropic's SDK with base URL <gateway>/anthropic,
+# so POST /anthropic/v1/messages) also get x-stargate-api: anthropic. Route
+# rules match headers only, never the path, so that is what sends them to
+# their own copy of the routing (aigw-run-anthropic, stargate-hints-anthropic),
+# where an Anthropic backend is its <name>-native AIServiceBackend on
+# Anthropic's Messages API. Agent Router translates Messages to any other
+# backend's OpenAI API.
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
 metadata:
@@ -209,13 +218,16 @@ spec:
   extAuth:
     bodyToExtAuth:
       maxRequestBytes: 52428800
+    # An HTTP ext_authz service gets Authorization and the request line by
+    # default; Anthropic's SDK sends the key as x-api-key.
+    headersToExtAuth: [x-api-key]
     http:
       backendRefs:
         - group: gateway.envoyproxy.io
           kind: Backend
           name: stargate-authz
           port: ${STARGATE_AUTHZ_PORT:-8082}
-      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id]
+      headersToBackend: [x-stargate-key-id, x-stargate-team, x-stargate-project, x-stargate-project-id, x-stargate-secret-id, x-stargate-api]
 ---
 # Warden: budgets and policy rules, after the key check. Headers and the whole
 # body go to it. messageTimeout sits above Warden's own 50ms deadline so
@@ -225,7 +237,8 @@ spec:
 #
 # The response comes back through it to rehydrate redacted values (§4.5 step
 # 5). Response filters run in reverse, so Warden sees it after Agent Router has
-# translated it to OpenAI's schema. The body streams (Streamed, not Buffered,
+# translated it to the caller's API (OpenAI's, or Anthropic's on
+# /anthropic/...; Warden reads the request path). The body streams (Streamed, not Buffered,
 # which would hold an SSE reply to the end); Warden holds back only a partial
 # placeholder. When the request left nothing to restore, Warden answers the
 # response headers with a mode override (allowModeOverride) so Envoy doesn't

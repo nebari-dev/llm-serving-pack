@@ -24,6 +24,7 @@ import (
 
 	"github.com/jbouder/stargate/server/internal/gateway"
 	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/jbouder/stargate/server/internal/routing"
 	"github.com/jbouder/stargate/server/internal/store"
 )
 
@@ -114,6 +115,12 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	if parts := strings.Split(get(attrBackend), "/"); len(parts) > 1 {
 		rc.Backend = parts[1]
 	}
+	// An Anthropic backend's native twin, which Anthropic-style callers
+	// reach, is that backend (unless a backend has the twin's name).
+	native := false
+	if name, ok := strings.CutSuffix(rc.Backend, routing.NativeSuffix); ok && !slices.ContainsFunc(s.Backends, func(b model.Backend) bool { return b.Name == rc.Backend }) {
+		rc.Backend, native = name, true
+	}
 	for _, b := range s.Backends {
 		if b.Name == rc.Backend {
 			rc.Provider, rc.Region = b.Provider, b.Region
@@ -154,6 +161,9 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	route := model.TraceStep{Step: "Route selected", Input: "requested " + rc.RequestedModel, Outcome: rc.ResolvedModel + " via " + rc.Backend, State: "ok"}
 	if upstreamName != "" && upstreamName != rc.ResolvedModel {
 		route.Outcome += " (upstream calls it " + upstreamName + ")"
+	}
+	if native {
+		route.Outcome += " · Anthropic Messages API"
 	}
 	if attempts := num(attrAttempts); attempts > 1 {
 		route.Outcome += fmt.Sprintf(" after %d attempts", attempts)

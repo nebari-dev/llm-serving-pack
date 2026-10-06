@@ -62,10 +62,17 @@ func rulesOf(t *testing.T, objs []Object) []string {
 // over, so compiling it gives the gateway the same rules: the hand-written
 // config's, plus Warden's reroute hint for local and openrouter, which it
 // lacked (a rule rerouting there fell through to the model's own route). The
-// hints now live in their own AIGatewayRoute.
+// hints now live in their own AIGatewayRoute. Anthropic-style callers' copies
+// of each rule (TestAnthropicCallersGetTheirOwnRules), which OpenAI-style
+// callers never match, are left out.
 func TestSeedCompilesToTodaysConfig(t *testing.T) {
 	was := rulesOf(t, readOwned(t, "testdata/config-2026-10-05.yaml"))
-	now := rulesOf(t, Compile(demo.Backends, demo.Routes))
+	var now []string
+	for _, r := range rulesOf(t, Compile(demo.Backends, demo.Routes)) {
+		if !strings.Contains(r, "name: "+APIHeader) {
+			now = append(now, r)
+		}
+	}
 	extra := slices.Clone(now)
 	for _, r := range was {
 		i := slices.Index(extra, r)
@@ -80,10 +87,12 @@ func TestSeedCompilesToTodaysConfig(t *testing.T) {
 }
 
 // Gateway API allows 16 rules per route (an HTTPRoute, which each
-// AIGatewayRoute becomes): hints and routes each split across as many
-// AIGatewayRoutes as they need, in order, so rule order still holds among
-// equals (routes with the same match count are tried by name).
-func TestCompileSplitsAt16Rules(t *testing.T) {
+// AIGatewayRoute becomes, with a not-found rule aigw adds; MaxRules is 14 to
+// keep a rule and its Anthropic-style copy together): hints and routes each
+// split across as many AIGatewayRoutes as they need, in order, so rule order
+// still holds among equals (routes with the same match count are tried by
+// name).
+func TestCompileSplitsAt14Rules(t *testing.T) {
 	var bs []model.Backend
 	for i := range 20 {
 		b := demo.Backends[0]
@@ -105,13 +114,13 @@ func TestCompileSplitsAt16Rules(t *testing.T) {
 	if got, want := strings.Join(names, " "), "aigw-run aigw-run-2 aigw-run-3 stargate-hints stargate-hints-2"; got != want {
 		t.Fatalf("AIGatewayRoutes = %s, want %s", got, want)
 	}
-	for n, want := range map[string]int{"aigw-run": 16, "aigw-run-2": 16, "aigw-run-3": 1, "stargate-hints": 16, "stargate-hints-2": 4} {
+	for n, want := range map[string]int{"aigw-run": 14, "aigw-run-2": 14, "aigw-run-3": 5, "stargate-hints": 14, "stargate-hints-2": 6} {
 		if sizes[n] != want {
 			t.Errorf("%s has %d rules, want %d", n, sizes[n], want)
 		}
 	}
 	running := Compile(bs, rs)
-	if !RouteInSync(running, rs[32]) {
+	if !RouteInSync(running, rs[32], bs) {
 		t.Errorf("a route in the third AIGatewayRoute isn't in sync with a config compiled from it")
 	}
 }
@@ -171,7 +180,7 @@ backendRefs:
     modelNameOverride: gpt-5.5
     priority: 1
 `
-	if got := RuleYAML(r); got != want {
+	if got := RuleYAML(r, nil); got != want {
 		t.Errorf("RuleYAML =\n%s\nwant\n%s", got, want)
 	}
 }
@@ -183,7 +192,7 @@ func TestModelPatterns(t *testing.T) {
 		{"gpt-5.*", "value: gpt-5\\..*"},
 	} {
 		r := model.Route{Name: "r", Match: model.RouteMatch{Models: []string{tc.models}}, Targets: []model.RouteTarget{{Backend: "openai-prod"}}}
-		if got := RuleYAML(r); !strings.Contains(got, tc.want) {
+		if got := RuleYAML(r, demo.Backends); !strings.Contains(got, tc.want) {
 			t.Errorf("%s: RuleYAML =\n%s\nwant it to contain\n%s", tc.models, got, tc.want)
 		}
 	}
@@ -199,10 +208,11 @@ func TestDiff(t *testing.T) {
 		}
 		return strings.Join(s, ", ")
 	}
-	if got, want := kinds(Diff(one, two)), "changed AIGatewayRoute/stargate-hints, added Backend/anthropic-prod, added AIServiceBackend/anthropic-prod"; got != want {
+	// anthropic-prod is Anthropic: its native twin, and hints for Anthropic-style callers, come with it.
+	if got, want := kinds(Diff(one, two)), "changed AIGatewayRoute/stargate-hints, added Backend/anthropic-prod, added AIServiceBackend/anthropic-prod, added AIServiceBackend/anthropic-prod-native"; got != want {
 		t.Errorf("Diff(one, two) = %s, want %s", got, want)
 	}
-	if got, want := kinds(Diff(two, one)), "changed AIGatewayRoute/stargate-hints, removed Backend/anthropic-prod, removed AIServiceBackend/anthropic-prod"; got != want {
+	if got, want := kinds(Diff(two, one)), "changed AIGatewayRoute/stargate-hints, removed Backend/anthropic-prod, removed AIServiceBackend/anthropic-prod, removed AIServiceBackend/anthropic-prod-native"; got != want {
 		t.Errorf("Diff(two, one) = %s, want %s", got, want)
 	}
 	if got := Diff(two, two); len(got) != 0 {
@@ -218,12 +228,12 @@ func TestDiff(t *testing.T) {
 func TestInSync(t *testing.T) {
 	running := Compile(demo.Backends, demo.Routes)
 	sonnet := demo.Routes[2]
-	if !RouteInSync(running, sonnet) {
+	if !RouteInSync(running, sonnet, demo.Backends) {
 		t.Fatalf("%s isn't in sync with a config compiled from it", sonnet.Name)
 	}
 	moved := sonnet
 	moved.Fallback = []model.RouteTarget{{Backend: "openai-prod"}}
-	if RouteInSync(running, moved) {
+	if RouteInSync(running, moved, demo.Backends) {
 		t.Errorf("a changed fallback is in sync")
 	}
 	if !BackendInSync(running, demo.Backends[0]) {

@@ -384,3 +384,44 @@ func TestReceiptRecordsGatewayOverhead(t *testing.T) {
 		t.Errorf("no upstream request, overhead = %v", *rc.OverheadUS)
 	}
 }
+
+// Anthropic-style callers reach an Anthropic backend through its native
+// twin (routing.NativeSuffix), which Agent Router logs as the backend. The
+// receipt names the backend the console knows, priced as its own, and the
+// trace says the request went to Anthropic's Messages API.
+func TestReceiptNativeTwinIsItsBackend(t *testing.T) {
+	s := *snap
+	s.Models = map[string]model.Model{"claude-echo": {ID: "claude-echo", Provider: "Anthropic"}}
+	s.Prices = map[gateway.Pair][]store.PriceRow{{Model: "claude-echo", Backend: "claude"}: {{ModelID: "claude-echo", Backend: "claude", Rates: per(3, 0.3, 3.75, 15, 15), From: priceFrom}}}
+	s.Backends = []model.Backend{{Name: "claude", Provider: "Anthropic", Region: "us-east"}, {Name: "odd-native", Provider: "OpenAI", Region: "local"}}
+	rc, err := Receipt(&s, record(map[string]string{
+		"gen_ai.request.model": "claude-echo", "gen_ai.response.model": "claude-echo",
+		"gen_ai.provider.name":      "default/claude-native/route/aigw-run-anthropic/rule/0/ref/0",
+		"gen_ai.usage.input_tokens": "1000", "gen_ai.usage.cached_input_tokens": "0", "gen_ai.usage.output_tokens": "500",
+		"gen_ai.usage.reasoning_tokens": "0", "gen_ai.usage.cache_creation_input_tokens": "0",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.Backend != "claude" || rc.Provider != "Anthropic" || rc.Region != "us-east" {
+		t.Errorf("backend: %s %s %s", rc.Backend, rc.Provider, rc.Region)
+	}
+	if got, want := cost(rc), (1000*3+500*15)/1e6; got < want-1e-9 || got > want+1e-9 {
+		t.Errorf("cost = %v, want %v", got, want)
+	}
+	var route model.TraceStep
+	for _, st := range rc.Trace {
+		if st.Step == "Route selected" {
+			route = st
+		}
+	}
+	if !strings.Contains(route.Outcome, "claude-echo via claude") || !strings.Contains(route.Outcome, "Anthropic Messages API") {
+		t.Errorf("route step = %+v", route)
+	}
+
+	// A backend that really is named …-native is itself.
+	rc, _ = Receipt(&s, record(map[string]string{"gen_ai.provider.name": "default/odd-native/route/aigw-run/rule/0/ref/0"}))
+	if rc.Backend != "odd-native" || rc.Provider != "OpenAI" {
+		t.Errorf("odd-native: %s %s", rc.Backend, rc.Provider)
+	}
+}

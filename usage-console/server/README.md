@@ -28,11 +28,12 @@ trafficgen ──► Agent Router :1975 ─────────────�
 ```
 
 A SecurityPolicy sends every request to stargate-api's ext_authz service
-first. It checks the bearer key the way the dev gateway does, so rotation,
-revocation and expiry behave the same, and checks the model against the key's
-allowlist after aliasing. A bad key gets a 401 and a model the key can't use
-gets a 403. On success it adds `X-Stargate-Key-Id`, `-Team` and `-Project` and
-strips `Authorization`, so the provider never sees the caller's key. The access
+first. It checks the bearer key (or `x-api-key`, which Anthropic's SDK
+sends) the way the dev gateway does, so rotation, revocation and expiry
+behave the same, and checks the model against the key's allowlist after
+aliasing. A bad key gets a 401 and a model the key can't use gets a 403. On
+success it adds `X-Stargate-Key-Id`, `-Team` and `-Project` and strips
+`Authorization` and `x-api-key`, so the provider never sees the caller's key. The access
 log records those headers and receipt-ingest fills in the receipt's identity. A
 403 is logged too, as a `blocked` receipt; a 401 has no key to attribute, so
 like the dev gateway it gets no receipt. Key changes made through the API take
@@ -76,6 +77,55 @@ return", the values it replaced (kept in memory on the request's ext_proc
 stream, never stored) go back into the reply, JSON or streamed, and the
 receipt counts them. Inbound detection and cutting streams aren't on this
 path yet, so nothing here is `truncated`.
+
+### Anthropic's SDK
+
+The gateway also takes Anthropic's Messages API, so code written against
+the Anthropic SDK keeps its SDK. Point it at the gateway's `/anthropic` with
+a gateway key as its API key (it sends it as `x-api-key`, which the key check
+takes like a bearer token):
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://localhost:1975/anthropic", api_key=os.environ["NEBARI_GATEWAY_KEY"])
+client.messages.create(model="claude-sonnet-5", max_tokens=256, messages=[{"role": "user", "content": "ping"}])
+```
+
+```sh
+curl localhost:1975/anthropic/v1/messages -H "x-api-key: $NEBARI_GATEWAY_KEY" \
+  -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+  -d '{"model": "claude-sonnet-5", "max_tokens": 256, "messages": [{"role": "user", "content": "ping"}]}'
+```
+
+The same governance applies: the key check (refusals in Anthropic's error
+shape, so the SDK raises its usual errors), budgets and rules (Warden reads
+the system prompt, text blocks and tool results; blocks, redactions,
+reroutes and rehydration work on Messages bodies and event streams), routing,
+and receipts. How it routes:
+
+- An Anthropic backend (provider "Anthropic", e.g. base URL
+  `https://api.anthropic.com/v1`) compiles to two AIServiceBackends on the
+  same host and key: `<name>` (schema OpenAI, the bearer key) for
+  OpenAI-style callers, as before, and `<name>-native` (schema Anthropic, a
+  `BackendSecurityPolicy` of type `AnthropicAPIKey`, so `x-api-key`) for
+  Anthropic-style ones. Receipts name `<name>` either way, priced as it is;
+  the trace says "Anthropic Messages API". An Anthropic backend's name is at
+  most 52 characters, and no backend may end in `-native`.
+- Rules can only match headers, not the path, so the key check marks a
+  `/anthropic/...` request with `x-stargate-api: anthropic`, and every rule
+  (and Warden's reroute hints) gets a copy right after it that also wants
+  that header and sends to `-native` twins. One more header means the copy
+  wins for Anthropic-style callers, in the same order as the originals;
+  OpenAI-style callers never match it. With no Anthropic backend, no copies.
+- Any other backend serves Anthropic-style callers through Agent Router's
+  Messages→chat-completions translation. aigw v1.1.0 records only input and
+  output tokens there: cached input bills at the input rate and reasoning at
+  the output rate. A route mixing native and translated backends fails over
+  between them.
+- OpenAI-style callers can't reach Anthropic's native API: aigw v1.1.0 has
+  no OpenAI→Anthropic translator for a direct Anthropic backend (only for
+  GCP and AWS ones). They keep using its OpenAI-compatible endpoint.
 
 ## Run it
 

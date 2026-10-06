@@ -35,6 +35,8 @@ const (
 //
 // It checks the key the same way Admit does, and the model against the key's
 // allowlist after aliasing. Budgets and rules are Warden's (cmd/warden).
+// Anthropic-style callers (APIOf) send the key as x-api-key, get refusals in
+// Anthropic's shape, and are marked with HeaderAPI for the routes.
 type ExtAuthz struct {
 	Snap *Current
 	Now  func() time.Time
@@ -46,27 +48,44 @@ func (a *ExtAuthz) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now = a.Now
 	}
 	snap := a.Snap.Load()
-	k, rej := Authenticate(snap, r.Header.Get("Authorization"), now())
+	api := APIOf(r.URL.RequestURI())
+	secret := callerSecret(r.Header)
+	k, rej := Authenticate(snap, secret, now())
 	if rej != nil {
-		writeErr(w, rej.Status, rej.Code, rej.Message)
+		writeAPIErr(w, api, rej.Status, rej.Code, rej.Message)
 		return
 	}
 	w.Header().Set(HeaderKeyID, k.ID)
 	w.Header().Set(HeaderTeam, k.Team)
 	w.Header().Set(HeaderProject, url.PathEscape(k.Project))
 	w.Header().Set(HeaderProjectID, k.ProjectID)
-	w.Header().Set(HeaderSecretID, SecretID(demo.HashSecret(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))))
+	w.Header().Set(HeaderSecretID, SecretID(demo.HashSecret(strings.TrimPrefix(secret, "Bearer "))))
 	m := requestModel(r)
 	if rej := snap.CheckModel(k, m); m != "" && rej != nil {
 		// A 403 goes to the caller, whose own key it is, with the identity
 		// headers above; the access log reads them so the block gets a receipt.
 		w.Header().Set(HeaderModel, m)
-		writeErr(w, rej.Status, rej.Code, rej.Message)
+		writeAPIErr(w, api, rej.Status, rej.Code, rej.Message)
 		return
+	}
+	if api == APIAnthropic {
+		w.Header().Set(HeaderAPI, APIAnthropic)
 	}
 	// The provider gets its own credentials from the backend, never the caller's.
 	w.Header().Set("X-Envoy-Auth-Headers-To-Remove", "authorization,x-api-key")
 	w.WriteHeader(http.StatusOK)
+}
+
+// callerSecret is the gateway key as an Authorization value: the bearer
+// token OpenAI's SDK sends, else the x-api-key Anthropic's sends.
+func callerSecret(h http.Header) string {
+	if a := h.Get("Authorization"); a != "" {
+		return a
+	}
+	if k := h.Get("X-Api-Key"); k != "" {
+		return "Bearer " + k
+	}
+	return ""
 }
 
 // requestModel is the model the caller asked for: the JSON body's "model".
