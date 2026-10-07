@@ -98,9 +98,9 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
-            <SidebarMenuButton active={isActive('/onboarding')} tooltip="Connect a provider" render={<RouterLink to="/onboarding" />}>
+            <SidebarMenuButton active={isActive('/onboarding')} tooltip="Connect an app" render={<RouterLink to="/onboarding" />}>
               <Sparkles className="size-4 shrink-0" aria-hidden="true" />
-              <SidebarMenuLabel>Connect a provider</SidebarMenuLabel>
+              <SidebarMenuLabel>Connect an app</SidebarMenuLabel>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

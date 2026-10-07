@@ -19,12 +19,15 @@ import { copy, FirstRequest, type Lang, readLang, Step, type StepInfo, StepMap }
 import { NEW_PROJECT, ProjectFields, useProjectChoice } from './project-dialogs'
 import { ProviderForm } from './providers-live'
 
-// §7.5.1 Onboarding against the real control plane. Pick a backend the
-// control plane has, or connect a new provider (its key tested once, then
-// sealed; one that fails isn't saved), route its models to it and apply
-// (every pending change, listed first); the key is a real key; the first
-// request is a real receipt for that key, from the caller's own app or the
-// test request sent here.
+// §7.5.1 Onboarding against the real control plane: connect an app. Step 1
+// is one choice, worded the way the rest of the console is: a model is what
+// the app asks for, a backend is a connection that serves models (a
+// provider's API and its key), and a provider is the kind of service. Use a
+// backend that's already connected, or connect a new provider (its key
+// tested once, then sealed; one that fails isn't saved), route its models to
+// it and apply (every pending change, listed first). Only the chosen path
+// shows. The key is a real key; the first request is a real receipt for that
+// key, from the caller's own app or the test request sent here.
 
 type GatewayTest = { status: number; sessionId: string; reply?: string; error?: string; ms: number }
 
@@ -43,6 +46,11 @@ function healthLine(b: Backend) {
     default:
       return `Healthy · ${served}`
   }
+}
+
+/** A tile's model list: the first two, then how many more, so a backend serving dozens stays one line. */
+export function servesShort(models: string[]): string {
+  return models.length <= 2 ? models.join(', ') : `${models.slice(0, 2).join(', ')} +${models.length - 2} more`
 }
 
 function snippets(gatewayUrl: string, model: string): Record<Lang, { diff: string; code: string; file: string }> {
@@ -97,8 +105,11 @@ export function LiveOnboardingPage() {
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<{ key: ApiKey; secret: string; backend: Backend } | null>(null)
   const [firstId, setFirstId] = useState<string | null>(null)
-  // Connecting a new provider: the form, then the provider it saved until it's routed and applied.
-  const [adding, setAdding] = useState(false)
+  // Where step 1 starts: a connected backend, or a new provider (the form,
+  // then the backend it saved until it's routed and applied). With no
+  // backends at all, only a new provider makes sense.
+  const [picked, setStart] = useState<'connected' | 'new' | null>(null)
+  const start = picked ?? (live.loaded && live.data.length === 0 ? 'new' : 'connected')
   const [fresh, setFresh] = useState<Backend | null>(null)
 
   const backend = live.data.find((b) => b.name === name) ?? null
@@ -145,74 +156,95 @@ export function LiveOnboardingPage() {
   }
 
   const steps: StepInfo[] = [
-    { n: 1, title: 'Pick a backend', hint: created ? created.backend.name : 'One the gateway serves', status: created ? 'done' : 'current' },
+    { n: 1, title: 'Choose a backend', hint: created ? created.backend.name : 'Where requests go', status: created ? 'done' : 'current' },
     { n: 2, title: 'Swap two lines', hint: 'Base URL and key', status: !created ? 'upcoming' : firstId ? 'done' : 'current' },
     { n: 3, title: 'First request', hint: firstId ? 'Receipt ready' : created ? 'Waiting…' : 'Lands live here', status: !created ? 'upcoming' : firstId ? 'done' : 'waiting' },
   ]
 
   return (
     <div data-density="comfortable" className="flex flex-col">
-      <PageHeader title="Connect a provider" description="Point one app at the gateway. It's a base URL and a key swap — about a minute." />
+      <PageHeader title="Connect an app" description="Point one app at the gateway: choose the backend that serves its models, get a key, and swap two lines. About a minute." />
       <div className="mx-auto grid w-full max-w-4xl gap-8 px-6 py-8 md:grid-cols-[12rem_minmax(0,1fr)] md:gap-10">
         <StepMap steps={steps} />
         <div className="flex min-w-0 flex-col gap-6">
-          <Step n={1} title="Pick a backend the gateway serves, or connect a provider" done={!!created}>
-            {live.loaded && live.data.length === 0 && <p className="text-sm text-muted-foreground">The control plane has no backends.</p>}
+          <Step n={1} title="Choose where its requests go" done={!!created}>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Your app asks for a model by name. A backend is a connection that serves models: a provider’s API, or your own server, with its key.
+            </p>
             <RadioGroup
-              aria-label="Backend"
-              value={name}
+              aria-label="Start from"
+              value={start}
               onValueChange={(v) => {
-                setName(v as string)
+                setStart(v as 'connected' | 'new')
+                setName(null)
                 setCreated(null)
                 setFirstId(null)
               }}
-              className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+              className="mb-4 grid grid-cols-1 gap-2 sm:grid-cols-2"
               orientation="vertical"
             >
-              {live.data.map((b) => (
-                <RadioGroupItem
-                  key={b.name}
-                  value={b.name}
-                  variant="box"
-                  description={`${b.provider} · ${b.health === 'idle' ? 'idle' : b.health}`}
-                  className={(s) => cn(s.checked && 'border-primary bg-card')}
-                >
-                  <span className="font-mono">{b.name}</span>
-                </RadioGroupItem>
-              ))}
-            </RadioGroup>
-            {!adding && !fresh && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                onClick={() => {
-                  setAdding(true)
-                  setName(null)
-                  setCreated(null)
-                }}
+              <RadioGroupItem
+                value="connected"
+                variant="box"
+                disabled={live.loaded && live.data.length === 0}
+                description={live.loaded ? `${live.data.length} ${live.data.length === 1 ? 'is' : 'are'} set up and ready` : 'Already set up'}
+                className={(st) => cn(st.checked && 'border-primary bg-card')}
               >
-                Connect a new provider
-              </Button>
+                A connected backend
+              </RadioGroupItem>
+              <RadioGroupItem
+                value="new"
+                variant="box"
+                description="OpenAI, Anthropic, or your own server, with your key"
+                className={(st) => cn(st.checked && 'border-primary bg-card')}
+              >
+                A new provider
+              </RadioGroupItem>
+            </RadioGroup>
+
+            {start === 'connected' && (
+              <RadioGroup
+                aria-label="Backend"
+                value={name}
+                onValueChange={(v) => {
+                  setName(v as string)
+                  setCreated(null)
+                  setFirstId(null)
+                }}
+                className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+                orientation="vertical"
+              >
+                {live.data.map((b) => (
+                  <RadioGroupItem
+                    key={b.name}
+                    value={b.name}
+                    variant="box"
+                    description={`serves ${servesShort(b.models)} · ${b.provider} · ${b.health}`}
+                    className={(st) => cn(st.checked && 'border-primary bg-card')}
+                  >
+                    <span className="font-mono">{b.name}</span>
+                  </RadioGroupItem>
+                ))}
+              </RadioGroup>
             )}
-            {adding && (
-              <div className="mt-4 rounded-md border border-border p-4">
-                <h3 className="mb-3 text-sm font-semibold">Connect your first provider</h3>
+            {start === 'new' && !fresh && (
+              <div className="rounded-md border border-border p-4">
+                <h3 className="mb-3 text-sm font-semibold">Connect a new provider</h3>
                 <ProviderForm
                   label="New provider"
-                  onCancel={() => setAdding(false)}
+                  onCancel={() => setStart('connected')}
                   onSaved={({ backend: b }) => {
-                    setAdding(false)
                     setFresh(b)
                     live.reload()
                   }}
                 />
               </div>
             )}
-            {fresh && (
+            {start === 'new' && fresh && (
               <ConnectFresh
                 b={fresh}
                 onDone={() => {
+                  setStart('connected')
                   setName(fresh.name)
                   setFresh(null)
                   live.reload()

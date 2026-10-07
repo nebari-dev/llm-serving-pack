@@ -138,7 +138,8 @@ Inventory taken 2026-09-25 against `946c498`. Tick items as they land.
     Each rate shows its source: LiteLLM, override or seed. A pair without a
     price shows "No price". History has one change per rate that differs
     between consecutive rows, including ended prices. CSV export is disabled.
-  - Catalog modalities and deprecation dates show as not connected (§3).
+  - Catalog modalities and deprecation dates come from LiteLLM's facts
+    (`litellm_facts`, built 2026-10-05).
 
 ## 2. Writes
 

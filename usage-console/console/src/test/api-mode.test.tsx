@@ -328,8 +328,17 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     })
     const text = () => document.body.textContent ?? ''
     for (const fake of ['gw.acme.dev', 'Mockup tip', 'ngw_live_7f3a91c4', 'models available']) expect(text()).not.toContain(fake)
-    // The backends the control plane has, with their observed health.
-    choose(screen.getByRole('radio', { name: /^local/ }))
+    // The page connects an app; step 1 is one clear choice: a backend that's
+    // already connected (the default), or a new provider. Only one shows.
+    expect(screen.getByRole('heading', { level: 1, name: 'Connect an app' })).toBeTruthy()
+    const start = screen.getByRole('radiogroup', { name: 'Start from' })
+    expect(within(start).getByRole('radio', { name: /A connected backend/ }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByRole('form', { name: 'New provider' })).toBeNull()
+    expect(text()).not.toContain('Connect your first provider')
+    // Each connected backend says which models it serves, so it can't be taken for a provider type.
+    const local = screen.getByRole('radio', { name: /^local/ })
+    expect(local.textContent).toContain('serves smollm2')
+    choose(local)
     expect(text()).toContain('smollm2')
     let keyId = ''
     try {
@@ -2304,10 +2313,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     let keyId = ''
     try {
       expect(text()).not.toContain('Adding a provider and its credentials isn’t connected')
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Connect a new provider' }))
-      })
-      const form = screen.getByRole('form', { name: 'New provider' })
+      choose(within(screen.getByRole('radiogroup', { name: 'Start from' })).getByRole('radio', { name: /A new provider/ }))
+      const form = await screen.findByRole('form', { name: 'New provider' })
+      // The connected backends step aside while a new one is set up.
+      expect(screen.queryByRole('radiogroup', { name: 'Backend' })).toBeNull()
+      expect(screen.getByRole('heading', { name: 'Connect a new provider' })).toBeTruthy()
       choose(within(form).getByRole('radio', { name: /OpenAI-compatible/ }))
       fireEvent.change(within(form).getByLabelText('Name'), { target: { value: name } })
       fireEvent.change(within(form).getByLabelText('Base URL'), { target: { value: `${fakeOpenAI}/keyed/v1` } })
