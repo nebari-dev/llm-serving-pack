@@ -49,6 +49,15 @@ function healthLine(b: Backend) {
   }
 }
 
+/**
+ * Whether a pending routing change is the new provider's: its objects, its
+ * key, an Anthropic provider's native twin (`<name>-native`, same key), or
+ * the routing tables its route and reroute hint change.
+ */
+export function changeIsProviders(c: Pick<RoutingChange, 'kind' | 'name'>, name: string): boolean {
+  return c.kind === 'AIGatewayRoute' || [name, `${name}-key`, `${name}-native`, `${name}-native-key`].includes(c.name)
+}
+
 /** A backend row's models: the first three, then how many more, so one serving hundreds stays one line. */
 export function modelChips(models: string[]): { shown: string[]; more: number } {
   return { shown: models.slice(0, 3), more: Math.max(0, models.length - 3) }
@@ -361,7 +370,7 @@ function ConnectFresh({ b, onDone }: { b: Backend; onDone: () => void }) {
   const routed = routes.data?.some((r) => r.targets.some((t) => t.backend === b.name)) ?? false
   const changes = plan.data?.changes ?? []
   const n = changes.length
-  const ours = (c: RoutingChange) => c.name === b.name || c.name === `${b.name}-key` || c.kind === 'AIGatewayRoute'
+  const ours = (c: RoutingChange) => changeIsProviders(c, b.name)
 
   const route = async () => {
     setBusy(true)
