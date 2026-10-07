@@ -14,7 +14,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { toast } from '@/components/ui/toast'
 import { type ApiKey, api, ApiError, type Backend, can, backends as seedBackends, createKey, type LiveRoute, type Receipt, type RoutingChange, type RoutingPlan, type Session, session as seedSession, teams } from '@/data/catalog'
 import { cn } from '@/lib/utils'
-import { useReceipts, useStreamSampling } from '@/state/app-state'
+import { useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { copy, FirstRequest, type Lang, readLang, Step, type StepInfo, StepMap } from './onboarding'
 import { NEW_PROJECT, ProjectFields, useProjectChoice } from './project-dialogs'
@@ -559,7 +559,6 @@ function FirstRequestLive({
   onLand: (id: string) => void
 }) {
   const rows = useReceipts()
-  const sampling = useStreamSampling()
   const [sending, setSending] = useState(false)
   const [test, setTest] = useState<GatewayTest | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -575,9 +574,12 @@ function FirstRequestLive({
     }
   }, [rows, keyId, landed])
 
-  // A sampled stream (§7.5.3) may skip this key's first request, so ask for it too.
+  // Ask for the key's first receipt too, every few seconds: the stream is the
+  // fast path, but a sampled stream (§7.5.3) may skip it, and a connection
+  // can go quiet (a laptop sleeping, the control plane restarting) without
+  // an error, which would leave this panel waiting on a request that landed.
   useEffect(() => {
-    if (!sampling || landed) return
+    if (landed) return
     let stop = false
     const timer = window.setInterval(() => {
       api<Receipt[]>(`/receipts?key=${encodeURIComponent(keyId)}&limit=1`)
@@ -593,7 +595,7 @@ function FirstRequestLive({
       stop = true
       window.clearInterval(timer)
     }
-  }, [sampling, landed, keyId])
+  }, [landed, keyId])
 
   // The test request's receipt, by the session the control plane tagged it with.
   useEffect(() => {

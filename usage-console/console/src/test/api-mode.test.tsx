@@ -357,11 +357,17 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       keyId = (await catalog.api<{ id: string; name: string; project: string }[]>('/keys')).find((k) => k.project === 'onboarding' && text().includes(k.name))?.id ?? ''
       expect(keyId).not.toBe('')
       expect(text()).toMatch(/ngw_live_\w{4}/)
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Send a test request for me' }))
+      // The caller's own app sends it, not the page's button: the panel must
+      // find the receipt even when the live stream doesn't bring it (here the
+      // suite's EventSource never delivers; in a browser a stream can go quiet).
+      const secret = text().match(/ngw_live_[a-z0-9]{40}/)![0]
+      const res = await fetch(`${gatewayUrl}/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'smollm2', max_tokens: 10, messages: [{ role: 'user', content: 'ping' }] }),
       })
+      expect(res.status).toBe(200)
       // The real model answers, and the page becomes that request's receipt.
-      await waitFor(() => expect(text()).toContain('Your first request'), { timeout: 60_000 })
+      await waitFor(() => expect(text()).toContain('Your first request'), { timeout: 15_000 })
       expect(text()).toContain('via local')
       expect(text()).toMatch(/smollm2/)
     } finally {
