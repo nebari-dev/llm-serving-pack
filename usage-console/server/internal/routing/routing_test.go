@@ -261,7 +261,7 @@ func TestRenderRoundTrips(t *testing.T) {
 		t.Errorf("rendered config parses back with changes: %+v", cs)
 	}
 	// Placeholders stay plain so aigw substitutes them, and ports stay numbers.
-	for _, want := range []string{"hostname: ${STARGATE_HOST:-localhost}", "port: ${LOCAL_LLM_PORT:-12434}", "port: 8090", "apiKey: ${OPENROUTER_API_KEY:-not-set}"} {
+	for _, want := range []string{"hostname: ${STARGATE_HOST:-localhost}", "port: ${LOCAL_LLM_PORT:-12434}", "port: 18090", "apiKey: ${OPENROUTER_API_KEY:-not-set}"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("rendered config lacks %q", want)
 		}

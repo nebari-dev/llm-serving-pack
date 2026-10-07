@@ -11,6 +11,11 @@ import (
 	"github.com/jbouder/stargate/server/internal/pricing"
 )
 
+// FakeUpstreamPort is where cmd/fake-openai listens, and where the demo
+// seed's simulated backends point. Not 8090, which other local model servers
+// commonly take.
+const FakeUpstreamPort = "18090"
+
 const Tenant = "demo"
 
 // DevSecret is the deterministic secret for a seeded key. The seed stores only
@@ -119,7 +124,7 @@ var Backends = []model.Backend{
 // fake is a backend served by cmd/fake-openai, which tells backends apart by
 // path prefix.
 func fake(name string) *model.BackendEndpoint {
-	return &model.BackendEndpoint{Schema: "OpenAI", Prefix: "/" + name + "/v1", Host: "${STARGATE_HOST:-localhost}", Port: "8090"}
+	return &model.BackendEndpoint{Schema: "OpenAI", Prefix: "/" + name + "/v1", Host: "${STARGATE_HOST:-localhost}", Port: FakeUpstreamPort}
 }
 
 // Routes are the gateway's routing as aigw/config.yaml had it before the

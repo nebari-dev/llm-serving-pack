@@ -1985,7 +1985,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     type B = { name: string; sync: string; endpoint?: { host: string; port: string } }
     await applyPending()
     const bs = await catalog.api<B[]>('/backends')
-    expect(bs.find((b) => b.name === 'openai-prod')).toMatchObject({ sync: 'synced', endpoint: { host: '${STARGATE_HOST:-localhost}', port: '8090' } })
+    expect(bs.find((b) => b.name === 'openai-prod')).toMatchObject({ sync: 'synced', endpoint: { host: '${STARGATE_HOST:-localhost}', port: '18090' } })
     expect(bs.find((b) => b.name === 'azure-openai-eu')).toMatchObject({ sync: 'no_endpoint' })
     expect(bs.find((b) => b.name === 'azure-openai-eu')?.endpoint).toBeUndefined()
 
@@ -2018,7 +2018,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   // fake-openai's "keyed" backend wants its own provider key (fakellm.KeyedKey,
   // or KeyedKey2: X-Fake-Key says which it got) and answers 401 in OpenAI's
   // words without it.
-  const fakeOpenAI = (import.meta.env.VITE_FAKE_OPENAI as string | undefined) ?? 'http://localhost:8090'
+  const fakeOpenAI = (import.meta.env.VITE_FAKE_OPENAI as string | undefined) ?? 'http://localhost:18090'
   const KEYED_KEY = 'sk-fake-keyed-7d1c0b5e9a2f4e68'
   const KEYED_KEY_2 = 'sk-fake-keyed-2b8e4f1a0c6d3957'
   const WRONG_KEY = 'sk-wrongkey-0000000000000000'

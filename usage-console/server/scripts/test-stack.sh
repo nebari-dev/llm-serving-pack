@@ -25,8 +25,8 @@
 #                 environment.
 #   trafficgen    0.5 rps into :2975
 #
-# fake-openai (:8090), the simulated upstream the demo backends point at, is
-# started here if nothing serves :8090 (it keeps no state, so a running one
+# fake-openai (:18090), the simulated upstream the demo backends point at, is
+# started here if nothing serves :18090 (it keeps no state, so a running one
 # is fine). The local model server is shared with the dev stack. The test
 # databases get the simulated demo seed (STARGATE_SEED=demo), which the
 # api-mode suite relies on; the dev stack's is real. Logs go to
@@ -101,9 +101,9 @@ db() {
 up() {
   db
   for c in warden receipt-ingest trafficgen fake-openai; do go build -o "$BIN/$c" "./cmd/$c"; done
-  if [ -z "$(pid_on 8090)" ]; then
+  if [ -z "$(pid_on 18090)" ]; then
     nohup "$BIN/fake-openai" >>"$LOGS/fake-openai.log" 2>&1 &
-    wait_up 8090 fake-openai
+    wait_up 18090 fake-openai
   fi
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \

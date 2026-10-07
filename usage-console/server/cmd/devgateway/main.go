@@ -20,7 +20,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8081", "listen address")
-	upstream := flag.String("upstream", "http://localhost:8090", "OpenAI-compatible upstream base URL; requests go to {upstream}/{backend}/v1/chat/completions")
+	upstream := flag.String("upstream", "http://localhost:"+demo.FakeUpstreamPort, "OpenAI-compatible upstream base URL; requests go to {upstream}/{backend}/v1/chat/completions")
 	refresh := flag.Duration("refresh", 5*time.Second, "how often to reload config from the control plane db")
 	flag.Parse()
 

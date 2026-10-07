@@ -29,11 +29,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jbouder/stargate/server/internal/demo"
 	"github.com/jbouder/stargate/server/internal/fakellm"
 )
 
 func main() {
-	addr := flag.String("addr", ":8090", "listen address")
+	addr := flag.String("addr", ":"+demo.FakeUpstreamPort, "listen address")
 	flag.Parse()
 
 	mux := http.NewServeMux()

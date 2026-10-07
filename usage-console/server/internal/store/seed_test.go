@@ -1,7 +1,6 @@
 package store
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/jbouder/stargate/server/internal/demo"
@@ -19,7 +18,7 @@ func TestRealSeedHasNothingSimulated(t *testing.T) {
 		t.Fatalf("backends = %v", s.Backends)
 	}
 	for _, b := range s.Backends {
-		if b.Endpoint == nil || strings.Contains(b.Endpoint.Port, "8090") {
+		if b.Endpoint == nil || b.Endpoint.Port == demo.FakeUpstreamPort {
 			t.Errorf("backend %s points at the fake upstream or nowhere: %+v", b.Name, b.Endpoint)
 		}
 	}

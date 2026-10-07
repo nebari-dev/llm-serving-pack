@@ -140,7 +140,7 @@ A fresh database gets the **real seed**: tenant "Local", the team names, and
 one backend, `local`, the Docker Model Runner on :12434 serving `smollm2`.
 Nothing is simulated; connect providers and make keys from the console
 (Connect an app). For the **simulated demo** instead (backends served by the
-fake upstream :8090, made-up keys, budgets, policies and history, plus the
+fake upstream :18090, made-up keys, budgets, policies and history, plus the
 traffic generator), use `SEED=demo` on a fresh database: `make migrate
 SEED=demo`, then `make dev SEED=demo` (or `dev-aigw`), and optionally `make
 backfill` for 7 days of synthetic history. The seed applies only to a
@@ -266,7 +266,7 @@ shell, so Ctrl-C on `make dev-aigw` leaves it running; stop it by port, e.g.
 |---|---|
 | `cmd/stargate-api serve` | REST + SSE on :8080, and Agent Router's ext_authz key check on :8082. Migrates and seeds on start. With `-aigw-config` and `-aigw-restart`, applies routing to aigw. With `-oidc-issuer`, the console signs in with Keycloak (above); without it, dev mode. Also `migrate`, `backfill -days N -per-day N`, and `routing write -o path`. |
 | `cmd/devgateway` | `POST /v1/chat/completions` on :8081. Reloads config from the db every 5s. |
-| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` and `GET /{backend}/v1/models` on :8090, with streaming. Rejects a Stargate key with 401, so a leaked one shows up. The `keyed` backend wants provider key `fakellm.KeyedKey` (401 otherwise) and echoes `keyed-echo`. |
+| `cmd/fake-openai` | `POST /{backend}/v1/chat/completions` and `GET /{backend}/v1/models` on :18090 (not 8090, which local model servers often take), with streaming. Rejects a Stargate key with 401, so a leaked one shows up. The `keyed` backend wants provider key `fakellm.KeyedKey` (401 otherwise) and echoes `keyed-echo`. |
 | `cmd/receipt-ingest` | OTLP/gRPC logs receiver on :4317. Turns each Agent Router access-log record, with Warden's decision, into a receipt. |
 | `cmd/warden` | Agent Router's ext_proc on :8083 (budgets, rules, redact, reroute). Admin on :8084: `/healthz`, `/metrics`, `POST /passthrough?on=`, and `POST /reload`, which the API calls after every config write. |
 | `aigw/base.yaml` | Agent Router's infrastructure config: the ext_authz key check, Warden's ext_proc and the filter order it needs, retries plus passive health checks for failover, the 50Mi buffer limit, and the access-log fields receipt-ingest reads. Routing (the AIGatewayRoute with Warden's backend hints, and each backend) is compiled onto it from Postgres. |
