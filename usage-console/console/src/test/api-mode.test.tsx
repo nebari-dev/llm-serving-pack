@@ -776,9 +776,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await waitFor(() => expect(pane.textContent).toMatch(/Replayed against [\d,]+ requests? from the last hour\. [\d,]+ had content available; [\d,]+ evaluated on metadata only\./), { timeout: 10_000 })
       const meta = within(pane).getByRole('region', { name: 'Metadata only' })
       expect(meta.textContent).toMatch(/Would newly block 1/)
-      const link = within(pane).getByRole('link', { name: new RegExp(`allowed → blocked by ${name}/stop`) })
-      expect(link.getAttribute('href')).toBe(`/traffic?receipt=${receipt.id}`)
-      expect(link.textContent).toContain('Metadata only')
+      // A changed request opens its receipt over Guardrails, not on another
+      // page: the draft and the replay stay put. The receipt links to Traffic.
+      const row = within(pane).getByRole('button', { name: new RegExp(`allowed → blocked by ${name}/stop`) })
+      expect(row.textContent).toContain('Metadata only')
+      fireEvent.click(row)
+      await waitFor(() => expect(new URLSearchParams(window.location.search).get('receipt')).toBe(receipt.id))
+      expect(window.location.pathname).toBe('/guardrails')
+      const toTraffic = await screen.findByRole('link', { name: 'Open in Traffic' }, { timeout: 5000 })
+      expect(toTraffic.getAttribute('href')).toBe(`/traffic?receipt=${receipt.id}`)
+      expect(screen.getByRole('complementary', { name: 'Replay', hidden: true }).textContent).toMatch(/Would newly block 1/) // behind the drawer, unchanged
       // Replay writes nothing.
       expect((await catalog.api<C[]>('/changes'))[0]).toEqual(before)
     } finally {
@@ -3211,6 +3218,12 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       fireEvent.click(screen.getByRole('tab', { name: 'Detectors' }))
       expect(document.body.textContent).toContain('the text a detector matched is never stored')
       const queue = await screen.findByRole('table', { name: 'Detector hits to review' }, { timeout: 5000 })
+      // Its receipt opens over the page, not on Traffic.
+      fireEvent.click(await within(queue).findByRole('button', { name: `Open receipt ${receipt!.id}` }, { timeout: 5000 }))
+      await waitFor(() => expect(new URLSearchParams(window.location.search).get('receipt')).toBe(receipt!.id))
+      expect(window.location.pathname).toBe('/guardrails')
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' }) // close it, back to the queue
+      await waitFor(() => expect(new URLSearchParams(window.location.search).get('receipt')).toBeNull())
       fireEvent.click(await within(queue).findByRole('button', { name: `Mark ${entity} on ${receipt!.id} a false positive` }, { timeout: 5000 }))
       await waitFor(async () => expect((await detector())?.falsePositives30d).toBe(1), { timeout: 5000 })
       const detectorsTable = screen.getByRole('table', { name: 'Detectors' })

@@ -1,6 +1,6 @@
 import { ArrowRight, Copy, Download, Eye, FileSignature, Link2, Lock, Printer, ShieldAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
@@ -141,6 +141,7 @@ function NotFound({ id }: { id: string | null }) {
 }
 
 function ReceiptBody({ r }: { r: Receipt }) {
+  const { pathname } = useLocation()
   const [revealed, setRevealed] = useState(false)
   // api mode: what the server returned for this receipt's reveal.
   const [liveReveal, setLiveReveal] = useState<{ id: string; v: Revealed } | null>(null)
@@ -483,9 +484,17 @@ function ReceiptBody({ r }: { r: Receipt }) {
 
       <DrawerFooter className="flex-col items-stretch gap-2" data-print-hide>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" onClick={() => copy(window.location.href, 'Link')}>
-            <Link2 /> Copy link
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" size="sm" onClick={() => copy(window.location.href, 'Link')}>
+              <Link2 /> Copy link
+            </Button>
+            {/* Opened over another page (Guardrails, Keys…): Traffic shows it among the requests around it. */}
+            {pathname !== '/traffic' && (
+              <Button variant="ghost" size="sm" render={<Link to={`/traffic?receipt=${r.id}`} />}>
+                <ArrowRight /> Open in Traffic
+              </Button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => window.print()}>
               <Printer /> Print

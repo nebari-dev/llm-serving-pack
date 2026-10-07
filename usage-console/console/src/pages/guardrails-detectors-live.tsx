@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { can } from '@/data/catalog'
-import { Link } from 'react-router-dom'
 import { Section } from '@/components/gw/page'
 import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
@@ -24,6 +23,7 @@ import {
   updateEntity,
 } from '@/data/catalog'
 import { int } from '@/lib/format'
+import { useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { modeChip } from './guardrails-model'
 
@@ -304,6 +304,8 @@ const verdictLabel: Record<DetectorVerdict['verdict'], string> = { false_positiv
 
 /** Recent hits to review, and the reviewer's verdict on each: what false-positive counts are made of. */
 function ReviewQueue({ detectors, onReviewed }: { detectors: DetectorView[]; onReviewed: () => void }) {
+  // A hit's receipt opens over the page, so the queue keeps its place.
+  const { openReceipt } = useApp()
   const [entity, setEntity] = useState('')
   const [all, setAll] = useState(false)
   const path = `/detectors/hits?limit=200${all ? '&review=all' : ''}${entity ? `&entity=${encodeURIComponent(entity)}` : ''}`
@@ -398,9 +400,9 @@ function ReviewQueue({ detectors, onReviewed }: { detectors: DetectorView[]; onR
                     </span>
                   </td>
                   <td className="py-2 pr-3 text-xs">
-                    <Link to={`/traffic?receipt=${h.receiptId}`} className="underline hover:text-foreground">
+                    <button type="button" onClick={() => openReceipt(h.receiptId)} aria-label={`Open receipt ${h.receiptId}`} className="underline hover:text-foreground">
                       Open receipt
-                    </Link>
+                    </button>
                     <span className="block text-muted-foreground">{h.contentCaptured ? 'Captured: reveal shows placeholders in context' : 'Hashes only'}</span>
                   </td>
                   <td className="py-2 text-xs">

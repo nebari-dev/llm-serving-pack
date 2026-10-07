@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { type PolicyContent, type ReplayPart, replayPolicy, type ReplayView, type ReplayWindow } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { useApp } from '@/state/app-state'
 
 // §7.5.7 in api mode: the builder's rules replayed over recorded requests
 // with Warden's evaluator, as a change from what the policies do now.
@@ -41,6 +41,8 @@ export function changeWords(p: ReplayPart): string {
 
 /** The replay's headline, part by part, and the requests it would change. */
 export function ReplaySummary({ replay, maxAffected = 50 }: { replay: ReplayView; maxAffected?: number }) {
+  // Each changed request opens its receipt over the page, keeping the draft and this result.
+  const { openReceipt } = useApp()
   if (replay.total === 0) {
     return <p className="text-sm">No requests in {phrase(replay.window)} reached the policies, so there’s nothing to replay. Try a longer window.</p>
   }
@@ -73,7 +75,7 @@ export function ReplaySummary({ replay, maxAffected = 50 }: { replay: ReplayView
           <ul className="flex flex-col gap-1">
             {shown.map((a) => (
               <li key={a.id}>
-                <Link to={`/traffic?receipt=${a.id}`} className="flex flex-wrap items-baseline gap-x-2 rounded px-1 py-0.5 hover:bg-muted">
+                <button type="button" onClick={() => openReceipt(a.id)} className="flex w-full flex-wrap items-baseline gap-x-2 rounded px-1 py-0.5 text-left hover:bg-muted">
                   <span className="text-xs text-muted-foreground">{ago(a.ts)}</span>
                   <span className="font-mono text-xs">{a.key}</span>
                   <span>
@@ -82,7 +84,7 @@ export function ReplaySummary({ replay, maxAffected = 50 }: { replay: ReplayView
                   <span className={cn('rounded border px-1 text-[11px]', a.kind === 'exact' ? 'border-border' : 'border-dashed border-border text-muted-foreground')}>
                     {a.kind === 'exact' ? 'Exact' : 'Metadata only'}
                   </span>
-                </Link>
+                </button>
               </li>
             ))}
           </ul>
