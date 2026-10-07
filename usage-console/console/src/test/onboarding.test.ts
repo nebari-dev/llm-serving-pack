@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { servesShort } from '@/pages/onboarding-live'
+import { modelChips } from '@/pages/onboarding-live'
 
-describe('servesShort', () => {
-  it('lists up to two models, then a count, so a big backend stays one line', () => {
-    expect(servesShort(['smollm2'])).toBe('smollm2')
-    expect(servesShort(['gpt-5-mini', 'gpt-5.5'])).toBe('gpt-5-mini, gpt-5.5')
-    expect(servesShort(['a', 'b', 'c', 'd', 'e'])).toBe('a, b +3 more')
+describe('modelChips', () => {
+  it('shows up to three models, then how many more, so a backend serving hundreds stays one line', () => {
+    expect(modelChips(['smollm2'])).toEqual({ shown: ['smollm2'], more: 0 })
+    expect(modelChips(['a', 'b', 'c'])).toEqual({ shown: ['a', 'b', 'c'], more: 0 })
+    expect(modelChips(['a', 'b', 'c', 'd', 'e'])).toEqual({ shown: ['a', 'b', 'c'], more: 2 })
   })
 })

@@ -25,8 +25,12 @@
 #                 environment.
 #   trafficgen    0.5 rps into :2975
 #
-# fake-openai (:8090) and the local model server are shared with the dev
-# stack: they keep no state. Logs go to tmp/test-<name>.log.
+# fake-openai (:8090), the simulated upstream the demo backends point at, is
+# started here if nothing serves :8090 (it keeps no state, so a running one
+# is fine). The local model server is shared with the dev stack. The test
+# databases get the simulated demo seed (STARGATE_SEED=demo), which the
+# api-mode suite relies on; the dev stack's is real. Logs go to
+# tmp/test-<name>.log.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -39,6 +43,7 @@ mkdir -p "$BIN" "$LOGS" "$AIGW_DIR"
 
 export STARGATE_CONFIG_DB=postgres://stargate:stargate@localhost:5433/stargate_test?sslmode=disable
 export STARGATE_RECEIPTS_DB=postgres://stargate:stargate@localhost:5434/receipts_test?sslmode=disable
+export STARGATE_SEED=demo
 
 pid_on() { lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1 || true; }
 wait_up() { for _ in $(seq 1 120); do [ -n "$(pid_on "$1")" ] && return 0; sleep 0.25; done; echo ":$1 didn't come up; see $LOGS/test-$2.log" >&2; exit 1; }
@@ -95,7 +100,11 @@ db() {
 
 up() {
   db
-  for c in warden receipt-ingest trafficgen; do go build -o "$BIN/$c" "./cmd/$c"; done
+  for c in warden receipt-ingest trafficgen fake-openai; do go build -o "$BIN/$c" "./cmd/$c"; done
+  if [ -z "$(pid_on 8090)" ]; then
+    nohup "$BIN/fake-openai" >>"$LOGS/fake-openai.log" 2>&1 &
+    wait_up 8090 fake-openai
+  fi
   if [ -z "$(pid_on 9080)" ]; then
     nohup "$BIN/stargate-api" serve -addr :9080 -authz-addr :9082 -warden http://localhost:9084 \
       -gateway http://localhost:2975 -environment test -signing-key tmp/receipt-signing-test.pem \

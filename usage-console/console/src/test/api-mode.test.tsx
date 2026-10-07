@@ -335,9 +335,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(within(start).getByRole('radio', { name: /A connected backend/ }).getAttribute('aria-checked')).toBe('true')
     expect(screen.queryByRole('form', { name: 'New provider' })).toBeNull()
     expect(text()).not.toContain('Connect your first provider')
-    // Each connected backend says which models it serves, so it can't be taken for a provider type.
+    // Each connected backend is a row: its name, provider and health, and the
+    // models it serves as a list, so it can't be taken for a provider type.
     const local = screen.getByRole('radio', { name: /^local/ })
-    expect(local.textContent).toContain('serves smollm2')
+    expect(within(within(local).getByRole('list', { name: 'Models' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['smollm2'])
+    expect(local.textContent).toContain('Self-hosted')
     choose(local)
     expect(text()).toContain('smollm2')
     let keyId = ''

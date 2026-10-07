@@ -1,7 +1,7 @@
 // stargate-api is the control plane: REST + SSE for the console, and the
 // external authorization service Agent Router checks keys against.
 //
-//	stargate-api serve     migrate, seed the demo tenant if missing, serve
+//	stargate-api serve     migrate, seed the tenant if missing (STARGATE_SEED: real, the default, or demo), serve
 //	stargate-api migrate   apply migrations only
 //	stargate-api backfill  synthesize history into the receipts db
 //	stargate-api routing write [-o path]
@@ -10,6 +10,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"flag"
 	"fmt"
@@ -51,10 +52,13 @@ func main() {
 	if err := st.Migrate(ctx); err != nil {
 		log.Fatalf("migrate: %v", err)
 	}
-	if seeded, err := st.Seed(ctx); err != nil {
+	// A fresh database gets the real seed (nothing simulated) unless
+	// STARGATE_SEED=demo asks for the simulated demo, as the test stack does.
+	mode := cmp.Or(os.Getenv("STARGATE_SEED"), store.SeedReal)
+	if seeded, err := st.Seed(ctx, mode); err != nil {
 		log.Fatalf("seed: %v", err)
 	} else if seeded {
-		log.Printf("seeded demo tenant")
+		log.Printf("seeded the tenant (%s)", mode)
 	}
 
 	switch os.Args[1] {

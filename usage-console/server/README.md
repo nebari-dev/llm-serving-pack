@@ -131,18 +131,28 @@ and receipts. How it routes:
 
 ```sh
 cd server
-make migrate                    # start both databases, migrate, seed the demo tenant
-make backfill                   # optional: 7 days of synthetic history so charts have shape
-make dev                        # fake upstream :8090, API :8080, gateway :8081, traffic ~0.8 rps
+make migrate                    # start both databases, migrate, seed the tenant
+make dev                        # API :8080, gateway :8081
 cd ../console && npm run dev:api   # console on the API (npm run dev stays on mock data)
 ```
+
+A fresh database gets the **real seed**: tenant "Local", the team names, and
+one backend, `local`, the Docker Model Runner on :12434 serving `smollm2`.
+Nothing is simulated; connect providers and make keys from the console
+(Connect an app). For the **simulated demo** instead (backends served by the
+fake upstream :8090, made-up keys, budgets, policies and history, plus the
+traffic generator), use `SEED=demo` on a fresh database: `make migrate
+SEED=demo`, then `make dev SEED=demo` (or `dev-aigw`), and optionally `make
+backfill` for 7 days of synthetic history. The seed applies only to a
+database with no tenant yet. The test stack always uses the demo seed, which
+the api-mode suite relies on, and starts the fake upstream itself.
 
 To use Agent Router instead of the dev gateway, get the `aigw` binary for
 your platform from the [releases](https://github.com/theagentrouter/agent-router/releases)
 (v1.1.0 tested), then run `make dev-aigw`, or `make dev-aigw AIGW=/path/to/aigw`
 if it's not on your PATH. The first run downloads Envoy into `~/.local/share/aigw`.
 
-Everything uses the demo tenant. Seeded keys authenticate with
+Everything uses the tenant with id `demo`. With `SEED=demo`, seeded keys authenticate with
 `<prefix>_devsecret_not_for_production`, for example:
 
 ```sh
@@ -288,7 +298,7 @@ All paths are under `/api/v1/{tenant}`. JSON field names match
   Above 40 matching requests a second (measured per connection, after its filters, over 5-second windows; the first is 1 second) the connection is sampled: it gets 1 in N, N the smallest of 2, 5, 10, 20, 50… that brings it back under, and a `sampling` event `{oneIn, ratePerSec, thresholdPerSec}` says so, again every window while it lasts, and once more with `oneIn: 1` when the rate falls under 30 a second. A request is kept by a hash of its id, so its in-flight and settled copies agree, and a row sent in flight always gets its settle. Counts (`receipts/count`, Spend, Overview) come from the database and are never sampled.
 - `GET receipts/signing-key` gives `{keyId, algorithm: "Ed25519", publicKeyPem}`: the key signed exports verify against. The private key never leaves the server.
 - `POST receipts/export` with `receipts`' filters (`limit` ignored), and `POST receipts/{id}/export` for one receipt, return a zip (see "Signed receipt exports" below). Over 10,000 receipts is a 400 saying to narrow it. Each writes an audit row first ("Exported receipts", target kind `Receipt`, with the filter, count, SHA-256 and key id).
-- `POST receipts/{id}/reveal` returns `{content, revealedBy, revealedAt}` after writing a "Revealed content" audit row; a receipt with no stored content is a 409 and writes nothing. Only `cmd/devgateway`'s engine (and `backfill`) stores content, for backends with `capture_content` on (the seed's `vllm-internal`); receipts from Agent Router never carry it.
+- `POST receipts/{id}/reveal` returns `{content, revealedBy, revealedAt}` after writing a "Revealed content" audit row; a receipt with no stored content is a 409 and writes nothing. Warden stores it, masked, for requests on routes that capture content; `cmd/devgateway`'s engine (and `backfill`) also stores it for backends with `capture_content` on (the demo seed's `vllm-internal`).
 - `GET changes` leaves out those access rows (target kind `Receipt`): they changed nothing. `GET changes?kind=Receipt` lists them.
 
 Writes (the console doesn't call most of them yet):

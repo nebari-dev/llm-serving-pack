@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { DiffView } from '@/components/gw/diff-view'
 import { Duration } from '@/components/gw/numbers'
 import { PageHeader } from '@/components/gw/page'
+import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
@@ -48,9 +49,32 @@ function healthLine(b: Backend) {
   }
 }
 
-/** A tile's model list: the first two, then how many more, so a backend serving dozens stays one line. */
-export function servesShort(models: string[]): string {
-  return models.length <= 2 ? models.join(', ') : `${models.slice(0, 2).join(', ')} +${models.length - 2} more`
+/** A backend row's models: the first three, then how many more, so one serving hundreds stays one line. */
+export function modelChips(models: string[]): { shown: string[]; more: number } {
+  return { shown: models.slice(0, 3), more: Math.max(0, models.length - 3) }
+}
+
+const healthTone = { healthy: 'allowed', degraded: 'degraded', down: 'blocked', idle: 'neutral' } as const
+
+/** One connected backend as a list row: name, then provider and health, then the models it serves. */
+function BackendRow({ b }: { b: Backend }) {
+  const { shown, more } = modelChips(b.models)
+  return (
+    <span className="mt-1 flex flex-col gap-1.5">
+      <span className="flex flex-wrap items-center gap-2 text-sm">
+        <span>{b.provider}</span>
+        <StateChip tone={healthTone[b.health as keyof typeof healthTone] ?? 'neutral'}>{b.health}</StateChip>
+      </span>
+      <span role="list" aria-label="Models" className="flex flex-wrap items-center gap-1">
+        {shown.map((m) => (
+          <span role="listitem" key={m} className="rounded-sm border border-border bg-muted px-1.5 font-mono text-xs leading-5">
+            {m}
+          </span>
+        ))}
+        {more > 0 && <span className="text-xs text-muted-foreground">+{more} more</span>}
+      </span>
+    </span>
+  )
 }
 
 function snippets(gatewayUrl: string, model: string): Record<Lang, { diff: string; code: string; file: string }> {
@@ -211,7 +235,7 @@ export function LiveOnboardingPage() {
                   setCreated(null)
                   setFirstId(null)
                 }}
-                className="grid grid-cols-2 gap-2 sm:grid-cols-3"
+                className="flex flex-col gap-2"
                 orientation="vertical"
               >
                 {live.data.map((b) => (
@@ -219,8 +243,8 @@ export function LiveOnboardingPage() {
                     key={b.name}
                     value={b.name}
                     variant="box"
-                    description={`serves ${servesShort(b.models)} · ${b.provider} · ${b.health}`}
-                    className={(st) => cn(st.checked && 'border-primary bg-card')}
+                    description={<BackendRow b={b} />}
+                    className={(st) => cn('w-full', st.checked && 'border-primary bg-card')}
                   >
                     <span className="font-mono">{b.name}</span>
                   </RadioGroupItem>

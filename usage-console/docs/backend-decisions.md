@@ -566,6 +566,18 @@ retire-old-secret-now are in.
 
 ## 7. Cross-cutting
 
+- **The dev stack has no simulated data (decided 2026-10-07, user's call:
+  clean slate).** A fresh database gets the real seed (`STARGATE_SEED`,
+  default `real`): tenant "Local", the team names (no form makes teams yet),
+  and the `local` backend with its `smollm2` route. `SEED=demo` keeps the
+  simulated demo for whoever wants it; the test stack always uses it. The
+  dev databases were rebuilt that day: backed up first to
+  `server/tmp/backup-2026-10-07/` (pg_dump of both, and the policies as
+  JSON), the dev traffic generator stopped, and `no-pii-out` (monitor) and
+  `block-src` (enforce) recreated through the API with the same rules, at
+  v1. Note `block-src` only blocks providers that aren't self-hosted, so it
+  acts on nothing until a hosted provider is connected.
+
 - **Auth and roles (decided 2026-10-05, built 2026-10-06).** Writes act as
   the signed-in user and every write checks the table below. Dev mode (no
   `-oidc-issuer`) is unchanged: everyone is `dev@localhost`, owner.
