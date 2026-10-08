@@ -2592,6 +2592,41 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 60_000)
 
+  // Savings compares a model only with cheaper ones of its family, so a model
+  // a backend adds gets one ("claude" for Anthropic's), not its own name; and
+  // an admin can correct it on Models, audited.
+  it('files a backend’s new models under a family, which can be corrected', async () => {
+    type M = { id: string; family: string }
+    type C = import('@/data/catalog').Change
+    const name = `family-${Date.now().toString(36)}`
+    const models = [`claude-${name}-big`, `${name}-7b`]
+    try {
+      await send('POST', '/backends', { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, apiKey: ANTHROPIC_KEY, models })
+      const got = await catalog.api<M[]>('/models')
+      expect(got.find((m) => m.id === models[0])?.family).toBe('claude')
+      expect(got.find((m) => m.id === models[1])?.family).toBe('claude') // Anthropic serves it
+      // Corrected by an admin: compare-and-set on the family as it was seen.
+      expect(await status(send('PUT', `/models/${models[1]}/family`, { from: 'not-it', to: 'family' }))).toBe(409)
+      await send('PUT', `/models/${models[1]}/family`, { from: 'claude', to: name })
+      expect((await catalog.api<M[]>('/models')).find((m) => m.id === models[1])?.family).toBe(name)
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Changed model family', target: `${models[1]} claude → ${name}`, targetKind: 'Model' })
+      expect(await status(send('PUT', `/models/${models[1]}/family`, { from: name, to: '' }))).toBe(400)
+
+      // On Models: each catalog row's family can be edited there.
+      window.history.pushState({}, '', '/models')
+      const r = render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: `Edit family of ${models[0]}` }, { timeout: 5000 }))
+      const d = await formDialog()
+      fireEvent.change(within(d).getByLabelText('Family'), { target: { value: 'claude-big' } })
+      fireEvent.click(within(d).getByRole('button', { name: 'Save' }))
+      await formDialogClosed()
+      expect((await catalog.api<M[]>('/models')).find((m) => m.id === models[0])?.family).toBe('claude-big')
+      r.unmount()
+    } finally {
+      await dropBackends(name)
+    }
+  }, 60_000)
+
   it('tests an Anthropic key on Anthropic’s native API, and refuses one that fails', async () => {
     const name = `anthropic-${Date.now().toString(36)}`
     const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, models: ['claude-echo'] }

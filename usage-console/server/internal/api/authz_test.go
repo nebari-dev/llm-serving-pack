@@ -62,6 +62,7 @@ var roleTable = []struct {
 	{"PUT", "/routes/r", []auth.Role{auth.Admin, auth.Editor}},
 	{"DELETE", "/routes/r", []auth.Role{auth.Admin, auth.Editor}},
 	{"PUT", "/routes/r/capture", []auth.Role{auth.Admin, auth.Security}},
+	{"PUT", "/models/m/family", []auth.Role{auth.Admin}},
 	{"POST", "/routing/apply", []auth.Role{auth.Admin, auth.Editor}},
 	{"POST", "/keys", nil},
 	{"POST", "/budgets", []auth.Role{auth.Admin, auth.Finance}},

@@ -96,11 +96,12 @@ func backendAudit(b model.Backend) map[string]any {
 }
 
 // ensureModels adds the models the catalog doesn't know, as the backend's
-// provider's, with no context length and no price: pricing shows the pair
-// as "no price" until a rate or a LiteLLM key is set (decisions §1).
+// provider's, in the family ModelFamily gives (so Savings can compare them
+// with their siblings), with no context length and no price: pricing shows
+// the pair as "no price" until a rate or a LiteLLM key is set (decisions §1).
 func ensureModels(ctx context.Context, tx pgx.Tx, models []string, provider string) error {
 	for _, m := range models {
-		if _, err := tx.Exec(ctx, `INSERT INTO model_catalog (id, display, provider, family, context) VALUES ($1, $1, $2, $1, 0) ON CONFLICT (id) DO NOTHING`, m, provider); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO model_catalog (id, display, provider, family, context) VALUES ($1, $1, $2, $3, 0) ON CONFLICT (id) DO NOTHING`, m, provider, ModelFamily(provider, m)); err != nil {
 			return err
 		}
 	}

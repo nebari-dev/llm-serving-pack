@@ -6,9 +6,12 @@ import { PageHeader, Section } from '@/components/gw/page'
 import { ProvenanceBadge } from '@/components/gw/provenance'
 import { StateChip } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Field, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { backends, can, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
+import { api, ApiError, backends, can, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -86,6 +89,12 @@ const th = 'px-3 py-2 font-medium'
 const td = 'px-3 py-2'
 
 function CatalogTab() {
+  // Api mode reads the catalog and backends live, so a backend added since
+  // the console loaded shows its models, and a family edit shows at once.
+  const liveMode = dataMode === 'api'
+  const catalogModels = useLive<typeof models>(liveMode ? '/models' : null, models, 30_000)
+  const catalogBackends = useLive<typeof backends>(liveMode ? '/backends' : null, backends, 30_000).data
+  const [editingFamily, setEditingFamily] = useState<(typeof models)[number] | null>(null)
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[52rem] text-sm">
@@ -102,7 +111,7 @@ function CatalogTab() {
           </tr>
         </thead>
         <tbody>
-          {models.map((m) => (
+          {catalogModels.data.map((m) => (
             <tr key={m.id} className="border-b border-border hover:bg-muted/50">
               <td className={cn(td, 'pl-6')}>
                 <Link to={`/traffic?model=${m.id}`} className="font-mono font-medium hover:underline">
@@ -111,7 +120,22 @@ function CatalogTab() {
                 <div className="text-xs text-muted-foreground">{m.display}</div>
               </td>
               <td className={td}>{m.provider}</td>
-              <td className={cn(td, 'font-mono text-xs')}>{m.family}</td>
+              <td className={cn(td, 'font-mono text-xs')}>
+                {m.family}
+                {liveMode && (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="ml-1"
+                    aria-label={`Edit family of ${m.id}`}
+                    disabled={!can('prices').ok}
+                    title={can('prices').reason ?? 'Savings compares a model only with cheaper ones of the same family'}
+                    onClick={() => setEditingFamily(m)}
+                  >
+                    <Pencil />
+                  </Button>
+                )}
+              </td>
               <td className={cn(td, 'num text-right font-mono')}>{ctx(m.context)}</td>
               <td className={td}>
                 <span className="flex gap-1">
@@ -123,7 +147,7 @@ function CatalogTab() {
                 </span>
               </td>
               <td className={cn(td, 'font-mono text-xs')}>
-                {backends
+                {catalogBackends
                   .filter((b) => b.models.includes(m.id))
                   .map((b) => b.name)
                   .join(', ')}
@@ -148,6 +172,15 @@ function CatalogTab() {
           Modalities and retirement dates come from LiteLLM’s entries for the backends serving each model, refreshed by the daily price sync. Unknown: no backend
           has an entry.
         </p>
+      )}
+      {editingFamily && (
+        <FamilyDialog
+          model={editingFamily}
+          onClose={(saved) => {
+            setEditingFamily(null)
+            if (saved) catalogModels.reload()
+          }}
+        />
       )}
     </div>
   )
@@ -454,5 +487,54 @@ function PricingTab() {
         <p className="mt-3 text-xs text-muted-foreground">Reasoning tokens are priced and budgeted separately from output tokens, so reasoning models don’t under-report.</p>
       </Section>
     </>
+  )
+}
+
+/**
+ * A model's family: Savings compares it only with cheaper models of the same
+ * one. Compare-and-set on the family shown, so an edit made meanwhile is
+ * refused rather than overwritten.
+ */
+function FamilyDialog({ model, onClose }: { model: (typeof models)[number]; onClose: (saved: boolean) => void }) {
+  const [family, setFamily] = useState(model.family)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api(`/models/${encodeURIComponent(model.id)}/family`, { method: 'PUT', body: JSON.stringify({ from: model.family, to: family }) })
+      toast.add({ title: 'Family changed', description: `${model.id} is now in ${family.trim().toLowerCase()}.`, type: 'success' })
+      onClose(true)
+    } catch (e) {
+      setError(e instanceof ApiError && e.status === 409 ? 'Someone changed it since this page loaded. Close and try again.' : e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Family of {model.id}</DialogTitle>
+          <DialogDescription>
+            Savings suggests a cheaper model only from the same family: Opus and Haiku are both claude. Use the same family for models that can stand in for each other.
+          </DialogDescription>
+        </DialogHeader>
+        <Field>
+          <FieldLabel htmlFor="model-family">Family</FieldLabel>
+          <Input id="model-family" value={family} onChange={(e) => setFamily(e.target.value)} className="font-mono" autoComplete="off" spellCheck={false} />
+        </Field>
+        {error && <p className="text-sm text-destructive-foreground">{error}</p>}
+        <DialogFooter>
+          <Button variant="outline" type="button" onClick={() => onClose(false)}>
+            Cancel
+          </Button>
+          <Button onClick={() => void save()} loading={busy} loadingText="Saving…" disabled={!family.trim() || family.trim().toLowerCase() === model.family}>
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

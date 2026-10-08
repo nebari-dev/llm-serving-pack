@@ -117,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	h("PUT "+p+"/projects/{id}", s.renameProject)
 	h("DELETE "+p+"/projects/{id}", s.deleteProject)
 	h("GET "+p+"/models", s.models)
+	h("PUT "+p+"/models/{id}/family", s.setModelFamily)
 	h("GET "+p+"/aliases", s.aliases)
 	h("PUT "+p+"/aliases/{alias}", s.putAlias)
 	h("DELETE "+p+"/aliases/{alias}", s.deleteAlias)

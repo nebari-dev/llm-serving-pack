@@ -154,6 +154,13 @@ I picked, all open to change:
   says to try the cheaper model on part of the traffic first.
 - "Same family" is `model_catalog.family`, which is coarse: Opus 4.1 →
   Haiku 4.5 counts (both `claude`).
+  A model a backend adds gets its family from `store.ModelFamily` (fixed
+  2026-10-08; it used to be the model's own name, so no two such models
+  shared one and Savings never found anything): Anthropic's are `claude`,
+  `gpt-*` is `gpt`, otherwise the name's words before the first version
+  (`llama-3.3-70b` → `llama`). Existing ones were corrected once at start.
+  An admin can change it on Models (compare-and-set, audited), since the
+  catalog is shared like prices.
 - The cheaper model bills the same token counts, cache hits included
   (switching models would usually lose them), on the cheapest backend that
   offers it, not the one routing would pick.

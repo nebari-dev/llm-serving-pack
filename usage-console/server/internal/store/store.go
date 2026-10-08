@@ -64,11 +64,25 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("receipts: refresh receipts_daily: %w", err)
 		}
 	}
+	// Models a backend added before 2026-10-08 were filed under their own
+	// name as family; they get ModelFamily's, once (a later edit stays).
+	var done bool
+	const families = "model_family.backfill"
+	if err := s.Config.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, families).Scan(&done); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if !done {
+		if err := s.backfillFamilies(ctx); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if _, err := s.Config.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, families); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+	}
 	// Receipts from before 008 get their project id from the config database.
 	// It's recorded like a migration once done, so a failed run is retried
 	// at the next start.
 	const backfill = "008_project_id.backfill"
-	var done bool
 	if err := s.Receipts.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`, backfill).Scan(&done); err != nil {
 		return fmt.Errorf("receipts: %w", err)
 	}

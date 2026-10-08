@@ -86,7 +86,9 @@ var routeActions = map[string]Action{
 	"PUT /routes/{name}":         ActRouting,
 	"DELETE /routes/{name}":      ActRouting,
 	"PUT /routes/{name}/capture": ActCapture,
-	"POST /routing/apply":        ActRouting,
+	// The catalog is every tenant's, like prices.
+	"PUT /models/{id}/family": ActPrices,
+	"POST /routing/apply":     ActRouting,
 
 	"POST /pricing/sync":                     ActPrices,
 	"POST /pricing/proposals/{id}/accept":    ActPrices,

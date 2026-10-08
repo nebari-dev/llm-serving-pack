@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jbouder/stargate/server/internal/model"
@@ -104,4 +105,26 @@ func aliasViews(aliases map[string]string, requested map[string]int, changed map
 	}
 	slices.SortFunc(out, func(x, y model.Alias) int { return cmp.Compare(x.Alias, y.Alias) })
 	return out
+}
+
+// setModelFamily is PUT /models/{id}/family {from, to}: the family Savings
+// compares the model within. from is the family the caller saw (409 if it
+// changed since). The catalog is shared, so it's a price-level action.
+func (s *Server) setModelFamily(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	var in struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return nil, badRequest("invalid JSON body")
+	}
+	to := strings.ToLower(strings.TrimSpace(in.To))
+	if to == "" || len(to) > 60 {
+		return nil, badRequest("family is 1 to 60 characters")
+	}
+	id := r.PathValue("id")
+	if err := s.Store.SetModelFamily(r.Context(), t, actor(r), id, in.From, to); err != nil {
+		return nil, err
+	}
+	return map[string]string{"id": id, "family": to}, nil
 }
