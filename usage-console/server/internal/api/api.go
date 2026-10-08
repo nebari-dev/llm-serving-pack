@@ -127,6 +127,7 @@ func (s *Server) Handler() http.Handler {
 	h("POST "+p+"/pricing/proposals/{id}/dismiss", s.dismissProposal)
 	h("GET "+p+"/pricing/litellm/match", s.liteLLMMatch)
 	h("POST "+p+"/pricing/{model}/{backend}", s.setPrice)
+	h("DELETE "+p+"/pricing/{model}/{backend}", s.removePrice)
 	h("PUT "+p+"/pricing/{model}/{backend}/source", s.setPriceSource)
 	h("DELETE "+p+"/pricing/{model}/{backend}/{at}", s.cancelPrice)
 	h("GET "+p+"/backends", s.backends)

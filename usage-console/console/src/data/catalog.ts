@@ -570,6 +570,9 @@ export const setPairPrice = (p: PairPrice, rates: Partial<Record<RateName, numbe
     headers: { 'If-Match': p.etag },
   })
 
+/** Ends a pair's price now: new requests have no price, earlier ones keep theirs. */
+export const removePairPrice = (p: PairPrice) =>
+  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}`, { method: 'DELETE', headers: { 'If-Match': p.etag } })
 export const cancelPairPrice = (c: { model: string; backend: string; effectiveAt: number }) =>
   api<PricingView>(`/pricing/${encodeURIComponent(c.model)}/${encodeURIComponent(c.backend)}/${c.effectiveAt}`, { method: 'DELETE' })
 

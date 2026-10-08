@@ -94,6 +94,7 @@ var routeActions = map[string]Action{
 	"POST /pricing/proposals/{id}/accept":    ActPrices,
 	"POST /pricing/proposals/{id}/dismiss":   ActPrices,
 	"POST /pricing/{model}/{backend}":        ActPrices,
+	"DELETE /pricing/{model}/{backend}":      ActPrices,
 	"PUT /pricing/{model}/{backend}/source":  ActPrices,
 	"DELETE /pricing/{model}/{backend}/{at}": ActPrices,
 

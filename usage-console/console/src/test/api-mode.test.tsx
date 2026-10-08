@@ -2633,6 +2633,46 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     }
   }, 60_000)
 
+  // A pair priced by hand with no LiteLLM entry (a self-hosted model) could
+  // never go back to "no price": emptying a rate means "follow LiteLLM".
+  // Remove price ends it from now on; earlier requests keep their cost.
+  it('removes a pair’s price, so new requests are unpriced and old ones keep theirs', async () => {
+    type P = import('@/data/catalog').PricingView
+    type C = import('@/data/catalog').Change
+    const name = `unprice-${Date.now().toString(36)}`
+    const model = `${name}/model:tag`
+    const pair = async () => (await catalog.api<P>('/pricing')).prices.find((p) => p.model === model && p.backend === name)!
+    const path = `/pricing/${encodeURIComponent(model)}/${name}`
+    try {
+      await send('POST', '/backends', { name, provider: 'Self-hosted', region: 'local', baseUrl: `${fakeOpenAI}/vllm-internal/v1`, models: [model] })
+      await send('POST', path, { rates: { input: 1000, output: 2000 } }, (await pair()).etag)
+      expect((await pair()).rates.input?.perM).toBe(1000)
+      expect(await status(send('DELETE', path))).toBe(428) // If-Match, like any price write
+      await send('DELETE', path, undefined, (await pair()).etag)
+      const after = await pair()
+      expect(after.rates.input ?? null).toBeNull()
+      expect(after.rates.output ?? null).toBeNull()
+      expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Removed model price', target: `${model} on ${name}`, targetKind: 'Pricing' })
+      // Nothing left to remove.
+      expect(await status(send('DELETE', path, undefined, after.etag))).toBe(400)
+
+      // From Models → Pricing: the price editor's Remove price, with a confirm.
+      await send('POST', path, { rates: { input: 5, output: 10 } }, after.etag)
+      window.history.pushState({}, '', '/models?tab=pricing')
+      const r = render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: `Edit price for ${model} on ${name}` }, { timeout: 5000 }))
+      const d = await formDialog()
+      fireEvent.click(within(d).getByRole('button', { name: 'Remove price' }))
+      expect(d.textContent).toContain('New requests will have no price')
+      fireEvent.click(within(d).getByRole('button', { name: 'Yes, remove it' }))
+      await formDialogClosed()
+      expect((await pair()).rates.input ?? null).toBeNull()
+      r.unmount()
+    } finally {
+      await dropBackends(name)
+    }
+  }, 30_000)
+
   it('tests an Anthropic key on Anthropic’s native API, and refuses one that fails', async () => {
     const name = `anthropic-${Date.now().toString(36)}`
     const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, models: ['claude-echo'] }

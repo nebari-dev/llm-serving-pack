@@ -289,6 +289,27 @@ func (s *Server) cancelPrice(_ http.ResponseWriter, r *http.Request, t string) (
 	return s.pricing(nil, r, t)
 }
 
+// removePrice is DELETE /pricing/{model}/{backend} with If-Match: the
+// pair's price ends now, and new requests have none.
+func (s *Server) removePrice(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
+	match, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
+	m, b, err := s.servedPair(r, t)
+	if err != nil {
+		return nil, err
+	}
+	err = s.Store.RemovePrice(r.Context(), t, actor(r), m, b, match, time.Now())
+	if store.IsBadPrice(err) {
+		return nil, badRequest(err.Error())
+	} else if err != nil {
+		return nil, err
+	}
+	s.afterPriceWrite(r.Context())
+	return s.pricing(nil, r, t)
+}
+
 // setPriceSource takes {litellmKey}: the LiteLLM entry that prices the
 // pair, "" for none. The key must be in LiteLLM's file; the sync runs at
 // once so the price follows it.

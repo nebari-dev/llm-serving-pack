@@ -14,6 +14,7 @@ import {
   ApiError,
   can,
   cancelPairPrice,
+  removePairPrice,
   decidePriceProposal,
   type PairPrice,
   type PriceChange,
@@ -330,7 +331,26 @@ function PriceDialog({ pair, onClose }: { pair: PairPrice; onClose: (saved: bool
   const [at, setAt] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [removing, setRemoving] = useState(false)
   const start = initialDraft(pair)
+  const priced = Object.values(pair.rates).some((r) => r && r.perM !== null)
+
+  // A price set by hand on a pair LiteLLM doesn't list (a self-hosted model)
+  // can't be emptied rate by rate: there's nothing to follow. This ends it.
+  const remove = async () => {
+    setError(null)
+    setSaving(true)
+    try {
+      await removePairPrice(pair)
+      toast.add({ title: `Removed the price of ${pair.model} on ${pair.backend}`, description: 'New requests have no price; earlier ones keep theirs.', type: 'success' })
+      onClose(true)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) setError('This price changed since you opened it. Close and reopen to see the current rates.')
+      else setError(fail(e))
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const set = (k: RateName, d: Partial<RateDraft>) => setDraft((x) => ({ ...x, [k]: { ...x[k], ...d } }))
 
@@ -461,7 +481,25 @@ function PriceDialog({ pair, onClose }: { pair: PairPrice; onClose: (saved: bool
           </Field>
           {error && <FieldError>{error}</FieldError>}
         </div>
+        {removing && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-2 text-sm">
+            <span>New requests will have no price, and budgets won’t count them. Requests already made keep their cost.</span>
+            <span className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRemoving(false)}>
+                Keep it
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => void remove()} disabled={saving}>
+                Yes, remove it
+              </Button>
+            </span>
+          </div>
+        )}
         <DialogFooter>
+          {priced && !removing && (
+            <Button variant="ghost" className="mr-auto" onClick={() => setRemoving(true)} disabled={saving}>
+              Remove price
+            </Button>
+          )}
           <Button variant="outline" onClick={() => onClose(false)}>
             Cancel
           </Button>

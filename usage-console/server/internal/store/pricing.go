@@ -270,6 +270,48 @@ func (s *Store) SetPrice(ctx context.Context, tenant, actor string, e PriceEdit,
 	return p, tx.Commit(ctx)
 }
 
+// RemovePrice ends a pair's price now, so requests from now on have no
+// price (decisions §1: "no price", not $0), and unlinks its LiteLLM entry so
+// the sync doesn't bring one back. Earlier rows stay: past requests keep
+// their cost. A manual rate can't be emptied otherwise when there's no
+// LiteLLM rate to follow (a self-hosted model). A scheduled change has to be
+// cancelled first.
+func (s *Store) RemovePrice(ctx context.Context, tenant, actor, modelID, backend, ifMatch string, now time.Time) error {
+	tx, err := s.Config.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	last, had, err := newestPrice(ctx, tx, modelID, backend)
+	if err != nil {
+		return err
+	}
+	if err := checkMatch(ifMatch, PriceVersion(last)); err != nil {
+		return err
+	}
+	switch {
+	case !had || last.To != nil:
+		return badPrice{fmt.Errorf("%s on %s has no price to remove", modelID, backend)}
+	case last.From.After(now):
+		return badPrice{errors.New("a price change is scheduled; cancel it first")}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE model_pricing SET effective_to = $3 WHERE model_id = $1 AND backend = $2 AND effective_from = $4`,
+		modelID, backend, now, last.From); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM price_sources WHERE model_id = $1 AND backend = $2`, modelID, backend); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE price_proposals SET status = 'dismissed', decided_by = $3, decided_at = $4
+		WHERE model_id = $1 AND backend = $2 AND status = 'open'`, modelID, backend, actor, now); err != nil {
+		return err
+	}
+	if err := audit(ctx, tx, tenant, actor, "Removed model price", modelID+" on "+backend, "Pricing", modelID+"@"+backend, last, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // CancelPrice removes a scheduled price row that hasn't taken effect, and
 // reopens the row before it.
 func (s *Store) CancelPrice(ctx context.Context, tenant, actor, modelID, backend string, from, now time.Time) error {
