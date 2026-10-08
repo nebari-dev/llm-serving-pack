@@ -12,7 +12,7 @@ import { receiptStream, useApp, useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { DecisionTrace } from './decision-trace'
 import { Duration, Money, TokenCount } from './numbers'
-import { VerdictBadge } from './verdict'
+import { failedAfterAllowed, VerdictBadge } from './verdict'
 
 // §7.5.4 Request receipt. A drawer, deep-linkable (?receipt=id), printable,
 // exportable as signed JSON. Sections in the spec's order.
@@ -198,9 +198,16 @@ function ReceiptBody({ r }: { r: Receipt }) {
       <DrawerHeader className="flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <VerdictBadge verdict={r.verdict} />
-          <span className={cn('rounded-sm border px-1.5 font-mono text-xs leading-5', r.status >= 400 ? 'border-v-blocked-border text-v-blocked-fg' : 'border-border text-muted-foreground-strong')}>
-            {r.status}
-          </span>
+          {failedAfterAllowed(r) ? (
+            // Allowed by the guardrails, then failed upstream: say so, not just the code.
+            <span className="rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
+              Failed · <span className="font-mono">{r.status}</span>
+            </span>
+          ) : (
+            <span className={cn('rounded-sm border px-1.5 font-mono text-xs leading-5', r.status >= 400 ? 'border-v-blocked-border text-v-blocked-fg' : 'border-border text-muted-foreground-strong')}>
+              {r.status}
+            </span>
+          )}
           {r.inFlight && <span className="text-xs text-muted-foreground">Streaming — usage arrives at end of stream</span>}
           {mode?.note && (
             <span className="inline-flex items-center gap-1 rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">

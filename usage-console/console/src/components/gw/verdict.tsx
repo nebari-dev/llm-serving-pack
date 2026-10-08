@@ -56,6 +56,15 @@ export const toneFill: Record<Tone, string> = {
 }
 
 /** Chip with glyph + label. Use `compact` inside dense tables (glyph only, label for AT). */
+/**
+ * A request the guardrails let through (its verdict) whose upstream then
+ * failed: shown apart from a success, which shares its verdict, and from a
+ * guardrail's refusal (blocked, throttled), which is red already.
+ */
+export function failedAfterAllowed(r: { verdict: Verdict; status: number; inFlight?: boolean }): boolean {
+  return !r.inFlight && r.verdict !== 'blocked' && r.verdict !== 'throttled' && r.status >= 400
+}
+
 export function VerdictBadge({
   verdict,
   compact = false,

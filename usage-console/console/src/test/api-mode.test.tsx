@@ -1867,6 +1867,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         expect(failed.backend).toBe(name)
         expect(['upstream_error', 'upstream_unavailable']).toContain(failed.errorCode)
         expect(failed.trace.find((t) => t.step === 'Route selected')!.outcome).not.toContain('no matching route')
+        // Allowed by the guardrails, then failed: the receipt says so, not a green "Allowed" alone.
+        window.history.pushState({}, '', `/traffic?receipt=${(failed as R & { id: string }).id}`)
+        const view = render(<App />)
+        await waitFor(() => expect(document.body.textContent).toContain(`Failed · ${failed.status}`), { timeout: 5000 })
+        view.unmount()
       }
       const served = rs.find((r) => r.status === 200)!
       expect(served).toMatchObject({ backend: 'local', routeReason: 'fallback', fallbackFrom: name })

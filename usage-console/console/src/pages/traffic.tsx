@@ -3,7 +3,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'rea
 import { useSearchParams } from 'react-router-dom'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { EmptyState } from '@/components/gw/page'
-import { toneBar, toneText, verdictMeta } from '@/components/gw/verdict'
+import { failedAfterAllowed, toneBar, toneText, verdictMeta } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -610,6 +610,7 @@ const TrafficRow = memo(function TrafficRow({
   onMove: (from: number, by: number) => void
 }) {
   const meta = verdictMeta[r.verdict]
+  const failed = failedAfterAllowed(r)
   const cell = 'h-(--row-h) border-b border-border px-(--cell-px) whitespace-nowrap'
   const pinnedBg = 'bg-canvas group-hover:bg-muted group-focus-visible:bg-muted'
   const blocked = r.verdict === 'blocked' || r.verdict === 'throttled' // refused before the upstream call
@@ -628,13 +629,13 @@ const TrafficRow = memo(function TrafficRow({
           onMove(index, e.key === 'ArrowDown' ? 1 : -1)
         }
       }}
-      aria-label={`${clock(r.ts)} ${r.keyName} ${r.resolvedModel} ${r.inFlight ? 'streaming' : meta.label}`}
+      aria-label={`${clock(r.ts)} ${r.keyName} ${r.resolvedModel} ${r.inFlight ? 'streaming' : meta.label}${failed ? `, failed ${r.status}` : ''}`}
       className={cn('group cursor-pointer outline-none hover:bg-muted focus-visible:bg-muted', isNew && 'motion-safe:animate-row-arrive')}
     >
       {/* Verdict is the leftmost signal: a color bar at the row edge. */}
       <td className={cn('sticky left-0 z-[1] w-2 border-b border-border p-0', pinnedBg)}>
         <span
-          className={cn('mx-auto block h-[calc(var(--row-h)-6px)] w-1 rounded-full', r.inFlight ? 'border border-dashed border-border-strong' : toneBar[meta.tone])}
+          className={cn('mx-auto block h-[calc(var(--row-h)-6px)] w-1 rounded-full', r.inFlight ? 'border border-dashed border-border-strong' : toneBar[failed ? 'degraded' : meta.tone])}
           aria-hidden="true"
         />
         {/* Reduced motion: the arrival highlight degrades to a static left-edge marker. */}
