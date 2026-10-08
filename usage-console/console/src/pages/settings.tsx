@@ -13,6 +13,7 @@ import { api, can, dataMode, type LiveRoute, liveRoutes, type Member, type Reten
 import { age, ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
+import { envDisplay } from '@/components/shell/app-header'
 import { useLive } from '@/state/live'
 import { Link } from 'react-router-dom'
 import { LiveProviderKeys } from './providers-live'
@@ -38,6 +39,7 @@ const roleHelp: Record<string, string> = {
 
 export function SettingsPage() {
   const { env } = useApp()
+  const shownEnv = envDisplay(dataMode, session.environment, env)
   const live = dataMode === 'api'
   const [killOpen, setKillOpen] = useState(false)
   const sess = useLive(live ? '/session' : null, session, 15_000)
@@ -312,15 +314,22 @@ export function SettingsPage() {
 
       <Section id="environment" title="Environment">
         <p className="max-w-3xl text-sm text-muted-foreground-strong">
-          You are in <span className="font-medium text-foreground">{env === 'production' ? 'Production' : 'Staging'}</span>. Production shows a solid accent band across the top of every screen; staging shows a hatched one. The accent is set here, per environment, so the
-          two are never told apart by a dropdown label alone.
+          You are in <span className="font-medium text-foreground">{shownEnv.label}</span>. Production shows a solid accent band across the top of every screen; every other
+          environment shows a hatched one, so the two are never told apart by a label alone.{' '}
+          {live ? (
+            <>
+              It’s the environment this control plane serves, set when it starts (<span className="font-mono">-environment</span>).
+            </>
+          ) : (
+            'The accent is set here, per environment.'
+          )}
         </p>
         <div className="mt-3 flex flex-wrap gap-6 text-sm">
           <span className="inline-flex items-center gap-2">
             <span className="h-3 w-12 rounded-sm bg-env-production" aria-hidden="true" /> Production · solid
           </span>
           <span className="inline-flex items-center gap-2">
-            <span className="h-3 w-12 rounded-sm bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_6px,transparent_6px_12px)]" aria-hidden="true" /> Staging · hatched
+            <span className="h-3 w-12 rounded-sm bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_6px,transparent_6px_12px)]" aria-hidden="true" /> {live ? 'Any other · hatched' : 'Staging · hatched'}
           </span>
         </div>
       </Section>

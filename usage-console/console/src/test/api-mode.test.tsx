@@ -1004,6 +1004,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect(text).toMatch(/Warden config snapshot.*cache age \d/)
     // What has no backend yet says so instead of showing the mockup.
     expect(text).toContain('Not connected yet')
+    // The environment is the one this control plane serves, not the mockup's switcher.
+    expect(text).toContain('You are in Test')
+    expect(text).toContain('-environment')
+    expect(text).not.toContain('You are in Staging')
     for (const s of ['Snapshot v1842', 'on 2 of 6 pods', 'sk-proj-…Q7f', 'priya@acme.dev', 'otel-collector.nebari-gateway', 'platform-gitops', '7 years', '1,412', '4,806']) expect(text).not.toContain(s)
   })
 

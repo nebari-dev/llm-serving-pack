@@ -44,12 +44,22 @@ function initials(a: Session['actor']) {
     .join('')
 }
 
+/**
+ * The environment the header shows, and whether it's production (§7.4: it
+ * must be unmistakable). Against a control plane it's the one it serves;
+ * only the mockup has a switcher.
+ */
+export function envDisplay(mode: 'api' | 'mock', served: string, mockEnv: Env): { label: string; production: boolean } {
+  const name = mode === 'api' ? served : mockEnv
+  return { label: name.charAt(0).toUpperCase() + name.slice(1), production: name === 'production' }
+}
+
 export function AppHeader() {
   const { env, setEnv, range, setRange, setPaletteOpen } = useApp()
   const { themeMode, setThemeMode } = useTheme()
   const notifications = useNotifications()
   const unread = notifications.filter((n) => n.unread).length
-  const envLabel = dataMode === 'api' ? session.environment.charAt(0).toUpperCase() + session.environment.slice(1) : env === 'production' ? 'Production' : 'Staging'
+  const { label: envLabel, production } = envDisplay(dataMode, session.environment, env)
   const actor = session.actor
   // Dev mode: no IdP, every caller is the dev user (dev@localhost, owner).
   const devMode = dataMode === 'api' && session.auth.mode === 'dev'
@@ -58,7 +68,7 @@ export function AppHeader() {
     <div className="relative">
       {/* Environment accent (§7.4): production vs staging must be unmistakable. */}
       <div
-        className={cn('h-1 w-full', env === 'production' ? 'bg-env-production' : 'bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_8px,transparent_8px_16px)]')}
+        className={cn('h-1 w-full', production ? 'bg-env-production' : 'bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_8px,transparent_8px_16px)]')}
         aria-hidden="true"
       />
       <NavigationMenu className="h-14 justify-between border-border bg-header pl-4 text-header-foreground">
@@ -73,7 +83,7 @@ export function AppHeader() {
           {dataMode === 'api' ? (
             // One control plane serves one environment, so there's nothing to switch.
             <span
-              className={cn('ml-2 inline-flex h-8 items-center gap-2 rounded-md border px-2.5', env === 'production' ? 'border-env-production' : 'border-dashed border-env-staging')}
+              className={cn('ml-2 inline-flex h-8 items-center gap-2 rounded-md border px-2.5', production ? 'border-env-production' : 'border-dashed border-env-staging')}
               aria-label={`Tenant ${session.tenant.name}, environment ${session.environment}`}
             >
               <span className="text-sm font-medium text-muted-foreground-strong">{session.tenant.name}</span>
@@ -81,7 +91,7 @@ export function AppHeader() {
               <span
                 className={cn(
                   'rounded-sm px-1.5 text-xs leading-5 font-semibold',
-                  env === 'production' ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
+                  production ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
                 )}
               >
                 {envLabel}
@@ -91,7 +101,7 @@ export function AppHeader() {
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger
               variant="ghost"
-              className={cn('ml-2 h-8 gap-2 border px-2.5', headerAction, env === 'production' ? 'border-env-production' : 'border-dashed border-env-staging')}
+              className={cn('ml-2 h-8 gap-2 border px-2.5', headerAction, production ? 'border-env-production' : 'border-dashed border-env-staging')}
               aria-label={`Environment: ${env}. Change environment`}
             >
               <span className="text-sm font-medium text-muted-foreground-strong">{session.tenant.name}</span>
@@ -99,7 +109,7 @@ export function AppHeader() {
               <span
                 className={cn(
                   'rounded-sm px-1.5 text-xs leading-5 font-semibold',
-                  env === 'production' ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
+                  production ? 'bg-env-production text-primary-foreground' : 'border border-dashed border-env-staging text-foreground',
                 )}
               >
                 {envLabel}
