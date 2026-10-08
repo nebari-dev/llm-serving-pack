@@ -402,6 +402,12 @@ retire-old-secret-now are in.
 - Key writes (revoke, rotate, extend, finish) don't have an etag yet, so
   they don't take If-Match (§7).
 
+- **A key's allowed regions aren't enforced (found 2026-10-08).** They're
+  stored (spec §7.5.8 asks for them on creation) but nothing in the request
+  path checks them. The key form now lists the backends' real regions and
+  says they're recorded but not enforced. Decide what enforcing means: a
+  route or fallback to a backend outside them refused, or skipped.
+
 ## 6. Not built, by decision
 
 - **Routes and backends: desired state, applied locally (2026-10-05).** This

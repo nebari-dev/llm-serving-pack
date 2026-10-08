@@ -1645,6 +1645,14 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       choose(await screen.findByRole('option', { name: 'New project…' }))
       fireEvent.change(within(form).getByLabelText('New project name'), { target: { value: name } })
       expect(form.textContent).toContain(`Created on ${support} when you create the key.`)
+      // Nothing is picked for you: the models are the catalog's, as it is now.
+      await waitFor(() => expect(within(form).getByRole('checkbox', { name: /^gpt-5-mini/ }).getAttribute('aria-checked')).toBe('false'))
+      fireEvent.click(within(form).getByRole('checkbox', { name: /^gpt-5-mini/ }))
+      // Regions are the backends' own, and the form says they aren't enforced.
+      const regionsNow = [...new Set((await catalog.api<{ region: string }[]>('/backends')).map((b) => b.region))].sort()
+      const regionBoxes = within(within(form).getByRole('group', { name: 'Allowed regions' })).getAllByRole('checkbox').map((c) => c.textContent)
+      expect(regionBoxes).toEqual(regionsNow)
+      expect(form.textContent).toContain('not enforced yet')
       fireEvent.click(within(form).getByRole('radio', { name: '30 days' }))
       fireEvent.click(within(form).getByRole('button', { name: 'Create key' }))
       await waitFor(() => expect(document.body.textContent).toContain('Copy your new secret'), { timeout: 5000 })
@@ -1726,6 +1734,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       fireEvent.click(picker)
       choose(await screen.findByRole('option', { name }))
       await waitFor(() => expect(form.textContent).toContain(`project budget ${name}`), { timeout: 5000 })
+      fireEvent.click(await within(form).findByRole('checkbox', { name: /^gpt-5-mini/ }))
       fireEvent.click(within(form).getByRole('radio', { name: '30 days' }))
       fireEvent.click(within(form).getByRole('button', { name: 'Create key' }))
       await waitFor(() => expect(document.body.textContent).toContain('Copy your new secret'), { timeout: 5000 })
@@ -1884,6 +1893,24 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await dropBackends(name)
     }
   }, 120_000)
+
+  // A backend added on Routing brings its models; Create key offers them at
+  // once, not after the console reloads its catalog.
+  it('offers a just-added backend’s models when creating a key', async () => {
+    const name = `fresh-${Date.now().toString(36)}`
+    const model = `${name}-model`
+    try {
+      await send('POST', '/backends', { name, provider: 'Self-hosted', region: 'local', baseUrl: `${fakeOpenAI}/vllm-internal/v1`, models: [model] })
+      window.history.pushState({}, '', '/keys')
+      const r = render(<App />)
+      fireEvent.click(await screen.findByRole('button', { name: /Create key/ }))
+      const form = await formDialog()
+      await waitFor(() => expect(within(form).getByRole('checkbox', { name: new RegExp(model) })).toBeTruthy(), { timeout: 5000 })
+      r.unmount()
+    } finally {
+      await dropBackends(name)
+    }
+  }, 30_000)
 
   it('edits routes as desired state with audit rows and If-Match, diffs them against what the gateway runs, and applies them', async () => {
     type C = import('@/data/catalog').Change

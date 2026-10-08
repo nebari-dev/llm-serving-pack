@@ -1,5 +1,6 @@
 import { Copy, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
+import { useLive } from '@/state/live'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -9,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
-import { type ApiKey, type KeyRotation, budgetLabel, canManageKey, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
+import { type ApiKey, type Backend, type KeyRotation, budgetLabel, canManageKey, coveringBudgets, createKey, dataMode, extendRotation, finishRotation, models, rotateKey, teams } from '@/data/catalog'
 import { ago, int } from '@/lib/format'
 import { useNow } from '@/state/live'
 import { cn } from '@/lib/utils'
@@ -61,9 +62,16 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
   const [step, setStep] = useState<'form' | 'secret'>('form')
   const [secret, setSecret] = useState('')
   const [name, setName] = useState('')
-  const [team, setTeam] = useState<string>('support')
-  const [allowed, setAllowed] = useState<string[]>(['gpt-5-mini'])
-  const [allowedRegions, setAllowedRegions] = useState<string[]>(['us-east'])
+  const live = dataMode === 'api'
+  // Api mode: the models and regions as they are when the form opens (a
+  // backend added since the console loaded brings its models), and nothing
+  // picked for you. The mockup keeps its fixtures.
+  const liveModels = useLive<typeof models>(live && open ? '/models' : null, models, 60_000).data
+  const liveBackends = useLive<Backend[]>(live && open ? '/backends' : null, [], 60_000).data
+  const regionList = live ? [...new Set(liveBackends.map((b) => b.region))].sort() : regions
+  const [team, setTeam] = useState<string>(live ? (teams[0]?.id ?? '') : 'support')
+  const [allowed, setAllowed] = useState<string[]>(live ? [] : ['gpt-5-mini'])
+  const [allowedRegions, setAllowedRegions] = useState<string[]>(live ? [] : ['us-east'])
   const [expiry, setExpiry] = useState<Expiry | ''>('')
   const [customDate, setCustomDate] = useState('')
   const [neverAck, setNeverAck] = useState(false)
@@ -78,15 +86,16 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
 
   const nameValid = /^[a-z][a-z0-9-]{2,39}$/.test(name)
   const expiryValid = expiry !== '' && (expiry !== 'custom' || !!customDate) && (expiry !== 'never' || neverAck)
-  const valid = nameValid && allowed.length > 0 && allowedRegions.length > 0 && expiryValid && projectValid
+  // Regions are recorded, not enforced, in api mode: none picked is fine there.
+  const valid = nameValid && allowed.length > 0 && (live || allowedRegions.length > 0) && expiryValid && projectValid
 
   const reset = () => {
     setStep('form')
     setSecret('')
     setName('')
     project.reset()
-    setAllowed(['gpt-5-mini'])
-    setAllowedRegions(['us-east'])
+    setAllowed(live ? [] : ['gpt-5-mini'])
+    setAllowedRegions(live ? [] : ['us-east'])
     setExpiry('')
     setCustomDate('')
     setNeverAck(false)
@@ -194,7 +203,7 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">Allowed models</legend>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  {models.map((m) => (
+                  {liveModels.map((m) => (
                     <Checkbox key={m.id} checked={allowed.includes(m.id)} onCheckedChange={(on) => setAllowed((l) => toggle(l, m.id, on))} description={m.provider}>
                       <span className="font-mono">{m.id}</span>
                     </Checkbox>
@@ -206,13 +215,17 @@ export function CreateKeyDialog({ open, onOpenChange, onCreate }: { open: boolea
               <fieldset className="flex flex-col gap-2">
                 <legend className="mb-1 text-sm font-medium">Allowed regions</legend>
                 <div className="flex flex-wrap gap-x-5 gap-y-2">
-                  {regions.map((r) => (
+                  {regionList.map((r) => (
                     <Checkbox key={r} checked={allowedRegions.includes(r)} onCheckedChange={(on) => setAllowedRegions((l) => toggle(l, r, on))}>
                       <span className="font-mono">{r}</span>
                     </Checkbox>
                   ))}
                 </div>
-                {tried && allowedRegions.length === 0 && <p className="text-sm text-destructive-foreground">Pick at least one region.</p>}
+                {live ? (
+                  <p className="text-xs text-muted-foreground">Your backends’ regions. Recorded on the key, but not enforced yet: the gateway doesn’t check them.</p>
+                ) : (
+                  tried && allowedRegions.length === 0 && <p className="text-sm text-destructive-foreground">Pick at least one region.</p>
+                )}
               </fieldset>
 
               <div className="flex flex-col gap-1">
