@@ -2655,9 +2655,13 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Removed model price', target: `${model} on ${name}`, targetKind: 'Pricing' })
       // Nothing left to remove.
       expect(await status(send('DELETE', path, undefined, after.etag))).toBe(400)
+      // A removed price isn't "the rates in effect": setting the same ones again works.
+      await send('POST', path, { rates: { input: 1000, output: 2000 } }, after.etag)
+      expect((await pair()).rates.input?.perM).toBe(1000)
+      await send('DELETE', path, undefined, (await pair()).etag)
 
       // From Models → Pricing: the price editor's Remove price, with a confirm.
-      await send('POST', path, { rates: { input: 5, output: 10 } }, after.etag)
+      await send('POST', path, { rates: { input: 5, output: 10 } }, (await pair()).etag)
       window.history.pushState({}, '', '/models?tab=pricing')
       const r = render(<App />)
       fireEvent.click(await screen.findByRole('button', { name: `Edit price for ${model} on ${name}` }, { timeout: 5000 }))

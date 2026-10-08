@@ -216,9 +216,13 @@ func (s *Store) SetPrice(ctx context.Context, tenant, actor string, e PriceEdit,
 		return PriceRow{}, err
 	}
 	p := PriceRow{ModelID: e.ModelID, Backend: e.Backend, Rates: last.Rates, Sources: last.Sources, From: e.From}
+	// What's in effect now: the newest row, unless it ended with nothing after
+	// it (removed, retired, or its backend deleted). Then nothing is, and the
+	// same rates again are a new price, not "the rates already in effect".
+	prev := last
 	if had && last.To != nil {
-		// The newest row ended with nothing after it (a retired price).
 		p.Rates, p.Sources = pricing.Rates{}, pricing.Sources{}
+		prev = PriceRow{ModelID: e.ModelID, Backend: e.Backend}
 	}
 	var touched []string
 	for r, v := range e.Set {
@@ -239,7 +243,7 @@ func (s *Store) SetPrice(ctx context.Context, tenant, actor string, e PriceEdit,
 	if err := ValidatePrice(p, latest, now); err != nil {
 		return PriceRow{}, badPrice{err}
 	}
-	target := priceChange(last, p)
+	target := priceChange(prev, p)
 	if target == "" {
 		return PriceRow{}, badPrice{ErrSamePrice}
 	}
@@ -261,7 +265,7 @@ func (s *Store) SetPrice(ctx context.Context, tenant, actor string, e PriceEdit,
 		action = "Scheduled model price change"
 	}
 	var before any
-	if had {
+	if had && last.To == nil {
 		before = last
 	}
 	if err := audit(ctx, tx, tenant, actor, action, target, "Pricing", e.ModelID+"@"+e.Backend, before, p); err != nil {
