@@ -3264,7 +3264,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       made = await send<V>('POST', `/policies/${made.id}/publish`, { mode: 'enforce' }, made.etag)
       const before = await detectors()
       // The built-ins; custom entities (another test's, say) are listed too, marked custom.
-      expect(Object.values(before).filter((d) => !d.custom).map((d) => d.entity).sort()).toEqual(['Acme account ID', 'SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
+      expect(Object.values(before).filter((d) => !d.custom).map((d) => d.entity).sort()).toEqual(['SSN', 'credit card', 'email', 'phone', 'private key', 'secret', 'source code'])
       expect(before['credit card'].kind).toBe('regex + Luhn check')
       expect(before.email.usedBy).toContainEqual({ rule: `${name}-redact`, policy: name, version: 1, mode: 'enforce', action: 'redact' })
       expect(before.secret.usedBy).toContainEqual({ rule: `${name}-block`, policy: name, version: 1, mode: 'enforce', action: 'block' })

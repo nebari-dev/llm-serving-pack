@@ -26,14 +26,13 @@ type detector struct {
 }
 
 var detectors = map[string]detector{
-	"email":           {re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`), label: "EMAIL", sample: "replay@example.com"},
-	"SSN":             {re: regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), label: "SSN", sample: "078-05-1120"},
-	"phone":           {re: regexp.MustCompile(`\(\d{3}\) \d{3}-\d{4}|\b\d{3}-\d{3}-\d{4}\b`), label: "PHONE", sample: "(555) 010-0199"},
-	"credit card":     {re: regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`), valid: luhn, label: "CARD", sample: "4111 1111 1111 1111"},
-	"secret":          {re: regexp.MustCompile(`\b(?:sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36})\b`), label: "SECRET", sample: "sk-REPLAYSAMPLE0000000000"},
-	"private key":     {re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), label: "PRIVATE_KEY", sample: "-----BEGIN PRIVATE KEY-----"},
-	"source code":     {re: regexp.MustCompile("(?m)^```[a-z]*\\n(?:.*\\n)*?```"), label: "CODE", sample: "\n```\nsample()\n```\n"},
-	"Acme account ID": {re: regexp.MustCompile(`\bACME-\d{8}\b`), label: "ACCOUNT", sample: "ACME-00000000"},
+	"email":       {re: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`), label: "EMAIL", sample: "replay@example.com"},
+	"SSN":         {re: regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), label: "SSN", sample: "078-05-1120"},
+	"phone":       {re: regexp.MustCompile(`\(\d{3}\) \d{3}-\d{4}|\b\d{3}-\d{3}-\d{4}\b`), label: "PHONE", sample: "(555) 010-0199"},
+	"credit card": {re: regexp.MustCompile(`\b(?:\d[ -]?){13,19}\b`), valid: luhn, label: "CARD", sample: "4111 1111 1111 1111"},
+	"secret":      {re: regexp.MustCompile(`\b(?:sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36})\b`), label: "SECRET", sample: "sk-REPLAYSAMPLE0000000000"},
+	"private key": {re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`), label: "PRIVATE_KEY", sample: "-----BEGIN PRIVATE KEY-----"},
+	"source code": {re: regexp.MustCompile("(?m)^```[a-z]*\\n(?:.*\\n)*?```"), label: "CODE", sample: "\n```\nsample()\n```\n"},
 }
 
 func luhn(s string) bool {

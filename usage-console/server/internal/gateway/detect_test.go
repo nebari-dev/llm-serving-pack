@@ -166,3 +166,12 @@ func TestCustomEntityRedactedByRule(t *testing.T) {
 		t.Fatalf("got %s %+v", rc.Verdict, rc.Redactions)
 	}
 }
+
+// The built-ins are general kinds of data. A company's own identifiers (the
+// demo's "Acme account ID") are custom entities, made on the Detectors tab.
+func TestBuiltInsAreGeneralNotOneCompanys(t *testing.T) {
+	want := []string{"SSN", "credit card", "email", "phone", "private key", "secret", "source code"}
+	if got := Entities(); !slices.Equal(got, want) {
+		t.Fatalf("built-ins = %v, want %v", got, want)
+	}
+}
