@@ -88,7 +88,8 @@ export function LiveRoutingPage() {
     backends.reload()
   }
   const [editing, setEditing] = useState<LiveRoute | 'new' | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  // ?backend=<name> opens that backend's details (Settings → Providers links here).
+  const [selected, setSelected] = useState<string | null>(() => params.get('backend'))
   const [adding, setAdding] = useState(false)
   const current = backends.data.find((b) => b.name === selected) ?? null
 

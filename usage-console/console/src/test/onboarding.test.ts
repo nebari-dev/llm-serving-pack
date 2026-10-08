@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { changeIsProviders, modelChips } from '@/pages/onboarding-live'
+import { modelChips } from '@/pages/backend-summary'
+import { changeIsProviders } from '@/pages/onboarding-live'
 
 describe('modelChips', () => {
   it('shows up to three models, then how many more, so a backend serving hundreds stays one line', () => {

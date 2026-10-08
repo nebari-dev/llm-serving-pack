@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { envDisplay } from '@/components/shell/app-header'
 import { useLive } from '@/state/live'
+import { BackendRow } from './backend-summary'
 import { Link, useLocation } from 'react-router-dom'
 
 // §7.4 Settings → Providers · Retention · Integrations · Members.
@@ -124,14 +125,32 @@ export function SettingsPage() {
       <Accordion multiple value={open} onValueChange={(v) => setOpen(v as string[])} className="px-6">
       <SettingsSection id="providers" title="Providers" summary={providersSummary}>
         {live ? (
-          <p className="max-w-3xl text-sm text-muted-foreground-strong">
-            {backendList.loaded ? `${backendList.data.length} ${backendList.data.length === 1 ? 'backend' : 'backends'}: ${backendList.data.map((b) => b.name).join(', ') || 'none yet'}. ` : 'Loading… '}
-            Their keys, connection tests and models are on{' '}
-            <Link to="/routing?tab=backends" className="underline">
-              Routing → Backends
-            </Link>
-            . A key is tested once, then sealed: no screen or API ever returns it.
-          </p>
+          <div className="flex flex-col gap-3">
+            {backendList.loaded && backendList.data.length === 0 && <p className="text-sm text-muted-foreground">No backends yet. Connect one on Connect an app.</p>}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {backendList.data.map((b) => (
+                <Link
+                  key={b.name}
+                  to={`/routing?tab=backends&backend=${encodeURIComponent(b.name)}`}
+                  className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 no-underline! hover:border-border-strong hover:bg-muted/50"
+                >
+                  <span className="font-mono text-sm font-semibold">{b.name}</span>
+                  <BackendRow b={b} />
+                  <span className="mt-1 text-xs text-muted-foreground">
+                    {b.key ? <>Key <span className="font-mono">{b.key.prefix}…</span></> : 'No key'}
+                    {b.lastTest ? ` · last test ${b.lastTest.ok ? 'passed' : 'failed'} ${ago(b.lastTest.at)}` : ''}
+                  </span>
+                </Link>
+              ))}
+            </div>
+            <p className="max-w-3xl text-xs text-muted-foreground">
+              Click one for its details. Add one, replace a key or test a connection on{' '}
+              <Link to="/routing?tab=backends" className="underline">
+                Routing → Backends
+              </Link>
+              . A key is tested once, then sealed: no screen or API ever returns it.
+            </p>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[48rem] text-sm">
