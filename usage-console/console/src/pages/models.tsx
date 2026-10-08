@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
 import { backends, can, dataMode, modelById, models, seedAliases, seedDeprecations, seedModalities, seedPricing, seedRates, type AliasView, type MockPricingView, type PricingView } from '@/data/catalog'
+import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
 import { AliasDialog, DeleteAliasDialog, type LiveAlias } from './alias-dialogs'
@@ -237,8 +238,15 @@ function AliasesTab({ nonce }: { nonce: number }) {
                 <span className="sr-only">resolves to</span>
               </th>
               <th className={th}>Runs</th>
-              <th className={th}>When</th>
-              <th className={th}>Owner</th>
+              {live ? (
+                // Conditions and provenance aren't built, so api mode shows who last changed it instead.
+                <th className={th}>Last changed</th>
+              ) : (
+                <>
+                  <th className={th}>When</th>
+                  <th className={th}>Owner</th>
+                </>
+              )}
               <th className={cn(th, 'text-right')}>Requests, 24h</th>
               <th className={cn(th, !live && 'pr-6', 'text-right')}>Blended cost / 1M</th>
               {live && (
@@ -262,14 +270,29 @@ function AliasesTab({ nonce }: { nonce: number }) {
                     <span className="font-mono">{a.target}</span>
                     {a.note && <div className="text-xs text-muted-foreground">{a.note}</div>}
                   </td>
-                  <td className={cn(td, 'font-mono text-xs')}>{a.conditions ?? <span className="font-sans text-muted-foreground">always</span>}</td>
-                  <td className={td}>
-                    {a.provenance ? (
-                      <ProvenanceBadge provenance={a.provenance} source="github.com/acme/platform-gitops/blob/main/gateway/aliases.yaml" />
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Not recorded</span>
-                    )}
-                  </td>
+                  {live ? (
+                    <td className={cn(td, 'text-xs')}>
+                      {a.changedBy ? (
+                        <>
+                          {a.changedBy}
+                          {a.changedAt && <div className="text-muted-foreground">{ago(a.changedAt)}</div>}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">Not recorded</span>
+                      )}
+                    </td>
+                  ) : (
+                    <>
+                      <td className={cn(td, 'font-mono text-xs')}>{a.conditions ?? <span className="font-sans text-muted-foreground">always</span>}</td>
+                      <td className={td}>
+                        {a.provenance ? (
+                          <ProvenanceBadge provenance={a.provenance} source="github.com/acme/platform-gitops/blob/main/gateway/aliases.yaml" />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Not recorded</span>
+                        )}
+                      </td>
+                    </>
+                  )}
                   <td className={cn(td, 'num text-right font-mono')}>{a.requests24h.toLocaleString('en-US')}</td>
                   <td className={cn(td, !live && 'pr-6', 'text-right')}>
                     {!m ? (
@@ -297,7 +320,7 @@ function AliasesTab({ nonce }: { nonce: number }) {
             })}
             {loaded && rows.length === 0 && (
               <tr>
-                <td colSpan={live ? 8 : 7} className="px-6 py-6 text-center text-sm text-muted-foreground">
+                <td colSpan={7} className="px-6 py-6 text-center text-sm text-muted-foreground">
                   No aliases yet.
                 </td>
               </tr>

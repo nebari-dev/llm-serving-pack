@@ -369,3 +369,31 @@ func (s *Store) FinishRotation(ctx context.Context, tenant, actor, id string) (K
 	}
 	return k, tx.Commit(ctx)
 }
+
+// LastChange is who last changed something, and when (epoch ms).
+type LastChange struct {
+	Actor string
+	At    int64
+}
+
+// LastChanges is the latest audit row per target id of a kind ("Alias"):
+// who last created or changed each, and when.
+func (s *Store) LastChanges(ctx context.Context, tenant, kind string) (map[string]LastChange, error) {
+	rows, err := s.Config.Query(ctx, `SELECT DISTINCT ON (target_id) target_id, actor, ts FROM audit_log
+		WHERE tenant_id = $1 AND target_kind = $2 AND target_id IS NOT NULL AND target_id <> ''
+		ORDER BY target_id, ts DESC`, tenant, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]LastChange{}
+	for rows.Next() {
+		var id, actor string
+		var ts time.Time
+		if err := rows.Scan(&id, &actor, &ts); err != nil {
+			return nil, err
+		}
+		out[id] = LastChange{Actor: actor, At: ts.UnixMilli()}
+	}
+	return out, rows.Err()
+}

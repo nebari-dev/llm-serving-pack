@@ -72,6 +72,10 @@ type Alias struct {
 	Target      string `json:"target"`
 	Requests24h int    `json:"requests24h"`
 	ETag        string `json:"etag"` // for If-Match
+	// ChangedBy and ChangedAt are who last created or retargeted it, and when
+	// (epoch ms), from the audit log; empty when it has no row there.
+	ChangedBy string `json:"changedBy,omitempty"`
+	ChangedAt int64  `json:"changedAt,omitempty"`
 }
 
 // Pricing is every (model, backend) the tenant's backends serve with the

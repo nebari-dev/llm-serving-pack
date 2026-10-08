@@ -20,7 +20,11 @@ func (s *Server) aliases(_ http.ResponseWriter, r *http.Request, t string) (any,
 	if err != nil {
 		return nil, err
 	}
-	return aliasViews(aliases, requested), nil
+	changed, err := s.Store.LastChanges(r.Context(), t, "Alias")
+	if err != nil {
+		return nil, err
+	}
+	return aliasViews(aliases, requested, changed), nil
 }
 
 // putAlias takes {"target": model}: it creates the alias in the path
@@ -86,7 +90,7 @@ func (s *Server) aliasView(w http.ResponseWriter, r *http.Request, t, alias stri
 
 // aliasViews credits each requested model's count to the alias the gateway
 // would resolve it through, so requests later rerouted still count.
-func aliasViews(aliases map[string]string, requested map[string]int) []model.Alias {
+func aliasViews(aliases map[string]string, requested map[string]int, changed map[string]store.LastChange) []model.Alias {
 	byAlias := map[string]int{}
 	for m, n := range requested {
 		if a, ok := store.MatchAlias(aliases, m); ok {
@@ -95,7 +99,8 @@ func aliasViews(aliases map[string]string, requested map[string]int) []model.Ali
 	}
 	out := make([]model.Alias, 0, len(aliases))
 	for a, target := range aliases {
-		out = append(out, model.Alias{Alias: a, Target: target, Requests24h: byAlias[a], ETag: store.ETag(store.AliasRow{Alias: a, Target: target})})
+		c := changed[a]
+		out = append(out, model.Alias{Alias: a, Target: target, Requests24h: byAlias[a], ETag: store.ETag(store.AliasRow{Alias: a, Target: target}), ChangedBy: c.Actor, ChangedAt: c.At})
 	}
 	slices.SortFunc(out, func(x, y model.Alias) int { return cmp.Compare(x.Alias, y.Alias) })
 	return out

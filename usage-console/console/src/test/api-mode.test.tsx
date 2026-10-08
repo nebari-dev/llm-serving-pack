@@ -1104,6 +1104,10 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({
         action: 'Created alias', target: `${name} → gpt-5-mini`, targetKind: 'Alias', actor: catalog.session.actor.email,
       })
+      // The alias says who last changed it, and when.
+      const listed = (await catalog.api<(A & { changedBy?: string; changedAt?: number })[]>('/aliases')).find((x) => x.alias === name)!
+      expect(listed.changedBy).toBe(catalog.session.actor.email)
+      expect(Date.now() - listed.changedAt!).toBeLessThan(60_000)
 
       expect(await status(send('PUT', path, { target: 'gpt-5.5' }, NEW))).toBe(409) // it exists now
       const moved = await send<A>('PUT', path, { target: 'claude-haiku-4-5' }, made.etag)
@@ -1200,6 +1204,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await formDialogClosed()
       await waitFor(() => expect(screen.getByText(name)).toBeTruthy(), { timeout: 5000 })
       expect((await catalog.api<A[]>('/aliases')).find((a) => a.alias === name)?.target).toBe('smollm2')
+      // No columns the console can't fill (conditions, provenance); who last changed it instead.
+      const heads = screen.getAllByRole('columnheader').map((h) => h.textContent)
+      expect(heads).toContain('Last changed')
+      for (const gone of ['When', 'Owner']) expect(heads).not.toContain(gone)
+      await waitFor(() => expect(screen.getByText(name).closest('tr')!.textContent).toContain(catalog.session.actor.email), { timeout: 5000 })
       expect((await catalog.api<C[]>('/changes'))[0]).toMatchObject({ action: 'Created alias', target: `${name} → smollm2` })
 
       await act(async () => {

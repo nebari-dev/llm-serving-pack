@@ -16,7 +16,8 @@ import (
 func TestAliasViewsCountRequestsByWhatTheClientAskedFor(t *testing.T) {
 	aliases := map[string]string{"summarize-*": "gpt-5-mini", "summarize-eu": "llama-3.3-70b", "fast": "claude-haiku-4-5"}
 	requested := map[string]int{"summarize-digest": 887, "summarize-notes": 32, "summarize-eu": 5, "gpt-5.5": 1602}
-	got := aliasViews(aliases, requested)
+	changed := map[string]store.LastChange{"fast": {Actor: "ana@example.org", At: 1791400000000}}
+	got := aliasViews(aliases, requested, changed)
 	for i := range got {
 		if got[i].ETag != store.ETag(store.AliasRow{Alias: got[i].Alias, Target: got[i].Target}) {
 			t.Errorf("%s: etag %s isn't its row's ETag", got[i].Alias, got[i].ETag)
@@ -24,7 +25,8 @@ func TestAliasViewsCountRequestsByWhatTheClientAskedFor(t *testing.T) {
 		got[i].ETag = ""
 	}
 	want := []model.Alias{
-		{Alias: "fast", Target: "claude-haiku-4-5", Requests24h: 0},
+		// Who last created or changed it, from the audit log; nothing when it has no row.
+		{Alias: "fast", Target: "claude-haiku-4-5", Requests24h: 0, ChangedBy: "ana@example.org", ChangedAt: 1791400000000},
 		{Alias: "summarize-*", Target: "gpt-5-mini", Requests24h: 919},
 		{Alias: "summarize-eu", Target: "llama-3.3-70b", Requests24h: 5},
 	}

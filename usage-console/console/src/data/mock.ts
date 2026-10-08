@@ -248,6 +248,9 @@ export interface AliasView {
   conditions?: string
   provenance?: Provenance
   note?: string
+  /** Api mode: who last created or retargeted it, and when (epoch ms), from the audit log. */
+  changedBy?: string
+  changedAt?: number
 }
 
 export const aliases: AliasView[] = [
