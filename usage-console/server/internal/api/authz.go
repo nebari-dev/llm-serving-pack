@@ -131,6 +131,7 @@ var routeActions = map[string]Action{
 	"POST /detectors/hits/verdict": ActDetectors,
 	// Exports are reads of what the caller can already see (audited).
 	"POST /receipts/export":      ActRead,
+	"POST /receipts/export.csv":  ActRead,
 	"POST /receipts/{id}/export": ActRead,
 	// Sends a test request with the caller's own gateway key.
 	"POST /gateway/test": ActRead,

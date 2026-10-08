@@ -549,6 +549,12 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     fireEvent.click(screen.getByRole('button', { name: /Export signed/ }))
     await waitFor(() => expect(document.body.textContent).toMatch(/Exported [\d,]+ receipts?, signed/))
     expect(saved.at(-1)).toMatch(/^receipts-demo-\d{8}T\d{6}Z\.zip$/)
+    // The same receipts as a spreadsheet to read: CSV, not signed, audited too.
+    fireEvent.click(screen.getByRole('button', { name: /Export CSV/ }))
+    await waitFor(() => expect(document.body.textContent).toMatch(/Exported [\d,]+ receipts? as CSV/))
+    expect(saved.at(-1)).toMatch(/^receipts-demo-\d{8}T\d{6}Z\.csv$/)
+    const [csvRow] = await catalog.api<{ action: string; targetKind: string }[]>('/changes?kind=Receipt&limit=1')
+    expect(csvRow).toMatchObject({ action: 'Exported receipts as CSV', targetKind: 'Receipt' })
     click.mockRestore()
   })
 

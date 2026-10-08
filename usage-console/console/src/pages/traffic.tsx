@@ -1,4 +1,4 @@
-import { Columns3, FileSignature, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
+import { Columns3, Download, FileSignature, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
@@ -209,6 +209,23 @@ export function TrafficPage() {
       .finally(() => setExporting(false))
   }
 
+  // The same receipts as a spreadsheet to read: not signed, so not evidence; audited the same.
+  const exportCsv = () => {
+    setExporting(true)
+    downloadSignedExport(`/receipts/export.csv?${exportQuery(filters, window_)}`)
+      .then((ex) =>
+        toast.add({
+          title: `Exported ${ex.count.toLocaleString()} ${ex.count === 1 ? 'receipt' : 'receipts'} as CSV`,
+          description: `${ex.filename}: one row per request, for a spreadsheet. The export is recorded in the audit log.`,
+          type: 'success',
+        }),
+      )
+      .catch((e: unknown) =>
+        toast.add({ title: "The receipts couldn't be exported", description: e instanceof ApiError ? e.message : `${String(e)}. Try again.`, type: 'error' }),
+      )
+      .finally(() => setExporting(false))
+  }
+
   const activeDims = dims.filter((d) => filters[d.dim].length > 0 || primaryDims.includes(d.dim))
   const extraDims = dims.filter((d) => !primaryDims.includes(d.dim) && filters[d.dim].length === 0)
   const shownCols = allCols.filter((c) => cols.includes(c.id))
@@ -239,6 +256,17 @@ export function TrafficPage() {
                 title="Every receipt matching these filters in this window, as JSON Lines with an Ed25519 signature anyone can verify."
               >
                 <FileSignature /> {exporting ? 'Exporting…' : 'Export signed'}
+              </Button>
+            )}
+            {dataMode === 'api' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportCsv}
+                disabled={exporting}
+                title="The same receipts as a spreadsheet: one row per request with time, key, team, model, backend, verdict, status, tokens, cost and latency. Not signed."
+              >
+                <Download /> Export CSV
               </Button>
             )}
             <DensityPicker density={density} setDensity={setDensity} />

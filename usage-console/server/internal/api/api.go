@@ -175,6 +175,7 @@ func (s *Server) Handler() http.Handler {
 	h("GET "+p+"/receipts/count", s.receiptCount)
 	h("GET "+p+"/receipts/signing-key", s.signingKey)
 	h("POST "+p+"/receipts/export", s.exportReceipts)
+	h("POST "+p+"/receipts/export.csv", s.exportReceiptsCSV)
 	h("POST "+p+"/receipts/{id}/export", s.exportReceipt)
 	h("POST "+p+"/receipts/{id}/reveal", s.revealContent)
 	h("GET "+p+"/receipts/{id}", s.receipt)
