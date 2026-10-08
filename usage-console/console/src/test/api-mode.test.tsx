@@ -812,7 +812,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const totals = week.map((v) => v.rows.reduce((a, r) => a + r.spendUsd, 0))
     for (const t of totals) expect(Math.abs(t - totals[0])).toBeLessThan(Math.max(1, totals[0] * 0.01))
     const providers = new Set(catalog.backends.map((b) => b.provider))
-    expect(week[4].rows.filter((r) => r.spendUsd > 0).every((r) => providers.has(r.id))).toBe(true)
+    // A backend deleted since keeps its spend, under its own name, said to be gone.
+    expect(week[4].rows.filter((r) => r.spendUsd > 0).every((r) => providers.has(r.id) || r.sub === 'backend no longer configured')).toBe(true)
     expect(week[0].trend.bucketMs).toBe(86_400_000)
     expect(week[0].trend.points).toHaveLength(7)
 

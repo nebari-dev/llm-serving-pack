@@ -107,7 +107,10 @@ func TestPriceLater(t *testing.T) {
 	ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	now := ts.Add(time.Hour)
 	tok := pricing.Tokens{Input: 1000, Output: 100, Reasoning: 10}
+	// No output rate: nothing stands in for it (a missing reasoning rate would
+	// bill at output), so this row can't price a request with output.
 	partial := per(1, 1, 1, 4, 4)
+	partial[pricing.Output] = nil
 	partial[pricing.Reasoning] = nil
 	set := ts.Add(30 * time.Minute)
 	for _, c := range []struct {

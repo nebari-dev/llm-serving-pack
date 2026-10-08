@@ -65,8 +65,14 @@ func (r Rates) Priced() bool {
 type Tokens struct{ Input, Cached, CacheWrite, Output, Reasoning int }
 
 // Cost is what tokens cost at r, or nil when a rate they need is missing:
-// an unpriced request has no cost rather than $0.
+// an unpriced request has no cost rather than $0. Cached input and cache
+// writes without their own rate bill at the input rate, and reasoning at the
+// output rate, as ParseLiteLLM fills them, so a price set with only input
+// and output (by hand, say) prices every request.
 func Cost(r Rates, t Tokens) *float64 {
+	r[CachedInput] = cmp.Or(r[CachedInput], r[Input])
+	r[CacheWrite] = cmp.Or(r[CacheWrite], r[Input])
+	r[Reasoning] = cmp.Or(r[Reasoning], r[Output])
 	n := [NumRates]int{max(t.Input-t.Cached-t.CacheWrite, 0), t.Cached, t.CacheWrite, max(t.Output-t.Reasoning, 0), t.Reasoning}
 	if !r.Priced() && n == ([NumRates]int{}) {
 		return nil

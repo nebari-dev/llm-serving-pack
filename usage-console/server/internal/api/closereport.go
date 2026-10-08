@@ -105,7 +105,7 @@ func buildCloseReport(in closeInput) closeReport {
 			used[[2]string{c.Model, c.Backend}] = true
 		}
 	}
-	r.TotalUSD = round2(r.TotalUSD)
+	r.TotalUSD = roundUSD(r.TotalUSD)
 	for _, c := range in.Unpriced {
 		r.Unpriced += c.Requests
 	}
@@ -122,7 +122,7 @@ func buildCloseReport(in closeInput) closeReport {
 	unpriced := unpricedByScope(in.G, in.Unpriced)
 	for _, b := range in.Budgets {
 		id := b.ScopeType + ":" + b.Scope
-		cb := closeBudget{Name: b.Scope, ScopeType: b.ScopeType, CapUSD: b.CapUSD, SpentUSD: round2(spent[id]), Unpriced: unpriced[id]}
+		cb := closeBudget{Name: b.Scope, ScopeType: b.ScopeType, CapUSD: b.CapUSD, SpentUSD: roundUSD(spent[id]), Unpriced: unpriced[id]}
 		switch b.ScopeType {
 		case "team":
 			if t, ok := in.G.teams[b.Scope]; ok {

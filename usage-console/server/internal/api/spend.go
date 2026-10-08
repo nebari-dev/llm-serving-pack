@@ -278,7 +278,9 @@ func (g grouper) label(id, by string) (label, sub string) {
 	return id, ""
 }
 
-func round2(v float64) float64 { return math.Round(v*100) / 100 }
+// roundUSD keeps dollars to 6 places, as receipts' costs are: spend under a
+// cent is real, and rounding it to cents showed $0.00 for it.
+func roundUSD(v float64) float64 { return math.Round(v*1e6) / 1e6 }
 
 func (s *Server) spend(_ http.ResponseWriter, r *http.Request, t string) (any, error) {
 	ctx := r.Context()
@@ -347,7 +349,7 @@ func spendRows(g grouper, by string, cur, prev []store.SpendCell, unpriced []sto
 	for id, x := range rows {
 		x.Label, x.Sub = g.label(id, by)
 		x.NoDrill = id == unattributed || id == notRouted || id == "(unknown key)"
-		x.SpendUSD, x.PrevSpendUSD = round2(x.SpendUSD), round2(x.PrevSpendUSD)
+		x.SpendUSD, x.PrevSpendUSD = roundUSD(x.SpendUSD), roundUSD(x.PrevSpendUSD)
 		out = append(out, *x)
 	}
 	slices.SortFunc(out, func(a, b SpendRow) int { return cmp.Or(cmp.Compare(b.SpendUSD, a.SpendUSD), cmp.Compare(a.ID, b.ID)) })
@@ -468,8 +470,8 @@ func (s *Server) projection(ctx context.Context, t string, now time.Time, scope 
 			per[id] = [2]float64{v[0], v[1] / trailDays}
 		}
 	}
-	p.ProjectedUSD = round2(project(p.MonthToDateUSD, p.TrailingDailyUSD, p.RemainingDays))
-	p.MonthToDateUSD, p.TrailingDailyUSD = round2(p.MonthToDateUSD), round2(p.TrailingDailyUSD)
+	p.ProjectedUSD = roundUSD(project(p.MonthToDateUSD, p.TrailingDailyUSD, p.RemainingDays))
+	p.MonthToDateUSD, p.TrailingDailyUSD = roundUSD(p.MonthToDateUSD), roundUSD(p.TrailingDailyUSD)
 	return p, per, nil
 }
 
@@ -512,9 +514,9 @@ func (s *Server) budgetViews(ctx context.Context, t string, bs []model.Budget) (
 			b.ThrottlePerMinute = gateway.ThrottleRate
 		}
 		v := per[b.ScopeType+":"+b.Scope]
-		b.CurrentUSD, b.TrailingDailyUSD = round2(v[0]), round2(v[1])
+		b.CurrentUSD, b.TrailingDailyUSD = roundUSD(v[0]), roundUSD(v[1])
 		b.UnpricedRequests = unpriced[b.ScopeType+":"+b.Scope]
-		b.ProjectedUSD = round2(project(v[0], v[1], p.RemainingDays))
+		b.ProjectedUSD = roundUSD(project(v[0], v[1], p.RemainingDays))
 		b.ETag = store.BudgetETag(*b)
 	}
 	return bs, nil

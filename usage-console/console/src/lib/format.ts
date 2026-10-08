@@ -1,6 +1,9 @@
 // Formatting helpers used by the Money / TokenCount / Duration primitives.
 
+/** Dollars to `digits` places, except that spend under a cent shows to four places (never "$0.00" for real spend). */
 export function money(usd: number, digits = 2) {
+  const abs = Math.abs(usd)
+  if (digits === 2 && abs > 0 && abs < 0.01) return abs < 0.0001 ? '<$0.0001' : (usd < 0 ? '-$' : '$') + abs.toFixed(4)
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 

@@ -29,14 +29,21 @@ func TestCostSplitsInputIntoUncachedCachedAndCacheWrites(t *testing.T) {
 	near(t, got, (700*2+200*0.2+100*2.5+450*10+50*10)/1e6) // the 50 reasoning are inside the 500 output
 }
 
-func TestCostIsNilWhenANeededRateIsMissing(t *testing.T) {
-	r := all(2, 0.2, 2.5, 10, 10)
-	r[CacheWrite] = nil
-	if got := Cost(r, Tokens{Input: 1000, CacheWrite: 10, Output: 5}); got != nil {
-		t.Fatalf("a cache write with no cache-write rate can't be priced: %v", *got)
+// A price with just input and output (a manual one, say) bills cached input
+// and cache writes at the input rate, and reasoning at the output rate, as
+// LiteLLM's entries without those rates do: a local model reporting a few
+// cached tokens is priced, not left with no cost. Only a missing input or
+// output rate leaves a request unpriced.
+func TestCostFillsMissingRatesFromInputAndOutput(t *testing.T) {
+	in, out := 1000.0, 2000.0
+	r := Rates{&in, nil, nil, &out, nil}
+	near(t, Cost(r, Tokens{Input: 33, Cached: 5, CacheWrite: 2, Output: 20, Reasoning: 4}), (26*1000+5*1000+2*1000+16*2000+4*2000)/1e6)
+	noOut := Rates{&in, nil, nil, nil, nil}
+	if got := Cost(noOut, Tokens{Input: 10, Output: 5}); got != nil {
+		t.Fatalf("output with no output rate can't be priced: %v", *got)
 	}
 	// A missing rate the receipt doesn't use doesn't matter.
-	near(t, Cost(r, Tokens{Input: 1000, Output: 5}), (1000*2+5*10)/1e6)
+	near(t, Cost(noOut, Tokens{Input: 1000}), 1000*1000/1e6)
 	if got := Cost(Rates{}, Tokens{}); got != nil {
 		t.Fatalf("no price at all is no cost, not $0: %v", *got)
 	}
