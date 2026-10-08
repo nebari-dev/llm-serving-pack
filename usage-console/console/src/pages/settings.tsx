@@ -1,22 +1,21 @@
 import { CircleCheck, CircleDashed, KeyRound, Power, TriangleAlert, UserPlus } from 'lucide-react'
-import { useState } from 'react'
-import { PageHeader, Section } from '@/components/gw/page'
+import { type ReactNode, useEffect, useState } from 'react'
+import { PageHeader } from '@/components/gw/page'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { StateChip } from '@/components/gw/verdict'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toast'
-import { api, can, dataMode, type LiveRoute, liveRoutes, type Member, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
+import { api, type Backend, can, dataMode, type LiveRoute, liveRoutes, type Member, type RetentionView, routes, seedIntegrations, seedMembers, seedProviderKeys, seedRetention, seedSummary, session, type Summary } from '@/data/catalog'
 import { age, ago, int } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { envDisplay } from '@/components/shell/app-header'
 import { useLive } from '@/state/live'
-import { Link } from 'react-router-dom'
-import { LiveProviderKeys } from './providers-live'
+import { Link, useLocation } from 'react-router-dom'
 
 // §7.4 Settings → Providers · Retention · Integrations · Members.
 // §9.1 credentials, §4.6 retention tiers, §9.3 Warden kill switch.
@@ -65,6 +64,29 @@ export function SettingsPage() {
   const members = useLive<Member[]>(live ? '/members' : null, seedMembers, 60_000)
   const liveRouteList = useLive<LiveRoute[]>(live ? '/routes' : null, liveRoutes, 60_000).data
   const capturing = (live ? liveRouteList : routes).filter((r) => r.captureContent)
+  const backendList = useLive<Backend[]>(live ? '/backends' : null, [], 60_000)
+
+  // Sections start closed, each with a one-line summary; a link opens one
+  // (/settings#members), and the kill switch opens itself while it's on.
+  const { hash } = useLocation()
+  const [open, setOpen] = useState<string[]>(() => (hash ? [hash.slice(1)] : []))
+  useEffect(() => {
+    if (passThrough) setOpen((o) => (o.includes('kill-switch') ? o : [...o, 'kill-switch']))
+  }, [passThrough])
+  const providersSummary = live
+    ? backendList.loaded
+      ? `${backendList.data.length} ${backendList.data.length === 1 ? 'backend' : 'backends'}${backendList.data.length ? ` · ${backendList.data.map((b) => b.name).join(', ')}` : ''}`
+      : ''
+    : `${seedProviderKeys.length} providers`
+  const retentionSummary = [
+    retention?.hotDays ? `Request details ${retention.hotDays} days` : 'Request details kept',
+    retention?.aggregates.every((x) => x.dropAfterDays === null) ? 'totals forever' : 'totals kept',
+    capturing.length ? `capture on for ${capturing.length} ${capturing.length === 1 ? 'route' : 'routes'}` : 'no capture',
+  ].join(' · ')
+  const membersSummary = `${members.data.length} ${members.data.length === 1 ? 'member' : 'members'}${devMode ? ' · dev mode, no sign-in' : ''}`
+  const integrationsSummary = live
+    ? `${warden?.connected ? 'Warden connected' : 'Warden not connected'} · ${devMode ? 'sign-in, ' : ''}OpenTelemetry and Argo CD not set up`
+    : `${seedIntegrations.length + 1} integrations`
 
   const setPassThrough = async (on: boolean) => {
     if (!live) {
@@ -99,13 +121,17 @@ export function SettingsPage() {
         </div>
       )}
 
-      <Section
-        id="providers"
-        title="Providers"
-        description="Provider keys never leave the cluster and are never returned by the API — not even to owners. Tested once, then sealed. Never returned to callers."
-      >
+      <Accordion multiple value={open} onValueChange={(v) => setOpen(v as string[])} className="px-6">
+      <SettingsSection id="providers" title="Providers" summary={providersSummary}>
         {live ? (
-          <LiveProviderKeys />
+          <p className="max-w-3xl text-sm text-muted-foreground-strong">
+            {backendList.loaded ? `${backendList.data.length} ${backendList.data.length === 1 ? 'backend' : 'backends'}: ${backendList.data.map((b) => b.name).join(', ') || 'none yet'}. ` : 'Loading… '}
+            Their keys, connection tests and models are on{' '}
+            <Link to="/routing?tab=backends" className="underline">
+              Routing → Backends
+            </Link>
+            . A key is tested once, then sealed: no screen or API ever returns it.
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[48rem] text-sm">
@@ -159,37 +185,32 @@ export function SettingsPage() {
           </div>
         )}
         {!live && <p className="mt-2 text-xs text-muted-foreground">Providers without a cloud identity story get a rotation reminder every 90 days.</p>}
-      </Section>
+      </SettingsSection>
 
-      <Section id="retention" title="Retention" description="Receipts store hashes and decision traces, not prompt content, unless a route opts into capture.">
-        <dl className="grid max-w-3xl grid-cols-[10rem_1fr] gap-x-6 gap-y-3 text-sm">
-          <dt className="font-medium">Hot tier</dt>
+      <SettingsSection id="retention" title="Data kept" summary={retentionSummary}>
+        <dl className="grid max-w-3xl grid-cols-[11rem_1fr] gap-x-6 gap-y-3 text-sm">
+          <dt className="font-medium">Request details</dt>
           <dd>
             {!retention ? (
               <span className="text-muted-foreground">Loading…</span>
             ) : retention.hotDays === null ? (
               <>
-                <StateChip tone="degraded">No retention policy</StateChip> Raw receipts are kept indefinitely.
+                <StateChip tone="degraded">No retention policy</StateChip> Every request’s details are kept indefinitely.
               </>
             ) : (
               <>
-                <span className="num font-mono">{days(retention.hotDays)}</span> — full per-request receipts and decision traces
-                {retention.compressAfterDays !== null && <>, compressed after {days(retention.compressAfterDays)}</>}.{' '}
-                <span className="text-muted-foreground">This is also the longest window a rule can be replayed against.</span>
+                Kept <span className="num font-mono">{days(retention.hotDays)}</span>: who sent each request, the model, tokens, cost and its decision trace.{' '}
+                <span className="text-muted-foreground">Replay can look back this far.</span>
               </>
             )}
-            {live && retention?.oldestReceiptAt && <div className="text-xs text-muted-foreground">Oldest receipt kept: {new Date(retention.oldestReceiptAt).toISOString().slice(0, 10)}.</div>}
+            {live && retention?.oldestReceiptAt && <div className="text-xs text-muted-foreground">Oldest kept: {new Date(retention.oldestReceiptAt).toISOString().slice(0, 10)}.</div>}
           </dd>
-          <dt className="font-medium">Cold tier</dt>
+          <dt className="font-medium">Totals for charts</dt>
           <dd>
-            {retention?.aggregates.map((a) => (
-              <div key={a.name}>
-                <span className="font-mono">{a.name}</span> — {a.dropAfterDays === null ? 'Never dropped.' : <>kept <span className="num font-mono">{days(a.dropAfterDays)}</span>.</>}
-              </div>
-            ))}
-            {retention && <div className="text-muted-foreground">Aggregates and verdict counts only. No per-request detail.</div>}
+            {retention?.aggregates.every((x) => x.dropAfterDays === null) ? 'Kept forever' : 'Kept'}: the 5-minute and daily totals that Spend, Overview and Activity draw. No per-request
+            detail.
           </dd>
-          <dt className="font-medium">Content capture</dt>
+          <dt className="font-medium">Prompts and responses</dt>
           <dd className="flex flex-wrap items-center gap-2">
             {capturing.length === 0 ? (
               'Off on every route.'
@@ -211,9 +232,9 @@ export function SettingsPage() {
             </span>
           </dd>
         </dl>
-      </Section>
+      </SettingsSection>
 
-      <Section id="integrations" title="Integrations">
+      <SettingsSection id="integrations" title="Integrations" summary={integrationsSummary}>
         <ul className="divide-y divide-border rounded-md border border-border">
           {[
             ...(live
@@ -240,13 +261,11 @@ export function SettingsPage() {
             </li>
           ))}
         </ul>
-      </Section>
+      </SettingsSection>
 
-      <Section
-        id="members"
-        title="Members"
-        actions={
-          groupsUrl ? (
+      <SettingsSection id="members" title="Members" summary={membersSummary}>
+        <div className="mb-3 flex justify-end">
+          {groupsUrl ? (
             <Button variant="outline" size="sm" render={<a href={groupsUrl} target="_blank" rel="noreferrer" />}>
               <UserPlus /> Manage in Keycloak
             </Button>
@@ -254,9 +273,8 @@ export function SettingsPage() {
             <Button variant="outline" size="sm" disabled title={devMode ? 'Dev mode: no identity provider is configured.' : 'Roles are assigned in Keycloak.'}>
               <UserPlus /> Manage in Keycloak
             </Button>
-          )
-        }
-      >
+          )}
+        </div>
         <p className="mb-3 max-w-3xl text-sm text-muted-foreground">
           {devMode ? (
             <>
@@ -310,9 +328,9 @@ export function SettingsPage() {
           </tbody>
         </table>
         {!live && <p className="mt-2 text-xs text-muted-foreground">Service accounts get scoped tokens for CI.</p>}
-      </Section>
+      </SettingsSection>
 
-      <Section id="environment" title="Environment">
+      <SettingsSection id="environment" title="Environment" summary={shownEnv.label}>
         <p className="max-w-3xl text-sm text-muted-foreground-strong">
           You are in <span className="font-medium text-foreground">{shownEnv.label}</span>. Production shows a solid accent band across the top of every screen; every other
           environment shows a hatched one, so the two are never told apart by a label alone.{' '}
@@ -332,32 +350,27 @@ export function SettingsPage() {
             <span className="h-3 w-12 rounded-sm bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_6px,transparent_6px_12px)]" aria-hidden="true" /> {live ? 'Any other · hatched' : 'Staging · hatched'}
           </span>
         </div>
-      </Section>
+      </SettingsSection>
 
-      <Section id="kill-switch" title="Warden kill switch">
-        <Alert variant="destructive" className="max-w-3xl">
-          <Power />
-          <AlertTitle>Put Warden into pass-through.</AlertTitle>
-          <AlertDescription>
-            <p>
-              Every request skips identity checks, rules, redaction, and budget enforcement. Traffic keeps flowing and receipts keep recording.{' '}
-              {live
-                ? 'Takes effect on Warden immediately, without a rollout. Warden holds it in memory: a restart turns it back off.'
-                : 'Takes effect on all gateway pods within seconds, without a rollout.'}
-            </p>
-            <div className="mt-3 flex items-center gap-3">
-              <Switch
-                checked={passThrough}
-                disabled={switching || !!noSwitch}
-                onCheckedChange={(on) => (on ? setKillOpen(true) : setPassThrough(false))}
-                aria-label="Warden pass-through"
-              />
-              <span className="text-sm text-foreground">{passThrough ? 'Pass-through is on' : 'Policing normally'}</span>
-            </div>
-            {noSwitch && <p className="mt-2 text-xs text-muted-foreground">{noSwitch}</p>}
-          </AlertDescription>
-        </Alert>
-      </Section>
+      <SettingsSection id="kill-switch" title="Warden kill switch" summary={passThrough ? 'Pass-through is ON: nothing is being checked' : 'Policing normally'}>
+        <div className={cn('max-w-3xl rounded-md p-3', passThrough && 'border border-v-blocked-border bg-v-blocked-bg')}>
+          <p className="text-sm text-muted-foreground-strong">
+            For emergencies. If guardrails are breaking traffic, pass-through lets every request through unchecked: no key checks, rules, redaction or budgets. Receipts keep recording.{' '}
+            {live ? 'It takes effect at once, and Warden forgets it if it restarts.' : 'It takes effect on all gateway pods within seconds, without a rollout.'}
+          </p>
+          <div className="mt-3 flex items-center gap-3">
+            <Switch
+              checked={passThrough}
+              disabled={switching || !!noSwitch}
+              onCheckedChange={(on) => (on ? setKillOpen(true) : setPassThrough(false))}
+              aria-label="Warden pass-through"
+            />
+            <span className={cn('text-sm', passThrough ? 'font-medium text-v-blocked-fg' : 'text-foreground')}>{passThrough ? 'Pass-through is on' : 'Policing normally'}</span>
+          </div>
+          {noSwitch && <p className="mt-2 text-xs text-muted-foreground">{noSwitch}</p>}
+        </div>
+      </SettingsSection>
+    </Accordion>
 
       <KillSwitchDialog
         open={killOpen}
@@ -371,6 +384,21 @@ export function SettingsPage() {
         }}
       />
     </div>
+  )
+}
+
+/** One collapsible section: its title and a one-line summary, then its content. */
+function SettingsSection({ id, title, summary, children }: { id: string; title: string; summary: string; children: ReactNode }) {
+  return (
+    <AccordionItem value={id} id={id}>
+      <AccordionTrigger headingLevel={2} className="py-4">
+        <span className="text-base font-semibold">{title}</span>
+        {summary && <span className="ml-3 font-normal text-muted-foreground">{summary}</span>}
+      </AccordionTrigger>
+      <AccordionContent>
+        <div className="text-foreground">{children}</div>
+      </AccordionContent>
+    </AccordionItem>
   )
 }
 

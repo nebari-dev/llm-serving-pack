@@ -159,12 +159,13 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
     }
 
-    // Settings → Members lists the cache, and says there's no IdP.
-    window.history.pushState({}, '', '/settings')
+    // Settings → Members lists the cache, and says there's no IdP. A link opens its section.
+    window.history.pushState({}, '', '/settings#members')
     render(<App />)
     await act(async () => {
       await new Promise((ok) => setTimeout(ok, 500))
     })
+    expect(screen.getByRole('button', { name: /^Members/ }).getAttribute('aria-expanded')).toBe('true')
     const table = await screen.findByRole('table', { name: 'Members' })
     const row = within(table).getByText('dev@localhost').closest('tr')!
     expect(row.textContent).toContain('owner')
@@ -994,8 +995,15 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await new Promise((ok) => setTimeout(ok, 500))
     })
     const text = document.body.textContent ?? ''
-    expect(text).toContain('30 days')
-    expect(text).toContain('Never dropped')
+    // Each section collapses to its title and a one-line summary.
+    for (const name of ['Providers', 'Data kept', 'Integrations', 'Members', 'Environment', 'Warden kill switch']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}`) }).getAttribute('aria-expanded'), name).toBe('false')
+    }
+    expect(screen.getByRole('button', { name: /^Data kept/ }).textContent).toContain('Request details 30 days · totals forever')
+    expect(screen.getByRole('button', { name: /^Warden kill switch/ }).textContent).toContain('Policing normally')
+    // Plain words, not storage tiers and table names.
+    expect(text).toMatch(/kept forever/i)
+    for (const s of ['Hot tier', 'Cold tier', 'receipts_daily', 'receipts_5m']) expect(text).not.toContain(s)
     for (const name of capturing) expect(text).toContain(name)
     expect(text).toContain(capturing.length ? `On for ${capturing.length} route` : 'Off on every route.')
     // Warden's snapshot comes from /session, not the mockup's pods.
@@ -2681,11 +2689,14 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await new Promise((ok) => setTimeout(ok, 500))
     })
     try {
-      const providers = screen.getByRole('region', { name: 'Providers' })
-      // Only rotation reminders are still unbuilt.
-      expect(providers.textContent?.replace('Rotation reminders aren’t connected yet.', '')).not.toContain('connected yet')
+      // One line naming the backends, and where to manage them: their keys,
+      // tests and models live on Routing → Backends, not repeated here.
+      fireEvent.click(screen.getByRole('button', { name: /^Providers/ }))
+      const providers = await screen.findByRole('region', { name: /^Providers/ })
+      expect(providers.textContent).not.toContain('connected yet')
       expect(providers.textContent).toContain('openrouter')
-      expect(providers.textContent).toContain('OPENROUTER_API_KEY')
+      expect(within(providers).getByRole('link', { name: 'Routing → Backends' }).getAttribute('href')).toBe('/routing?tab=backends')
+      expect(providers.textContent).not.toContain('Last tested')
     } finally {
       r.unmount()
     }
@@ -3478,7 +3489,8 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await act(async () => {
         await new Promise((ok) => setTimeout(ok, 500))
       })
-      fireEvent.click(screen.getByRole('switch', { name: 'Warden pass-through' }))
+      fireEvent.click(screen.getByRole('button', { name: /^Warden kill switch/ }))
+      fireEvent.click(await screen.findByRole('switch', { name: 'Warden pass-through' }))
       const phrase = `pass-through ${catalog.session.environment}`
       fireEvent.change(screen.getByLabelText(/to confirm/), { target: { value: phrase } })
       await act(async () => {
