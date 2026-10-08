@@ -1830,7 +1830,7 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   // A route's targets unreachable: after the first failed request the gateway
   // ejects them and serves from the fallback, and those receipts say so.
   it('serves from a route’s fallback once its target is down, and the receipt says it fell back', async () => {
-    type R = { status: number; backend: string; routeReason: string; fallbackFrom?: string; trace: { step: string; outcome: string }[] }
+    type R = { status: number; backend: string; routeReason: string; fallbackFrom?: string; errorCode?: string; trace: { step: string; outcome: string }[] }
     const name = `down-${Date.now().toString(36)}`
     const model = `${name}-model`
     let keyId = ''
@@ -1842,20 +1842,32 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
         name, team: 'research', project: 'api-mode-test', allowedModels: [model], allowedRegions: ['local'], expiresAt: '2027-01-01',
       })
       keyId = key.id
+      // Passive health checking benches the target on a 1s sweep, so failover
+      // can take up to a second: send half a second apart until one is served.
       const statuses: number[] = []
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 12 && statuses.at(-1) !== 200; i++) {
         const res = await fetch(`${gateway}/v1/chat/completions`, {
           method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ model, max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }),
         })
         statuses.push(res.status)
+        if (res.status !== 200) await new Promise((ok) => setTimeout(ok, 500))
       }
       expect(statuses.at(-1)).toBe(200)
       const rs = await waitFor(async () => {
-        const got = await catalog.api<R[]>(`/receipts?key=${key.id}&limit=4`)
-        expect(got.length).toBe(4)
+        const got = await catalog.api<R[]>(`/receipts?key=${key.id}&limit=${statuses.length}`)
+        expect(got.length).toBe(statuses.length)
         return got
       }, { timeout: 15_000, interval: 500 })
+      // The failed one says the route's target was unreachable, not "no matching route".
+      const failed = rs.find((r) => r.status === 503)
+      // Envoy logs the backend when a connection was attempted on it, and none
+      // when it gave up first; either way the receipt names it.
+      if (failed) {
+        expect(failed.backend).toBe(name)
+        expect(['upstream_error', 'upstream_unavailable']).toContain(failed.errorCode)
+        expect(failed.trace.find((t) => t.step === 'Route selected')!.outcome).not.toContain('no matching route')
+      }
       const served = rs.find((r) => r.status === 200)!
       expect(served).toMatchObject({ backend: 'local', routeReason: 'fallback', fallbackFrom: name })
       const step = served.trace.find((t) => t.step === 'Route selected')!.outcome

@@ -195,7 +195,31 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 	up := model.TraceStep{Step: "Upstream called", Input: rc.Provider + " · " + rc.Region, MS: float64(rc.DurationMS),
 		Outcome: fmt.Sprintf("%d · %d output tokens", rc.Status, rc.OutputTokens), State: "ok"}
 
+	flags := get(attrFlags)
 	switch {
+	case rc.Backend == "" && rt != nil && len(rt.Targets) > 0 && !strings.Contains(flags, "NR") && rc.Status >= 500:
+		// The route matched, but no backend could be reached (UF connection
+		// failure, URX retries exhausted, UH none healthy), so none is logged.
+		// It's the route's target that failed, not a missing route.
+		target := rt.Targets[0].Backend
+		rc.Backend = target
+		for _, b := range s.Backends {
+			if b.Name == target {
+				rc.Provider, rc.Region = b.Provider, b.Region
+			}
+		}
+		rc.ErrorCode = "upstream_unavailable"
+		rc.ErrorDetail = fmt.Sprintf("%s unreachable (%d", target, rc.Status)
+		if flags != "" {
+			rc.ErrorDetail += ", " + flags
+		}
+		rc.ErrorDetail += ")"
+		route.Outcome = fmt.Sprintf("%s via %s · %s unreachable", rc.ResolvedModel, target, target)
+		if attempts := num(attrAttempts); attempts > 1 {
+			route.Outcome += fmt.Sprintf(" after %d attempts", attempts)
+		}
+		route.State = "fail"
+		up.Input, up.Outcome, up.State = rc.Provider+" · "+rc.Region, fmt.Sprintf("%d · couldn’t connect", rc.Status), "fail"
 	case rc.Backend == "":
 		// Agent Router answered without calling a backend, e.g. no route for the model.
 		rc.Verdict, rc.ErrorCode = "blocked", "no_route"

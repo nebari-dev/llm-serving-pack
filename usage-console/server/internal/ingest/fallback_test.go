@@ -71,3 +71,25 @@ func TestUpstreamFilePathShowsAsTheModelTheRouteSent(t *testing.T) {
 		t.Fatalf("route step = %q", st.Outcome)
 	}
 }
+
+// A route whose backends can't be reached logs no backend either, but it
+// matched: Envoy's flags say the upstream failed (UF: connection failure,
+// URX: retries exhausted, UH: no healthy host), not NR (no route). The
+// receipt says the route's targets were unreachable, not "no matching route".
+func TestUnreachableTargetsAreNotNoRoute(t *testing.T) {
+	rc, err := Receipt(withRoutes(), record(map[string]string{"response_code": "503", "response_flags": "UF,URX", "gen_ai.provider.name": "-",
+		"gen_ai.response.model": "-", "upstream_request_attempt_count": "3"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rc.ErrorCode != "upstream_unavailable" || rc.Verdict != "allowed" {
+		t.Fatalf("code %q verdict %q", rc.ErrorCode, rc.Verdict)
+	}
+	st := routeStep(rc)
+	if strings.Contains(st.Outcome, "no matching route") || !strings.Contains(st.Outcome, "openai-prod unreachable after 3 attempts") {
+		t.Errorf("route step = %q", st.Outcome)
+	}
+	if !strings.Contains(rc.ErrorDetail, "openai-prod") {
+		t.Errorf("detail = %q", rc.ErrorDetail)
+	}
+}
