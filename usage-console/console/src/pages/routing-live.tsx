@@ -296,10 +296,27 @@ function Models({ r }: { r: LiveRoute }) {
   )
 }
 
+/**
+ * The model a target names, for reading: a config default
+ * (`${LOCAL_LLM_MODEL:-ai/smollm2:360M-Q4_K_M}`, which the gateway fills from
+ * its environment) shows as the default it falls back to.
+ */
+export function shownModel(m: string): string {
+  return /^\$\{\w+:-(.+)\}$/.exec(m)?.[1] ?? m
+}
+
 function Target({ t, share }: { t: RouteTarget; share?: number }) {
   return (
-    <span className="truncate text-sm">
-      {t.model ? <span className="font-mono">{t.model}</span> : <span className="text-muted-foreground">Requested model</span>} <span className="text-muted-foreground">via {t.backend}</span>
+    // Long model names wrap rather than run into the next column.
+    <span className="block min-w-0 text-sm [overflow-wrap:anywhere]">
+      {t.model ? (
+        <span className="font-mono" title={t.model === shownModel(t.model) ? undefined : `Set as ${t.model}: the gateway’s environment can override it`}>
+          {shownModel(t.model)}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">Requested model</span>
+      )}{' '}
+      <span className="text-muted-foreground">via {t.backend}</span>
       {share !== undefined && <span className="num ml-2 font-mono text-xs">{share}%</span>}
     </span>
   )

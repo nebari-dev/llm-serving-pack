@@ -27,3 +27,12 @@ describe('changeIsProviders', () => {
     expect(changeIsProviders(c('Backend', 'testing-anthropic-2'), 'testing-anthropic')).toBe(false)
   })
 })
+
+describe('shownModel', () => {
+  it('shows the model a config default names, not the ${VAR:-default} syntax', async () => {
+    const { shownModel } = await import('@/pages/routing-live')
+    expect(shownModel('${LOCAL_LLM_MODEL:-ai/smollm2:360M-Q4_K_M}')).toBe('ai/smollm2:360M-Q4_K_M')
+    expect(shownModel('gpt-5-mini')).toBe('gpt-5-mini')
+    expect(shownModel('${ONLY_VAR}')).toBe('${ONLY_VAR}') // no default: nothing better to show
+  })
+})
