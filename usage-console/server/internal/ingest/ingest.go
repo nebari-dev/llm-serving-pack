@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -158,9 +159,31 @@ func Receipt(s *gateway.Snapshot, a map[string]string) (*model.Receipt, error) {
 		}
 		policy = p.Trace
 	}
+	// The route Agent Router took for the model it routed on. A backend from
+	// its fallback list, not its targets, means the targets were unavailable
+	// (passive health checking ejected them). A policy's reroute isn't that.
+	running := s.RunningRoutes
+	if running == nil {
+		running = s.Routes
+	}
+	rt := gateway.RouteFor(running, cmp.Or(get(attrReqModel), rc.RequestedModel),
+		map[string]string{"x-stargate-team": rc.Team, "x-data-region": rc.DataRegion})
+	if rt != nil && rc.Backend != "" && (rc.RouteReason == "explicit" || rc.RouteReason == "alias") &&
+		!servedBy(rt.Targets, rc.Backend) && servedBy(rt.Fallback, rc.Backend) && len(rt.Targets) > 0 {
+		rc.FallbackFrom, rc.RouteReason = rt.Targets[0].Backend, "fallback"
+	}
+	// A local runner reports a file path for its model; say what the route
+	// sent it instead, when the route renames it (else the path is all there is).
+	if strings.HasPrefix(upstreamName, "/") || strings.HasSuffix(upstreamName, ".gguf") {
+		upstreamName = cmp.Or(sentAs(rt, rc.Backend), upstreamName)
+	}
 	route := model.TraceStep{Step: "Route selected", Input: "requested " + rc.RequestedModel, Outcome: rc.ResolvedModel + " via " + rc.Backend, State: "ok"}
 	if upstreamName != "" && upstreamName != rc.ResolvedModel {
 		route.Outcome += " (upstream calls it " + upstreamName + ")"
+	}
+	if rc.FallbackFrom != "" {
+		route.Outcome += " · fallback: " + rc.FallbackFrom + " unavailable"
+		route.State = "warn"
 	}
 	if native {
 		route.Outcome += " · Anthropic Messages API"
@@ -280,4 +303,30 @@ func traceID(tp, reqID string) string {
 		return parts[1]
 	}
 	return reqID
+}
+
+// servedBy reports whether backend is one of ts.
+func servedBy(ts []model.RouteTarget, backend string) bool {
+	return slices.ContainsFunc(ts, func(t model.RouteTarget) bool { return t.Backend == backend })
+}
+
+// configDefault is a ${VAR:-default} value's default, which the gateway
+// uses unless its environment sets VAR.
+var configDefault = regexp.MustCompile(`^\$\{\w+:-(.+)\}$`)
+
+// sentAs is the model name rt sends to backend ("" if it sends the
+// requested one), with a config default shown as the default.
+func sentAs(rt *model.Route, backend string) string {
+	if rt == nil {
+		return ""
+	}
+	for _, t := range append(slices.Clone(rt.Targets), rt.Fallback...) {
+		if t.Backend == backend && t.Model != "" {
+			if m := configDefault.FindStringSubmatch(t.Model); m != nil {
+				return m[1]
+			}
+			return t.Model
+		}
+	}
+	return ""
 }

@@ -1827,6 +1827,47 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     await applyPending()
   }
 
+  // A route's targets unreachable: after the first failed request the gateway
+  // ejects them and serves from the fallback, and those receipts say so.
+  it('serves from a route’s fallback once its target is down, and the receipt says it fell back', async () => {
+    type R = { status: number; backend: string; routeReason: string; fallbackFrom?: string; trace: { step: string; outcome: string }[] }
+    const name = `down-${Date.now().toString(36)}`
+    const model = `${name}-model`
+    let keyId = ''
+    try {
+      await send('POST', '/backends', { name, provider: 'Self-hosted', region: 'local', baseUrl: 'http://localhost:1/v1', models: [model] })
+      await send('POST', '/routes', { name, match: { models: [model], headers: [] }, targets: [{ backend: name }], fallback: [{ backend: 'local', model: '${LOCAL_LLM_MODEL:-ai/smollm2:360M-Q4_K_M}' }] })
+      await applyPending()
+      const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+        name, team: 'research', project: 'api-mode-test', allowedModels: [model], allowedRegions: ['local'], expiresAt: '2027-01-01',
+      })
+      keyId = key.id
+      const statuses: number[] = []
+      for (let i = 0; i < 4; i++) {
+        const res = await fetch(`${gateway}/v1/chat/completions`, {
+          method: 'POST', headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model, max_tokens: 10, messages: [{ role: 'user', content: 'hi' }] }),
+        })
+        statuses.push(res.status)
+      }
+      expect(statuses.at(-1)).toBe(200)
+      const rs = await waitFor(async () => {
+        const got = await catalog.api<R[]>(`/receipts?key=${key.id}&limit=4`)
+        expect(got.length).toBe(4)
+        return got
+      }, { timeout: 15_000, interval: 500 })
+      const served = rs.find((r) => r.status === 200)!
+      expect(served).toMatchObject({ backend: 'local', routeReason: 'fallback', fallbackFrom: name })
+      const step = served.trace.find((t) => t.step === 'Route selected')!.outcome
+      expect(step).toContain(`fallback: ${name} unavailable`)
+      expect(step).not.toContain('.gguf') // the local runner's file path, named as the route sent it
+    } finally {
+      if (keyId) await send('POST', `/keys/${keyId}/revoke`).catch(() => {})
+      await dropRoutes(name)
+      await dropBackends(name)
+    }
+  }, 120_000)
+
   it('edits routes as desired state with audit rows and If-Match, diffs them against what the gateway runs, and applies them', async () => {
     type C = import('@/data/catalog').Change
     type Rc = { backend: string; resolvedModel: string; requestedModel: string }
