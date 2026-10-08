@@ -258,11 +258,9 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     const [r] = await catalog.api<{ id: string; traceId: string }[]>('/receipts?limit=1&verdict=allowed&range=24h')
     window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
     render(<App />)
-    await act(async () => {
-      await new Promise((ok) => setTimeout(ok, 300))
-    })
+    // Wait for the receipt to load rather than a fixed time: under a full run's load 300ms wasn't always enough.
+    await waitFor(() => expect(document.body.textContent).toContain(r.traceId), { timeout: 5000 })
     const text = document.body.textContent ?? ''
-    expect(text).toContain(r.traceId)
     // Priced at the snapshot for the backend that served it, or plainly unpriced.
     expect(text).toMatch(/rates (on \S+ )?recorded with this receipt|had no price when this request arrived/)
     expect(text).toContain('Policy mode:')
@@ -2398,6 +2396,77 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
   // fake-openai's "keyed-anthropic" backend speaks Anthropic's native API
   // (fakellm.AnthropicBackend): x-api-key and anthropic-version, no bearer token.
   const ANTHROPIC_KEY = 'sk-ant-fake-3c9e1f0a6b2d4c87'
+  // A model a provider adds would show "No price" and unknown context until
+  // someone linked it on Models. Setup offers LiteLLM's entry for each model
+  // (same name, same provider, priced) and links the ones you keep, with one
+  // sync, so price, context, modalities and status are there at once.
+  it('offers each new model’s LiteLLM entry when adding a provider, and links the kept ones in one sync', async () => {
+    type Match = import('@/data/catalog').LiteLLMMatch
+    type P = import('@/data/catalog').PricingView
+    const name = `anthropic-priced-${Date.now().toString(36)}`
+    const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, apiKey: ANTHROPIC_KEY, models: ['claude-echo', 'claude-opus-5-5'] }
+    try {
+      const matches = await catalog.api<Match[]>('/pricing/litellm/match?provider=Anthropic&models=claude-echo,claude-opus-5-5')
+      expect(matches.map((m) => [m.model, m.litellmKey])).toEqual([['claude-echo', ''], ['claude-opus-5-5', 'claude-opus-5-5']])
+      const opus = matches[1]
+      expect(opus.rates!.input).toBeGreaterThan(0)
+      expect(opus.context).toBeGreaterThan(0)
+      expect(opus.modalities).toContain('text')
+      // Nothing for a provider LiteLLM doesn't price.
+      expect((await catalog.api<Match[]>('/pricing/litellm/match?provider=Self-hosted&models=claude-opus-5-5'))[0].litellmKey).toBe('')
+
+      // A key that isn't in the file, or for a model the provider doesn't serve, refuses the whole save.
+      for (const bad of [{ 'claude-opus-5-5': 'no-such-entry' }, { 'gpt-5-mini': 'gpt-5-mini' }]) {
+        expect(await status(send('POST', '/backends', { ...provider, litellmKeys: bad }))).toBe(400)
+      }
+      expect((await catalog.api<BackendView[]>('/backends')).some((b) => b.name === name)).toBe(false)
+
+      await send('POST', '/backends', { ...provider, litellmKeys: { 'claude-opus-5-5': 'claude-opus-5-5' } })
+      const pair = (await catalog.api<P>('/pricing')).prices.find((p) => p.model === 'claude-opus-5-5' && p.backend === name)!
+      expect(pair.litellmKey).toBe('claude-opus-5-5')
+      expect(pair.rates.input!.perM).toBe(opus.rates!.input)
+      expect((await catalog.api<P>('/pricing')).prices.find((p) => p.model === 'claude-echo' && p.backend === name)?.litellmKey ?? null).toBeNull()
+      const m = (await catalog.api<{ id: string; context: number; modalities?: string[] }[]>('/models')).find((x) => x.id === 'claude-opus-5-5')!
+      expect(m.context).toBe(opus.context)
+      expect(m.modalities).toEqual(expect.arrayContaining(opus.modalities!))
+    } finally {
+      await dropBackends(name)
+    }
+  }, 60_000)
+
+  it('shows each model’s LiteLLM price in the provider form, and links the ones kept when it saves', async () => {
+    type P = import('@/data/catalog').PricingView
+    const name = `ui-priced-${Date.now().toString(36)}`
+    window.history.pushState({}, '', '/routing?tab=backends')
+    const r = render(<App />)
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: /Add provider/ }))
+      const d = await formDialog()
+      choose(within(d).getByRole('radio', { name: /^Anthropic/ }))
+      fireEvent.change(within(d).getByLabelText('Name'), { target: { value: name } })
+      fireEvent.change(within(d).getByLabelText('Base URL'), { target: { value: `${fakeOpenAI}/keyed-anthropic/v1` } })
+      fireEvent.change(within(d).getByLabelText('Region'), { target: { value: 'local' } })
+      fireEvent.change(within(d).getByLabelText('API key'), { target: { value: ANTHROPIC_KEY } })
+      fireEvent.change(within(d).getByLabelText('Models'), { target: { value: 'claude-echo, claude-opus-5-5' } })
+      // Each model says where its price will come from, before anything is saved.
+      const prices = await within(d).findByRole('region', { name: 'Prices and details' }, { timeout: 10_000 })
+      await waitFor(() => expect(prices.textContent).toMatch(/claude-opus-5-5.*LiteLLM.*\$[\d.]+ in · \$[\d.]+ out per 1M/), { timeout: 10_000 })
+      expect(prices.textContent).toMatch(/claude-echo.*No LiteLLM entry/)
+      const keep = within(prices).getByRole('checkbox', { name: 'Use LiteLLM for claude-opus-5-5' })
+      expect(keep.getAttribute('aria-checked') ?? String((keep as HTMLInputElement).checked)).toBe('true')
+      await act(async () => {
+        fireEvent.click(within(d).getByRole('button', { name: 'Save provider' }))
+      })
+      await formDialogClosed()
+      const pair = (await catalog.api<P>('/pricing')).prices.find((p) => p.model === 'claude-opus-5-5' && p.backend === name)!
+      expect(pair.litellmKey).toBe('claude-opus-5-5')
+      expect(pair.rates.input?.perM).toBeGreaterThan(0)
+    } finally {
+      r.unmount()
+      await dropBackends(name)
+    }
+  }, 60_000)
+
   it('tests an Anthropic key on Anthropic’s native API, and refuses one that fails', async () => {
     const name = `anthropic-${Date.now().toString(36)}`
     const provider = { name, provider: 'Anthropic', region: 'local', baseUrl: `${fakeOpenAI}/keyed-anthropic/v1`, models: ['claude-echo'] }

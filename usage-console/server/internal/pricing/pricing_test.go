@@ -183,8 +183,8 @@ func TestPriced(t *testing.T) {
 func TestParseFacts(t *testing.T) {
 	file := []byte(`{
 		"sample_spec": {"mode": "chat"},
-		"gpt-5-mini": {"mode": "chat", "supports_vision": true, "supports_pdf_input": true, "input_cost_per_token": 1e-7, "output_cost_per_token": 1e-6},
-		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {"mode": "chat", "supports_vision": true, "deprecation_date": "2026-10-15"},
+		"gpt-5-mini": {"mode": "chat", "litellm_provider": "openai", "max_input_tokens": 272000, "max_tokens": 128000, "supports_vision": true, "supports_pdf_input": true, "input_cost_per_token": 1e-7, "output_cost_per_token": 1e-6},
+		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {"mode": "chat", "litellm_provider": "bedrock_converse", "max_tokens": 64000, "supports_vision": true, "deprecation_date": "2026-10-15"},
 		"whisper-1": {"mode": "audio_transcription", "supports_audio_input": true},
 		"text-embedding-3-small": {"mode": "embedding", "deprecation_date": "not a date"}
 	}`)
@@ -193,8 +193,10 @@ func TestParseFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]Facts{
-		"gpt-5-mini": {Modalities: []string{"text", "image", "pdf"}},
-		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {Modalities: []string{"text", "image"}, Deprecation: "2026-10-15"},
+		// Context is how many tokens a request may take in: max_input_tokens,
+		// else max_tokens (older entries have only that).
+		"gpt-5-mini": {Modalities: []string{"text", "image", "pdf"}, Context: 272000, Provider: "openai"},
+		"eu.anthropic.claude-haiku-4-5-20251001-v1:0": {Modalities: []string{"text", "image"}, Deprecation: "2026-10-15", Context: 64000, Provider: "bedrock_converse"},
 		"whisper-1":              {Modalities: []string{"audio"}},
 		"text-embedding-3-small": {Modalities: []string{"text"}},
 	}
@@ -211,4 +213,34 @@ func TestCostBillsReasoningOnceInsideOutput(t *testing.T) {
 	near(t, Cost(r, Tokens{Output: 1000, Reasoning: 400}), (600*10+400*20)/1e6)
 	// More reasoning than output (a provider that reports them apart) never bills negative output.
 	near(t, Cost(r, Tokens{Output: 100, Reasoning: 400}), 400*20/1e6)
+}
+
+// Match is a model's LiteLLM entry for the provider serving it: the entry
+// named exactly as the model, priced, and listed under that provider (or
+// OpenRouter's prefixed name). It never borrows another provider's entry:
+// the same model costs differently on Bedrock than direct.
+func TestMatchFindsOnlyTheProvidersOwnEntry(t *testing.T) {
+	facts := map[string]Facts{
+		"claude-opus-5-5":               {Provider: "anthropic"},
+		"us.anthropic.claude-opus-5-5":  {Provider: "bedrock_converse"},
+		"gpt-5-mini":                    {Provider: "openai"},
+		"openrouter/openai/gpt-4o-mini": {Provider: "openrouter"},
+		"claude-unpriced":               {Provider: "anthropic"},
+		"gpt-5.5":                       {Provider: "azure"},
+	}
+	rates := map[string]Rates{"claude-opus-5-5": {}, "us.anthropic.claude-opus-5-5": {}, "gpt-5-mini": {}, "openrouter/openai/gpt-4o-mini": {}, "gpt-5.5": {}}
+	for _, c := range []struct{ provider, model, want string }{
+		{"Anthropic", "claude-opus-5-5", "claude-opus-5-5"},
+		{"OpenAI", "gpt-5-mini", "gpt-5-mini"},
+		{"OpenRouter", "openai/gpt-4o-mini", "openrouter/openai/gpt-4o-mini"},
+		{"Anthropic", "claude-unpriced", ""}, // no price in the file: nothing to link
+		{"OpenAI", "gpt-5.5", ""},            // Azure's entry, not OpenAI's
+		{"OpenAI", "claude-opus-5-5", ""},    // another provider's model
+		{"Self-hosted", "gpt-5-mini", ""},    // a self-hosted server has no list price
+		{"Anthropic", "us.anthropic.claude-opus-5-5", ""},
+	} {
+		if got := Match(facts, rates, c.provider, c.model); got != c.want {
+			t.Errorf("%s %s: got %q, want %q", c.provider, c.model, got, c.want)
+		}
+	}
 }

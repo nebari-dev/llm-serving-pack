@@ -375,8 +375,25 @@ func (s *Server) fetchLiteLLM(ctx context.Context) (map[string]pricing.Rates, er
 	return pricing.ParseLiteLLM(b)
 }
 
-// fetchLiteLLMFile loads LiteLLM's price file.
+// liteLLMFresh is how long a fetched file is reused.
+const liteLLMFresh = 5 * time.Minute
+
+// fetchLiteLLMFile loads LiteLLM's price file, or the copy fetched in the
+// last few minutes.
 func (s *Server) fetchLiteLLMFile(ctx context.Context) ([]byte, error) {
+	s.liteMu.Lock()
+	defer s.liteMu.Unlock()
+	if s.liteRaw != nil && time.Since(s.liteAt) < liteLLMFresh {
+		return s.liteRaw, nil
+	}
+	b, err := s.downloadLiteLLM(ctx)
+	if err == nil {
+		s.liteRaw, s.liteAt = b, time.Now()
+	}
+	return b, err
+}
+
+func (s *Server) downloadLiteLLM(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.liteLLMURL(), nil)

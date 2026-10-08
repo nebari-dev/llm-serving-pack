@@ -4,6 +4,7 @@
 package pricing
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"math"
@@ -193,6 +194,11 @@ func PlanSync(cur Current, lite *Rates, seen Seen) Plan {
 type Facts struct {
 	Modalities  []string
 	Deprecation string // YYYY-MM-DD
+	// Context is how many tokens a request may take in, 0 if unknown.
+	Context int
+	// Provider is LiteLLM's name for who serves the entry ("anthropic",
+	// "openai", "bedrock_converse"…).
+	Provider string
 }
 
 // ParseFacts reads each entry's input modalities (text, image, audio, pdf)
@@ -206,6 +212,9 @@ func ParseFacts(b []byte) (map[string]Facts, error) {
 	for key, raw := range file {
 		var e struct {
 			Mode        string `json:"mode"`
+			Provider    string `json:"litellm_provider"`
+			MaxInput    int    `json:"max_input_tokens"`
+			Max         int    `json:"max_tokens"`
 			Vision      bool   `json:"supports_vision"`
 			Audio       bool   `json:"supports_audio_input"`
 			PDF         bool   `json:"supports_pdf_input"`
@@ -214,7 +223,7 @@ func ParseFacts(b []byte) (map[string]Facts, error) {
 		if key == "sample_spec" || json.Unmarshal(raw, &e) != nil || e.Mode == "" {
 			continue
 		}
-		var f Facts
+		f := Facts{Context: cmp.Or(e.MaxInput, e.Max), Provider: e.Provider}
 		if e.Mode != "audio_transcription" {
 			f.Modalities = append(f.Modalities, "text")
 		}
@@ -232,4 +241,32 @@ func ParseFacts(b []byte) (map[string]Facts, error) {
 		out[key] = f
 	}
 	return out, nil
+}
+
+// litellmProviders is LiteLLM's name for each provider a backend can be,
+// with the prefix its entries carry: OpenRouter lists models as
+// openrouter/<vendor>/<model>.
+var litellmProviders = map[string]struct{ name, prefix string }{
+	"Anthropic":  {"anthropic", ""},
+	"OpenAI":     {"openai", ""},
+	"OpenRouter": {"openrouter", "openrouter/"},
+}
+
+// Match is the LiteLLM entry for model as provider serves it, or "": the
+// entry named as the model (with the provider's prefix), listed under that
+// provider, with a token price. It never borrows another provider's entry
+// (Bedrock's or Azure's price for the same model differs), and a provider
+// LiteLLM doesn't list (self-hosted) has none.
+func Match(facts map[string]Facts, rates map[string]Rates, provider, model string) string {
+	p, ok := litellmProviders[provider]
+	if !ok {
+		return ""
+	}
+	key := p.prefix + model
+	if f, ok := facts[key]; ok && f.Provider == p.name {
+		if _, priced := rates[key]; priced {
+			return key
+		}
+	}
+	return ""
 }

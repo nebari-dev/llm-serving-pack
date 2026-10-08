@@ -458,9 +458,17 @@ retire-old-secret-now are in.
         itself, any 6+ characters of it past the prefix, and masked echoes
         like OpenAI's `sk-proj-****abcd` are taken out.
       - A model the catalog doesn't know is added to it (display = id,
-        provider = the backend's, context 0 = unknown) with no price and no
-        LiteLLM key: "no price" until someone sets a rate or a key on Models.
-        No LiteLLM key is guessed, even for OpenAI.
+        provider = the backend's, context 0 = unknown). Changed 2026-10-08
+        (user's ask: sync pricing when setting it up): the provider form
+        offers each model's LiteLLM entry, ticked by default, and saving
+        links the ticked ones and syncs once, so price, context, modalities
+        and status are there at once. Only an exact match is offered: the
+        entry named as the model, under the same provider in LiteLLM
+        (anthropic, openai; OpenRouter's `openrouter/` prefix), with a token
+        price (`pricing.Match`). Bedrock's or Azure's entry for the same
+        model is never borrowed, and self-hosted gets none. An unticked or
+        unmatched model shows "no price" until set on Models. A model's
+        unknown context now comes from its linked entries (the largest).
       - Anthropic serves both kinds of caller from one provider (built
         2026-10-06, the user's ask: Anthropic-style callers with the same
         governance). Its connection test is native (`GET /v1/models` with

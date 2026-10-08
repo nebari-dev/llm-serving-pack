@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -28,6 +30,9 @@ type BackendInput struct {
 	BaseURL  string   `json:"baseUrl"`
 	Models   []string `json:"models"`
 	APIKey   string   `json:"apiKey"`
+	// LiteLLMKeys links models to LiteLLM entries on create (model → key),
+	// as GET /pricing/litellm/match offers them.
+	LiteLLMKeys map[string]string `json:"litellmKeys"`
 }
 
 // BackendResult is a backend after a write, with the connection test the
@@ -35,16 +40,30 @@ type BackendInput struct {
 type BackendResult struct {
 	Backend model.Backend           `json:"backend"`
 	Test    *routing.ConnectionTest `json:"test,omitempty"`
+	// Pricing says what didn't happen when linking LiteLLM entries on
+	// create; empty when they're linked and priced.
+	Pricing string `json:"pricing,omitempty"`
 }
 
 func (s *Server) providerClient() *http.Client { return http.DefaultClient }
 
 // readBackend decodes and checks a backend write against was (nil on create).
 func readBackend(r *http.Request, name string, was *model.Backend) (model.Backend, string, error) {
+	b, key, _, err := readBackendInput(r, name, was)
+	return b, key, err
+}
+
+// readBackendInput is readBackend with the LiteLLM links a create may carry.
+func readBackendInput(r *http.Request, name string, was *model.Backend) (model.Backend, string, map[string]string, error) {
 	var in BackendInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		return model.Backend{}, "", badRequest("invalid JSON body")
+		return model.Backend{}, "", nil, badRequest("invalid JSON body")
 	}
+	b, key, err := checkBackendInput(in, name, was)
+	return b, key, in.LiteLLMKeys, err
+}
+
+func checkBackendInput(in BackendInput, name string, was *model.Backend) (model.Backend, string, error) {
 	if name != "" {
 		in.Name = name
 	}
@@ -116,12 +135,17 @@ func (s *Server) testKey(ctx context.Context, b model.Backend, key string) (rout
 	return res, nil
 }
 
-// createBackend takes {name, provider, region, baseUrl, models, apiKey?}. A
-// key is tested first, and the backend saved with it only if it passes; a
-// backend with no key is saved, then tested (a self-hosted one may be down).
+// createBackend takes {name, provider, region, baseUrl, models, apiKey?,
+// litellmKeys?}. A key is tested first, and the backend saved with it only if
+// it passes; a backend with no key is saved, then tested (a self-hosted one
+// may be down). litellmKeys are checked before anything is saved, then each
+// is linked (its own audit row) and prices sync once.
 func (s *Server) createBackend(w http.ResponseWriter, r *http.Request, t string) (any, error) {
-	b, key, err := readBackend(r, "", nil)
+	b, key, links, err := readBackendInput(r, "", nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkLiteLLMKeys(r.Context(), b.Models, links); err != nil {
 		return nil, err
 	}
 	var nk *store.NewProviderKey
@@ -150,8 +174,27 @@ func (s *Server) createBackend(w http.ResponseWriter, r *http.Request, t string)
 	if err != nil {
 		return nil, err
 	}
-	v, err := s.backendView(w, r, t, saved.Name)
-	return BackendResult{Backend: v, Test: &res}, err
+	out := BackendResult{Test: &res}
+	if len(links) > 0 {
+		out.Pricing = s.linkPrices(r.Context(), t, actor(r), saved.Name, links)
+	}
+	out.Backend, err = s.backendView(w, r, t, saved.Name)
+	return out, err
+}
+
+// linkPrices links a new backend's models to their LiteLLM entries and
+// syncs, so they're priced at once. The backend is saved either way; what
+// didn't happen comes back as a note rather than failing the save.
+func (s *Server) linkPrices(ctx context.Context, t, who, backend string, links map[string]string) string {
+	for _, m := range slices.Sorted(maps.Keys(links)) {
+		if err := s.Store.SetPriceSource(ctx, t, who, m, backend, links[m]); err != nil {
+			return fmt.Sprintf("Saved, but linking %s to LiteLLM failed: %v. Link it on Models.", m, err)
+		}
+	}
+	if err := s.SyncPrices(ctx); err != nil {
+		return "Linked to LiteLLM; prices arrive with the next sync (this one failed: " + err.Error() + ")."
+	}
+	return ""
 }
 
 // updateBackend replaces a backend's provider, region, base URL and models.

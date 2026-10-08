@@ -60,8 +60,13 @@ type Server struct {
 	Keys routing.KeyStore
 	// Signer signs receipt exports; nil when there's no key (exports are
 	// then refused, 503).
-	Signer  *receiptsig.Signer
-	syncMu  sync.Mutex
+	Signer *receiptsig.Signer
+	syncMu sync.Mutex
+	// lite is LiteLLM's file as last fetched, reused for a few minutes so
+	// the provider form's lookups don't download it each time.
+	liteMu  sync.Mutex
+	liteRaw []byte
+	liteAt  time.Time
 	applyMu sync.Mutex
 	// seen is the members cache's last write per user (touchUser).
 	seen sync.Map
@@ -119,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	h("POST "+p+"/pricing/sync", s.syncNow)
 	h("POST "+p+"/pricing/proposals/{id}/accept", s.acceptProposal)
 	h("POST "+p+"/pricing/proposals/{id}/dismiss", s.dismissProposal)
+	h("GET "+p+"/pricing/litellm/match", s.liteLLMMatch)
 	h("POST "+p+"/pricing/{model}/{backend}", s.setPrice)
 	h("PUT "+p+"/pricing/{model}/{backend}/source", s.setPriceSource)
 	h("DELETE "+p+"/pricing/{model}/{backend}/{at}", s.cancelPrice)
@@ -329,8 +335,9 @@ func (s *Server) models(_ http.ResponseWriter, r *http.Request, _ string) (any, 
 }
 
 // withFacts adds what LiteLLM says about each model on the backends serving
-// it: the union of their modalities, in first-seen order, and any
-// deprecation dates.
+// it: the union of their modalities, in first-seen order, any deprecation
+// dates, and, for a model whose context is unknown (0, as one a provider
+// added starts), the largest context its entries give.
 func withFacts(ms []model.Model, facts []store.PairFacts) []model.Model {
 	out := slices.Clone(ms)
 	for i := range out {
@@ -345,6 +352,9 @@ func withFacts(ms []model.Model, facts []store.PairFacts) []model.Model {
 			}
 			if f.Deprecation != "" {
 				out[i].Deprecations = append(out[i].Deprecations, model.Deprecation{Backend: f.Backend, Date: f.Deprecation})
+			}
+			if ms[i].Context == 0 {
+				out[i].Context = max(out[i].Context, f.Context)
 			}
 		}
 	}

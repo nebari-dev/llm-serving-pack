@@ -74,6 +74,8 @@ export interface ConnectionTest {
 export interface BackendResult {
   backend: Backend
   test?: ConnectionTest
+  /** What didn't happen linking models to LiteLLM on create; absent when they're linked and priced. */
+  pricing?: string
 }
 
 export type * from './mock'
@@ -771,6 +773,18 @@ export const planPublish = (p: PolicyView, mode: PublishMode) => api<PolicyPubli
 export const publishPolicy = (p: PolicyView, mode: PublishMode) => api<PolicyView>(`/policies/${p.id}/publish`, json('POST', { mode }, p.etag))
 export const rollbackPolicy = (p: PolicyView, version: number) => api<PolicyView>(`/policies/${p.id}/rollback`, json('POST', { version }, p.etag))
 export const deletePolicy = (p: PolicyView) => api<{ id: string }>(`/policies/${p.id}`, json('DELETE', undefined, p.etag))
+/** A model's LiteLLM entry for a provider, offered when adding the provider; `litellmKey` is "" when there's none. */
+export interface LiteLLMMatch {
+  model: string
+  litellmKey: string
+  /** Per 1M tokens, by rate (input, cachedInput, cacheWrite, output, reasoning). */
+  rates?: Partial<Record<'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning', number>>
+  context?: number
+  modalities?: string[]
+}
+export const liteLLMMatch = (provider: string, models: string[]) =>
+  api<LiteLLMMatch[]>(`/pricing/litellm/match?provider=${encodeURIComponent(provider)}&models=${encodeURIComponent(models.join(','))}`)
+
 /** Replays `c` (the builder's rules, saved or not) in place of policy `id` over the window. Writes nothing. */
 export const replayPolicy = (id: string, c: PolicyContent, window: ReplayWindow) => api<ReplayView>(`/policies/${id}/replay?window=${window}`, json('POST', c))
 /** §9.2: turns a route's content capture on or off, at once (no apply). An elevated role's action, audited. */

@@ -12,6 +12,7 @@ type PairFacts struct {
 	Model, Backend string
 	Modalities     []string
 	Deprecation    string // YYYY-MM-DD, "" if none
+	Context        int    // tokens in, 0 if unknown
 }
 
 // SaveFacts keeps the facts for every LiteLLM key a pair is priced from.
@@ -43,7 +44,8 @@ func (s *Store) SaveFacts(ctx context.Context, facts map[string]pricing.Facts, n
 		if !ok {
 			continue
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO litellm_facts VALUES ($1, $2, NULLIF($3, '')::date, $4)`, k, f.Modalities, f.Deprecation, now); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO litellm_facts (litellm_key, modalities, deprecation_date, synced_at, context_tokens)
+			VALUES ($1, $2, NULLIF($3, '')::date, $4, $5)`, k, f.Modalities, f.Deprecation, now, f.Context); err != nil {
 			return err
 		}
 	}
@@ -53,7 +55,7 @@ func (s *Store) SaveFacts(ctx context.Context, facts map[string]pricing.Facts, n
 // ModelFacts are the saved facts per (model, backend), by its LiteLLM key.
 func (s *Store) ModelFacts(ctx context.Context) ([]PairFacts, error) {
 	rows, err := s.Config.Query(ctx, `
-		SELECT p.model_id, p.backend, f.modalities, coalesce(to_char(f.deprecation_date, 'YYYY-MM-DD'), '')
+		SELECT p.model_id, p.backend, f.modalities, coalesce(to_char(f.deprecation_date, 'YYYY-MM-DD'), ''), f.context_tokens
 		FROM price_sources p JOIN litellm_facts f USING (litellm_key)
 		ORDER BY p.model_id, p.backend`)
 	if err != nil {
@@ -63,7 +65,7 @@ func (s *Store) ModelFacts(ctx context.Context) ([]PairFacts, error) {
 	var out []PairFacts
 	for rows.Next() {
 		var f PairFacts
-		if err := rows.Scan(&f.Model, &f.Backend, &f.Modalities, &f.Deprecation); err != nil {
+		if err := rows.Scan(&f.Model, &f.Backend, &f.Modalities, &f.Deprecation, &f.Context); err != nil {
 			return nil, err
 		}
 		out = append(out, f)

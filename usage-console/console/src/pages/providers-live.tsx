@@ -1,14 +1,15 @@
 import { CircleCheck, Plus } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { toast } from '@/components/ui/toast'
-import { api, ApiError, can, type Backend, type BackendResult, type ConnectionTest } from '@/data/catalog'
+import { api, ApiError, can, type Backend, type BackendResult, type ConnectionTest, type LiteLLMMatch, liteLLMMatch } from '@/data/catalog'
 import { ago } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/state/live'
@@ -145,7 +146,21 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
   const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
   const tile = tiles.find((t) => t.id === draft.provider)
   const provider = draft.provider === 'OpenAI-compatible' && draft.providerName.trim() ? draft.providerName.trim() : draft.provider
-  const body = () => ({ name: draft.name.trim(), provider, region: draft.region.trim(), baseUrl: draft.baseUrl.trim(), models: splitModels(draft.models), apiKey: draft.apiKey || undefined })
+  // New provider: each model's LiteLLM entry, linked on save unless unticked,
+  // so it's priced, with its context and modalities, from the start.
+  const models = splitModels(draft.models)
+  const matches = useLiteLLMMatches(backend ? '' : provider, models)
+  const [skipped, setSkipped] = useState<string[]>([])
+  const litellmKeys = Object.fromEntries((matches.data ?? []).filter((m) => m.litellmKey && !skipped.includes(m.model)).map((m) => [m.model, m.litellmKey]))
+  const body = () => ({
+    name: draft.name.trim(),
+    provider,
+    region: draft.region.trim(),
+    baseUrl: draft.baseUrl.trim(),
+    models,
+    apiKey: draft.apiKey || undefined,
+    litellmKeys: backend ? undefined : litellmKeys,
+  })
 
   const runTest = async () => {
     setTesting(true)
@@ -165,7 +180,7 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
     try {
       let out: BackendResult
       if (backend) {
-        const { apiKey: _, ...rest } = body()
+        const { apiKey: _, litellmKeys: __, ...rest } = body()
         out = { backend: await api<Backend>(`/backends/${encodeURIComponent(backend.name)}`, { method: 'PUT', body: JSON.stringify(rest), headers: { 'If-Match': etag } }) }
       } else {
         out = await api<BackendResult>('/backends', { method: 'POST', body: JSON.stringify(body()) })
@@ -249,8 +264,16 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
             <Field className="sm:col-span-2">
               <FieldLabel>Models</FieldLabel>
               <Input value={draft.models} onChange={(e) => set({ models: e.target.value })} placeholder="Test the connection to list them" className="font-mono" autoComplete="off" spellCheck={false} />
-              <FieldDescription>The models the gateway serves from it. A model the catalog doesn’t know is added with no price until one is set on Models.</FieldDescription>
+              <FieldDescription>The models the gateway serves from it, as the provider names them.</FieldDescription>
             </Field>
+            {!backend && models.length > 0 && (
+              <PricesAndDetails
+                matches={matches}
+                provider={provider}
+                skipped={skipped}
+                onToggle={(m, keep) => setSkipped((s) => (keep ? s.filter((x) => x !== m) : [...s, m]))}
+              />
+            )}
             <div className="flex flex-col items-start gap-2 sm:col-span-2">
               <Button type="button" variant="outline" onClick={runTest} loading={testing} loadingText="Testing…" disabled={!draft.baseUrl.trim() || !can('routing').ok} title={can('routing').reason}>
                 Test connection
@@ -295,6 +318,79 @@ export function ProviderForm({ backend, onSaved, onCancel, label }: { backend?: 
   )
 }
 
+/** LiteLLM's entry for each model, looked up as the models are typed (debounced). */
+function useLiteLLMMatches(provider: string, models: string[]) {
+  const key = provider && models.length ? `${provider}|${models.join(',')}` : ''
+  const [state, setState] = useState<{ key: string; data?: LiteLLMMatch[]; error?: string }>({ key: '' })
+  useEffect(() => {
+    if (!key) return
+    let live = true
+    const timer = window.setTimeout(() => {
+      liteLLMMatch(provider, models).then(
+        (data) => live && setState({ key, data }),
+        (e) => live && setState({ key, error: e instanceof Error ? e.message : String(e) }),
+      )
+    }, 400)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key covers provider and models
+  }, [key])
+  return state.key === key ? state : { key, data: undefined, error: undefined }
+}
+
+const money = (n?: number) => (n === undefined ? '—' : `$${Number(n.toFixed(4))}`)
+const tokens = (n: number) => (n >= 1_000_000 ? `${Number((n / 1_000_000).toFixed(1))}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n))
+
+/**
+ * Where each new model's price, context and modalities come from: its LiteLLM
+ * entry for this provider, linked on save unless unticked, or none (then
+ * "No price" until someone sets one on Models).
+ */
+function PricesAndDetails({
+  matches,
+  provider,
+  skipped,
+  onToggle,
+}: {
+  matches: { data?: LiteLLMMatch[]; error?: string }
+  provider: string
+  skipped: string[]
+  onToggle: (model: string, keep: boolean) => void
+}) {
+  return (
+    <section aria-label="Prices and details" className="flex flex-col gap-2 sm:col-span-2">
+      <h3 className="text-sm font-medium">Prices and details</h3>
+      {!matches.data && !matches.error && <p className="text-xs text-muted-foreground">Looking each model up in LiteLLM’s price list…</p>}
+      {matches.error && <p className="text-xs text-muted-foreground">Couldn’t reach LiteLLM’s price list ({matches.error}). Prices can be linked on Models after saving.</p>}
+      {matches.data?.map((m) =>
+        m.litellmKey ? (
+          <Checkbox
+            key={m.model}
+            aria-label={`Use LiteLLM for ${m.model}`}
+            checked={!skipped.includes(m.model)}
+            onCheckedChange={(on) => onToggle(m.model, on)}
+            description={[m.context ? `${tokens(m.context)} context` : '', m.modalities?.join(', ') ?? ''].filter(Boolean).join(' · ')}
+          >
+            <span className="font-mono">{m.model}</span> · LiteLLM <span className="font-mono">{m.litellmKey}</span>: {money(m.rates?.input)} in · {money(m.rates?.output)} out per 1M
+          </Checkbox>
+        ) : (
+          <p key={m.model} className="text-sm">
+            <span className="font-mono">{m.model}</span> · <span className="text-muted-foreground">No LiteLLM entry for {provider}. It shows “No price” until you set one on Models.</span>
+          </p>
+        ),
+      )}
+      {matches.data?.some((m) => m.litellmKey) && (
+        <p className="text-xs text-muted-foreground">
+          Ticked models are linked to LiteLLM’s list price when you save: price, context, modalities and retirement date fill in, and follow LiteLLM’s daily updates. Untick one you pay a different rate
+          for, and set it on Models.
+        </p>
+      )}
+    </section>
+  )
+}
+
 /** The provider form in a dialog: Routing's "Add provider" and the drawer's "Edit provider". */
 export function ProviderDialog({ backend, onClose }: { backend?: Backend; onClose: (saved: boolean) => void }) {
   return (
@@ -312,11 +408,11 @@ export function ProviderDialog({ backend, onClose }: { backend?: Backend; onClos
           label={backend ? `Edit ${backend.name}` : 'New provider'}
           backend={backend}
           onCancel={() => onClose(false)}
-          onSaved={({ backend: b, test }) => {
+          onSaved={({ backend: b, test, pricing }) => {
             toast.add({
               title: backend ? 'Provider saved' : 'Provider added',
-              description: `${b.name} is pending until you apply.${test && !test.ok ? ' Its connection test failed; see its details.' : ''}`,
-              type: test && !test.ok ? 'warning' : 'success',
+              description: `${b.name} is pending until you apply.${test && !test.ok ? ' Its connection test failed; see its details.' : ''}${pricing ? ` ${pricing}` : ''}`,
+              type: (test && !test.ok) || pricing ? 'warning' : 'success',
             })
             onClose(true)
           }}
