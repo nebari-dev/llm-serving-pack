@@ -2668,6 +2668,13 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await formDialogClosed()
       expect((await pair()).rates.input ?? null).toBeNull()
       r.unmount()
+
+      // Deleting the backend ends its price (kept as history), so a backend
+      // made again under the same name starts with no price, not the old one.
+      await send('POST', path, { rates: { input: 7, output: 9 } }, (await pair()).etag)
+      await dropBackends(name)
+      await send('POST', '/backends', { name, provider: 'Self-hosted', region: 'local', baseUrl: `${fakeOpenAI}/vllm-internal/v1`, models: [model] })
+      expect((await pair()).rates.input ?? null).toBeNull()
     } finally {
       await dropBackends(name)
     }

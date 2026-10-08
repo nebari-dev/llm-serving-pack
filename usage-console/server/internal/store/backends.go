@@ -225,6 +225,18 @@ func (s *Store) DeleteBackend(ctx context.Context, tenant, actor, name, ifMatch 
 	if len(routes) > 0 {
 		return was, inUse(plural(len(routes), "route ", "routes ") + strings.Join(routes, ", ") + " " + plural(len(routes), "sends", "send") + " to " + name + "; change or delete " + plural(len(routes), "it", "them") + " first")
 	}
+	// Its prices end now (kept as history, so its receipts keep their cost),
+	// a scheduled one is dropped, and its LiteLLM links go: a backend made
+	// again under this name starts with no price, not this one's.
+	if _, err := tx.Exec(ctx, `UPDATE model_pricing SET effective_to = now() WHERE backend = $1 AND effective_to IS NULL AND effective_from <= now()`, name); err != nil {
+		return was, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM model_pricing WHERE backend = $1 AND effective_from > now()`, name); err != nil {
+		return was, err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM price_sources WHERE backend = $1`, name); err != nil {
+		return was, err
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM backends WHERE tenant_id = $1 AND name = $2`, tenant, name); err != nil {
 		return was, err
 	}
