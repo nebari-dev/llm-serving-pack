@@ -710,6 +710,10 @@ func (d *Decision) verdict() string {
 // Rerouted reports whether a rule changed the model or backend.
 func (d *Decision) Rerouted() bool { return d.rerouted }
 
+// Aliased reports whether the requested model was an alias, so d.Req.Model
+// is its target.
+func (d *Decision) Aliased() bool { return d.aliased }
+
 // Policy is the part of a receipt the policy engine decides, for a gateway
 // that logs the rest itself: Warden sends it along with each request, and
 // receipt-ingest lays it over the access-log record (spec §4.6: Warden owns

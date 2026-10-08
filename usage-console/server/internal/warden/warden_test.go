@@ -379,3 +379,26 @@ func TestSameVerdictAsDevgateway(t *testing.T) {
 		}
 	}
 }
+
+// Agent Router routes on the model in the body, and it has no route for an
+// alias: Warden sends the model the alias resolves to, as it does for a
+// reroute, but with no backend hint (routing picks the backend as for the
+// model itself). The receipt keeps what the caller asked for.
+func TestAliasRewritesModelToItsTarget(t *testing.T) {
+	snap := gateway.DemoSnapshot()
+	r := newServer(snap).decide(headers(snap, "k3"), body("summarize-digest", "hello"))
+	p := policyOf(t, r)
+	if p.RequestedModel != "summarize-digest" || p.RouteReason != "alias" || p.Verdict != "allowed" {
+		t.Fatalf("policy = %+v", p)
+	}
+	b, hs := mutated(r)
+	if b == nil || b["model"] != "gpt-5-mini" {
+		t.Fatalf("body model = %v", b["model"])
+	}
+	if _, ok := hs[HeaderBackend]; ok {
+		t.Error("an alias isn't a reroute: no backend hint")
+	}
+	if b["temperature"] != 0.2 {
+		t.Errorf("fields Warden doesn't own changed: %v", b)
+	}
+}

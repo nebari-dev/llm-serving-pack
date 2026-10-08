@@ -265,12 +265,16 @@ func (s *Server) evaluateRequest(snap *gateway.Snapshot, h map[string]string, bo
 	}
 
 	common := &extprocv3.CommonResponse{}
-	if len(p.Redactions) > 0 || d.Rerouted() {
+	// The model goes in the body as the decision has it after a reroute, or
+	// an alias: Agent Router routes on the body's model and has no route for
+	// an alias.
+	newModel := d.Rerouted() || d.Aliased()
+	if len(p.Redactions) > 0 || newModel {
 		var nb []byte
 		if mr != nil {
-			nb, err = mr.rewrite(d.Req, d.Rerouted())
+			nb, err = mr.rewrite(d.Req, newModel)
 		} else {
-			nb, err = rewrite(body, d.Req, d.Rerouted())
+			nb, err = rewrite(body, d.Req, newModel)
 		}
 		if err != nil {
 			return fail(cr.Model, "couldn't rewrite the request body: "+err.Error())
@@ -427,9 +431,8 @@ func (s *Server) unpoliced(snap *gateway.Snapshot, mode, requested, why string) 
 }
 
 // rewrite applies the engine's changes to the caller's JSON, leaving every
-// field it doesn't own as sent: message contents, and the model on a reroute.
-// Without a reroute the model stays as asked, so Agent Router's alias routes
-// still see it.
+// field it doesn't own as sent: message contents, and the model when it
+// changed (a reroute, or an alias resolved to its target).
 func rewrite(body []byte, req fakellm.ChatRequest, rerouted bool) ([]byte, error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {

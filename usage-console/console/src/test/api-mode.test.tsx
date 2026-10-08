@@ -1143,6 +1143,28 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       name, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
     })
 
+  // Agent Router routes on the model in the body and has no route for an
+  // alias, so Warden sends the alias's target: a request for the alias is
+  // served, and its receipt says requested alias → resolved target.
+  it('serves a request for an alias through the gateway, as its target', async () => {
+    type R = { requestedModel: string; resolvedModel: string; routeReason: string; status: number }
+    const alias = `api-mode-alias-${Date.now().toString(36)}`
+    const path = `/aliases/${encodeURIComponent(alias)}`
+    const { key, secret } = await send<{ key: { id: string }; secret: string }>('POST', '/keys', {
+      name: alias, team: 'support', project: 'api-mode-test', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2027-01-01',
+    })
+    let etag = ''
+    try {
+      etag = (await send<{ etag: string }>('PUT', path, { target: 'gpt-5-mini' }, NEW)).etag
+      await echo(secret, alias)
+      const [r] = (await receiptsOf(key.id, 1)) as unknown as R[]
+      expect(r).toMatchObject({ requestedModel: alias, resolvedModel: 'gpt-5-mini', routeReason: 'alias', status: 200 })
+    } finally {
+      if (etag) await send('DELETE', path, undefined, etag).catch(() => {})
+      await send('POST', `/keys/${key.id}/revoke`).catch(() => {})
+    }
+  }, 30_000)
+
   it('creates, retargets and deletes an alias from Models, with audit rows', async () => {
     type A = import('@/data/catalog').AliasView & { etag: string }
     type C = import('@/data/catalog').Change
