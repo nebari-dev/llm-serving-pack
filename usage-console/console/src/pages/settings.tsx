@@ -15,8 +15,8 @@ import { cn } from '@/lib/utils'
 import { useApp } from '@/state/app-state'
 import { envDisplay } from '@/components/shell/app-header'
 import { useLive } from '@/state/live'
-import { BackendRow } from './backend-summary'
-import { Link, useLocation } from 'react-router-dom'
+import { HealthChip, ModelChips } from './backend-summary'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
 // §7.4 Settings → Providers · Retention · Integrations · Members.
 // §9.1 credentials, §4.6 retention tiers, §9.3 Warden kill switch.
@@ -70,6 +70,7 @@ export function SettingsPage() {
   // Sections start closed, each with a one-line summary; a link opens one
   // (/settings#members), and the kill switch opens itself while it's on.
   const { hash } = useLocation()
+  const navigate = useNavigate()
   const [open, setOpen] = useState<string[]>(() => (hash ? [hash.slice(1)] : []))
   useEffect(() => {
     if (passThrough) setOpen((o) => (o.includes('kill-switch') ? o : [...o, 'kill-switch']))
@@ -127,24 +128,46 @@ export function SettingsPage() {
         {live ? (
           <div className="flex flex-col gap-3">
             {backendList.loaded && backendList.data.length === 0 && <p className="text-sm text-muted-foreground">No backends yet. Connect one on Connect an app.</p>}
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {backendList.data.map((b) => (
-                <Link
-                  key={b.name}
-                  to={`/routing?tab=backends&backend=${encodeURIComponent(b.name)}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card p-3 no-underline! hover:border-border-strong hover:bg-muted/50"
-                >
-                  <span className="font-mono text-sm font-semibold">{b.name}</span>
-                  <BackendRow b={b} />
-                  <span className="mt-1 text-xs text-muted-foreground">
-                    {b.key ? <>Key <span className="font-mono">{b.key.prefix}…</span></> : 'No key'}
-                    {b.lastTest ? ` · last test ${b.lastTest.ok ? 'passed' : 'failed'} ${ago(b.lastTest.at)}` : ''}
-                  </span>
-                </Link>
-              ))}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[44rem] text-sm" aria-label="Providers">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr className="border-b border-border">
+                    <th className="py-1.5 pr-3 font-medium">Backend</th>
+                    <th className="py-1.5 pr-3 font-medium">Provider</th>
+                    <th className="py-1.5 pr-3 font-medium">Health</th>
+                    <th className="py-1.5 pr-3 font-medium">Models</th>
+                    <th className="py-1.5 font-medium">Key</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backendList.data.map((b) => {
+                    const to = `/routing?tab=backends&backend=${encodeURIComponent(b.name)}`
+                    return (
+                      <tr key={b.name} onClick={() => navigate(to)} className="cursor-pointer border-b border-border align-top last:border-0 hover:bg-muted/50">
+                        <th scope="row" className="py-2 pr-3 text-left font-normal">
+                          <Link to={to} className="font-mono font-medium no-underline! hover:underline!" onClick={(e) => e.stopPropagation()}>
+                            {b.name}
+                          </Link>
+                        </th>
+                        <td className="py-2 pr-3">{b.provider}</td>
+                        <td className="py-2 pr-3">
+                          <HealthChip health={b.health} />
+                        </td>
+                        <td className="py-2 pr-3">
+                          <ModelChips models={b.models} />
+                        </td>
+                        <td className="py-2 text-xs text-muted-foreground">
+                          {b.key ? <span className="font-mono">{b.key.prefix}…</span> : 'none'}
+                          {b.lastTest && <div>test {b.lastTest.ok ? 'passed' : 'failed'} {ago(b.lastTest.at)}</div>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
             <p className="max-w-3xl text-xs text-muted-foreground">
-              Click one for its details. Add one, replace a key or test a connection on{' '}
+              Click one for its details. Add a backend, replace a key or test a connection on{' '}
               <Link to="/routing?tab=backends" className="underline">
                 Routing → Backends
               </Link>

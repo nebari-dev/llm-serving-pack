@@ -2696,13 +2696,16 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       expect(providers.textContent).not.toContain('connected yet')
       expect(within(providers).getByRole('link', { name: 'Routing → Backends' }).getAttribute('href')).toBe('/routing?tab=backends')
       expect(providers.textContent).not.toContain('Last tested')
-      // A card per backend: name, provider, health, key, and its models as a list.
-      const card = within(providers).getByRole('link', { name: /^openrouter/ })
-      expect(card.textContent).toContain('OpenRouter')
-      expect(within(card).getAllByRole('listitem').map((li) => li.textContent)).toContain('gpt-4o-mini')
-      expect(card.getAttribute('href')).toBe('/routing?tab=backends&backend=openrouter')
+      // A row per backend, so a long list stays scannable: name, provider,
+      // health, its models as a list, and its key.
+      const table = within(providers).getByRole('table', { name: 'Providers' })
+      const row = within(table).getByRole('row', { name: /^openrouter/ })
+      expect(row.textContent).toContain('OpenRouter')
+      expect(within(row).getAllByRole('listitem').map((li) => li.textContent)).toContain('gpt-4o-mini')
+      const link = within(row).getByRole('link', { name: 'openrouter' })
+      expect(link.getAttribute('href')).toBe('/routing?tab=backends&backend=openrouter')
       // It opens that backend's details on Routing.
-      fireEvent.click(card)
+      fireEvent.click(link)
       expect(await screen.findByRole('heading', { name: 'openrouter' }, { timeout: 5000 })).toBeTruthy()
       expect(window.location.pathname).toBe('/routing')
     } finally {

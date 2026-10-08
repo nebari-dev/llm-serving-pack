@@ -10,25 +10,37 @@ export function modelChips(models: string[]): { shown: string[]; more: number } 
   return { shown: models.slice(0, 3), more: Math.max(0, models.length - 3) }
 }
 
-const healthTone = { healthy: 'allowed', degraded: 'degraded', down: 'blocked', idle: 'neutral' } as const
+export const healthTone = { healthy: 'allowed', degraded: 'degraded', down: 'blocked', idle: 'neutral' } as const
 
 /** One connected backend as a list row: name, then provider and health, then the models it serves. */
 export function BackendRow({ b }: { b: Backend }) {
-  const { shown, more } = modelChips(b.models)
   return (
     <span className="mt-1 flex flex-col gap-1.5">
       <span className="flex flex-wrap items-center gap-2 text-sm">
         <span>{b.provider}</span>
-        <StateChip tone={healthTone[b.health as keyof typeof healthTone] ?? 'neutral'}>{b.health}</StateChip>
+        <HealthChip health={b.health} />
       </span>
-      <span role="list" aria-label="Models" className="flex flex-wrap items-center gap-1">
-        {shown.map((m) => (
-          <span role="listitem" key={m} className="rounded-sm border border-border bg-muted px-1.5 font-mono text-xs leading-5">
-            {m}
-          </span>
-        ))}
-        {more > 0 && <span className="text-xs text-muted-foreground">+{more} more</span>}
-      </span>
+      <ModelChips models={b.models} />
     </span>
   )
+}
+
+/** A backend's models as chips: three, then how many more. */
+export function ModelChips({ models }: { models: string[] }) {
+  const { shown, more } = modelChips(models)
+  return (
+    <span role="list" aria-label="Models" className="flex flex-wrap items-center gap-1">
+      {shown.map((m) => (
+        <span role="listitem" key={m} className="rounded-sm border border-border bg-muted px-1.5 font-mono text-xs leading-5">
+          {m}
+        </span>
+      ))}
+      {more > 0 && <span className="text-xs text-muted-foreground">+{more} more</span>}
+    </span>
+  )
+}
+
+/** A backend's health as a chip. */
+export function HealthChip({ health }: { health: string }) {
+  return <StateChip tone={healthTone[health as keyof typeof healthTone] ?? 'neutral'}>{health}</StateChip>
 }
