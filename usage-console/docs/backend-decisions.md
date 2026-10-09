@@ -225,10 +225,14 @@ Agent Router (api-mode test).
 - **Defaults I picked:**
   - One budget per scope, enforced by a unique index.
   - Monthly budgets only, since spend is month to date.
-- **Overshoot.** Warden reads spend from its 5s snapshot of
-  `receipts_daily`, so a key can overspend by up to about 5s of traffic plus
-  ingest lag, plus whatever is in flight. Fine for monthly caps; not a hard
-  real-time limit.
+- **Overshoot.** Warden reads spend from its 5s snapshot, so a key can
+  overspend by up to about 5s of traffic plus ingest lag, plus whatever is in
+  flight. Fine for monthly caps; not a hard real-time limit. Fixed 2026-10-09:
+  the snapshot read only `receipts_daily`, which materializes today's bucket
+  early and whose refresh skips the last hour, so spend could lag by an hour
+  or more and a key kept spending past its cap (seen on the dev stack: $2.00
+  spent, $0.04 seen). It now reads settled days from `receipts_daily` and the
+  last two days from raw receipts.
 
 ## 3. Rules and policies
 

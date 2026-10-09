@@ -404,9 +404,22 @@ type MonthSpend struct {
 
 func (s *Store) MonthToDate(ctx context.Context, tenant string) (MonthSpend, error) {
 	ms := MonthSpend{ByTeam: map[string]float64{}, ByKey: map[string]float64{}}
+	// Settled days from receipts_daily; the last two from raw receipts. The
+	// daily aggregate materializes today's bucket early and its refresh
+	// skips the last hour, so it can lag spend by an hour or more, which let
+	// a key keep spending past its cap. Two days covers a refresh that's
+	// behind across midnight; raw receipts for them are a small, indexed scan.
 	rows, _ := s.Receipts.Query(ctx, `
-		SELECT team, key_id, coalesce(sum(cost_usd), 0)::float8 FROM receipts_daily
-		WHERE tenant_id = $1 AND bucket >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+		WITH bounds AS (
+		  SELECT date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS month,
+		         greatest(date_trunc('month', now() AT TIME ZONE 'UTC'), date_trunc('day', now() AT TIME ZONE 'UTC') - interval '1 day') AT TIME ZONE 'UTC' AS recent)
+		SELECT team, key_id, coalesce(sum(usd), 0)::float8 FROM (
+		  SELECT team, key_id, cost_usd AS usd FROM receipts_daily, bounds
+		  WHERE tenant_id = $1 AND bucket >= bounds.month AND bucket < bounds.recent
+		  UNION ALL
+		  SELECT team, key_id, cost_usd FROM receipts, bounds
+		  WHERE tenant_id = $1 AND ts >= bounds.recent AND NOT in_flight AND cost_usd IS NOT NULL
+		) spend
 		GROUP BY 1, 2`, tenant)
 	defer rows.Close()
 	for rows.Next() {
