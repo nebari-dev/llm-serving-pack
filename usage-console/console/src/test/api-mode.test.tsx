@@ -930,7 +930,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await new Promise((ok) => setTimeout(ok, 500))
     })
     const text = document.body.textContent ?? ''
-    const rows = catalog.changes.slice(1, 5)
+    // The three latest changes, as equal rows, each with its effect; none featured larger.
+    const section = screen.getByRole('list', { name: 'Recent config changes' })
+    const rows = catalog.changes.slice(0, 3)
+    expect(within(section).getAllByRole('listitem')).toHaveLength(rows.length)
+    expect(document.querySelector('[data-featured-change]')).toBeNull()
     expect(rows.length).toBeGreaterThan(0)
     for (const c of rows) {
       const computed = v.changes.find((x) => x.id === c.id)

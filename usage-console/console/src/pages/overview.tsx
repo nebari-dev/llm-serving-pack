@@ -5,8 +5,8 @@ import { Delta, Money } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { type ActivityView, backends, budgetLabel, budgets, type Change, type ChangeImpact, changes, dataMode, policies, type SeriesPoint, seedChangeImpacts, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
-import { age, ago, clock, int, money, perRequest, unpricedNote } from '@/lib/format'
+import { type ActivityView, backends, budgetLabel, budgets, type Change, changes, dataMode, policies, type SeriesPoint, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
+import { age, ago, clock, int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
 import { useDegradations } from '@/state/degradations'
@@ -170,9 +170,10 @@ export function OverviewPage() {
           </Button>
         }
       >
-        {configChanges[0] ? <FeaturedChange change={configChanges[0]} /> : <p className="text-sm text-muted-foreground">No config changes yet.</p>}
-        <ol className="mt-4 divide-y divide-border border-y border-border">
-          {configChanges.slice(1, 5).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
+        {/* The three latest, as equal rows, each joined to its effect (§7.5.2 item 4); Activity has the rest. */}
+        {!configChanges[0] && <p className="text-sm text-muted-foreground">No config changes yet.</p>}
+        <ol aria-label="Recent config changes" className="divide-y divide-border border-y border-border empty:hidden">
+          {configChanges.slice(0, 3).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
             <li key={c.id} className="grid grid-cols-[5rem_1fr_auto] items-baseline gap-4 py-2.5 text-sm">
               <span className="num font-mono text-xs text-muted-foreground">{clock(c.ts).slice(0, 5)}</span>
               <div className="min-w-0">
@@ -292,86 +293,6 @@ function BigNumber({ to, label, value, delta, note }: { to: string; label: strin
         {delta} {note}
       </span>
     </Link>
-  )
-}
-
-// Too few requests either side and percentages mean nothing.
-const MIN_COMPARE = 20
-
-/** The differentiating component: one change, its before/after window, the delta in words. */
-function FeaturedChange({ change: c }: { change: Change }) {
-  const { data: impact, loaded } = useLive<ChangeImpact | null>(dataMode === 'api' ? `/changes/${c.id}/impact` : null, seedChangeImpacts[c.id] ?? null, 60_000)
-  const metrics = impact
-    ? [
-        { label: 'p50 latency', before: impact.before.p50Ms, after: impact.after.p50Ms, fmt: (n: number | null) => `${int(Math.round(n ?? 0))}ms`, goodWhen: 'down' as const },
-        { label: 'Cost / request', before: impact.before.costPerRequestUsd, after: impact.after.costPerRequestUsd, fmt: perRequest, goodWhen: 'down' as const },
-        { label: 'Error rate', before: impact.before.errorRate * 100, after: impact.after.errorRate * 100, fmt: (n: number | null) => `${(n ?? 0).toFixed(1)}%`, goodWhen: 'down' as const },
-        {
-          label: 'Blocked + redacted',
-          before: impact.before.blockedRedactedShare * 100,
-          after: impact.after.blockedRedactedShare * 100,
-          fmt: (n: number | null) => `${(n ?? 0).toFixed(1)}%`,
-          goodWhen: 'down' as const,
-        },
-      ]
-    : []
-  const comparable = !!impact && impact.before.requests >= MIN_COMPARE && impact.after.requests >= MIN_COMPARE
-  const w = impact?.windowMinutes ?? 40
-  return (
-    <article className="flex flex-col gap-3 rounded-md border border-border p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <p className="text-base leading-6">
-          {c.action} <span className="font-mono font-medium">{c.target}</span>
-        </p>
-        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <MonitorCog className="size-3.5" aria-hidden="true" />
-          {c.actor} · <span className="num font-mono">{clock(c.ts).slice(0, 5)}</span> ({ago(c.ts)})
-        </span>
-      </div>
-      {comparable ? (
-        <>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-            {metrics.map((m) => {
-              // A side with no price (null) has nothing to compare.
-              const pct = m.before !== null && m.after !== null && m.before > 0 ? ((m.after - m.before) / m.before) * 100 : null
-              return (
-                <div key={m.label} className="flex flex-col gap-0.5">
-                  <dt className="text-xs text-muted-foreground">{m.label}</dt>
-                  <dd className="flex items-baseline gap-2">
-                    <span className="num font-mono text-base">{m.fmt(m.after)}</span>
-                    {pct === null ? null : Math.abs(pct) < 5 ? <span className="text-xs text-muted-foreground">steady</span> : <Delta pct={pct} goodWhen={m.goodWhen} />}
-                  </dd>
-                  <dd className="num font-mono text-xs text-muted-foreground">was {m.fmt(m.before)}</dd>
-                </div>
-              )
-            })}
-          </dl>
-          <p className="text-xs text-muted-foreground">
-            Whole tenant, {w} minutes before vs after ({int(impact!.before.requests + impact!.after.requests)} requests), not only what this change touched.
-            {!!((impact!.before.unpriced ?? 0) + (impact!.after.unpriced ?? 0)) &&
-              ` Cost / request leaves out ${int((impact!.before.unpriced ?? 0) + (impact!.after.unpriced ?? 0))} requests with no price.`}
-          </p>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          {!loaded
-            ? 'Comparing traffic either side of the change…'
-            : !impact
-              ? 'No traffic comparison for this change.'
-              : `Too little traffic to compare yet: ${int(impact.before.requests)} requests in the ${w} minutes before, ${int(impact.after.requests)} after.`}
-        </p>
-      )}
-      <div className="flex flex-wrap gap-2">
-        <Button variant="outline" size="sm" render={<Link to={`/traffic?since=${Math.round(c.ts)}`} />}>
-          Receipts after the change
-        </Button>
-        {c.targetKind === 'Route' && (
-          <Button variant="ghost" size="sm" render={<Link to="/routing" />}>
-            View route
-          </Button>
-        )}
-      </div>
-    </article>
   )
 }
 
