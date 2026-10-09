@@ -3604,7 +3604,11 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
     expect((await catalog.api<C[]>('/changes?limit=5&kind=Pricing')).every((c) => c.targetKind === 'Pricing')).toBe(true)
     const synced = (await catalog.api<C[]>('/changes?limit=500&kind=Pricing')).filter((c) => c.actor === 'LiteLLM sync')
     expect(synced.length).toBeGreaterThan(0)
-    expect(synced.some((c) => c.action === 'Retired model price' && /^llama-3\.3-70b on vllm-internal /.test(c.target))).toBe(true)
+    // The retirement itself: the seed price ended with nothing after it. Read from the pair's price
+    // history, which keeps it; its audit row was written at the test db's first sync and scrolls out
+    // of the newest 500 as later runs add pricing rows.
+    const history = (await catalog.api<{ changes: { model: string; backend: string; field: string; from: number | null; to: number | null }[] }>('/pricing')).changes
+    expect(history.some((h) => h.model === 'llama-3.3-70b' && h.backend === 'vllm-internal' && h.field === 'Input' && h.from !== null && h.to === null)).toBe(true)
     // Spend says how many requests it leaves out for having no price.
     expect(typeof (await catalog.api<{ unpriced: number }>('/spend?range=24h')).unpriced).toBe('number')
   }, 60_000)
