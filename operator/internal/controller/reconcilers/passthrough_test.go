@@ -241,6 +241,42 @@ func TestBuildPassthroughResourcesTrustsConfiguredCA(t *testing.T) {
 	}
 }
 
+func TestBuildPassthroughResourcesBedrockTrustsConfiguredCA(t *testing.T) {
+	// A private Bedrock endpoint whose certificate comes from a corporate CA.
+	pm := testPassthroughModel()
+	pm.Spec.Provider = llmv1alpha1.ProviderSpec{
+		Backend: &llmv1alpha1.ProviderBackend{
+			Type:    "Bedrock",
+			Bedrock: &llmv1alpha1.BedrockBackend{Region: "us-west-2"},
+		},
+		Credential: &llmv1alpha1.ProviderCredential{Type: "WorkloadIdentity"},
+		Hostname:   "bedrock.corp.example.com",
+		TLS:        &llmv1alpha1.ProviderTLS{CAConfigMapName: "corp-ca"},
+	}
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+	validation, _ := specMap(t, res.BackendTLSPolicy)["validation"].(map[string]interface{})
+	if validation["hostname"] != "bedrock.corp.example.com" {
+		t.Errorf("validation hostname = %v", validation["hostname"])
+	}
+	if _, exists := validation["wellKnownCACertificates"]; exists {
+		t.Error("Bedrock with a CA bundle must not also trust the system roots")
+	}
+	want := []interface{}{map[string]interface{}{"group": "", "kind": "ConfigMap", "name": "corp-ca"}}
+	if !reflect.DeepEqual(validation["caCertificateRefs"], want) {
+		t.Errorf("caCertificateRefs = %#v, want %#v", validation["caCertificateRefs"], want)
+	}
+	// The trust setting must leave Bedrock's schema and signing untouched.
+	if schema := specMap(t, res.AIServiceBackend)["schema"].(map[string]interface{}); schema["name"] != "AWSBedrock" {
+		t.Errorf("Bedrock schema = %v", schema)
+	}
+	if policy := specMap(t, res.BackendSecurityPolicy); policy["type"] != "AWSCredentials" {
+		t.Errorf("Bedrock auth type = %v", policy["type"])
+	}
+}
+
 func TestBuildPassthroughResourcesBedrockUsesConverseAndWorkloadIdentity(t *testing.T) {
 	pm := testPassthroughModel()
 	pm.Spec.Provider = llmv1alpha1.ProviderSpec{
