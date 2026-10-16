@@ -93,7 +93,7 @@ An existing cluster needs the pack release that adds `spec.provider.tls` to the
 `PassthroughModel` CRD, and the matching operator, before you apply the
 manifest. An older CRD drops or rejects the field, and an older operator keeps
 trusting only the public roots. Helm does not upgrade installed CRDs; see
-[Upgrading the pack](/installation/#83-upgrading-the-pack).
+[Upgrading](/upgrading/#routine-upgrade).
 
 Apply the PassthroughModel, declaring each model id the server answers to:
 
