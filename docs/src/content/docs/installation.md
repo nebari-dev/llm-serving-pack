@@ -1197,9 +1197,12 @@ Bump `targetRevision` in the Application from section 8.1 to the new
 chart version and push. With `automated` sync on, ArgoCD rolls it out;
 otherwise sync it by hand. Read the
 [release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
-for every version in between first. A release can raise the supported
-Envoy Gateway and AI Gateway versions; [Gateway Upgrades](/gateway-upgrades/)
-lists the current ones and how to move between them.
+for every version in between first.
+
+Some releases need steps beyond this section. The move to Envoy AI
+Gateway 1.1, which ships in the first release after 0.1.4, is in
+[Gateway Upgrades](/gateway-upgrades/), along with the gateway versions
+the pack supports.
 
 **CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
 its `crds/` directory. ArgoCD applies them on every sync, so they move
