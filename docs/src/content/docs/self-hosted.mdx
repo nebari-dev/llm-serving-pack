@@ -19,7 +19,8 @@ group access control. The server's own API key stays with the platform.
   slots and queues the rest.
 - **A 120-second request timeout.** Passthrough routes use a fixed 120s timeout
   for the whole response, streamed or not, including any time spent queued. Long
-  or slow generations are cut off; cap `max_tokens` accordingly.
+  or slow generations are cut off; cap `max_tokens` accordingly (see
+  [#209](https://github.com/nebari-dev/llm-serving-pack/issues/209)).
 - **No health checks.** The cluster does not monitor the server, and a
   `PassthroughModel` reports `Ready` whether or not the server answers.
 :::
