@@ -9,6 +9,21 @@ another machine, such as llama.cpp on a Mac Studio or vLLM on a workstation.
 Users keep the shared endpoints, their minted API keys or Keycloak JWTs, and
 group access control. The server's own API key stays with the platform.
 
+:::caution[A single server has trade-offs]
+- **No failover or load balancing.** Every request goes to one hostname and
+  port. When the server is down, asleep, or restarting, requests for its
+  models fail.
+- **Overload is handled by the serving framework.** The pack adds no queueing
+  or rate limiting in front of the server, so busy periods behave however the
+  framework does: llama.cpp, for example, works on a fixed number of parallel
+  slots and queues the rest.
+- **A 120-second request timeout.** Passthrough routes use a fixed 120s timeout
+  for the whole response, streamed or not, including any time spent queued. Long
+  or slow generations are cut off; cap `max_tokens` accordingly.
+- **No health checks.** The cluster does not monitor the server, and a
+  `PassthroughModel` reports `Ready` whether or not the server answers.
+:::
+
 ## How the connection works
 
 A request crosses two TLS connections:
@@ -21,7 +36,8 @@ The gateway always uses TLS toward the provider and verifies the server's
 certificate against `spec.provider.hostname`. By default it trusts only the
 public CA roots built into the Envoy proxy image. If the server's certificate
 comes from a private or corporate CA, set `spec.provider.tls.caConfigMapName`
-so the gateway trusts that CA.
+so the gateway trusts that CA. The server sees only the platform key: per-user
+identity, access groups, and key revocation are enforced at the gateway.
 
 ## Requirements
 
@@ -102,16 +118,6 @@ The PassthroughModel reports `Ready` once its resources are applied, which does
 not mean the server is reachable. The `BackendTLSPolicy` status reports a
 missing or empty CA ConfigMap. Handshake failures appear only on requests; see
 [Troubleshooting](/troubleshooting/#external-provider-passthroughmodel-not-working).
-
-## Limits
-
-- **120-second request timeout.** Passthrough routes use a fixed 120s timeout
-  for the whole response, streamed or not. A slow local model can be cut off
-  during long generations; cap `max_tokens` accordingly.
-- **One address per PassthroughModel.** The gateway sends every request to the
-  single hostname and port, without load balancing or failover.
-- **The server sees the platform key, not users.** Per-user identity, access
-  groups, and key revocation are enforced at the gateway.
 
 ## Example: llama.cpp on a Mac Studio
 
