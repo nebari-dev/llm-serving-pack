@@ -1191,6 +1191,44 @@ Keycloak login screen and back to a (mostly empty) key-manager page
 for users in the `llm` group. There are no LLMModels yet; section 9
 changes that.
 
+### 8.3 Upgrading the pack
+
+Bump `targetRevision` in the Application from section 8.1 to the new
+chart version and push. With `automated` sync on, ArgoCD rolls it out;
+otherwise sync it by hand. Read the
+[release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
+for every version in between first. A release can raise the supported
+Envoy Gateway and AI Gateway versions; [Gateway Upgrades](/gateway-upgrades/)
+lists the current ones and how to move between them.
+
+**CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
+its `crds/` directory. ArgoCD applies them on every sync, so they move
+with the operator as long as the Application does not set
+`skipCrds: true`. Plain `helm upgrade` installs `crds/` only on first
+install and never updates it, so a Helm-managed install must apply the
+CRDs from the target release before upgrading:
+
+```bash
+helm pull oci://quay.io/nebari/charts/nebari-llm-serving --version <version> --untar
+kubectl apply --server-side -f nebari-llm-serving/crds/
+kubectl wait --for=condition=Established --timeout=60s \
+  crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
+helm upgrade nebari-llm-serving oci://quay.io/nebari/charts/nebari-llm-serving \
+  --version <version> -n nebari-llm-serving-system -f <your-values>.yaml
+```
+
+If the CRDs lag behind the chart, the API server keeps validating against
+the old schema: fields the release added are rejected or dropped, so those
+features do not work until the CRDs are updated.
+
+:::caution[Never delete a CRD to upgrade it]
+Deleting a CRD deletes every resource of that kind. Removing the
+`LLMModel` or `PassthroughModel` CRD removes every model, and their
+cleanup deletes the API keys users minted for them.
+:::
+
+Then re-run the checks in section 8.2.
+
 ## 9. Apply your first LLMModel
 
 An `LLMModel` is the user-facing API of the pack: one CR per model

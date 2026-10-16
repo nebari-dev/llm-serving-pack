@@ -36,6 +36,10 @@ invalid names before upgrading to avoid reconciliation failures.
 
 ## Upgrade the pack's CRDs with plain Helm
 
+Every pack upgrade includes this step; see
+[Upgrading the pack](/installation/#83-upgrading-the-pack) for the routine
+procedure. This section covers it for the AI Gateway 1.1 migration.
+
 `helm upgrade` does not update files in a chart's `crds/` directory. The pack's
 CRDs need an explicit update as well as the gateway CRDs. Otherwise the old
 `PassthroughModel` schema still requires a hostname and API-key Secret and does
