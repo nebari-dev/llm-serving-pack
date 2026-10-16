@@ -10,6 +10,10 @@ export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
   base: process.env.BASE || '/',
   site: process.env.SITE,
+  // Old page slugs, kept so published links keep working.
+  redirects: {
+    '/gateway-upgrades': `${(process.env.BASE || '/').replace(/\/$/, '')}/upgrade-notes/`,
+  },
   integrations: [
     starlight({
       title: 'LLM Serving Pack',
@@ -33,7 +37,7 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Provider Integrations', slug: 'providers' },
             { label: 'AWS Bedrock', slug: 'bedrock' },
-            { label: 'Gateway Upgrades', slug: 'gateway-upgrades' },
+            { label: 'Upgrade Notes', slug: 'upgrade-notes' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Local Development', slug: 'local-development' },
             { label: 'UI Development', slug: 'ui-development' },

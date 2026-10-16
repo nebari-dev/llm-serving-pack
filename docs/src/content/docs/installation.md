@@ -1199,10 +1199,10 @@ otherwise sync it by hand. Read the
 [release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
 for every version in between first.
 
-Some releases need steps beyond this section. The move to Envoy AI
-Gateway 1.1, which ships in the first release after 0.1.4, is in
-[Gateway Upgrades](/gateway-upgrades/), along with the gateway versions
-the pack supports.
+Some releases need steps beyond this section, such as the move to Envoy
+AI Gateway 1.1 after 0.1.4. Check [Upgrade notes](/upgrade-notes/) for
+every version between yours and the target; it also lists the gateway
+versions the pack supports.
 
 **CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
 its `crds/` directory. ArgoCD applies them on every sync, so they move

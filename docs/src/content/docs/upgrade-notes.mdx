@@ -1,13 +1,26 @@
 ---
-title: Upgrade the AI gateway
-description: Move existing installations to Envoy AI Gateway 1.1.
+title: Upgrade notes
+description: Release-specific steps for upgrading the pack.
 ---
+
+Most upgrades need only the routine steps in
+[Upgrading the pack](/installation/#83-upgrading-the-pack). This page lists the
+releases that need more, newest first. Read every entry between your current
+version and the target before upgrading.
+
+## Supported gateway versions
 
 The supported deployment target is **Envoy AI Gateway 1.1.0, Envoy Gateway
 1.8.1, and Gateway API 1.5.1**. Use the released upstream Helm charts, including
 the separate AI Gateway CRD chart. The pack does not install those controllers.
 
-## Existing provider settings
+## Upgrading from 0.1.4 or earlier: Envoy AI Gateway 1.1
+
+Releases after 0.1.4 emit `aigateway.envoyproxy.io/v1beta1` resources and target
+the gateway versions above. An installation on 0.1.4 or earlier needs these
+steps.
+
+### Existing provider settings
 
 The operator translates the legacy `spec.provider.schemaVersion` setting into
 Envoy's `schema.prefix`: `api/v1` still reaches `/api/v1/chat/completions`, and
@@ -34,7 +47,7 @@ upgrading: underscores, empty labels, URLs, ports, paths, and whitespace are
 rejected. Older webhooks admitted some of these values; correct any remaining
 invalid names before upgrading to avoid reconciliation failures.
 
-## Upgrade an installation on AI Gateway 0.5
+### Upgrade an installation on AI Gateway 0.5
 
 Follow the upstream [controller upgrade policy](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/RELEASES.md#upgrading-the-envoy-ai-gateway-controller)
 and [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/).
@@ -83,14 +96,14 @@ while retaining the installed CRDs. Returning to AI Gateway 0.5 also requires
 restoring its path-prefix and catalog configuration; an image-only rollback is
 not sufficient.
 
-## Scope of the upgrade
+### Scope of the upgrade
 
 AI Gateway 1.1 makes newer protocol translation, token counting, streaming
 controls, and tracing available. It does not automatically enable additional
 providers, failover, or tracing, and does not grant cloud model access. Provider
 adapters still select the appropriate upstream schema and authentication.
 
-## Check generated resources against upstream CRDs
+### Check generated resources against upstream CRDs
 
 The operator's `TestGatewayAdmission` uses a local Kubernetes API server with
 the released AI Gateway CRDs. It checks admission and stored fields, including
