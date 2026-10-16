@@ -1193,47 +1193,9 @@ changes that.
 
 ### 8.3 Upgrading the pack
 
-Bump `targetRevision` in the Application from section 8.1 to the new
-chart version and push. With `automated` sync on, ArgoCD rolls it out;
-otherwise sync it by hand. Read the
-[release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
-for every version in between first.
-
-Some releases need steps beyond this section, such as the move to Envoy
-AI Gateway 1.1 after 0.1.4. Check [Upgrade notes](/upgrade-notes/) for
-every version between yours and the target; it also lists the gateway
-versions the pack supports.
-
-**CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
-its `crds/` directory. ArgoCD applies them on every sync, so they move
-with the operator as long as the Application does not set
-`skipCrds: true`. Plain `helm upgrade` installs `crds/` only on first
-install and never updates it, so a Helm-managed install must apply the
-CRDs from the target release before upgrading:
-
-```bash
-helm pull oci://quay.io/nebari/charts/nebari-llm-serving --version <version> --untar
-kubectl apply --server-side -f nebari-llm-serving/crds/
-kubectl wait --for=condition=Established --timeout=60s \
-  crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
-helm upgrade nebari-llm-serving oci://quay.io/nebari/charts/nebari-llm-serving \
-  --version <version> -n nebari-llm-serving-system -f <your-values>.yaml
-```
-
-If another tool owns the CRDs, update them through that tool instead, and
-resolve field-ownership conflicts rather than forcing them.
-
-If the CRDs lag behind the chart, the API server keeps validating against
-the old schema: fields the release added are rejected or dropped, so those
-features do not work until the CRDs are updated.
-
-:::caution[Never delete a CRD to upgrade it]
-Deleting a CRD deletes every resource of that kind. Removing the
-`LLMModel` or `PassthroughModel` CRD removes every model, and their
-cleanup deletes the API keys users minted for them.
-:::
-
-Then re-run the checks in section 8.2.
+To upgrade the pack later, follow [Upgrading](/upgrading/): the routine
+steps start from the Application in section 8.1, and some releases need
+extra steps listed on that page.
 
 ## 9. Apply your first LLMModel
 

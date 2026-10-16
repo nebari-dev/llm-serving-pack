@@ -121,7 +121,7 @@ Image tags are not derived from `appVersion`, and they are not hand-edited in th
 
 Cutting a release is one action: open a pull request that bumps `version` in `charts/nebari-llm-serving/Chart.yaml`, and merge it. Everything else is automatic - no git tag to push by hand, no editing image tags, no release step that happens outside a PR merged to `main`.
 
-If upgrading to the release takes more than the routine steps in [Upgrading the pack](/installation/#83-upgrading-the-pack), add an entry for it to [Upgrade notes](/upgrade-notes/) in the same pull request.
+If upgrading to the release takes more than the [routine steps](/upgrading/#routine-upgrade), add an entry for it under [Release-specific steps](/upgrading/#release-specific-steps) in the same pull request.
 
 **What happens when that PR merges:**
 

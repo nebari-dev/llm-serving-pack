@@ -12,7 +12,7 @@ export default defineConfig({
   site: process.env.SITE,
   // Old page slugs, kept so published links keep working.
   redirects: {
-    '/gateway-upgrades': `${(process.env.BASE || '/').replace(/\/$/, '')}/upgrade-notes/`,
+    '/gateway-upgrades': `${(process.env.BASE || '/').replace(/\/$/, '')}/upgrading/`,
   },
   integrations: [
     starlight({
@@ -37,8 +37,8 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Provider Integrations', slug: 'providers' },
             { label: 'AWS Bedrock', slug: 'bedrock' },
-            { label: 'Upgrade Notes', slug: 'upgrade-notes' },
             { label: 'Installation', slug: 'installation' },
+            { label: 'Upgrading', slug: 'upgrading' },
             { label: 'Local Development', slug: 'local-development' },
             { label: 'UI Development', slug: 'ui-development' },
             { label: 'Shared Storage', slug: 'shared-storage' },
