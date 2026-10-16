@@ -42,8 +42,7 @@ which points the gateway at a ConfigMap holding that CA.
   ```
 
 - **A server certificate for that name.** Its subject alternative names must
-  include the hostname, and it must be signed with SHA-256 or stronger. Current
-  TLS stacks reject SHA-1 signatures, and no trust setting changes that.
+  include the hostname, and it must be signed with SHA-256 or stronger.
 - **An API key** that the server requires on every request.
 
 ## 1. Prepare the certificate

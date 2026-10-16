@@ -312,7 +312,7 @@ openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>
   | openssl x509 -noout -text | grep -E 'Issuer:|Subject:|DNS:|Signature Algorithm'
 ```
 
-The certificate must list `spec.provider.hostname` in its subject alternative names, chain to a CA in the ConfigMap, and carry a SHA-256 (or stronger) signature; SHA-1 signatures are rejected regardless of trust.
+The certificate must list `spec.provider.hostname` in its subject alternative names, chain to a CA in the ConfigMap, and carry a SHA-256 (or stronger) signature.
 
 **PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
