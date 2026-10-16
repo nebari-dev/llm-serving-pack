@@ -5,10 +5,9 @@ import Code from '../../components/ExampleCode.astro';
 import llamacppExample from '../../../../examples/passthrough-llamacpp.yaml?raw';
 
 A `PassthroughModel` can front an OpenAI-compatible server that you run on
-another machine, such as llama.cpp's `llama-server` on a Mac Studio, vLLM on a
-workstation, or LM Studio. Users keep the shared endpoints, their minted API
-keys or Keycloak JWTs, and group access control. The server's own API key stays
-with the platform. This page uses `llama-server` as the worked example.
+another machine, such as llama.cpp on a Mac Studio or vLLM on a workstation.
+Users keep the shared endpoints, their minted API keys or Keycloak JWTs, and
+group access control. The server's own API key stays with the platform.
 
 ## How the connection works
 
@@ -20,96 +19,44 @@ client ──TLS──▶ gateway (llm.<baseDomain>) ──TLS──▶ self-hos
 
 The gateway always uses TLS toward the provider and verifies the server's
 certificate against `spec.provider.hostname`. By default it trusts only the
-public CA roots built into the Envoy proxy image. A server whose certificate
-comes from a private or corporate CA needs `spec.provider.tls.caConfigMapName`,
-which points the gateway at a ConfigMap holding that CA.
+public CA roots built into the Envoy proxy image. If the server's certificate
+comes from a private or corporate CA, set `spec.provider.tls.caConfigMapName`
+so the gateway trusts that CA.
 
 ## Requirements
 
-- **Network reachability.** The Envoy proxy pods for the gateway (usually in
-  `envoy-gateway-system`) must reach the server on its port. Open that port in
-  the host firewall, such as the macOS application firewall.
+- **Reachable from the cluster.** The gateway's Envoy proxy pods must reach the
+  server on its port. Nothing else needs access.
 - **A DNS name, not an IP address.** Envoy Gateway rejects IP addresses and
-  single-label names such as `macstudio` as backend hostnames. Use a name like
-  `macstudio.corp.example.com` that cluster DNS resolves. If your cluster DNS
-  answers a whole zone with the gateway address (for example a wildcard for
-  `*.<baseDomain>`), choose a name outside that zone. Check resolution from
-  inside the cluster:
+  single-label names as backend hostnames. Cluster DNS must resolve the name to
+  the server; avoid a zone that your cluster DNS answers with the gateway
+  address.
+- **A TLS certificate for that name**, issued by a public CA or by a CA you
+  give the cluster, signed with SHA-256 or stronger.
+- **An OpenAI-compatible API that requires an API key**, sent as
+  `Authorization: Bearer <key>`, and answering to a fixed model id.
 
-  ```sh
-  kubectl run dnscheck --rm -it --restart=Never --image=busybox:1.36 -- \
-    nslookup macstudio.corp.example.com
-  ```
+## Set up the server
 
-- **A server certificate for that name.** Its subject alternative names must
-  include the hostname, and it must be signed with SHA-256 or stronger.
-- **An API key** that the server requires on every request.
+The details depend on your hardware and serving framework; see the
+[example](#example-llamacpp-on-a-mac-studio) below for one complete setup.
 
-## 1. Prepare the certificate
+1. **Install the certificate on the host.** Get a certificate for the server's
+   hostname and place it, with any intermediate CAs, on the host along with its
+   private key. Generating the key on the host and sending your CA only a
+   signing request keeps the key from ever leaving it.
+2. **Serve HTTPS with it.** Pass the certificate and key to your serving
+   framework. llama.cpp's `llama-server` and vLLM accept them directly; for a
+   server that does not, put a TLS-terminating reverse proxy in front of it.
+3. **Require an API key**, and set the model id that clients will send.
+4. **Keep it running.** Start the server on boot, restart it on failure, and
+   open its port to the cluster's nodes.
 
-Request a server certificate for the hostname from your CA. `llama-server` needs
-two PEM files: the certificate followed by any intermediate CAs, and an
-unencrypted private key. If your CA delivers a PKCS#12 (`.pfx`) bundle, split it:
+## Connect it to the cluster
 
-```sh
-openssl pkcs12 -in macstudio.pfx -nokeys -out macstudio.crt
-openssl pkcs12 -in macstudio.pfx -nocerts -nodes -out macstudio.key
-chmod 600 macstudio.key
-```
-
-OpenSSL 3 needs `-legacy` for bundles that use older encryption. Check the
-name and signature before going further:
-
-```sh
-openssl x509 -in macstudio.crt -noout -ext subjectAltName
-openssl x509 -in macstudio.crt -noout -text | grep -m1 'Signature Algorithm'
-```
-
-Keep the CA certificate that signed it (here `corp-root-ca.pem`); the cluster
-needs it in step 3.
-
-## 2. Run llama-server with TLS and an API key
-
-Install llama.cpp with OpenSSL support. The Homebrew formula
-(`brew install llama.cpp`) has it; source builds enable it by default with
-`-DLLAMA_OPENSSL=ON`. Generate a key and start the server:
-
-```sh
-openssl rand -hex 32 > api-key
-chmod 600 api-key
-
-llama-server -hf <hf-user>/<model>-GGUF:Q4_K_M \
-  --alias qwen3-30b-a3b \
-  --host 0.0.0.0 --port 8443 \
-  --ssl-cert-file macstudio.crt \
-  --ssl-key-file macstudio.key \
-  --api-key-file api-key \
-  --no-webui
-```
-
-- `--alias` sets the model id the server reports. Declare the same id in the
-  `PassthroughModel`.
-- `--api-key-file` reads one key per line. Requests without a matching
-  `Authorization: Bearer` header get HTTP 401; only `/health` stays public.
-- `--no-webui` turns off the built-in chat page, whose static assets do not
-  require the key.
-- A build without SSL refuses to start with
-  `the server is built without SSL support`.
-
-Run it under `launchd` or another supervisor so it survives logouts and
-reboots. From any machine that trusts the CA, confirm TLS and the key:
-
-```sh
-curl --cacert corp-root-ca.pem \
-  -H "Authorization: Bearer $(cat api-key)" \
-  https://macstudio.corp.example.com:8443/v1/models
-```
-
-## 3. Store the key and the CA in the cluster
-
-Create both objects in the PassthroughModel's namespace, which is the operator
-namespace. Command substitution strips the file's trailing newline, which
-would otherwise become part of the key:
+Create the API key Secret and the CA ConfigMap in the PassthroughModel's
+namespace, which is the operator namespace. Command substitution strips a
+trailing newline that would otherwise become part of the key:
 
 ```sh
 kubectl create secret generic macstudio-api-key -n nebari-llm-serving-system \
@@ -120,27 +67,25 @@ kubectl create configmap corp-ca -n nebari-llm-serving-system \
 
 The ConfigMap must hold the CA under the `ca.crt` key or as its only key. A
 trust-manager Bundle target that already projects your organization's CAs into
-the namespace qualifies; reference it by name instead of creating `corp-ca`.
-
-The bundle **replaces** the public roots for this provider only. Other
-PassthroughModels keep the public roots. Envoy Gateway watches the ConfigMap, so
-renewing the CA takes effect without restarting the gateway.
-
-## 4. Apply the PassthroughModel
+the namespace qualifies; reference it by name instead. The bundle **replaces**
+the public roots for this provider only, and Envoy Gateway watches the
+ConfigMap, so renewing the CA takes effect without a restart. Skip the
+ConfigMap and `spec.provider.tls` if a public CA issued the certificate.
 
 An existing cluster needs the pack release that adds `spec.provider.tls` to the
-`PassthroughModel` CRD, and the matching operator, before applying this
+`PassthroughModel` CRD, and the matching operator, before you apply the
 manifest. An older CRD drops or rejects the field, and an older operator keeps
 trusting only the public roots. Helm does not upgrade installed CRDs; see
 [Upgrade the pack's CRDs with plain Helm](/gateway-upgrades/#upgrade-the-packs-crds-with-plain-helm).
 
+Apply the PassthroughModel, declaring each model id the server answers to:
+
 <Code code={llamacppExample} lang="yaml" title="examples/passthrough-llamacpp.yaml" />
 
-Declare each id the server answers to. A single server has no use for
-`catchAll`. The key-manager lists the model next to served models, so users mint
-keys for it the usual way.
+The key-manager lists the model next to served models, so users mint keys for
+it the usual way.
 
-## 5. Verify
+## Verify
 
 ```sh
 kubectl -n nebari-llm-serving-system get passthroughmodel macstudio
@@ -153,8 +98,8 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
   -d '{"model": "qwen3-30b-a3b", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-The PassthroughModel reports `Ready` once its resources are applied. Readiness
-does not mean the server is reachable. The `BackendTLSPolicy` status reports a
+The PassthroughModel reports `Ready` once its resources are applied, which does
+not mean the server is reachable. The `BackendTLSPolicy` status reports a
 missing or empty CA ConfigMap. Handshake failures appear only on requests; see
 [Troubleshooting](/troubleshooting/#external-provider-passthroughmodel-not-working).
 
@@ -164,7 +109,50 @@ missing or empty CA ConfigMap. Handshake failures appear only on requests; see
   for the whole response, streamed or not. A slow local model can be cut off
   during long generations; cap `max_tokens` accordingly.
 - **One address per PassthroughModel.** The gateway sends every request to the
-  single hostname and port, without load balancing or failover. When the
-  server is down, requests fail at the gateway.
+  single hostname and port, without load balancing or failover.
 - **The server sees the platform key, not users.** Per-user identity, access
   groups, and key revocation are enforced at the gateway.
+
+## Example: llama.cpp on a Mac Studio
+
+This is the setup the example manifest above describes: `llama-server` at
+`macstudio.corp.example.com:8443`, with a certificate from a corporate CA.
+
+Install llama.cpp with Homebrew (`brew install llama.cpp`), which builds it
+with the OpenSSL support HTTPS needs. Generate an API key, then start the
+server with the certificate, key, and API key file:
+
+```sh
+openssl rand -hex 32 > api-key
+chmod 600 api-key macstudio.key
+
+llama-server -hf <hf-user>/<model>-GGUF:Q4_K_M \
+  --alias qwen3-30b-a3b \
+  --host 0.0.0.0 --port 8443 \
+  --ssl-cert-file macstudio.crt \
+  --ssl-key-file macstudio.key \
+  --api-key-file api-key \
+  --no-webui
+```
+
+- `--alias` sets the model id; it matches `declared` in the manifest.
+- `--api-key-file` makes every endpoint except `/health` require the key.
+- `--no-webui` turns off the built-in chat page, whose assets do not require
+  the key.
+
+For an always-on service:
+
+- **Run it under launchd.** A LaunchDaemon with `RunAtLoad` and `KeepAlive`
+  starts it at boot and restarts it if it exits.
+- **Stop the Mac from sleeping.** Use System Settings → Energy, or
+  `sudo pmset -a sleep 0`. A sleeping Mac is an outage for this model.
+- **Allow incoming connections** to `llama-server` in the macOS firewall.
+
+From any machine that trusts the CA, confirm TLS and the key before connecting
+the cluster:
+
+```sh
+curl --cacert corp-root-ca.pem \
+  -H "Authorization: Bearer $(cat api-key)" \
+  https://macstudio.corp.example.com:8443/v1/models
+```
