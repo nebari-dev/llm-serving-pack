@@ -34,33 +34,6 @@ upgrading: underscores, empty labels, URLs, ports, paths, and whitespace are
 rejected. Older webhooks admitted some of these values; correct any remaining
 invalid names before upgrading to avoid reconciliation failures.
 
-## Upgrade the pack's CRDs with plain Helm
-
-Every pack upgrade includes this step; see
-[Upgrading the pack](/installation/#83-upgrading-the-pack) for the routine
-procedure. This section covers it for the AI Gateway 1.1 migration.
-
-`helm upgrade` does not update files in a chart's `crds/` directory. The pack's
-CRDs need an explicit update as well as the gateway CRDs. Otherwise the old
-`PassthroughModel` schema still requires a hostname and API-key Secret and does
-not recognize the new backend and credential fields.
-
-At the pack-operator step of the migration below, run these commands from a
-checkout of the **same release or revision as the chart being installed**:
-
-```sh
-kubectl apply --server-side -f charts/nebari-llm-serving/crds/
-kubectl wait --for=condition=Established --timeout=60s \
-  crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
-```
-
-Then upgrade the Helm release with the matching chart and your existing values.
-Wait for the updated operator and webhook before applying Bedrock resources.
-If another tool owns the CRDs, update them through that tool instead; resolve
-field-ownership conflicts rather than forcing them. Argo CD installations that
-already manage the CRDs as rendered manifests should keep that existing workflow.
-Never delete the CRDs to upgrade them: deletion also removes their resources.
-
 ## Upgrade an installation on AI Gateway 0.5
 
 Follow the upstream [controller upgrade policy](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/RELEASES.md#upgrading-the-envoy-ai-gateway-controller)
@@ -79,8 +52,12 @@ Use staged revisions, rather than changing every controller independently:
    these resources, pause that reconciler during the handover. Move any custom
    `AIGatewayRoute.spec.filterConfig` into `GatewayConfig`; this pack does not
    generate `filterConfig`.
-4. Upgrade AI Gateway CRDs and controller to 0.7, then update the pack's CRDs
-   and deploy the new pack operator. Version 0.7 supports hostname-scoped catalogs
+4. Upgrade AI Gateway CRDs and controller to 0.7, then update the pack's CRDs as
+   in [Upgrading the pack](/installation/#83-upgrading-the-pack) and deploy the
+   new pack operator. Until the CRDs are updated, the old `PassthroughModel`
+   schema still requires a hostname and an API-key Secret and rejects the new
+   backend and credential fields, so wait for the new operator and webhook
+   before applying Bedrock resources. Version 0.7 supports hostname-scoped catalogs
    and the `v1beta1` resources the operator now emits. Confirm that all resources reconcile before
    proceeding to AI Gateway 1.1, using 1.0 as an intermediate controller release.
    AI Gateway 1.0 has a namespace-discovery bug when the Gateway lives in the

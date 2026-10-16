@@ -1217,6 +1217,9 @@ helm upgrade nebari-llm-serving oci://quay.io/nebari/charts/nebari-llm-serving \
   --version <version> -n nebari-llm-serving-system -f <your-values>.yaml
 ```
 
+If another tool owns the CRDs, update them through that tool instead, and
+resolve field-ownership conflicts rather than forcing them.
+
 If the CRDs lag behind the chart, the API server keeps validating against
 the old schema: fields the release added are rejected or dropped, so those
 features do not work until the CRDs are updated.
