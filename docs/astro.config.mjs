@@ -33,6 +33,7 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Provider Integrations', slug: 'providers' },
             { label: 'AWS Bedrock', slug: 'bedrock' },
+            { label: 'Self-hosted Servers', slug: 'self-hosted' },
             { label: 'Gateway Upgrades', slug: 'gateway-upgrades' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Local Development', slug: 'local-development' },

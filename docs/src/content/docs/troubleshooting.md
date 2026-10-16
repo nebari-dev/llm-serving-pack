@@ -298,6 +298,22 @@ kubectl -n envoy-gateway-system get sa \
 
 The `<name>-api-keys` Secret is the key-manager's user API-key store, not an upstream credential; a 401 issued by the gateway itself points at the user's minted key, not the AWS identity.
 
+**Upstream TLS verification fails (HTTP 503, `CERTIFICATE_VERIFY_FAILED`).** The gateway reached the provider but did not trust its certificate. By default it accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status first:
+
+```bash
+kubectl -n nebari-llm-serving-system get backendtlspolicy <name>-backend-tls \
+  -o jsonpath='{range .status.ancestors[*].conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+`NoValidCACertificate` / `InvalidCACertificateRef` means the ConfigMap is missing from the PassthroughModel's namespace, or has neither a `ca.crt` key nor exactly one key. If the policy is accepted, inspect the certificate the server presents:
+
+```bash
+openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>/dev/null \
+  | openssl x509 -noout -text | grep -E 'Issuer:|Subject:|DNS:|Signature Algorithm'
+```
+
+The certificate must list `spec.provider.hostname` in its subject alternative names, chain to a CA in the ConfigMap, and carry a SHA-256 (or stronger) signature; SHA-1 signatures are rejected regardless of trust.
+
 **PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
 ```bash

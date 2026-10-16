@@ -54,6 +54,7 @@ describe('ExampleCode adoption', () => {
       'bedrock.mdx',
       'configuration.mdx',
       'quickstart.mdx',
+      'self-hosted.mdx',
       'shared-storage.mdx',
     ]) {
       const page = readPage(name);
@@ -105,7 +106,7 @@ describe('configuration', () => {
       'provider.hostname', 'provider.port', 'provider.schemaVersion',
       'provider.credentialSecretName', 'models.catchAll', 'models.declared',
       'provider.backend', 'provider.backend.bedrock.region',
-      'provider.credential', 'access', 'endpoints',
+      'provider.credential', 'provider.tls.caConfigMapName', 'access', 'endpoints',
     ]) {
       expect(page).toContain(f);
     }
@@ -125,6 +126,27 @@ describe('configuration', () => {
     expect(page).toMatch(/examples\/models\/advanced-scheduling\.yaml\?raw/);
     // the broken hand-written minimal manifest is gone
     expect(page).not.toMatch(/namespace:\s*llm-serving\b/);
+  });
+});
+
+describe('self-hosted', () => {
+  it('embeds the llama.cpp example, which trusts a CA ConfigMap', () => {
+    const page = readPage('self-hosted.mdx');
+    const example = readExample('passthrough-llamacpp.yaml');
+    expect(page).toContain('examples/passthrough-llamacpp.yaml?raw');
+    expect(page).not.toMatch(/```yaml[\s\S]*kind:\s*PassthroughModel/);
+    expect(example).toMatch(/namespace:\s*nebari-llm-serving-system/);
+    expect(example).toMatch(/caConfigMapName:\s*\S+/);
+  });
+
+  it('keeps the llama-server alias and the declared model id in step', () => {
+    const page = readPage('self-hosted.mdx');
+    const example = readExample('passthrough-llamacpp.yaml');
+    const alias = page.match(/--alias\s+(\S+)/)[1];
+    expect(example).toMatch(new RegExp(`declared:[\\s\\S]*-\\s+${alias}\\b`));
+    for (const flag of ['--ssl-cert-file', '--ssl-key-file', '--api-key-file']) {
+      expect(page).toContain(flag);
+    }
   });
 });
 
