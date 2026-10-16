@@ -129,6 +129,12 @@ renewing the CA takes effect without restarting the gateway.
 
 ## 4. Apply the PassthroughModel
 
+An existing cluster needs the pack release that adds `spec.provider.tls` to the
+`PassthroughModel` CRD, and the matching operator, before applying this
+manifest. An older CRD drops or rejects the field, and an older operator keeps
+trusting only the public roots. Helm does not upgrade installed CRDs; see
+[Upgrade the pack's CRDs with plain Helm](/gateway-upgrades/#upgrade-the-packs-crds-with-plain-helm).
+
 <Code code={llamacppExample} lang="yaml" title="examples/passthrough-llamacpp.yaml" />
 
 Declare each id the server answers to. A single server has no use for
