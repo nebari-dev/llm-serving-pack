@@ -279,18 +279,30 @@ func TestBedrockRetainsRoutesAndAccessControl(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Provider selection deliberately changes exactly one route field: the
+	// hosting origin advertised on /v1/models (owned_by). Everything else —
+	// matching, backends, timeouts, access control — must stay identical.
 	for _, pair := range [][2]*unstructured.Unstructured{
 		{baseline.ExternalRoute, bedrock.ExternalRoute},
 		{baseline.InternalRoute, bedrock.InternalRoute},
+	} {
+		if !reflect.DeepEqual(withoutOwnedBy(t, pair[0]), withoutOwnedBy(t, pair[1])) {
+			t.Errorf("provider selection changed routing beyond the hosting origin for %s", pair[0].GetName())
+		}
+	}
+	for _, pair := range [][2]*unstructured.Unstructured{
 		{baseline.ExternalSecurityPolicy, bedrock.ExternalSecurityPolicy},
 		{baseline.InternalSecurityPolicy, bedrock.InternalSecurityPolicy},
 	} {
 		if !reflect.DeepEqual(pair[0].Object, pair[1].Object) {
-			t.Errorf("provider selection changed routing or access control for %s", pair[0].GetName())
+			t.Errorf("provider selection changed access control for %s", pair[0].GetName())
 		}
 	}
 	for _, route := range []*unstructured.Unstructured{bedrock.ExternalRoute, bedrock.InternalRoute} {
 		rule := routeRules(t, route)[0].(map[string]interface{})
+		if rule["modelsOwnedBy"] != string(llmv1alpha1.OriginBedrock) {
+			t.Errorf("%s modelsOwnedBy = %v, want %q", route.GetName(), rule["modelsOwnedBy"], llmv1alpha1.OriginBedrock)
+		}
 		matches := rule["matches"].([]interface{})
 		if len(matches) != len(pm.Spec.Models.Declared) {
 			t.Fatalf("%s does not route every Bedrock model", route.GetName())
@@ -444,8 +456,10 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 	t.Run("declared rule registers models on both endpoints", func(t *testing.T) {
 		extRules := routeRules(t, res.ExternalRoute)
 		declared, _ := extRules[0].(map[string]interface{})
-		if declared["modelsOwnedBy"] != ptCRName {
-			t.Errorf("external modelsOwnedBy = %v", declared["modelsOwnedBy"])
+		// owned_by is the hosting-origin contract (backend type), never the
+		// deployment-chosen CR name.
+		if declared["modelsOwnedBy"] != string(llmv1alpha1.OriginOpenAI) {
+			t.Errorf("external modelsOwnedBy = %v, want %q", declared["modelsOwnedBy"], llmv1alpha1.OriginOpenAI)
 		}
 		matches, _ := declared["matches"].([]interface{})
 		if len(matches) != 2 {
@@ -472,7 +486,7 @@ func TestBuildPassthroughRouteDetails(t *testing.T) {
 
 		intRules := routeRules(t, res.InternalRoute)
 		intDeclared, _ := intRules[0].(map[string]interface{})
-		if intDeclared["modelsOwnedBy"] != ptCRName {
+		if intDeclared["modelsOwnedBy"] != string(llmv1alpha1.OriginOpenAI) {
 			t.Error("internal route must register models in its hostname-scoped catalog")
 		}
 	})
@@ -606,4 +620,20 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 	if _, present := authzNo["rules"]; present {
 		t.Errorf("expected deny-all (no rules) for zero client IDs, got %v", authzNo["rules"])
 	}
+}
+
+// withoutOwnedBy deep-copies a route object with every rule's modelsOwnedBy
+// removed, so equality checks compare routing behavior rather than the
+// deliberately backend-dependent catalog attribution.
+func withoutOwnedBy(t *testing.T, route *unstructured.Unstructured) map[string]interface{} {
+	t.Helper()
+	obj := route.DeepCopy().Object
+	spec, _ := obj["spec"].(map[string]interface{})
+	rules, _ := spec["rules"].([]interface{})
+	for _, r := range rules {
+		if rm, ok := r.(map[string]interface{}); ok {
+			delete(rm, "modelsOwnedBy")
+		}
+	}
+	return obj
 }
