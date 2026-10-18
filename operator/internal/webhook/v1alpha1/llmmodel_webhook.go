@@ -98,6 +98,10 @@ func (v *LLMModelCustomValidator) ValidateCreate(ctx context.Context, obj runtim
 		return nil, err
 	}
 
+	if err := reconcilers.ValidateKVCacheOffload(llmmodel); err != nil {
+		return nil, err
+	}
+
 	if err := v.validateNoNameCollision(ctx, llmmodel); err != nil {
 		return nil, err
 	}
@@ -180,6 +184,10 @@ func (v *LLMModelCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 	}
 
 	if err := validateAccess(llmmodel); err != nil {
+		return nil, err
+	}
+
+	if err := reconcilers.ValidateKVCacheOffload(llmmodel); err != nil {
 		return nil, err
 	}
 

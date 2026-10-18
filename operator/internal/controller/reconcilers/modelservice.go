@@ -63,6 +63,9 @@ type ModelServiceResources struct {
 // BuildModelServiceResources is a pure function that computes the Kubernetes resources
 // needed to serve an LLMModel, based on its spec, storage results, and operator config.
 func BuildModelServiceResources(model *llmv1alpha1.LLMModel, storage *StorageResult, cfg *config.OperatorConfig) (*ModelServiceResources, error) {
+	if err := ValidateKVCacheOffload(model); err != nil {
+		return nil, err
+	}
 	labels := StandardLabels(model)
 	saName := model.Name + "-sa"
 
@@ -216,8 +219,8 @@ func buildVLLMContainer(
 			{Name: "http", ContainerPort: 8000, Protocol: corev1.ProtocolTCP},
 		},
 		Resources: corev1.ResourceRequirements{
-			Limits:   limits,
-			Requests: model.Spec.Resources.Requests,
+			Limits:   withKVCacheOffloadMemory(limits, model),
+			Requests: withKVCacheOffloadMemory(model.Spec.Resources.Requests, model),
 		},
 		Env:          model.Spec.Advanced.VLLM.ExtraEnv,
 		VolumeMounts: mounts,
@@ -283,6 +286,12 @@ func buildVLLMArgs(model *llmv1alpha1.LLMModel, storage *StorageResult) []string
 
 	args = append(args, model.Spec.Serving.VLLMArgs...)
 	args = append(args, model.Spec.Advanced.VLLM.ExtraArgs...)
+	if offload := model.Spec.Serving.KVCacheOffload; offload != nil {
+		args = append(args,
+			"--kv-offloading-size", fmt.Sprint(offload.CPUMemoryGiB),
+			"--kv-offloading-backend", "native",
+		)
+	}
 
 	return args
 }

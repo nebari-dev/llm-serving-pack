@@ -29,13 +29,14 @@ An optional key manager gives users a web UI to generate API keys for external a
 - Two auth paths: API keys for external consumers, JWT bearer tokens for in-cluster users
 - Model loading from HuggingFace (default) or OCI/modelcar images
 - Intelligent inference scheduling via llm-d's `InferencePool` and EPP
+- Opt-in native CPU KV-cache offload with explicit host-memory budgeting; see [compatibility and validation](/kv-cache-offload/)
 - Token counting and rate limiting on both endpoints via Envoy AI Gateway
 - NetworkPolicy enforcement: model pods are only reachable through the Gateway
 
 ## Non-goals for v0.1
 
 - Prefill/decode disaggregation
-- KV cache offloading
+- Shared/distributed KV cache storage and managed LMCache integration
 - Multi-accelerator support (AMD, Intel, etc.) - NVIDIA only initially
 - Usage billing or cost chargeback
 - Scale-to-zero autoscaling

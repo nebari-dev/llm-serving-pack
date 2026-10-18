@@ -1365,6 +1365,24 @@ spec:
                   image:
                     description: image overrides the default vLLM container image
                     type: string
+                  kvCacheOffload:
+                    description: |-
+                      kvCacheOffload enables native vLLM CPU KV-cache offload. Omit to disable.
+                      Explicit resources.requests.memory and resources.limits.memory describe
+                      the baseline process budget; the operator adds the cache allocation to both.
+                    properties:
+                      cpuMemoryGiB:
+                        description: |-
+                          cpuMemoryGiB is the CPU cache budget per data-parallel engine, summed
+                          across that engine's tensor-parallel ranks. The operator reserves
+                          cpuMemoryGiB * dataParallelism GiB in addition to baseline pod memory.
+                          The serving image must support native --kv-offloading-size/backend.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    required:
+                    - cpuMemoryGiB
+                    type: object
                   monitoring:
                     description: monitoring configures Prometheus monitoring
                     properties:
