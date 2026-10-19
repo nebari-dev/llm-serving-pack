@@ -159,6 +159,17 @@ describe.skipIf(!base || import.meta.env.VITE_DATA !== 'api')('api mode against 
       await catalog.api(`/keys/${key.id}/revoke`, { method: 'POST' })
     }
 
+    // allowedRegions is optional: left out, the key has none (not a NOT NULL 500).
+    const { key: bare } = await catalog.api<{ key: K }>('/keys', {
+      method: 'POST',
+      body: JSON.stringify({ name: `api-mode-test-${Date.now().toString(36)}`, team: catalog.teams[0].id, project: 'api-mode-test', allowedModels: [catalog.models[0].id] }),
+    })
+    try {
+      expect(bare.allowedRegions).toEqual([])
+    } finally {
+      await catalog.api(`/keys/${bare.id}/revoke`, { method: 'POST' })
+    }
+
     // Settings → Members lists the cache, and says there's no IdP. A link opens its section.
     window.history.pushState({}, '', '/settings#members')
     render(<App />)

@@ -507,6 +507,10 @@ func (s *Server) createKey(_ http.ResponseWriter, r *http.Request, t string) (an
 		return nil, badRequest("invalid JSON body")
 	}
 	in.Name, in.Project = strings.TrimSpace(in.Name), strings.TrimSpace(in.Project)
+	// Optional: left out, it decodes to nil, which pgx writes as NULL into a NOT NULL column.
+	if in.AllowedRegions == nil {
+		in.AllowedRegions = []string{}
+	}
 	switch {
 	case in.Name == "" || in.Team == "" || in.Project == "" && in.ProjectID == "":
 		return nil, badRequest("name, team and project are required")
