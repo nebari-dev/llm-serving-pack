@@ -13,6 +13,8 @@ type Server struct {
 	Client *Client
 	Tenant string
 	Now    func() time.Time
+	// Poll is how often the live stream reads OpenMeter; 0 is 5 seconds.
+	Poll time.Duration
 }
 
 type handlerFunc func(r *http.Request) (any, error)
@@ -32,6 +34,11 @@ func (s *Server) Handler() http.Handler {
 		})
 	}
 	h("/receipts", s.receipts)
+	mux.HandleFunc("GET "+p+"/stream/traffic", s.streamTraffic)
+	h("/receipts/count", s.receiptCount)
+	h("/activity", s.activity)
+	h("/spend/savings", s.savings)
+	h("/gateway/overhead", s.gatewayOverhead)
 	h("/spend", s.spend)
 	h("/session", s.session)
 	h("/summary", s.summary)

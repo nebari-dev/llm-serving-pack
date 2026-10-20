@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -50,12 +49,13 @@ func main() {
 }
 
 // console serves the built console's files, and index.html for any other
-// path, so the console's own routes (/spend, /traffic) load on refresh.
+// path (folders included, so none is listed), so the console's own routes
+// (/spend, /traffic) load on refresh.
 func console(dir string) http.Handler {
 	files := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := filepath.Join(dir, filepath.Clean("/"+r.URL.Path))
-		if st, err := os.Stat(p); err != nil || st.IsDir() && !strings.HasSuffix(r.URL.Path, "/") {
+		if st, err := os.Stat(p); err != nil || st.IsDir() {
 			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 			return
 		}

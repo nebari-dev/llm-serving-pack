@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,8 @@ import (
 // events and prices a test sets up. Pages of events are newest first, like
 // OpenMeter's GET /api/v2/events.
 type fakeOpenMeter struct {
+	// mu guards events, for tests that add them while the API reads.
+	mu        sync.Mutex
 	events    []map[string]any
 	overrides []map[string]any
 	prices    []map[string]any
@@ -52,7 +55,9 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/events", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
 		evs := append([]map[string]any(nil), f.events...)
+		f.mu.Unlock()
 		sort.SliceStable(evs, func(i, j int) bool { return evs[i]["time"].(string) > evs[j]["time"].(string) })
 		size := f.pageSize
 		if size == 0 {

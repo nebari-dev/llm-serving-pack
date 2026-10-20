@@ -1,10 +1,14 @@
 package openmeter_test
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,5 +317,101 @@ func TestSpendByKeySplitsLoginUsageByPerson(t *testing.T) {
 
 	if len(v.Rows) != 2 || v.Rows[0].ID != "login:bob" || v.Rows[0].Label != "bob (Keycloak login)" || v.Rows[1].ID != "login:alice" || !v.Rows[0].NoDrill {
 		t.Fatalf("rows %+v", v.Rows)
+	}
+}
+
+// The calls pages make after loading answer too: the receipt count from
+// OpenMeter, and empty answers where this pack keeps nothing (configuration
+// history, savings, gateway timing).
+func TestPageCallsAnswer(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("a1", now.Add(-2*time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
+	f.request("a2", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
+	f.request("a3", now.Add(-26*time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
+	h := newAPI(t, f)
+
+	since := now.Add(-24 * time.Hour).UnixMilli()
+	c := get[api.ReceiptCount](t, h, "/receipts/count?since="+strconv.FormatInt(since, 10))
+	if c.Count == nil || *c.Count != 2 || c.Since != since {
+		t.Fatalf("count %+v", c)
+	}
+	a := get[api.ActivityView](t, h, "/activity?range=7d")
+	if a.Changes == nil || a.Events == nil || a.Until != now.UnixMilli() {
+		t.Fatalf("activity %+v", a)
+	}
+	sv := get[api.SavingsView](t, h, "/spend/savings")
+	if sv.Opportunities == nil {
+		t.Fatalf("savings %+v", sv)
+	}
+	o := get[map[string]any](t, h, "/gateway/overhead")
+	if o["samples"] != 0.0 {
+		t.Fatalf("overhead %+v", o)
+	}
+}
+
+// Live Traffic: requests that reach OpenMeter after the page opened arrive
+// on the stream, and arrive again when their token counts land later.
+func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("old", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
+	om := f.server(t)
+	srv := httptest.NewServer((&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Poll: 20 * time.Millisecond}).Handler())
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/demo/stream/traffic", nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	events := make(chan model.Receipt)
+	ready := make(chan struct{})
+	go func() {
+		sc := bufio.NewScanner(res.Body)
+		for sc.Scan() {
+			if sc.Text() == ": ready" {
+				close(ready)
+			}
+			if data, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+				var r model.Receipt
+				if json.Unmarshal([]byte(data), &r) == nil && r.ID != "" {
+					events <- r
+				}
+			}
+		}
+	}()
+	next := func() model.Receipt {
+		t.Helper()
+		select {
+		case r := <-events:
+			return r
+		case <-ctx.Done():
+			t.Fatal("no receipt on the stream")
+		}
+		return model.Receipt{}
+	}
+
+	// What was already there when the stream opened isn't sent again.
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("stream never ready")
+	}
+	f.mu.Lock()
+	f.events = append(f.events, event("new", "llm.request", now, alice("mock/small", "key-a1", "api_key")))
+	f.mu.Unlock()
+	if r := next(); r.ID != "new" || r.InputTokens != 0 {
+		t.Fatalf("first %+v", r)
+	}
+	f.mu.Lock()
+	f.events = append(f.events, event("new:input", "llm.tokens", now, map[string]any{"token_type": "input", "tokens": 9, "user": "alice"}))
+	f.mu.Unlock()
+	if r := next(); r.ID != "new" || r.InputTokens != 9 {
+		t.Fatalf("update %+v", r)
 	}
 }
