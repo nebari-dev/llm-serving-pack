@@ -1,10 +1,14 @@
 // Command openmeter-api serves the console read-only from OpenMeter: the
 // console's API under /api/v1/<tenant>/, and the built console itself.
+//
+//	openmeter-api [flags]                      serve
+//	openmeter-api bootstrap -config FILE.json  set up OpenMeter's features and prices, then exit
 package main
 
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
@@ -20,6 +24,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
+		bootstrap(os.Args[2:])
+		return
+	}
 	addr := flag.String("addr", ":8080", "listen address")
 	omURL := flag.String("openmeter-url", cmp.Or(os.Getenv("OPENMETER_URL"), "http://localhost:8888"), "OpenMeter's API ($OPENMETER_URL); its token, if any, is $OPENMETER_TOKEN")
 	consoleDir := flag.String("console-dir", "", "the built console (console/dist) to serve; empty serves the API only")
@@ -61,4 +69,37 @@ func console(dir string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+// bootstrap applies a BootstrapConfig, retrying while OpenMeter starts.
+func bootstrap(args []string) {
+	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
+	omURL := fs.String("openmeter-url", cmp.Or(os.Getenv("OPENMETER_URL"), "http://localhost:8888"), "OpenMeter's API")
+	path := fs.String("config", "/etc/openmeter-pack/bootstrap.json", "the features and prices to set up")
+	timeout := fs.Duration("timeout", 5*time.Minute, "how long to keep trying")
+	fs.Parse(args)
+	b, err := os.ReadFile(*path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var cfg openmeter.BootstrapConfig
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		log.Fatalf("%s: %v", *path, err)
+	}
+	c := openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN"))
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	for {
+		err := openmeter.Bootstrap(ctx, c, cfg, time.Now)
+		if err == nil {
+			log.Printf("bootstrap: %d model resources, %d manual prices in place", len(cfg.Resources), len(cfg.Prices))
+			return
+		}
+		log.Printf("bootstrap: %v; retrying", err)
+		select {
+		case <-ctx.Done():
+			log.Fatalf("bootstrap: gave up after %s", *timeout)
+		case <-time.After(5 * time.Second):
+		}
+	}
 }

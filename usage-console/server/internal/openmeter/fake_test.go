@@ -26,6 +26,10 @@ type fakeOpenMeter struct {
 	// cost is USD per token by model, for the fake's cost queries; a model
 	// missing here has no price.
 	cost map[string]float64
+	// features overrides the two default features when set; created holds
+	// what POSTs created.
+	features []map[string]any
+	created  []map[string]any
 }
 
 // request adds the events the usage collector sends for one gateway request:
@@ -90,11 +94,32 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 		writeJSON(w, map[string]any{"data": out})
 	})
 	mux.HandleFunc("GET /api/v3/openmeter/features", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"data": []map[string]any{
-			feature("f-mock", "mock-provider", "mock"),
-			feature("f-bedrock", "bedrock", "bedrock"),
-		}})
+		fs := f.features
+		if fs == nil {
+			fs = []map[string]any{feature("f-mock", "mock-provider", "mock"), feature("f-bedrock", "bedrock", "bedrock")}
+		}
+		writeJSON(w, map[string]any{"data": fs})
 	})
+	mux.HandleFunc("GET /api/v3/openmeter/meters", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"data": []map[string]any{{"id": "m-req", "key": "llm_requests"}, {"id": "m-tok", "key": "llm_tokens"}}})
+	})
+	create := func(kind string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			var body map[string]any
+			json.NewDecoder(r.Body).Decode(&body)
+			body["_kind"] = kind
+			f.created = append(f.created, body)
+			if kind == "feature" {
+				f.features = append(f.features, map[string]any{"id": "f-" + fmt.Sprint(len(f.created)), "key": body["key"], "meter": body["meter"], "unit_cost": body["unit_cost"]})
+			} else {
+				f.overrides = append(f.overrides, map[string]any{"provider": map[string]any{"id": body["provider"]}, "model": map[string]any{"id": body["model_id"]}, "pricing": body["pricing"], "effective_from": body["effective_from"]})
+			}
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(w, body)
+		}
+	}
+	mux.HandleFunc("POST /api/v3/openmeter/features", create("feature"))
+	mux.HandleFunc("POST /api/v3/openmeter/llm-cost/overrides", create("override"))
 	mux.HandleFunc("GET /api/v1/customers", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"items": orEmpty(f.customers)})
 	})
