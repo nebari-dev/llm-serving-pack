@@ -415,3 +415,18 @@ func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
 		t.Fatalf("update %+v", r)
 	}
 }
+
+// Provider is the OpenMeter provider of each model resource's price feature.
+func TestSpendByProvider(t *testing.T) {
+	f := &fakeOpenMeter{cost: map[string]float64{"mock/small": 0.001, "amazon.nova-2-lite": 0.0001}}
+	f.request("a1", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 100})
+	nova := alice("amazon.nova-2-lite", "key-a2", "api_key")
+	nova["model_resource"] = "bedrock"
+	f.request("a2", now.Add(-time.Hour), nova, map[string]int{"input": 100})
+
+	v := get[api.SpendView](t, newAPI(t, f), "/spend?range=24h&by=provider")
+
+	if v.By != "provider" || len(v.Rows) != 2 || v.Rows[0].ID != "mock" || v.Rows[1].ID != "bedrock" || v.Rows[1].SpendUSD != 0.01 {
+		t.Fatalf("rows %+v", v.Rows)
+	}
+}

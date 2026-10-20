@@ -84,16 +84,21 @@ func (s *Server) newPricer(ctx context.Context) (*pricer, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &pricer{client: s.Client, now: s.Now(), providers: map[string]string{}, overrides: ov, cache: map[[2]string]*Price{}}
+	return &pricer{client: s.Client, now: s.Now(), providers: providersOf(fs), overrides: ov, cache: map[[2]string]*Price{}}, nil
+}
+
+// providersOf maps each model resource to its price feature's provider.
+func providersOf(fs []Feature) map[string]string {
+	out := map[string]string{}
 	for _, f := range fs {
 		if f.UnitCost == nil || f.UnitCost.Type != "llm" {
 			continue
 		}
 		if r := f.Meter.Filters["model_resource"]["eq"]; r != "" {
-			p.providers[r] = f.UnitCost.Provider
+			out[r] = f.UnitCost.Provider
 		}
 	}
-	return p, nil
+	return out
 }
 
 // cost is the request's cost in USD, or nil when its model has no price or

@@ -30,11 +30,12 @@ func rangeOf(r *http.Request) (string, time.Duration) {
 // spendDims maps the console's Spend dimensions to the event field each
 // groups by. A key's project is the model resource it was minted for.
 var spendDims = map[string]string{
-	"team":    "team",
-	"person":  "user",
-	"key":     "api_key",
-	"model":   "model",
-	"project": "model_resource",
+	"team":     "team",
+	"person":   "user",
+	"key":      "api_key",
+	"model":    "model",
+	"project":  "model_resource",
+	"provider": "provider",
 }
 
 func (s *Server) spend(r *http.Request) (any, error) {

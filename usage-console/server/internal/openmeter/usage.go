@@ -22,6 +22,8 @@ type cell struct {
 	Key      string
 	Model    string
 	Resource string
+	// Provider is the price feature's provider for Resource.
+	Provider string
 	USD      float64
 	// Unpriced: the cell's tokens have no price, so USD leaves them out.
 	Unpriced bool
@@ -41,6 +43,8 @@ func (c cell) dim(name string) string {
 		return c.Model
 	case "model_resource":
 		return c.Resource
+	case "provider":
+		return c.Provider
 	}
 	return ""
 }
@@ -111,6 +115,7 @@ func (s *Server) usage(ctx context.Context, from, to time.Time, w *window) ([]ce
 	if err != nil {
 		return nil, err
 	}
+	providers := providersOf(fs)
 	by := map[string]*cell{}
 	var order []string
 	at := func(start time.Time, g map[string]*string) *cell {
@@ -124,6 +129,7 @@ func (s *Server) usage(ctx context.Context, from, to time.Time, w *window) ([]ce
 			return ""
 		}
 		c := cell{Start: start.UTC(), Team: v("team"), User: v("user"), Key: v("api_key"), Model: v("model"), Resource: v("model_resource")}
+		c.Provider = providers[c.Resource]
 		k := c.Start.String()
 		for _, d := range dims {
 			k += "\x00" + c.dim(d)
