@@ -1,0 +1,237 @@
+{{- $kafka := include "om.name" (dict "root" . "component" "kafka") }}
+{{- $creds := include "om.name" (dict "root" . "component" "credentials") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $kafka }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $kafka }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.labels" . | nindent 8 }}
+        {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {fsGroup: 1000}
+      containers:
+        - name: kafka
+          image: {{ .Values.kafka.image }}
+          env:
+            - {name: CLUSTER_ID, value: {{ printf "%s-kafka" .Release.Name | sha256sum | trunc 22 | quote }}}
+            - {name: KAFKA_NODE_ID, value: "0"}
+            - {name: KAFKA_PROCESS_ROLES, value: "broker,controller"}
+            - {name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "0@localhost:9093"}
+            - {name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER}
+            - {name: KAFKA_INTER_BROKER_LISTENER_NAME, value: INTERNAL}
+            - {name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"}
+            - {name: KAFKA_LISTENERS, value: "INTERNAL://0.0.0.0:9092,CONTROLLER://localhost:9093"}
+            - {name: KAFKA_ADVERTISED_LISTENERS, value: {{ printf "INTERNAL://%s:9092" $kafka | quote }}}
+            - {name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "false"}
+            - {name: KAFKA_LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS, value: "9223372036854775807"}
+            - {name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data/logs}
+            - {name: KAFKA_HEAP_OPTS, value: "-Xms256m -Xmx384m"}
+          ports:
+            - containerPort: 9092
+          readinessProbe:
+            tcpSocket: {port: 9092}
+            periodSeconds: 5
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.kafka.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/kafka/data}
+      {{- if not .Values.kafka.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "store" .Values.kafka) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $kafka }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 4 }}
+  ports:
+    - {port: 9092, targetPort: 9092}
+---
+{{- $ch := include "om.name" (dict "root" . "component" "clickhouse") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $ch }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $ch }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.labels" . | nindent 8 }}
+        {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image }}
+          env:
+            - {name: CLICKHOUSE_USER, value: default}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $creds }}, key: clickhouse-password}}
+            - {name: CLICKHOUSE_DB, value: openmeter}
+            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+          ports:
+            - containerPort: 9000
+            - containerPort: 8123
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+      {{- if not .Values.clickhouse.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "store" .Values.clickhouse) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $ch }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 4 }}
+  ports:
+    - {name: native, port: 9000, targetPort: 9000}
+    - {name: http, port: 8123, targetPort: 8123}
+---
+{{- $pg := include "om.name" (dict "root" . "component" "postgres") }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $pg }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $pg }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.labels" . | nindent 8 }}
+        {{- include "om.selector" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          args: ["postgres", "-c", "wal_level=logical"]
+          env:
+            - {name: POSTGRES_USER, value: postgres}
+            - {name: POSTGRES_DB, value: postgres}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $creds }}, key: postgres-password}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec: {command: ["pg_isready", "-U", "postgres"]}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      {{- if not .Values.postgres.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "store" .Values.postgres) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $pg }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "postgres") | nindent 4 }}
+  ports:
+    - {port: 5432, targetPort: 5432}
+---
+{{- $redis := include "om.name" (dict "root" . "component" "redis") }}
+# Redis holds only the sink's recently seen event IDs (deduplication), so it
+# keeps no data across restarts.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $redis }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.labels" . | nindent 8 }}
+        {{- include "om.selector" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 999}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          args: ["redis-server", "--maxmemory", "50mb", "--maxmemory-policy", "noeviction", "--save", ""]
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            periodSeconds: 5
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $redis }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "redis") | nindent 4 }}
+  ports:
+    - {port: 6379, targetPort: 6379}

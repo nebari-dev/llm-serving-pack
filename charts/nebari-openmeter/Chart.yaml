@@ -1,0 +1,15 @@
+apiVersion: v2
+name: nebari-openmeter
+description: A Nebari Software Pack that deploys OpenMeter as the LLM usage store for the LLM serving pack, with a read-only usage console.
+type: application
+version: 0.1.0
+appVersion: "v1.0.0-beta.234"
+home: https://openmeter.io/
+sources:
+  - https://github.com/openmeterio/openmeter
+keywords:
+  - openmeter
+  - llm
+  - usage
+  - metering
+  - nebari
