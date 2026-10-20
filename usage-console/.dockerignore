@@ -1,0 +1,4 @@
+console/node_modules
+console/dist
+server/tmp
+**/.DS_Store
