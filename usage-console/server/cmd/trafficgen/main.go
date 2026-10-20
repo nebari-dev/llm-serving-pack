@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/traffic"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/traffic"
 )
 
 func main() {

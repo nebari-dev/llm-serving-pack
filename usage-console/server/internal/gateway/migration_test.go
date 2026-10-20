@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/demo"
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // Config migration 045 turns every rule into a policy of its own (§5.2). The

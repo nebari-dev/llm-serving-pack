@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/auth"
-	"github.com/jbouder/stargate/server/internal/auth/authtest"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth/authtest"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // serve runs one request and reports its status, or 0 if the handler got

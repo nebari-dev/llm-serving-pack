@@ -10,8 +10,8 @@ import (
 	"reflect"
 	"slices"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Policy writes (§5.2, §7.5.7): a policy is an ordered list of rules with

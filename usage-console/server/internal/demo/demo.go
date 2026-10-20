@@ -7,8 +7,8 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/pricing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
 )
 
 // FakeUpstreamPort is where cmd/fake-openai listens, and where the demo

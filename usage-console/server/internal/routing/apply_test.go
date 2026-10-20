@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
 )
 
 func newLocal(t *testing.T, ready func(n int) error) (*LocalApplier, string) {

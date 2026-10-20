@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // §7.5.9 Activity: config changes and traffic on one timeline. Everything

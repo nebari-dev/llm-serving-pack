@@ -4,9 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/demo"
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
 )
 
 // Sync is what the gateway runs against the desired state: the seed sync_state

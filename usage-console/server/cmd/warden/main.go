@@ -30,12 +30,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/jbouder/stargate/server/internal/buildinfo"
-	"github.com/jbouder/stargate/server/internal/config"
-	"github.com/jbouder/stargate/server/internal/demo"
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/store"
-	"github.com/jbouder/stargate/server/internal/warden"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/buildinfo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/config"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/warden"
 )
 
 func main() {

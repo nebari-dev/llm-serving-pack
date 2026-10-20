@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // Throttled requests are their own verdict in the traffic series, not blocks.

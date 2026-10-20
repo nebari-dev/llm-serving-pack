@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jbouder/stargate/server/internal/buildinfo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/buildinfo"
 )
 
 // Session is what the console's shell shows about where it is and who's

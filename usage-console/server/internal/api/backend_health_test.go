@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Health, p50 and error rate come from receipts, never from the seed: the

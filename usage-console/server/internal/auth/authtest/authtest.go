@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/auth"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
 )
 
 const (

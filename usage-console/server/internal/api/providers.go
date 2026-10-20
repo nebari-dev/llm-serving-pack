@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/routing"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Providers (spec §7.5.1, §7.5.6, §9.1): backends are desired state like

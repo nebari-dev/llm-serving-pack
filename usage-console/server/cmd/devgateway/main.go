@@ -12,10 +12,10 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/config"
-	"github.com/jbouder/stargate/server/internal/demo"
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/config"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 func main() {

@@ -7,10 +7,10 @@ import (
 	"slices"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/fakellm"
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/fakellm"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Replay (spec §7.5.7): a policy's draft run over recorded requests with the

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/fakellm"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/fakellm"
 )
 
 // Upstream calls one backend. onDelta receives streamed content (nil for

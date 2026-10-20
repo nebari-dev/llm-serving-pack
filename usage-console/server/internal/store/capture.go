@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // ContentWriter stores Warden's captured content off the request path (spec

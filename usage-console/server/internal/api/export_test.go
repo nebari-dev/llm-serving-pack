@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/receiptsig"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/receiptsig"
 )
 
 func unzip(t *testing.T, b []byte) map[string][]byte {

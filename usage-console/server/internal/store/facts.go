@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/pricing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
 )
 
 // PairFacts is what LiteLLM's entry for a (model, backend) says besides price.

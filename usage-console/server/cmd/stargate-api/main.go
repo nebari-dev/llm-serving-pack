@@ -25,16 +25,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/api"
-	"github.com/jbouder/stargate/server/internal/auth"
-	"github.com/jbouder/stargate/server/internal/config"
-	"github.com/jbouder/stargate/server/internal/demo"
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/receiptsig"
-	"github.com/jbouder/stargate/server/internal/routing"
-	"github.com/jbouder/stargate/server/internal/store"
-	"github.com/jbouder/stargate/server/internal/traffic"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/api"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/config"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/receiptsig"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/traffic"
 )
 
 func main() {

@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/routing"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Attribute names, as set in the EnvoyProxy access-log format.

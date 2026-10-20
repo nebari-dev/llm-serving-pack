@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/pricing"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // LiteLLMURL is LiteLLM's price file (MIT), the default price source

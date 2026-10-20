@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/routing"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 // Routing (spec §4.4, §7.5.6): routes and backends in Postgres are the desired

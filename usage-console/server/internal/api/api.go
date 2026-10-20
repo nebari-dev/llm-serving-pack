@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jbouder/stargate/server/internal/auth"
-	"github.com/jbouder/stargate/server/internal/gateway"
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/receiptsig"
-	"github.com/jbouder/stargate/server/internal/routing"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/receiptsig"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 type Server struct {

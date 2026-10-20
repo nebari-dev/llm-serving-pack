@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jbouder/stargate/server/internal/pricing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
 )
 
 // Setup links each model a provider adds to its LiteLLM entry, so its price,

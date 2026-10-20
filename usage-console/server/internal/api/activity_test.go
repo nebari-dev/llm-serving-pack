@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/store"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
 )
 
 var t0 = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)

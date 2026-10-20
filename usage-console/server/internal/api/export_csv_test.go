@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // One row per settled receipt, for a spreadsheet: a value with a comma is

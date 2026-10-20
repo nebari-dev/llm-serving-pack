@@ -1,4 +1,4 @@
-module github.com/jbouder/stargate/server
+module github.com/nebari-dev/openmeter-pack/ui/server
 
 go 1.26.5
 

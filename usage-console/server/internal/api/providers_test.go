@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jbouder/stargate/server/internal/model"
-	"github.com/jbouder/stargate/server/internal/routing"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
 )
 
 // §9.1: provider keys are never returned by the API, not even masked beyond a

@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // BudgetScopes is what a budget may cover: team ids, project ids (a project

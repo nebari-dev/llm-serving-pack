@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jbouder/stargate/server/internal/model"
+	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
 )
 
 // Providers the console can add: each is a base URL speaking OpenAI's API
