@@ -15,7 +15,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "api") | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
@@ -72,7 +71,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "sink-worker") | nindent 8 }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
@@ -132,6 +130,9 @@ spec:
           configMap: {name: {{ $config }}}
 ---
 {{- define "om.priceSyncPod" }}
+metadata:
+  labels:
+    {{- include "om.selector" (dict "root" . "component" "price-sync") | nindent 4 }}
 spec:
   restartPolicy: Never
   enableServiceLinks: false
@@ -165,17 +166,16 @@ spec:
       template:
         {{- include "om.priceSyncPod" . | nindent 8 }}
 ---
-# Prices on the first install, without waiting for the schedule; retried
-# while OpenMeter's database comes up.
+# Prices right after each install or upgrade, without waiting for the
+# schedule; retried while OpenMeter's stores come up. An ordinary Job, not a
+# hook: it fetches public prices, and a slow or offline fetch shouldn't fail
+# the install.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "om.name" (dict "root" . "component" "price-sync-now") }}
+  name: {{ include "om.name" (dict "root" . "component" (printf "price-sync-%d" .Release.Revision)) }}
   labels:
     {{- include "om.labels" . | nindent 4 }}
-  annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 86400
@@ -197,7 +197,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "bootstrap") | nindent 8 }}
     spec:
       restartPolicy: Never

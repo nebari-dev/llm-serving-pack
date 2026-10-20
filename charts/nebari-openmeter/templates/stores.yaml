@@ -15,7 +15,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 8 }}
     spec:
       enableServiceLinks: false
@@ -87,7 +86,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 8 }}
     spec:
       enableServiceLinks: false
@@ -146,7 +144,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "postgres") | nindent 8 }}
     spec:
       enableServiceLinks: false
@@ -205,7 +202,6 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "om.labels" . | nindent 8 }}
         {{- include "om.selector" (dict "root" . "component" "redis") | nindent 8 }}
     spec:
       enableServiceLinks: false
