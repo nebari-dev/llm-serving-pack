@@ -4,18 +4,24 @@
 // hand-tuned shares, so the breakdown and the trend reconcile to the same
 // totals.
 
-import { keys, modelById, now, seedRates, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
+import { dataMode, keys, modelById, now, seedRates, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
 import type { TimeRange } from '@/state/app-state'
 
 export type Dim = SpendDim
 
-export const dims: { value: Dim; label: string }[] = [
-  { value: 'team', label: 'Team' },
-  { value: 'project', label: 'Project' },
-  { value: 'key', label: 'Key' },
-  { value: 'model', label: 'Model' },
-  { value: 'provider', label: 'Provider' },
-]
+/** The Spend page's dimensions. Person needs a control plane that knows who made each request; the mock data doesn't. */
+export function spendDims(mode: 'api' | 'mock'): { value: Dim; label: string }[] {
+  return [
+    { value: 'team', label: 'Team' },
+    ...(mode === 'api' ? [{ value: 'person' as const, label: 'Person' }] : []),
+    { value: 'project', label: 'Project' },
+    { value: 'key', label: 'Key' },
+    { value: 'model', label: 'Model' },
+    { value: 'provider', label: 'Provider' },
+  ]
+}
+
+export const dims = spendDims(dataMode)
 
 /** One attribution cell: a key × model pair and its share of the team's daily spend. */
 export interface Cell {
@@ -24,6 +30,8 @@ export interface Cell {
   projectId: string
   key: string
   keyId: string
+  /** The key's owner: who made its requests. */
+  person: string
   model: string
   provider: string
   /** fraction of the team's daily spend */
@@ -76,6 +84,7 @@ export const cells: Cell[] = (() => {
           projectId: k.projectId,
           key: k.name,
           keyId: k.id,
+          person: k.owner,
           model: m,
           provider: modelById[m].provider,
           share: kShare * (weights[m] / wSum),

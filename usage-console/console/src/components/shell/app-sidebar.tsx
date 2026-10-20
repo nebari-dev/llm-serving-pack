@@ -23,11 +23,12 @@ import {
   SidebarMenuLabel,
   SidebarSeparator,
 } from '@/components/ui/sidebar'
-import { dataMode, session } from '@/data/catalog'
+import { dataMode, hiddenPages, session } from '@/data/catalog'
 
 // §7.4 information architecture, grouped by the job each screen serves:
 // watching the request stream, governing money and data, configuring the gateway.
-const groups = [
+// The last, unlabelled group sits below the separator.
+const allGroups = [
   {
     label: 'Monitor',
     items: [
@@ -51,7 +52,19 @@ const groups = [
       { to: '/models', label: 'Models', icon: Boxes },
     ],
   },
+  {
+    label: '',
+    items: [
+      { to: '/settings', label: 'Settings', icon: Settings },
+      { to: '/onboarding', label: 'Connect an app', icon: Sparkles },
+    ],
+  },
 ]
+
+/** The sidebar's groups without the hidden pages, and without a group left empty. */
+export function navGroups(hidden: Set<string>) {
+  return allGroups.map((g) => ({ ...g, items: g.items.filter((i) => !hidden.has(i.to)) })).filter((g) => g.items.length > 0)
+}
 
 // Mock mode names the mockup's versions; against the control plane, the builds
 // actually running (Warden only when the control plane knows where it is).
@@ -65,12 +78,14 @@ function versions() {
 export function AppSidebar() {
   const { pathname } = useLocation()
   const isActive = (to: string) => (to === '/' ? pathname === '/' : pathname.startsWith(to))
+  const groups = navGroups(hiddenPages)
+  const bottom = groups.find((g) => g.label === '')
 
   return (
     <Sidebar className="relative h-full rounded-none border-r border-sidebar-border" aria-label="Primary">
       <SidebarContent>
         <div className="flex flex-col gap-4">
-          {groups.map((g) => (
+          {groups.filter((g) => g.label !== '').map((g) => (
             <SidebarGroup key={g.label} role="group" aria-labelledby={`nav-${g.label}`}>
               {/* Spec §7.3: sentence case, no all-caps — override nebari's uppercase label. */}
               <SidebarGroupLabel id={`nav-${g.label}`} className="text-xs tracking-normal normal-case">
@@ -89,21 +104,21 @@ export function AppSidebar() {
             </SidebarGroup>
           ))}
         </div>
-        <SidebarSeparator className="my-4" />
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton active={isActive('/settings')} tooltip="Settings" render={<RouterLink to="/settings" />}>
-              <Settings className="size-4 shrink-0" aria-hidden="true" />
-              <SidebarMenuLabel>Settings</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton active={isActive('/onboarding')} tooltip="Connect an app" render={<RouterLink to="/onboarding" />}>
-              <Sparkles className="size-4 shrink-0" aria-hidden="true" />
-              <SidebarMenuLabel>Connect an app</SidebarMenuLabel>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        {bottom && (
+          <>
+            <SidebarSeparator className="my-4" />
+            <SidebarMenu>
+              {bottom.items.map(({ to, label, icon: Icon }) => (
+                <SidebarMenuItem key={to}>
+                  <SidebarMenuButton active={isActive(to)} tooltip={label} render={<RouterLink to={to} />}>
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    <SidebarMenuLabel>{label}</SidebarMenuLabel>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </>
+        )}
       </SidebarContent>
       <SidebarFooter className="text-xs text-muted-foreground-strong group-data-[state=collapsed]/sidebar:hidden">
         <div className="flex flex-col gap-0.5 px-2 py-1">

@@ -81,6 +81,12 @@ export interface BackendResult {
 export type * from './mock'
 
 export const dataMode: 'api' | 'mock' = import.meta.env.VITE_DATA === 'api' ? 'api' : 'mock'
+
+/** VITE_HIDE_PAGES ("/routing,/guardrails"): pages a deployment has no backend for, left out of the sidebar and sent to Overview. */
+export function parseHiddenPages(v: string | undefined): Set<string> {
+  return new Set((v ?? '').split(',').map((p) => p.trim()).filter(Boolean))
+}
+export const hiddenPages = parseHiddenPages(import.meta.env.VITE_HIDE_PAGES)
 export const API_BASE = '/api/v1/demo'
 
 export type Detector = (typeof mock.detectors)[number]

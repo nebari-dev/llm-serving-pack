@@ -1,5 +1,6 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppLayout } from '@/components/shell/app-layout'
+import { hiddenPages } from '@/data/catalog'
 import { ThemeProvider } from '@/hooks/theme-provider'
 import { ActivityPage } from '@/pages/activity'
 import { GuardrailsPage } from '@/pages/guardrails'
@@ -13,6 +14,9 @@ import { SpendPage } from '@/pages/spend'
 import { TrafficPage } from '@/pages/traffic'
 import { AppStateProvider } from '@/state/app-state'
 
+/** A hidden page (VITE_HIDE_PAGES) sends its visitor to Overview. */
+const page = (path: string, el: React.ReactElement) => (hiddenPages.has(path) ? <Navigate to="/" replace /> : el)
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -21,15 +25,15 @@ export default function App() {
           <Routes>
             <Route element={<AppLayout />}>
               <Route index element={<OverviewPage />} />
-              <Route path="traffic" element={<TrafficPage />} />
-              <Route path="spend" element={<SpendPage />} />
-              <Route path="models" element={<ModelsPage />} />
-              <Route path="routing" element={<RoutingPage />} />
-              <Route path="guardrails" element={<GuardrailsPage />} />
-              <Route path="keys" element={<KeysPage />} />
-              <Route path="activity" element={<ActivityPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="onboarding" element={<OnboardingPage />} />
+              <Route path="traffic" element={page("/traffic", <TrafficPage />)} />
+              <Route path="spend" element={page("/spend", <SpendPage />)} />
+              <Route path="models" element={page("/models", <ModelsPage />)} />
+              <Route path="routing" element={page("/routing", <RoutingPage />)} />
+              <Route path="guardrails" element={page("/guardrails", <GuardrailsPage />)} />
+              <Route path="keys" element={page("/keys", <KeysPage />)} />
+              <Route path="activity" element={page("/activity", <ActivityPage />)} />
+              <Route path="settings" element={page("/settings", <SettingsPage />)} />
+              <Route path="onboarding" element={page("/onboarding", <OnboardingPage />)} />
             </Route>
           </Routes>
         </AppStateProvider>

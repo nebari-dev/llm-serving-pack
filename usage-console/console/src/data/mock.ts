@@ -839,7 +839,8 @@ export const spendSeries: SpendPoint[] = Array.from({ length: 30 }, (_, i) => {
 
 // GET /spend: the Spend page's totals, breakdown, trend and projection for a
 // range, grouped by one dimension. Mock mode derives it in pages/spend-data.
-export type SpendDim = 'team' | 'project' | 'key' | 'model' | 'provider'
+/** person: who made the requests, where the control plane can tell (the OpenMeter pack's). */
+export type SpendDim = 'team' | 'person' | 'project' | 'key' | 'model' | 'provider'
 
 export interface SpendRow {
   /** What Traffic filters on for this group. */
