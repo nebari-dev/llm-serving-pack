@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -130,6 +131,7 @@ func (p *pricer) price(ctx context.Context, provider, model string) (*Price, err
 	if provider == "" {
 		return nil, nil
 	}
+	provider, model = strings.ToLower(strings.TrimSpace(provider)), canonicalModel(model)
 	k := [2]string{provider, model}
 	if pr, ok := p.cache[k]; ok {
 		return pr, nil

@@ -430,3 +430,31 @@ func TestSpendByProvider(t *testing.T) {
 		t.Fatalf("rows %+v", v.Rows)
 	}
 }
+
+// Gateway model IDs are priced under OpenMeter's canonical IDs: Bedrock's
+// region prefix and version suffix go, and a dot between digits becomes a
+// hyphen, as OpenMeter's cost queries look them up.
+func TestReceiptCostFindsPricesUnderOpenMeterModelIDs(t *testing.T) {
+	f := &fakeOpenMeter{prices: []map[string]any{
+		price("bedrock", "amazon.nova-2-lite", now.Add(-time.Hour), map[string]string{"input_per_token": "0.000001", "output_per_token": "0.000002"}),
+		price("bedrock", "xai.grok-4-6", now.Add(-time.Hour), map[string]string{"input_per_token": "0.00001", "output_per_token": "0.00002"}),
+	}}
+	for id, m := range map[string]string{"r1": "us.amazon.nova-2-lite-v1:0", "r2": "us.xai.grok-4.6"} {
+		d := alice(m, "key-a1", "api_key")
+		d["model_resource"] = "bedrock"
+		f.request(id, now.Add(-time.Minute), d, map[string]int{"input": 1000, "output": 100})
+	}
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), "/receipts")
+
+	cost := map[string]float64{}
+	for _, r := range rs {
+		if r.CostUSD == nil {
+			t.Fatalf("%s (%s) unpriced", r.ID, r.ResolvedModel)
+		}
+		cost[r.ID] = *r.CostUSD
+	}
+	if cost["r1"] != 0.0012 || cost["r2"] != 0.012 {
+		t.Fatalf("costs %v", cost)
+	}
+}
