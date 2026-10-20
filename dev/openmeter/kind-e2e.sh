@@ -135,6 +135,16 @@ for attempt in $(seq 1 90); do
   sleep 2
 done
 
+# A request's event can land before its token events: wait until the token
+# total holds still for three reads.
+tokens() { curl -sf "$API/spend?range=30d&by=team" | python3 -c 'import sys, json; print(sum(r["tokens"] for r in json.load(sys.stdin)["rows"]))'; }
+last=""; same=0
+for _ in $(seq 1 60); do
+  now="$(tokens || echo "")"
+  if [[ -n "$now" && "$now" == "$last" ]]; then same=$((same + 1)); [[ $same -ge 2 ]] && break; else same=0; fi
+  last="$now"; sleep 2
+done
+
 step "spend by person and by team, from the console's API (last 30 days)"
 for by in person team; do
   curl -sf "$API/spend?range=30d&by=$by" | python3 -c '
