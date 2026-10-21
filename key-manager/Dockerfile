@@ -23,7 +23,7 @@ RUN go mod download
 COPY key-manager/ /workspace/key-manager/
 
 # Build the binary.
-RUN CGO_ENABLED=0 GOOS=linux go build -o key-manager ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o key-manager ./cmd
 
 # ---------------------------------------------------------------------------
 # Runtime image
