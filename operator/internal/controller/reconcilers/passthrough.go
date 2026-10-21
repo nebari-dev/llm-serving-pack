@@ -324,7 +324,8 @@ func buildPassthroughRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
-				"rules": rules,
+				"llmRequestCosts": tokenUsageCosts(),
+				"rules":           rules,
 			},
 		},
 	}

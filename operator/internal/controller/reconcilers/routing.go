@@ -132,6 +132,7 @@ func buildAIGatewayRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
+				"llmRequestCosts": tokenUsageCosts(),
 				"rules": []interface{}{
 					map[string]interface{}{
 						// Match on the `x-ai-eg-model` header for per-model dispatch on the
