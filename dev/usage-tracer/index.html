@@ -12,7 +12,7 @@
     --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'Cascadia Code', ui-monospace, Menlo, monospace;
     --bg: #f6f5f1; --panel: #ffffff; --line: #e2dfd6; --text: #1b1f27; --muted: #5d6470;
-    --accent: #2f5bd3; --accent-bg: #e8eefc; --ok: #1f7a4d; --ok-bg: #e5f3ea; --wait: #8a5b00; --wait-bg: #fbf0d9; --err: #b3261e;
+    --accent: #2f5bd3; --accent-ink: #ffffff; --accent-bg: #e8eefc; --ok: #1f7a4d; --ok-bg: #e5f3ea; --wait: #8a5b00; --wait-bg: #fbf0d9; --err: #b3261e;
     --tile: #f1efe9; --inline-code: #ece9e1;
     /* command: a terminal; output: a lighter well */
     --term-bg: #1b1f27; --term-text: #e7e9ee; --term-line: #1b1f27; --term-head: #9aa3b2; --term-rule: #2f3542;
@@ -20,15 +20,15 @@
     --t-cmd: #7aa2ff; --t-flag: #e5c07b; --t-str: #98c379; --t-op: #c678dd; --t-prompt: #6b7280;
     --j-key: #2f5bd3; --j-str: #1f7a4d; --j-num: #b35c00; --j-lit: #8e3fb0; --j-punct: #8a909b;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      --bg: #0f1115; --panel: #171a21; --line: #272c37; --text: #e7e9ee; --muted: #9aa3b2;
-      --accent: #7aa2ff; --accent-bg: #1b2440; --ok: #6fd39b; --ok-bg: #16301f; --wait: #f2c46b; --wait-bg: #33290f; --err: #ff8a80;
-      --tile: #222731; --inline-code: #232833;
-      --term-bg: #07080b; --term-line: #2f3542;
-      --out-bg: #11141a;
-      --j-key: #7aa2ff; --j-str: #98c379; --j-num: #f2a66b; --j-lit: #d19af0; --j-punct: #6b7280;
-    }
+  /* Light by default; the header switch sets data-theme="dark". */
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --panel: #181b22; --line: #3a4150; --text: #f1f3f7; --muted: #c2c9d6;
+    --accent: #8fb0ff; --accent-ink: #0f1115; --accent-bg: #22305a; --ok: #7ee2a8; --ok-bg: #173a26; --wait: #ffd27a; --wait-bg: #3d3011; --err: #ff9b92;
+    --tile: #2c323e; --inline-code: #2a303b;
+    --term-bg: #07080b; --term-line: #3a4150; --term-head: #b4bccb; --term-rule: #3a4150;
+    --out-bg: #12151b;
+    --t-prompt: #8a92a0;
+    --j-key: #8fb0ff; --j-str: #a5d68a; --j-num: #ffb27a; --j-lit: #dba8f5; --j-punct: #8a92a0;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--font-sans); }
@@ -36,6 +36,9 @@
   @media (max-width: 860px) { .wrap { padding: 0 16px; } }
   header { padding: 28px 0 4px; }
   header h1 { margin: 0 0 6px; font-size: 24px; font-weight: 600; }
+  .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 6px; }
+  .title-row h1 { margin: 0; }
+  .theme button { padding: 5px 12px; font-size: 13px; }
   header p { margin: 0; color: var(--muted); max-width: 980px; }
   code.ic { font: 0.9em var(--font-mono); background: var(--inline-code); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
   h2.section { margin: 28px 0 4px; font-size: 18px; font-weight: 600; }
@@ -48,7 +51,7 @@
   .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .seg button { border: 0; background: transparent; color: var(--text); font: 500 14px var(--font-sans); padding: 8px 14px; cursor: pointer; white-space: nowrap; }
   .seg button + button { border-left: 1px solid var(--line); }
-  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .seg code { font: 13px var(--font-mono); }
   .form label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; padding-bottom: 9px; }
   .send { border: 0; border-radius: 8px; background: var(--text); color: var(--bg); font: 600 15px var(--font-sans); padding: 10px 22px; cursor: pointer; }
@@ -103,7 +106,7 @@
 
   /* what happens between two steps */
   .hop { padding-top: 8px; padding-bottom: 8px; }
-  .hop-body { display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13.5px; max-width: 1180px; }
+  .hop-body { display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border: 1.5px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13.5px; max-width: 1180px; }
   .hop-logos { display: flex; gap: 6px; }
   .hop-proto { font: 600 12.5px/1.6 var(--font-mono); color: var(--text); }
   .hop-proto .tag { display: inline-block; margin-left: 8px; font: 600 11px/1.6 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; padding: 0 8px; border-radius: 999px; }
@@ -156,7 +159,7 @@
 <body>
 <div class="wrap">
 <header>
-  <h1>Usage tracer</h1>
+  <div class="title-row"><h1>Usage tracer</h1><div class="seg theme" id="theme" aria-label="Colour theme"><button data-t="light">Light</button><button data-t="dark">Dark</button></div></div>
   <p>Send one model request on the dev cluster and follow it. The request itself only touches the gateway and the model. Metering happens after the response, from a log record the gateway writes, so it can't slow a request down or block it. Every step below is a real lookup: the dark block is the command the tracer ran, the light block is what came back.</p>
 </header>
 
@@ -250,8 +253,18 @@ const STEPS = [
       text: `The console's server pages through OpenMeter's events, newest first, and joins each ${c("llm.request")} with its ${c("llm.tokens")} events into one receipt.` } },
 ];
 
+// Theme: light unless the viewer picked dark (remembered in this browser).
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.querySelectorAll("#theme button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.t === t));
+  try { localStorage.setItem("tracer-theme", t); } catch {}
+}
+let savedTheme = "light";
+try { savedTheme = localStorage.getItem("tracer-theme") || "light"; } catch {}
+setTheme(savedTheme);
+document.getElementById("theme").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTheme(b.dataset.t); });
 const choice = {};
-document.querySelectorAll(".seg").forEach((seg) => {
+document.querySelectorAll(".form .seg").forEach((seg) => {
   choice[seg.dataset.name] = seg.querySelector("[aria-pressed=true]").dataset.v;
   seg.addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
