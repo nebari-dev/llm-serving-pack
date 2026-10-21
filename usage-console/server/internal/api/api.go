@@ -16,12 +16,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/receiptsig"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/auth"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/receiptsig"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/routing"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 type Server struct {

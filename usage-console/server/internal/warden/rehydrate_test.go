@@ -13,8 +13,8 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/grpc"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/fakellm"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/fakellm"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
 )
 
 func gatewayInput(user string) gateway.Input {

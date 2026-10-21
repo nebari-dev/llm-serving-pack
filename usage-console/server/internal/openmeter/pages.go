@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/api"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
 )
 
 // receiptCount counts requests in [since, before) from the llm_requests

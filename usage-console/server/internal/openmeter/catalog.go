@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 // The catalog is what usage shows: teams, projects (a team's model

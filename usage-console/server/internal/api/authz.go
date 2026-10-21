@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/auth"
 )
 
 // Who may do what (backend-decisions §7, decided 2026-10-05). Roles come from

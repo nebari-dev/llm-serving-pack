@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // LoadSnapshot reads everything the gateway enforces for one tenant. In the

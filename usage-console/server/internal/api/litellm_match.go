@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/pricing"
 )
 
 // Setup links each model a provider adds to its LiteLLM entry, so its price,

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
 )
 
 func TestExtAuthz(t *testing.T) {

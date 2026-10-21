@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // receiptsCSV is settled receipts as a spreadsheet: one row each, newest

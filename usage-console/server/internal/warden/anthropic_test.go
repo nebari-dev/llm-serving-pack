@@ -7,7 +7,7 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
 )
 
 const messagesPath = "/anthropic/v1/messages"

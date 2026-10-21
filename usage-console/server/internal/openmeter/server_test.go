@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/api"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/openmeter"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 var now = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)

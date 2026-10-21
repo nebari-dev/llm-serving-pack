@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // receiptQuery reads the Traffic filters: limit, before and since (epoch ms),

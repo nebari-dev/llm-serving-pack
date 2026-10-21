@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/pricing"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/pricing"
 )
 
 func per(v ...float64) (r pricing.Rates) {

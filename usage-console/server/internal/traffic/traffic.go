@@ -10,9 +10,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/fakellm"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/fakellm"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 type Request struct {

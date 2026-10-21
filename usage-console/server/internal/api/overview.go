@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // rangeDuration is the span a range= value names.

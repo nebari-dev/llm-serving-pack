@@ -7,10 +7,10 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/ingest"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/ingest"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 const captureReqID = "0f8e2a4c-1b2d-4e5f-8a9b-0c1d2e3f4a5b"

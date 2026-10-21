@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 // Providers the console can add: each is a base URL speaking OpenAI's API

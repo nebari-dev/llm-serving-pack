@@ -1,4 +1,4 @@
-module github.com/nebari-dev/openmeter-pack/ui/server
+module github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server
 
 go 1.26.5
 

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 var ruleEnv = RuleEnv{

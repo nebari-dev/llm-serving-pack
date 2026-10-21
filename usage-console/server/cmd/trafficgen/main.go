@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/traffic"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/traffic"
 )
 
 func main() {

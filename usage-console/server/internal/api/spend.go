@@ -8,9 +8,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // §7.5.5 Spend. Every number here comes from receipts_5m and receipts_daily

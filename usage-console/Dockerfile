@@ -19,7 +19,7 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/nebari-dev/openmeter-pack/ui/server/internal/buildinfo.Version=${VERSION}" -o /openmeter-api ./cmd/openmeter-api
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/buildinfo.Version=${VERSION}" -o /openmeter-api ./cmd/openmeter-api
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087
 COPY --from=api /openmeter-api /openmeter-api

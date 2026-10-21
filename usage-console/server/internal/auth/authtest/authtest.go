@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/auth"
 )
 
 const (

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // DetectorView is one of the engine's entity detectors (§7.5.7): how it

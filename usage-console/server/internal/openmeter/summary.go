@@ -3,8 +3,8 @@ package openmeter
 import (
 	"net/http"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/api"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // summary is the Overview's totals for the range and the span before it.

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
 )
 
 // bodyRehydrator puts a request's redacted values back into its response

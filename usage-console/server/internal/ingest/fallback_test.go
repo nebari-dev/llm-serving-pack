@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/gateway"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/gateway"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 // withRoutes is the test snapshot with gpt-5-mini routed to openai-prod,

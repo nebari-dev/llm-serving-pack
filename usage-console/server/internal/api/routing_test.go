@@ -4,9 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/model"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/routing"
 )
 
 // Sync is what the gateway runs against the desired state: the seed sync_state

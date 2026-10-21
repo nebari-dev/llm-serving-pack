@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/auth/authtest"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/store"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/auth"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/auth/authtest"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // serve runs one request and reports its status, or 0 if the handler got

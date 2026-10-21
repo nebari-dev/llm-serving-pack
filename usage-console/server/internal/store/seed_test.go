@@ -3,7 +3,7 @@ package store
 import (
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
 )
 
 // The real seed is what a fresh dev stack starts with: nothing simulated.

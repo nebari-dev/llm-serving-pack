@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/demo"
-	"github.com/nebari-dev/openmeter-pack/ui/server/internal/routing"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/routing"
 )
 
 func TestAPIOf(t *testing.T) {
