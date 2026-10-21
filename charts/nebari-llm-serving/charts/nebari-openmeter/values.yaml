@@ -63,12 +63,19 @@ clickhouse:
   resources:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {memory: 2Gi}
+# OpenMeter's Postgres: a CloudNativePG Cluster. Needs the CloudNativePG
+# operator, which Nebari installs on every cluster (namespace cnpg-system).
 postgres:
-  image: postgres:14.20-alpine3.23@sha256:14f02666642586a64d6fae8ef42d479fd76456a77c73ae8a626b8fe323b76d22
-  persistence: {enabled: true, size: 5Gi, storageClass: ""}
+  instances: 1
+  # The image Nebari's own Keycloak database runs; bump it deliberately.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie@sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185
+  storage: {size: 5Gi, storageClass: ""}
   resources:
-    requests: {cpu: 50m, memory: 128Mi}
-    limits: {memory: 256Mi}
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {memory: 512Mi}
+  # Where the CloudNativePG operator runs; the database's network policy
+  # admits it.
+  operatorNamespace: cnpg-system
 redis:
   image: redis:7.4.7@sha256:c6e4a82ce60b829a72a21cc4ad4c1c274fa6962eb0d6ac698e8157cbc3fe16a4
   resources:

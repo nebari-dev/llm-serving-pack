@@ -17,4 +17,4 @@ console:
   image: {repository: docker.io/library/usage-console, tag: dev}
 kafka: {persistence: {size: 2Gi}}
 clickhouse: {persistence: {size: 2Gi}}
-postgres: {persistence: {size: 1Gi}}
+postgres: {storage: {size: 1Gi}}

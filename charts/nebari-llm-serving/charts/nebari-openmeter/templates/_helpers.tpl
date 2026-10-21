@@ -32,7 +32,7 @@ app.kubernetes.io/component: {{ .component }}
 {{/* The env every OpenMeter process needs for its stores' passwords. */}}
 {{- define "om.storeEnv" -}}
 - name: POSTGRES_URL
-  valueFrom: {secretKeyRef: {name: {{ include "om.name" (dict "root" . "component" "credentials") }}, key: postgres-url}}
+  valueFrom: {secretKeyRef: {name: {{ printf "%s-app" (include "om.name" (dict "root" . "component" "db")) }}, key: uri}}
 - name: AGGREGATION_CLICKHOUSE_PASSWORD
   valueFrom: {secretKeyRef: {name: {{ include "om.name" (dict "root" . "component" "credentials") }}, key: clickhouse-password}}
 {{- end -}}

@@ -18,6 +18,7 @@
 #
 # Prereq: `make setup`. Safe to re-run: each run adds traffic and new keys.
 # Needs about 3 GB of free memory in the Docker VM (Kafka and ClickHouse).
+# OpenMeter's Postgres is a CloudNativePG Cluster (`make deploy-cnpg`).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -55,6 +56,7 @@ make load-images >/dev/null
 kind load docker-image usage-console:dev --name "$CLUSTER_NAME" >/dev/null
 make deploy >/dev/null
 make deploy-keycloak >/dev/null
+make deploy-cnpg >/dev/null
 # Internal endpoints validate tokens from the in-cluster dev Keycloak.
 $KUBECTL -n "$NS" set env deploy/llm-operator LLM_OIDC_ISSUER_URL="$KC_URL/realms/nebari" >/dev/null
 

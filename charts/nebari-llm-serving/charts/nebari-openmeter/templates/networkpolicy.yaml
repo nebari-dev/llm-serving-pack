@@ -45,7 +45,7 @@ spec:
   podSelector:
     matchExpressions:
       - {key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name }}]}
-      - {key: app.kubernetes.io/component, operator: In, values: [kafka, clickhouse, postgres, redis]}
+      - {key: app.kubernetes.io/component, operator: In, values: [kafka, clickhouse, redis]}
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -53,4 +53,30 @@ spec:
             matchLabels:
               app.kubernetes.io/name: nebari-openmeter
               app.kubernetes.io/instance: {{ .Release.Name }}
+---
+# Postgres takes connections from OpenMeter's pods, its own instances, and
+# the CloudNativePG operator, which manages it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "db") }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "om.name" (dict "root" . "component" "db") }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nebari-openmeter
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: {{ include "om.name" (dict "root" . "component" "db") }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.postgres.operatorNamespace }}
 {{- end }}

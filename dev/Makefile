@@ -18,6 +18,11 @@ AI_GATEWAY_VERSION ?= v1.1.0
 # OpenMeter collector image the usage collector runs; keep in step with
 # usage.collector.image in the chart values.
 USAGE_COLLECTOR_IMAGE ?= ghcr.io/openmeterio/benthos-collector:v1.0.0-beta.234@sha256:cdc35416af4ededfbdb531463a3135127274f595c4b4b44573e685e82aac4fc4
+# CloudNativePG operator, which Nebari installs on every cluster; the bundled
+# OpenMeter's Postgres is a CloudNativePG Cluster. 0.29.1 ships operator
+# 1.30.1, which fixes CVE-2026-84304 (gRPC) in 1.30.0.
+CNPG_CHART_VERSION ?= 0.29.1
+CNPG_IMAGE_TAG ?= 1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
 
 # Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side.
 # Those are the experimental channel, and the safe-upgrades admission policy
@@ -31,7 +36,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope usage-e2e test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -72,6 +77,7 @@ setup: ## Create kind cluster and install dependencies
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml
 	# Test Gateways
 	$(KUBECTL) apply -f gateways.yaml
+	$(MAKE) deploy-cnpg
 
 teardown: ## Delete kind cluster
 	kind delete cluster --name $(CLUSTER_NAME)
@@ -95,6 +101,10 @@ deploy-operator: ## Deploy operator
 deploy-key-manager: ## Deploy key manager (dev mode: auth bypassed, dev identity injected)
 	$(KUBECTL) apply -f manifests/key-manager.yaml
 	$(KUBECTL) -n llm-operator-system rollout status deployment/llm-key-manager --timeout=60s
+
+deploy-cnpg: ## Install the CloudNativePG operator (as Nebari does), for the bundled OpenMeter's Postgres
+	helm upgrade -i cnpg cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version $(CNPG_CHART_VERSION) \
+		--kube-context kind-$(CLUSTER_NAME) -n cnpg-system --create-namespace --set image.tag=$(CNPG_IMAGE_TAG) --wait
 
 deploy-keycloak: ## Deploy dev Keycloak (imports the nebari realm)
 	$(KUBECTL) create namespace keycloak --dry-run=client -o yaml | $(KUBECTL) apply -f -
