@@ -262,6 +262,12 @@ func buildJWTSecurityPolicy(name, namespace string, labels map[string]interface{
 				"header": "X-Auth-User",
 				"claim":  "preferred_username",
 			},
+			// The stable identity of the caller. A username can be renamed
+			// and reused; usage records are attributed to the subject.
+			map[string]interface{}{
+				"header": "X-Auth-Subject",
+				"claim":  "sub",
+			},
 		},
 	}
 
