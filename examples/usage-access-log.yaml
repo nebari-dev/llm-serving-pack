@@ -1,0 +1,79 @@
+# Gateway access-log settings for usage metering.
+#
+# Add the `settings` entry below to the EnvoyProxy resource your GatewayClass
+# (or Gateway) already references; do not create a second EnvoyProxy. If the
+# gateway has no EnvoyProxy yet, this file works as is once the GatewayClass
+# points at it:
+#
+#   spec:
+#     parametersRef:
+#       group: gateway.envoyproxy.io
+#       kind: EnvoyProxy
+#       name: nebari-gateway-proxy
+#       namespace: envoy-gateway-system
+#
+# Setting `telemetry.accessLog.settings` replaces Envoy Gateway's default
+# access log. Keep (or add) your own entry for ordinary traffic next to this
+# one if you want it logged.
+#
+# What this entry does: for every request the Envoy AI Gateway recognised as a
+# model request, it sends one record to the pack's usage collector over OTLP
+# (chart value usage.enabled). The collector turns it into OpenMeter usage
+# events. The record holds who called (API key client ID, or the verified
+# token's user and subject), which model, the token counts the AI Gateway
+# stored in dynamic metadata, and how the request ended. It holds no prompt or
+# completion text: every field is a header the gateway set, a token count, or
+# request metadata.
+#
+# The field names are a contract with the collector pipeline
+# (charts/nebari-llm-serving/files/usage-collector.yaml), and the llm_*_token
+# keys are a contract with the routes the operator generates. Renaming either
+# silently drops that value from every usage event.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: nebari-gateway-proxy
+  namespace: envoy-gateway-system
+spec:
+  telemetry:
+    accessLog:
+      settings:
+        - matches:
+            # Only model requests: the AI Gateway sets this header on them.
+            - "'x-ai-eg-model' in request.headers"
+          format:
+            type: JSON
+            json:
+              request_id: "%REQ(X-REQUEST-ID)%"
+              start_time: "%START_TIME%"
+              route: "%ROUTE_NAME%"
+              client_id: "%REQ(X-LLM-CLIENT-ID)%"
+              auth_user: "%REQ(X-AUTH-USER)%"
+              auth_subject: "%REQ(X-AUTH-SUBJECT)%"
+              auth_groups: "%REQ(X-AUTH-GROUPS)%"
+              model: "%REQ(X-AI-EG-MODEL)%"
+              response_model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              cached_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%"
+              cache_creation_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cache_creation_input_token)%"
+              output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              reasoning_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_reasoning_token)%"
+              total_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_total_token)%"
+              response_code: "%RESPONSE_CODE%"
+              response_flags: "%RESPONSE_FLAGS%"
+              duration_ms: "%DURATION%"
+          sinks:
+            # The pack's usage collector (chart: <release>-usage-collector in
+            # the pack's namespace, port usage.collector.port).
+            - type: OpenTelemetry
+              openTelemetry:
+                backendRefs:
+                  - name: nebari-llm-serving-usage-collector
+                    namespace: nebari-llm-serving-system
+                    port: 4317
+            # A second copy on stdout. The OTLP sink does not retry, so this is
+            # the copy to replay from if the collector was down (OpenMeter
+            # stores each event once, however often it is delivered).
+            - type: File
+              file:
+                path: /dev/stdout

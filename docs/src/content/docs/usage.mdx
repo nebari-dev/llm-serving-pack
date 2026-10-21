@@ -1,0 +1,162 @@
+---
+title: Usage metering
+---
+import Code from '../../components/ExampleCode.astro';
+import accessLogExample from '../../../../examples/usage-access-log.yaml?raw';
+
+The pack can meter every model request in [OpenMeter](https://github.com/openmeterio/openmeter)
+(Apache-2.0): who called, which model, how many tokens of each kind, and what
+that cost. OpenMeter stores the usage, prices tokens from its LLM price table,
+and provides customers, plans, entitlements and invoicing on top. The pack
+does not run OpenMeter; it sends usage to the one you point it at.
+
+It is off by default.
+
+## How a request becomes usage in OpenMeter
+
+1. The operator asks the Envoy AI Gateway to count tokens on every route it
+   generates (`llmRequestCosts`). The gateway stores the counts with the
+   request once the response has finished.
+2. The gateway writes one access-log entry per model request (the caller, the
+   model, the token counts, the status) and sends it over OTLP to the pack's
+   usage collector. You add this entry to your `EnvoyProxy` resource (below).
+3. The usage collector, OpenMeter's own collector running the pack's pipeline
+   (`charts/nebari-llm-serving/files/usage-collector.yaml`), turns each entry
+   into OpenMeter usage events and sends them to OpenMeter.
+4. The key manager keeps one OpenMeter customer per API-key creator, so usage
+   made with a key is attributed to the person who minted it.
+
+No prompt or completion text is logged or sent. Every field is a header the
+gateway set, a token count, or request metadata.
+
+### Usage events
+
+Each request becomes one `llm.request` event and one `llm.tokens` event per
+token type that is not zero:
+
+| Event | `id` | Data |
+| --- | --- | --- |
+| `llm.request` | gateway request ID | model, model resource, access path, whether usage was reported, status |
+| `llm.tokens` | request ID + `:` + token type | model, model resource, access path, `token_type`, `tokens` |
+
+Token types are the ones OpenMeter's price table uses: `input` (uncached
+input), `cache_read`, `cache_write` and `output`. The gateway's input count
+already includes cached tokens, so the collector subtracts them; reasoning
+tokens are part of `output`.
+
+The event `source` is constant, so a redelivered access-log entry produces
+events OpenMeter has already seen, and OpenMeter counts them once (turn on its
+`sink.dedupe`).
+
+### Who a request is attributed to
+
+The event subject is:
+
+- **API key (external endpoint):** the key's client ID, which the gateway sets
+  from the key it matched. An `x-auth-*` header a caller sends here is ignored.
+- **OIDC token (internal endpoint):** the verified token's `sub`.
+
+The key manager creates, for each key creator, an OpenMeter customer whose key
+is the creator's `sub` and whose subject keys are that `sub` plus the client ID
+of every key they minted. Usage made with a key or with a token therefore lands
+on the same customer. Keys minted before this release do not record their
+creator's `sub` and are left out until re-minted.
+
+If you bill organizations rather than people, turn the sync off
+(`usage.customerSync.enabled: false`) and assign subjects to your own
+customers: one subject can belong to only one customer.
+
+## Enable it
+
+```yaml
+usage:
+  enabled: true
+  openmeter:
+    url: http://openmeter-api.openmeter.svc   # your OpenMeter API
+```
+
+Then tell the gateway to send its access log to the collector. Add the
+`settings` entry from this example to the `EnvoyProxy` your gateway already
+uses, and adjust the collector's Service name and namespace to your release:
+
+<Code code={accessLogExample} lang="yaml" title="examples/usage-access-log.yaml" />
+
+The collector's OTLP port has no authentication. The chart renders a
+`NetworkPolicy` that admits only the gateway namespaces; on a cluster whose
+network plugin does not enforce `NetworkPolicy`, restrict it another way.
+
+## Set up OpenMeter
+
+The pipeline expects two meters in OpenMeter:
+
+```yaml
+meters:
+  - slug: llm_tokens
+    eventType: llm.tokens
+    aggregation: SUM
+    valueProperty: $.tokens
+    groupBy:
+      model: $.model
+      model_resource: $.model_resource
+      token_type: $.token_type
+      access_path: $.access_path
+  - slug: llm_requests
+    eventType: llm.request
+    aggregation: COUNT
+    groupBy:
+      model: $.model
+      model_resource: $.model_resource
+      usage_reported: $.usage_reported
+      response_code: $.response_code
+      access_path: $.access_path
+```
+
+To price tokens, run OpenMeter's LLM price sync (`openmeter-jobs llm-cost
+sync`) and create one feature per model resource with an LLM unit cost. The
+provider is fixed per feature because one `PassthroughModel` talks to one
+provider:
+
+```json
+POST /api/v3/openmeter/features
+{
+  "key": "bedrock_tokens",
+  "name": "Bedrock tokens",
+  "meter": {"id": "<llm_tokens meter id>", "filters": {"model_resource": {"eq": "bedrock"}}},
+  "unit_cost": {"type": "llm", "provider": "bedrock", "model_property": "model", "token_type_property": "token_type"}
+}
+```
+
+`POST /api/v3/openmeter/features/{id}/cost/query` then returns usage and cost
+per model and token type, and can be narrowed to one customer. Bedrock model
+IDs such as `us.anthropic.claude-haiku-4-5-20251001-v1:0` are matched to the
+price table by OpenMeter; set your own prices with
+`POST /api/v3/openmeter/llm-cost/overrides`.
+
+## What the numbers mean
+
+- Token counts are what the provider reported to the gateway.
+- `usage_reported=false` on an `llm.request` means the gateway had no token
+  counts: a failed request, or a streamed response the client cancelled part
+  way. Envoy AI Gateway 1.1 only learns the counts when the response
+  completes. The provider may still have charged for it.
+- Requests the gateway rejected before identifying a caller (a wrong API key,
+  a missing token) produce no events.
+- Streamed chat completions end with one extra `usage` chunk even when the
+  client did not ask for it. The gateway adds
+  `stream_options.include_usage=true` so that streams can be counted.
+
+## Delivery
+
+The collector acknowledges the gateway's batch only after OpenMeter accepted
+the events. The gateway itself sends each batch once and does not retry, so
+entries produced while the collector or OpenMeter is down are lost. The example
+keeps a second copy of every entry on the gateway's stdout; if container logs
+are shipped somewhere durable, that copy can be replayed, and OpenMeter counts
+each event once.
+
+## Try it locally
+
+```sh
+cd dev
+make test-usage-collector  # the collector pipeline's tests
+```

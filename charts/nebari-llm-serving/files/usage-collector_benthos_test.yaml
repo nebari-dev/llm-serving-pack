@@ -1,0 +1,100 @@
+# Tests for usage-collector.yaml, run with the collector's own test command
+# (dev/Makefile: `make test-usage-collector`). The key-owner lookup is mocked:
+# client ID user-alice-bedrock-0123-1 belongs to alice, of team-a.
+#
+# Each input is an OTLP log record as the collector's otel_log input presents
+# it: the access-log fields of examples/usage-access-log.yaml as attributes.
+tests:
+  - name: API-key request is billed to the key's owner and team; input excludes cached tokens
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = {"clientId": content().string(), "subject": "sub-alice", "username": "alice", "groups": ["llm-users", "team-a"]}'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-1", "start_time": "2026-01-15T10:00:00.250Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "auth_user": "mallory", "auth_subject": "sub-mallory", "auth_groups": "team-evil",
+            "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "input_tokens": "11", "cached_input_tokens": "5", "cache_creation_input_tokens": "0",
+            "output_tokens": "6", "reasoning_tokens": "0", "total_tokens": "17",
+            "response_code": "200", "response_flags": "-", "duration_ms": "1807"}}}
+    output_batches:
+      - - json_equals:
+            specversion: "1.0"
+            id: req-1
+            type: llm.request
+            source: nebari-llm-gateway
+            subject: sub-alice
+            time: "2026-01-15T10:00:00.250Z"
+            data: {model: "us.anthropic.claude-haiku-4-5-20251001-v1:0", model_resource: bedrock, access_path: api_key,
+                   user: alice, team: team-a, api_key: user-alice-bedrock-0123-1,
+                   usage_reported: "true", response_code: "200", response_flags: "", duration_ms: 1807}
+        - json_contains: {id: "req-1:cache_read", subject: sub-alice, data: {token_type: cache_read, tokens: 5, team: team-a}}
+        - json_contains: {id: "req-1:input", subject: sub-alice, data: {token_type: input, tokens: 6}}
+        - json_contains: {id: "req-1:output", subject: sub-alice, data: {token_type: output, tokens: 6, api_key: user-alice-bedrock-0123-1}}
+
+  - name: Token request on the internal endpoint uses the verified token's subject and groups
+    target_processors: /pipeline/processors
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-2", "start_time": "2026-01-15T10:00:01Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_user": "bob", "auth_subject": "sub-bob", "auth_groups": "WyJsbG0tdXNlcnMiLCJ0ZWFtLWIiXQ==", "model": "m",
+            "input_tokens": "3", "cached_input_tokens": "0", "cache_creation_input_tokens": "0",
+            "output_tokens": "2", "response_code": "200"}}}
+    output_batches:
+      - - json_contains: {id: req-2, subject: sub-bob, data: {access_path: jwt, user: bob, team: team-b, api_key: login}}
+        - json_contains: {id: "req-2:input", subject: sub-bob, data: {tokens: 3}}
+        - json_contains: {id: "req-2:output", subject: sub-bob, data: {tokens: 2}}
+
+  - name: A key the key-manager does not know is billed to the key itself, never to a forged header
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = throw("unknown API key")'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-4", "start_time": "2026-01-15T10:00:04Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-old-key-1", "auth_subject": "sub-victim", "auth_user": "victim", "auth_groups": "team-a",
+            "model": "m", "input_tokens": "1", "output_tokens": "1", "response_code": "200"}}}
+    output_batches:
+      - - json_contains: {id: req-4, subject: user-old-key-1, data: {user: "", team: none, api_key: user-old-key-1}}
+        - json_contains: {id: "req-4:input", subject: user-old-key-1}
+        - json_contains: {id: "req-4:output", subject: user-old-key-1}
+
+  - name: Stream cancelled by the client is counted as a request with no tokens
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = {"subject": "sub-alice", "username": "alice", "groups": ["team-a"]}'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-3", "start_time": "2026-01-15T10:00:02Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/1/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m",
+            "response_code": "200", "response_flags": "DR", "duration_ms": "998"}}}
+    output_batches:
+      - - json_contains: {id: req-3, type: llm.request, subject: sub-alice, data: {usage_reported: "false", response_flags: DR}}
+
+  - name: Requests with no authenticated caller, and other routes, are dropped
+    target_processors: /pipeline/processors
+    input_batch:
+      - content: |
+          {"record": {"attributes": {"request_id": "req-401", "start_time": "2026-01-15T10:00:03Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "-", "auth_subject": "sub-mallory", "model": "m", "response_code": "401"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-jwt-401", "start_time": "2026-01-15T10:00:03Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "model": "m", "response_code": "401"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-other", "start_time": "2026-01-15T10:00:03Z",
+            "route": "httproute/apps/dashboard/rule/0/match/0/example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m", "response_code": "200"}}}
+    output_batches: []

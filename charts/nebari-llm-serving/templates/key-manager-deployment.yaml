@@ -25,6 +25,10 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            {{- if .Values.usage.enabled }}
+            - containerPort: {{ .Values.usage.keyOwnerLookup.port }}
+              name: key-owners
+            {{- end }}
           env:
             # Per #59 the API-key Secrets live in the operator's own
             # namespace alongside the LLMModels and SecurityPolicies that
@@ -66,6 +70,26 @@ spec:
             {{- if .Values.keyManager.oidcUserinfoURL }}
             - name: LLM_OIDC_USERINFO_URL
               value: {{ .Values.keyManager.oidcUserinfoURL | quote }}
+            {{- end }}
+            {{- if .Values.usage.enabled }}
+            # Internal API-key owner lookup for the usage collector. No auth,
+            # so it has its own port, reachable only from the collector.
+            - name: LLM_INTERNAL_LISTEN_ADDR
+              value: ":{{ .Values.usage.keyOwnerLookup.port }}"
+            {{- end }}
+            {{- if and .Values.usage.enabled .Values.usage.customerSync.enabled }}
+            # Attach API keys to their creators' OpenMeter customers.
+            - name: LLM_OPENMETER_URL
+              value: {{ required "usage.openmeter.url is required when usage.enabled=true" .Values.usage.openmeter.url | quote }}
+            - name: LLM_OPENMETER_SYNC_INTERVAL
+              value: {{ .Values.usage.customerSync.interval | quote }}
+            {{- if .Values.usage.openmeter.existingSecret }}
+            - name: LLM_OPENMETER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.usage.openmeter.existingSecret }}
+                  key: token
+            {{- end }}
             {{- end }}
             {{- if .Values.keyManager.devMode.enabled }}
             # Dev mode: bypasses auth and injects a fixed identity so the UI

@@ -63,6 +63,16 @@ jobs:
         working-directory: key-manager
         run: go test ./...
 
+  test-usage-collector:
+    name: Test usage collector pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run pipeline tests in the pinned collector image
+        working-directory: dev
+        run: make test-usage-collector
+
   test-frontend:
     name: Test frontend
     runs-on: ubuntu-latest

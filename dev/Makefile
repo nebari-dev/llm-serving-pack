@@ -15,6 +15,10 @@ GATEWAY_API_VERSION ?= v1.5.1
 GIE_VERSION ?= v1.4.0
 ENVOY_GATEWAY_VERSION ?= v1.8.1
 AI_GATEWAY_VERSION ?= v1.1.0
+# OpenMeter collector image the usage collector runs; keep in step with
+# usage.collector.image in the chart values.
+USAGE_COLLECTOR_IMAGE ?= ghcr.io/openmeterio/benthos-collector:v1.0.0-beta.234@sha256:cdc35416af4ededfbdb531463a3135127274f595c4b4b44573e685e82aac4fc4
+
 # Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side.
 # Those are the experimental channel, and the safe-upgrades admission policy
 # that Gateway API v1.5 installs with the standard channel in `setup` refuses
@@ -27,7 +31,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -122,6 +126,10 @@ test-auth: ## Verify the key-manager's real bearer-token JWKS validation (deploy
 
 test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-spoofing through the gateway (deploys two mock models, asserts the 200/403/401 matrix). KEEP=1 leaves the models.
 	./test-model-scope.sh
+
+test-usage-collector: ## Run the usage collector pipeline tests in the pinned collector image
+	docker run --rm -e OPENMETER_URL=http://unused -v "$(CURDIR)/../charts/nebari-llm-serving/files:/t:ro" \
+		$(USAGE_COLLECTOR_IMAGE) test /t/usage-collector.yaml
 
 logs-operator: ## Tail operator logs
 	$(KUBECTL) -n llm-operator-system logs -f deployment/llm-operator
