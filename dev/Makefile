@@ -31,7 +31,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope usage-e2e test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -126,6 +126,9 @@ test-auth: ## Verify the key-manager's real bearer-token JWKS validation (deploy
 
 test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-spoofing through the gateway (deploys two mock models, asserts the 200/403/401 matrix). KEEP=1 leaves the models.
 	./test-model-scope.sh
+
+usage-e2e: ## Usage metering end to end with the bundled OpenMeter and usage console: alice and bob call the mock provider, totals read back from the console (run `make setup` first)
+	./usage-e2e.sh
 
 test-usage-collector: ## Run the usage collector pipeline tests in the pinned collector image
 	docker run --rm -e OPENMETER_URL=http://unused -v "$(CURDIR)/../charts/nebari-llm-serving/files:/t:ro" \

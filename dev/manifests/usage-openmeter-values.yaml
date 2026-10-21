@@ -1,5 +1,6 @@
-# The kind cluster of the LLM serving pack's dev setup: its mock provider
-# alongside Bedrock, small volumes.
+# Values for the openmeter subchart on the dev kind cluster (usage-e2e.sh):
+# the mock provider alongside Bedrock, the locally built console image, small
+# volumes.
 modelResources:
   - {name: mock-provider, provider: mock}
   - {name: bedrock, provider: bedrock}
@@ -13,9 +14,7 @@ prices:
     model: mock/large
     pricing: {input_per_token: "0.003", output_per_token: "0.015", cache_read_per_token: "0.0003"}
 console:
-  image: {repository: docker.io/library/openmeter-console, tag: dev}
+  image: {repository: docker.io/library/usage-console, tag: dev}
 kafka: {persistence: {size: 2Gi}}
 clickhouse: {persistence: {size: 2Gi}}
 postgres: {persistence: {size: 1Gi}}
-networkPolicy:
-  apiClientNamespaces: [llm-operator-system]

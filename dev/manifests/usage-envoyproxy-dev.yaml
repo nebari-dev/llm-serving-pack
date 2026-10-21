@@ -1,0 +1,22 @@
+# Dev-only additions to the gateway's EnvoyProxy for `make usage-e2e`,
+# applied as a merge patch on top of examples/usage-access-log.yaml:
+#
+# - The mock provider's certificate replaces the Envoy system trust store, so
+#   the PassthroughModel's "System" CA validation accepts the in-cluster mock.
+#   Never do this on a real cluster.
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyDeployment:
+        pod:
+          volumes:
+            - name: dev-provider-ca
+              configMap:
+                name: dev-provider-ca
+        container:
+          volumeMounts:
+            - name: dev-provider-ca
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              subPath: ca.crt
+              readOnly: true

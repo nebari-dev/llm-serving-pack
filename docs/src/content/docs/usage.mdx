@@ -8,7 +8,8 @@ The pack can meter every model request in [OpenMeter](https://github.com/openmet
 (Apache-2.0): who called, which model, how many tokens of each kind, and what
 that cost. OpenMeter stores the usage, prices tokens from its LLM price table,
 and provides customers, plans, entitlements and invoicing on top. The pack
-does not run OpenMeter; it sends usage to the one you point it at.
+sends usage to an OpenMeter you point it at, or runs one itself together with
+a read-only usage console (`openmeter.enabled`).
 
 It is off by default.
 
@@ -23,8 +24,9 @@ It is off by default.
 3. The usage collector, OpenMeter's own collector running the pack's pipeline
    (`charts/nebari-llm-serving/files/usage-collector.yaml`), turns each entry
    into OpenMeter usage events and sends them to OpenMeter.
-4. The key manager keeps one OpenMeter customer per API-key creator, so usage
-   made with a key is attributed to the person who minted it.
+4. For a request made with an API key, the collector asks the key manager who
+   minted the key. The key manager also keeps one OpenMeter customer per
+   person.
 
 No prompt or completion text is logged or sent. Every field is a header the
 gateway set, a token count, or request metadata.
@@ -36,8 +38,8 @@ token type that is not zero:
 
 | Event | `id` | Data |
 | --- | --- | --- |
-| `llm.request` | gateway request ID | model, model resource, access path, whether usage was reported, status |
-| `llm.tokens` | request ID + `:` + token type | model, model resource, access path, `token_type`, `tokens` |
+| `llm.request` | gateway request ID | model, model resource, access path, user, team, API key, whether usage was reported, status |
+| `llm.tokens` | request ID + `:` + token type | model, model resource, access path, user, team, API key, `token_type`, `tokens` |
 
 Token types are the ones OpenMeter's price table uses: `input` (uncached
 input), `cache_read`, `cache_write` and `output`. The gateway's input count
@@ -50,23 +52,53 @@ events OpenMeter has already seen, and OpenMeter counts them once (turn on its
 
 ### Who a request is attributed to
 
-The event subject is:
+The event subject is the person's OIDC `sub`, and every event carries their
+username, their team (their first group starting with `team-`, or `none`) and
+the API key's client ID (`login` for a token):
 
-- **API key (external endpoint):** the key's client ID, which the gateway sets
-  from the key it matched. An `x-auth-*` header a caller sends here is ignored.
-- **OIDC token (internal endpoint):** the verified token's `sub`.
+- **API key (external endpoint):** the gateway sets the key's client ID from
+  the key it matched, and the collector looks up who minted it from the key
+  manager's key-owner lookup (`sub`, username and groups recorded when the key
+  was minted). An `x-auth-*` header a caller sends here is ignored. A key
+  minted before this release has no recorded owner; its usage is billed to
+  the key's client ID.
+- **OIDC token (internal endpoint):** the verified token's `sub`, username and
+  groups.
 
-The key manager creates, for each key creator, an OpenMeter customer whose key
-is the creator's `sub` and whose subject keys are that `sub` plus the client ID
-of every key they minted. Usage made with a key or with a token therefore lands
-on the same customer. Keys minted before this release do not record their
-creator's `sub` and are left out until re-minted.
+A key's team is the creator's team when they minted it; someone who changes
+teams keeps billing older keys to the old one until they mint new keys.
+
+The key manager also creates, for each key creator, an OpenMeter customer
+whose key is the creator's `sub` and whose subject keys are that `sub` plus
+the client ID of every key they minted.
 
 If you bill organizations rather than people, turn the sync off
 (`usage.customerSync.enabled: false`) and assign subjects to your own
 customers: one subject can belong to only one customer.
 
 ## Enable it
+
+With the bundled OpenMeter and usage console:
+
+```yaml
+usage:
+  enabled: true
+openmeter:
+  enabled: true
+  modelResources:            # your model resources and the provider that prices them
+    - {name: bedrock, provider: bedrock}
+  nebariapp:                 # the console, behind Keycloak sign-in
+    enabled: true
+    hostname: usage.<your-domain>
+```
+
+`openmeter` deploys OpenMeter with Kafka, ClickHouse, Postgres and Redis,
+creates the meters and a priced feature per model resource (see Set up
+OpenMeter below), and syncs public LLM prices daily. Every value under
+`openmeter` is the subchart's
+(`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
+
+With an OpenMeter you run yourself:
 
 ```yaml
 usage:
@@ -87,7 +119,8 @@ network plugin does not enforce `NetworkPolicy`, restrict it another way.
 
 ## Set up OpenMeter
 
-The pipeline expects two meters in OpenMeter:
+The bundled OpenMeter is set up this way already. For your own, the pipeline
+expects two meters:
 
 ```yaml
 meters:
@@ -100,6 +133,9 @@ meters:
       model_resource: $.model_resource
       token_type: $.token_type
       access_path: $.access_path
+      user: $.user
+      team: $.team
+      api_key: $.api_key
   - slug: llm_requests
     eventType: llm.request
     aggregation: COUNT
@@ -109,6 +145,9 @@ meters:
       usage_reported: $.usage_reported
       response_code: $.response_code
       access_path: $.access_path
+      user: $.user
+      team: $.team
+      api_key: $.api_key
 ```
 
 To price tokens, run OpenMeter's LLM price sync (`openmeter-jobs llm-cost
@@ -145,6 +184,20 @@ price table by OpenMeter; set your own prices with
   client did not ask for it. The gateway adds
   `stream_options.include_usage=true` so that streams can be counted.
 
+## The usage console
+
+With `openmeter.enabled`, the usage console shows the usage read live from
+OpenMeter: an overview, every request (Traffic), spend by team, person,
+project (model resource), key, model or provider with a month-end projection,
+and each API key's owner and last day. It keeps no data of its own and is
+read-only: everyone who reaches it is a viewer. It is the Stargate gateway
+console (`usage-console/console`) on `openmeter-api`
+(`usage-console/server/cmd/openmeter-api`), with the pages for routing,
+guardrails and budgets hidden.
+
+Costs follow OpenMeter's prices in effect now: OpenMeter prices past usage at
+today's price, and replacing a manual price deletes the old one.
+
 ## Delivery
 
 The collector acknowledges the gateway's batch only after OpenMeter accepted
@@ -158,5 +211,7 @@ each event once.
 
 ```sh
 cd dev
+make setup                 # kind cluster + gateway
+make usage-e2e             # bundled OpenMeter and console, collector, alice and bob, traffic, totals
 make test-usage-collector  # the collector pipeline's tests
 ```
