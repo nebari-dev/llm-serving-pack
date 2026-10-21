@@ -406,11 +406,11 @@ function setIds(t) {
   renderLegend();
 }
 // Box every followed value inside already-escaped text.
-function markIds(html, field = "") {
+function markIds(html) {
   if (!ID_RE) return html;
   return html.replace(ID_RE, (v) => {
     const hit = IDS.find(([, x]) => esc(x) === v);
-    return hit ? `<mark class="id id-${hit[0]}" data-f="${esc(field)}">${v}</mark>` : v;
+    return hit ? `<mark class="id id-${hit[0]}">${v}</mark>` : v;
   });
 }
 // Where each followed value first appears, in the gateway's record of the request.
@@ -439,27 +439,26 @@ function renderLegend() {
 }
 
 // ---- highlighting: wrap each regex match in a span chosen by classify(match) ----
-function highlight(text, re, classify, field = () => "") {
+function highlight(text, re, classify) {
   let out = "", last = 0;
   for (const m of text.matchAll(re)) {
-    out += markIds(esc(text.slice(last, m.index)), field());
+    out += markIds(esc(text.slice(last, m.index)));
     const cls = classify(m);
-    out += cls ? `<span class="${cls}">${markIds(esc(m[0]), field())}</span>` : markIds(esc(m[0]), field());
+    out += cls ? `<span class="${cls}">${markIds(esc(m[0]))}</span>` : markIds(esc(m[0]));
     last = m.index + m[0].length;
   }
   return out + markIds(esc(text.slice(last)));
 }
 const JSON_TOKENS = /"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:]/g;
 function hlJSON(text) {
-  let key = "";
   return highlight(text, JSON_TOKENS, (m) => {
     const s = m[0];
-    if (s[0] === '"' && text.slice(m.index + s.length).trimStart()[0] === ":") { key = s.slice(1, -1); return "j-key"; }
+    if (s[0] === '"' && text.slice(m.index + s.length).trimStart()[0] === ":") return "j-key";
     if (s[0] === '"') return "j-str";
     if (/^[a-z]/.test(s)) return "j-lit";
     if (/^[-\d]/.test(s)) return "j-num";
     return "j-punct";
-  }, () => key);
+  });
 }
 // Shell: the program at the start or after a pipe, flags, quoted strings, pipes and &.
 const SHELL_TOKENS = /'[^']*'|"(?:\\.|[^"\\])*"|\|\||&&|[|&]|(?<=\s)--?[\w.-]+(?:=\S*)?|\S+/g;
@@ -472,20 +471,20 @@ function hlShell(text) {
     if (/^--?[\w.-]/.test(s)) return "t-flag";
     if (expectCmd) { expectCmd = false; return "t-cmd"; }
     return "";
-  }, () => "the command");
+  });
 }
-function cell(v, col = "") {
+function cell(v) {
   if (v !== null && typeof v === "object") {
     const keys = Object.keys(v);
     return `<details><summary>${CHEV}{ ${keys.length} fields }</summary><pre class="code">${hlJSON(JSON.stringify(v, null, 2))}</pre></details>`;
   }
   if (typeof v === "number" || typeof v === "boolean" || v === null) return hlJSON(String(v));
-  return markIds(esc(v), col);
+  return markIds(esc(v));
 }
 function table(rows) {
   if (!rows.length) return "";
   const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
-  return `<div class="scroll"><table><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((k) => `<td>${cell(r[k], k)}</td>`).join("")}</tr>`).join("")}</table></div>`;
+  return `<div class="scroll"><table><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((k) => `<td>${cell(r[k])}</td>`).join("")}</tr>`).join("")}</table></div>`;
 }
 const CLIPBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>';
 const COPIED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
@@ -728,8 +727,7 @@ document.addEventListener("mouseover", (e) => {
   if (!mk) { tip.hidden = true; return; }
   const kind = mk.className.match(/id-(\w+)/)[1];
   const field = origin(kind);
-  const here = mk.dataset.f || "text";
-  tip.innerHTML = `<code>${esc(field)}</code> in the request → <code>${esc(here)}</code> here`;
+  tip.innerHTML = `Originally <code>${esc(field)}</code>`;
   tip.hidden = false;
   const r = mk.getBoundingClientRect(), w = tip.offsetWidth;
   tip.style.left = `${Math.max(12, Math.min(r.left, innerWidth - w - 12))}px`;
