@@ -16,6 +16,10 @@ spec:
       labels:
         app: {{ include "nebari-llm-serving.fullname" . }}-key-manager
         {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+        {{- if .Values.usage.enabled }}
+        # Admitted by the bundled OpenMeter's network policy (customer sync).
+        llm.nebari.dev/openmeter-client: "true"
+        {{- end }}
     spec:
       serviceAccountName: {{ include "nebari-llm-serving.fullname" . }}-key-manager
       containers:
@@ -80,7 +84,7 @@ spec:
             {{- if and .Values.usage.enabled .Values.usage.customerSync.enabled }}
             # Attach API keys to their creators' OpenMeter customers.
             - name: LLM_OPENMETER_URL
-              value: {{ required "usage.openmeter.url is required when usage.enabled=true" .Values.usage.openmeter.url | quote }}
+              value: {{ include "nebari-llm-serving.openmeterURL" . | quote }}
             - name: LLM_OPENMETER_SYNC_INTERVAL
               value: {{ .Values.usage.customerSync.interval | quote }}
             {{- if .Values.usage.openmeter.existingSecret }}

@@ -75,7 +75,7 @@ func console(dir string) http.Handler {
 func bootstrap(args []string) {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	omURL := fs.String("openmeter-url", cmp.Or(os.Getenv("OPENMETER_URL"), "http://localhost:8888"), "OpenMeter's API")
-	path := fs.String("config", "/etc/openmeter-pack/bootstrap.json", "the features and prices to set up")
+	path := fs.String("config", "/etc/usage-console/bootstrap.json", "the features and prices to set up")
 	timeout := fs.Duration("timeout", 5*time.Minute, "how long to keep trying")
 	fs.Parse(args)
 	b, err := os.ReadFile(*path)

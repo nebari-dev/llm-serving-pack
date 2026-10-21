@@ -176,10 +176,23 @@ keyManager:
 # OpenMeter itself is not part of this chart; point openmeter.url at yours. The
 # gateway also has to send its access log to the collector: see
 # examples/usage-access-log.yaml and the Usage metering docs.
+
+# OpenMeter, the usage store, and the read-only usage console (Stargate's
+# console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
+# default. With it on, usage.openmeter.url can stay empty: the collector and
+# the key-manager use the bundled OpenMeter. Every value under openmeter is
+# the subchart's; see charts/nebari-openmeter/values.yaml.
+openmeter:
+  enabled: false
+  console:
+    image:
+      tag: ""
+
 usage:
   enabled: false
   openmeter:
-    # url - base URL of the OpenMeter API, e.g. http://openmeter-api.openmeter.svc
+    # url - base URL of the OpenMeter API, e.g. http://openmeter-api.openmeter.svc.
+    # Leave empty with openmeter.enabled to use the bundled OpenMeter.
     url: ""
     # existingSecret - optional Secret holding a bearer token for the OpenMeter
     # API (key `token`), for an OpenMeter behind an authenticating proxy.

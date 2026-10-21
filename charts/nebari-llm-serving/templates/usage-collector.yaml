@@ -31,6 +31,8 @@ spec:
       labels:
         app: {{ $name }}
         {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+        # Admitted by the bundled OpenMeter's network policy.
+        llm.nebari.dev/openmeter-client: "true"
       annotations:
         # Roll the pod when the pipeline changes.
         checksum/pipeline: {{ .Files.Get "files/usage-collector.yaml" | sha256sum }}
@@ -51,7 +53,7 @@ spec:
             - name: KEY_OWNER_URL
               value: "http://{{ $name }}-key-owners.{{ $ns }}.svc:{{ .Values.usage.keyOwnerLookup.port }}"
             - name: OPENMETER_URL
-              value: {{ required "usage.openmeter.url is required when usage.enabled=true" .Values.usage.openmeter.url | quote }}
+              value: {{ include "nebari-llm-serving.openmeterURL" . | quote }}
             {{- if .Values.usage.openmeter.existingSecret }}
             - name: OPENMETER_TOKEN
               valueFrom:

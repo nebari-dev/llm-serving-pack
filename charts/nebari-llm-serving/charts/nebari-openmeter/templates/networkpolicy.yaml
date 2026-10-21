@@ -1,8 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
-{{- $sel := dict "root" . }}
 # OpenMeter's API has no authentication: only the console, the bootstrap
-# job and the listed namespaces (the usage collector, the key-manager) may
-# call it.
+# job, pods in this namespace with one of apiClientPodLabels, and the listed
+# namespaces may call it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -22,6 +21,11 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "om.selector" (dict "root" . "component" "bootstrap") | nindent 14 }}
+        {{- range .Values.networkPolicy.apiClientPodLabels }}
+        - podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
         {{- range .Values.networkPolicy.apiClientNamespaces }}
         - namespaceSelector:
             matchLabels:
