@@ -229,11 +229,8 @@
   mark.id { cursor: help; background: transparent; color: inherit; border-radius: 4px; padding: 1px 5px; margin: 0 1px; box-shadow: inset 0 0 0 1.5px var(--idc); background-color: color-mix(in srgb, var(--idc) 12%, transparent); }
   .id-rid { --idc: #2f5bd3; } .id-subject { --idc: #9b3fc4; } .id-key { --idc: #c46a00; } .id-user { --idc: #1f8a55; } .id-team { --idc: #0f8a99; }
   [data-theme="dark"] .id-rid { --idc: #8fb0ff; } [data-theme="dark"] .id-subject { --idc: #d19af0; } [data-theme="dark"] .id-key { --idc: #ffb35c; } [data-theme="dark"] .id-user { --idc: #7ee2a8; } [data-theme="dark"] .id-team { --idc: #5fd6e4; }
-  .tip { position: fixed; z-index: 50; max-width: 460px; padding: 10px 12px; border-radius: 8px; background: #171717; color: #fafafa; font: 12.5px/1.5 var(--font-sans); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); pointer-events: none; }
+  .tip { position: fixed; z-index: 50; white-space: nowrap; padding: 6px 10px; border-radius: 8px; background: #171717; color: #fafafa; font: 12.5px/1.5 var(--font-sans); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); pointer-events: none; }
   [data-theme="dark"] .tip { background: #fafafa; color: #171717; }
-  .tip b { display: block; margin-bottom: 4px; font-weight: 600; }
-  .tip .row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 2px 10px; }
-  .tip .row span:first-child { opacity: 0.7; }
   .tip code { font: 12px var(--font-mono); overflow-wrap: anywhere; }
   .legend { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 16px; }
   .legend h3 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -241,6 +238,20 @@
   .legend li { font-size: 13px; color: var(--muted); }
   .legend li mark { font: 600 12.5px var(--font-mono); margin-right: 6px; }
   .legend li .v { display: block; margin-top: 2px; font: 12px var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
+  /* JSON never wraps: it scrolls sideways */
+  .out-block .code, .xcol .code, .ev .code, .more .code, .xstep .code { white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  .more { border-top: 1px dashed var(--line); }
+  .more > summary, .cmdfold > summary { padding: 6px 12px; font: 500 12.5px var(--font-sans); color: var(--accent); }
+  .cmdfold { margin-top: 10px; }
+  .cmdfold > summary { padding: 2px 0; }
+  .cmdfold > summary code { font: 12.5px var(--font-mono); color: var(--muted); margin-right: 6px; }
+  .cmdfold[open] > summary { margin-bottom: -4px; }
+  .inline-more { display: inline; }
+  .inline-more > summary { display: inline; color: var(--accent); font-size: 0.95em; }
+  .inline-more[open] { display: block; margin-top: 4px; }
+  .inline-more[open] > summary { display: none; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .legend li .v { display: inline; margin: 0; }
   .note { color: var(--err); font: 13px/1.5 var(--font-mono); margin-top: 8px; }
 
   .links { margin: 24px 0 48px; display: grid; gap: 10px; }
@@ -395,24 +406,23 @@ function setIds(t) {
   renderLegend();
 }
 // Box every followed value inside already-escaped text.
-function markIds(html, field = "", whole = "") {
+function markIds(html, field = "") {
   if (!ID_RE) return html;
   return html.replace(ID_RE, (v) => {
     const hit = IDS.find(([, x]) => esc(x) === v);
-    return hit ? `<mark class="id id-${hit[0]}" data-f="${esc(field)}" data-w="${esc(whole)}">${v}</mark>` : v;
+    return hit ? `<mark class="id id-${hit[0]}" data-f="${esc(field)}">${v}</mark>` : v;
   });
 }
 // Where each followed value first appears, in the gateway's record of the request.
 function origin(kind) {
-  const rec = lastTrace?.stages?.gateway?.data || {}, key = lastTrace?.path === "key";
-  const v = (IDS.find(([k]) => k === kind) || [])[1];
+  const viaKey = lastTrace?.path === "key";
   return {
-    rid: ["request_id", "set by Envoy for this request"],
-    subject: key ? ["(not in the record)", "the API key's owner, from the key manager's lookup"] : ["auth_subject", "from the verified Keycloak token"],
-    key: ["client_id", "the API key the caller used"],
-    user: key ? ["(not in the record)", "the key owner's username, from the key manager"] : ["auth_user", "from the verified Keycloak token"],
-    team: key ? ["(not in the record)", "the first team- group of the key's owner"] : ["auth_groups", "the first team- group in the token's groups"],
-  }[kind].concat(v);
+    rid: "request_id",
+    subject: viaKey ? "key owner's subject" : "auth_subject",
+    key: "client_id",
+    user: viaKey ? "key owner's username" : "auth_user",
+    team: viaKey ? "key owner's groups" : "auth_groups",
+  }[kind];
 }
 const ID_ABOUT = {
   rid: ["request id", "Envoy's id for the request. It becomes the event id in OpenMeter (token events add :input, :output, …), which is how a repeat is dropped."],
@@ -425,17 +435,16 @@ function renderLegend() {
   const el = document.getElementById("legend");
   if (!IDS.length) { el.hidden = true; return; }
   el.hidden = false;
-  el.innerHTML = `<h3>Followed through every step: each one is boxed wherever it appears</h3><ul>${IDS.map(([k, v]) => `<li><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark>${esc(ID_ABOUT[k][1])}<span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
+  el.innerHTML = `<h3>Boxed wherever they appear. Hover one to see where it came from.</h3><ul>${IDS.map(([k, v]) => `<li title="${esc(ID_ABOUT[k][1])}"><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark><span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
 }
 
 // ---- highlighting: wrap each regex match in a span chosen by classify(match) ----
 function highlight(text, re, classify, field = () => "") {
   let out = "", last = 0;
   for (const m of text.matchAll(re)) {
-    out += markIds(esc(text.slice(last, m.index)), field(), "");
+    out += markIds(esc(text.slice(last, m.index)), field());
     const cls = classify(m);
-    const whole = m[0].replace(/^"|"$/g, "");
-    out += cls ? `<span class="${cls}">${markIds(esc(m[0]), field(), whole)}</span>` : markIds(esc(m[0]), field(), whole);
+    out += cls ? `<span class="${cls}">${markIds(esc(m[0]), field())}</span>` : markIds(esc(m[0]), field());
     last = m.index + m[0].length;
   }
   return out + markIds(esc(text.slice(last)));
@@ -471,7 +480,7 @@ function cell(v, col = "") {
     return `<details><summary>${CHEV}{ ${keys.length} fields }</summary><pre class="code">${hlJSON(JSON.stringify(v, null, 2))}</pre></details>`;
   }
   if (typeof v === "number" || typeof v === "boolean" || v === null) return hlJSON(String(v));
-  return markIds(esc(v), col, String(v));
+  return markIds(esc(v), col);
 }
 function table(rows) {
   if (!rows.length) return "";
@@ -491,6 +500,41 @@ function keepOpen(root, renderFn) {
   root.querySelectorAll("details[data-k]").forEach((d) => { if (d.dataset.k in state) d.open = state[d.dataset.k]; });
 }
 
+// Only what the journey needs is shown; everything else sits behind a fold.
+const IMPORTANT = {
+  record: ["request_id", "auth_subject", "auth_user", "client_id", "model", "response_code", "input_tokens", "cached_input_tokens", "output_tokens"],
+  owner: ["subject", "username", "groups"],
+  event: ["id", "type", "subject", "data"],
+  eventData: ["user", "team", "api_key", "model", "token_type", "tokens", "response_code", "usage_reported"],
+  receipt: ["actor", "team", "keyId", "resolvedModel", "inputTokens", "cachedInputTokens", "outputTokens", "costUsd", "verdict"],
+};
+const COLUMNS = { kafka: ["offset", "id", "type"], clickhouse: ["type", "id", "subject", "data"], openmeter: ["type", "id", "subject", "user", "team", "api_key", "token_type", "tokens"] };
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));
+// JSON with only the important fields, and a fold with all of them.
+function jsonView(obj, keys, k, dataKeys) {
+  const short = pick(obj, keys);
+  if (dataKeys && short.data && typeof short.data === "object") short.data = pick(short.data, dataKeys);
+  const full = JSON.stringify(obj, null, 2), brief = JSON.stringify(short, null, 2);
+  return `<pre class="code">${hlJSON(brief)}</pre>` + (full !== brief ? `<details class="more" data-k="${k}"><summary>${CHEV}Show all fields</summary><pre class="code">${hlJSON(full)}</pre></details>` : "");
+}
+// A table with the important columns, and a fold with all of them.
+function tableView(rows, cols, k) {
+  if (!cols) return table(rows);
+  const all = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const brief = table(rows.map((r) => pick(r, cols)));
+  return brief + (all.length > cols.length ? `<details class="more" data-k="${k}"><summary>${CHEV}Show all ${all.length} columns</summary>${table(rows)}</details>` : "");
+}
+// A command, folded to its program name.
+function cmdView(cmd, k) {
+  const prog = cmd.split(" ")[0];
+  return `<details class="cmdfold" data-k="${k}"><summary>${CHEV}<code>$ ${esc(prog)} …</code>the command</summary>${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(cmd)}</pre>`, cmd)}</details>`;
+}
+// The first sentence, with the rest behind "more".
+function brief(html, k) {
+  const m = html.match(/^([\s\S]*?\.)\s+(?=[A-Z])([\s\S]+)$/);
+  return m ? `${m[1]} <details class="inline-more" data-k="${k}"><summary>more</summary>${m[2]}</details>` : html;
+}
+
 // How each part runs, read live from the cluster by the tracer.
 let COMP = null;
 const RUNS = { gateway: ["gateway"], model: ["model"], collector: ["collector", "key-manager"], kafka: ["kafka"],
@@ -504,9 +548,10 @@ function runsView(where, small = false) {
     const comp = COMP[name]; if (!comp) return "";
     const pods = comp.pods, w = pods[0];
     const workloads = [...new Set(pods.map((x) => `${x.kind} ${x.workload}`))];
-    const sum = w ? `${workloads.join(", ")} · ${pods.length} pod${pods.length === 1 ? "" : "s"} · ${w.containers.map((x) => shortImage(x.image)).join(" + ")}` : "no pods running";
+    const kinds = workloads.length > 1 ? `${workloads.length} ${w.kind}s` : w ? w.kind : "";
+    const sum = small ? "" : w ? `${kinds} · ${pods.length} pod${pods.length === 1 ? "" : "s"}` : "no pods running";
     const rows = pods.flatMap((pod) => pod.containers.map((x) => ({ pod: pod.pod, container: x.name, image: x.image.split("@")[0] + (x.image.includes("@sha256:") ? " (pinned by digest)" : ""), runs: x.run || "(image default)", ports: x.ports.join(", ") || "-", ready: x.ready ? "yes" : "no", restarts: x.restarts, volumes: pod.volumes.join(", ") || "-" })));
-    return `<details class="runs" data-k="runs-${where}-${name}"><summary>${CHEV}<b>${esc(NAMES[name])} · how it runs</b><span class="sum">${esc(sum)}</span></summary>
+    return `<details class="runs" data-k="runs-${where}-${name}"><summary>${CHEV}<b>How ${esc(NAMES[name])} runs</b>${sum ? `<span class="sum">${esc(sum)}</span>` : ""}</summary>
       <div class="runs-body"><p>${esc(comp.about)}</p>${table(rows)}${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(comp.command)}</pre>`, comp.command)}</div></details>`;
   }).join("");
 }
@@ -537,21 +582,22 @@ function render(trace) {
   STEPS.forEach((step, i) => {
     const prevFound = i === 0 ? !!trace?.status : found(STEPS[i - 1].key);
     const h = step.hop, done = found(step.key), now = trace && prevFound && !done;
-    html.push(`<div class="item hop ${h.first ? "first" : ""} ${done ? "done lit" : now ? "now" : ""}"><div class="hop-body"><div class="hop-logos">${h.logos.map((n) => icon(n, "sm")).join("")}</div><div><div class="hop-proto">${esc(h.proto)}${done ? `<span class="tag">done</span>` : now ? `<span class="tag">happening now</span>` : ""}</div><div>${h.text}</div></div></div></div>`);
+    html.push(`<div class="item hop ${h.first ? "first" : ""} ${done ? "done lit" : now ? "now" : ""}"><div class="hop-body"><div class="hop-logos">${h.logos.map((n) => icon(n, "sm")).join("")}</div><div><div class="hop-proto">${esc(h.proto)}${done ? `<span class="tag">done</span>` : now ? `<span class="tag">happening now</span>` : ""}</div><div>${brief(h.text, `hop-${step.key}`)}</div></div></div></div>`);
     const s = st(step.key);
     const cls = !trace ? "idle" : s?.found ? "found" : s?.error ? "error" : "waiting";
     const pill = !trace ? "not sent" : s?.found ? `seen ${(s.afterMs / 1000).toFixed(1)} s after send` : s?.error ? "error, retrying" : s?.waiting ? `waiting for ${s.waiting}` : "looking…";
     let body = "";
-    if (s?.command && step.key !== "collector") body += block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(s.command)}</pre>`, s.command);
+    if (s?.command && step.key !== "collector") body += cmdView(s.command, `cmd-${step.key}`);
     if (s?.found && step.key === "collector") {
       body += collectorView(trace);
     } else if (s?.found) {
       const d = step.key === "kafka" ? s.data.map(({ event, ...row }) => row) : s.data;
-      const inner = Array.isArray(d) ? table(d) : `<pre class="code">${hlJSON(JSON.stringify(d, null, 2))}</pre>`;
+      const inner = Array.isArray(d) ? tableView(d, COLUMNS[step.key], `cols-${step.key}`)
+        : jsonView(d, step.key === "gateway" ? IMPORTANT.record : step.key === "console" ? IMPORTANT.receipt : Object.keys(d), `all-${step.key}`);
       body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : `${Object.keys(d).length} fields`);
     }
     if (s?.error) body += `<div class="note">${esc(s.error)}</div>`;
-    html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><p class="what">${step.what}</p>${runsView(step.key)}${body}</div></article>`);
+    html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><div class="what">${brief(step.what, `what-${step.key}`)}</div>${runsView(step.key)}${body}</div></article>`);
   });
   const journey = document.getElementById("journey");
   keepOpen(journey, () => { journey.innerHTML = html.join("") + `<span class="arrowhead" id="arrowhead"></span>`; });
@@ -566,7 +612,7 @@ function collectorView(t) {
   const rec = t.stages.gateway?.found ? t.stages.gateway.data : null;
   const owner = t.stages.collector.data.owner;
   const kafka = t.stages.kafka?.found ? t.stages.kafka.data : null;
-  const recCol = rec ? `<pre class="code">${hlJSON(JSON.stringify(rec, null, 2))}</pre>`
+  const recCol = rec ? jsonView(rec, IMPORTANT.record, "all-x-record")
     : `<p class="xwait">The collector has its copy already; the tracer shows the gateway's ${c("stdout")} copy, which Envoy writes out every 10 seconds.</p>`;
   const r = rec || {};
   const routeName = (r.route || "").split("/")[2] || "";
@@ -580,13 +626,13 @@ function collectorView(t) {
   const steps = [
     `<div class="xstep"><b>1 · normalize</b>${rec ? `The route ${c(esc(routeName))} ends in ${c(apiKey ? "-external" : "-internal")}, so this came in with ${apiKey ? "an API key" : "a Keycloak token"}. Records with no caller or no request id are dropped here.` : "Reads the record and keeps it only if it is a model request with a known caller."}</div>`,
     apiKey
-      ? `<div class="xstep"><b>2 · identify</b>An API key says nothing about its owner, so the collector asks the key manager who minted ${c(esc(r.client_id || "the key"))}. The same lookup:${t.stages.collector.command ? block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(t.stages.collector.command)}</pre>`, t.stages.collector.command) : ""}It answered:${owner ? `<pre class="code">${hlJSON(JSON.stringify(owner, null, 2))}</pre>` : ""}</div>`
+      ? `<div class="xstep"><b>2 · identify</b>An API key says nothing about its owner, so the collector asks the key manager who minted ${c(esc(r.client_id || "the key"))}. It answered:${owner ? jsonView(owner, IMPORTANT.owner, "all-x-owner") : ""}${t.stages.collector.command ? cmdView(t.stages.collector.command, "cmd-collector") : ""}</div>`
       : `<div class="xstep"><b>2 · identify</b>The gateway verified the Keycloak token and passed on its subject, username and groups${rec ? `: ${c(esc(r.auth_user))}, groups ${c(esc(JSON.stringify(groups)))}` : ""}. No lookup is needed.</div>`,
     `<div class="xstep"><b>3 · events</b>One ${c("llm.request")} event with the request id as its id, then one ${c("llm.tokens")} event for each token type that isn't zero.${rec && input != null ? ` Uncached input is ${n(r.input_tokens)} input − ${n(r.cached_input_tokens)} cached − ${n(r.cache_creation_input_tokens)} cache write = <strong>${input}</strong>.` : rec ? " This request reported no tokens, so only the request event is sent." : ""} The team is the first ${c("team-")} group (${c(esc(team))}), and the bill goes to the person's OIDC subject.</div>`,
   ];
   const readable = (ev) => { try { return { ...ev, data: typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data }; } catch { return ev; } };
   const evLine = (ev) => { const d = readable(ev).data || {}; return ev.type === "llm.tokens" ? `${d.token_type} · ${d.tokens} tokens` : `status ${d.response_code} · usage reported: ${d.usage_reported}`; };
-  const evCol = kafka ? `<p class="xwait">Kafka keeps ${c("data")} as a JSON string and ${c("time")} in Unix seconds; ${c("data")} is unpacked here to read it. Click an event to see all of it.</p><div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary><pre class="code">${hlJSON(JSON.stringify(readable(m.event), null, 2))}</pre></details>`).join("")}</div>`
+  const evCol = kafka ? `<p class="xwait">Click an event to open it.</p><div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary>${jsonView(readable(m.event), IMPORTANT.event, `all-ev-${i}`, IMPORTANT.eventData)}</details>`).join("")}</div>`
     : `<p class="xwait">These appear once Kafka has them (step 3).</p>`;
   return `<div class="xform">
     <div class="xcol">${fold("x-record", "Record in · from the gateway", recCol, true)}</div><div class="to">→</div>
@@ -681,16 +727,11 @@ document.addEventListener("mouseover", (e) => {
   const mk = e.target.closest("mark.id"), tip = document.getElementById("tip");
   if (!mk) { tip.hidden = true; return; }
   const kind = mk.className.match(/id-(\w+)/)[1];
-  const [field, how, value] = origin(kind);
-  const box = mk.closest("[data-key]"), step = box ? STEPS.find((x) => x.key === box.dataset.key) : null;
-  const where = step ? `${STEPS.indexOf(step) + 1} · ${step.title.replace(/<[^>]+>/g, "")}` : mk.closest(".legend") ? "the list above" : "this box";
-  const here = mk.dataset.f || "(text)";
-  const whole = mk.dataset.w || mk.textContent;
-  tip.innerHTML = `<b>${esc(ID_ABOUT[kind][0])}</b>
-    <div class="row"><span>In the request</span><span><code>${esc(field)}</code> = <code>${esc(value)}</code><br>${esc(how)}</span>
-    <span>Here</span><span>${esc(where)}: <code>${esc(here)}</code> = <code>${esc(whole)}</code></span></div>`;
+  const field = origin(kind);
+  const here = mk.dataset.f || "text";
+  tip.innerHTML = `<code>${esc(field)}</code> in the request → <code>${esc(here)}</code> here`;
   tip.hidden = false;
-  const r = mk.getBoundingClientRect(), w = Math.min(460, innerWidth - 24);
+  const r = mk.getBoundingClientRect(), w = tip.offsetWidth;
   tip.style.left = `${Math.max(12, Math.min(r.left, innerWidth - w - 12))}px`;
   tip.style.top = `${r.bottom + 8 + tip.offsetHeight > innerHeight ? r.top - tip.offsetHeight - 8 : r.bottom + 8}px`;
 });
