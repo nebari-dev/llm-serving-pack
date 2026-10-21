@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Usage tracer</title>
+<script>
+  // Resolve the theme before first paint: an explicit choice wins, otherwise follow the OS.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Cascadia+Code:wght@400;600;700&display=swap" rel="stylesheet">
@@ -13,18 +22,25 @@
     --font-mono: 'Cascadia Code', ui-monospace, Menlo, monospace;
     --bg: #f6f5f1; --panel: #ffffff; --line: #e2dfd6; --text: #1b1f27; --muted: #5d6470;
     --accent: #2f5bd3; --accent-ink: #ffffff; --accent-bg: #e8eefc; --ok: #1f7a4d; --ok-bg: #e5f3ea; --wait: #8a5b00; --wait-bg: #fbf0d9; --err: #b3261e;
-    --tile: #f1efe9; --inline-code: #ece9e1;
+    --tile: #f1efe9; --inline-code: #ece9e1; --step-border: #3a3f4b;
+    /* controls: shadcn/ui neutral tokens */
+    --sh-bg: #ffffff; --sh-fg: #0a0a0a; --sh-primary: #171717; --sh-primary-fg: #fafafa;
+    --sh-muted: #ecebe6; --sh-muted-fg: #6b6b6b; --sh-border: #e5e5e5; --sh-input: #d9d7d0; --sh-ring: rgba(161, 161, 161, 0.5);
+    --sh-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fafafa' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
     /* command: a terminal; output: a lighter well */
     --term-bg: #1b1f27; --term-text: #e7e9ee; --term-line: #1b1f27; --term-head: #9aa3b2; --term-rule: #2f3542;
     --out-bg: #f7f6f2;
     --t-cmd: #7aa2ff; --t-flag: #e5c07b; --t-str: #98c379; --t-op: #c678dd; --t-prompt: #6b7280;
     --j-key: #2f5bd3; --j-str: #1f7a4d; --j-num: #b35c00; --j-lit: #8e3fb0; --j-punct: #8a909b;
   }
-  /* Light by default; the header switch sets data-theme="dark". */
+  /* data-theme is set before first paint: the visitor's choice, else the OS. */
   :root[data-theme="dark"] {
     --bg: #0f1115; --panel: #181b22; --line: #3a4150; --text: #f1f3f7; --muted: #c2c9d6;
     --accent: #8fb0ff; --accent-ink: #0f1115; --accent-bg: #22305a; --ok: #7ee2a8; --ok-bg: #173a26; --wait: #ffd27a; --wait-bg: #3d3011; --err: #ff9b92;
-    --tile: #2c323e; --inline-code: #2a303b;
+    --tile: #2c323e; --inline-code: #2a303b; --step-border: #8a93a6;
+    --sh-bg: #0a0a0a; --sh-fg: #fafafa; --sh-primary: #e5e5e5; --sh-primary-fg: #171717;
+    --sh-muted: #262626; --sh-muted-fg: #a1a1a1; --sh-border: rgba(255, 255, 255, 0.1); --sh-input: rgba(255, 255, 255, 0.15); --sh-ring: rgba(115, 115, 115, 0.5);
+    --sh-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23171717' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
     --term-bg: #07080b; --term-line: #3a4150; --term-head: #b4bccb; --term-rule: #3a4150;
     --out-bg: #12151b;
     --t-prompt: #8a92a0;
@@ -38,7 +54,14 @@
   header h1 { margin: 0 0 6px; font-size: 24px; font-weight: 600; }
   .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 6px; }
   .title-row h1 { margin: 0; }
-  .theme button { padding: 5px 12px; font-size: 13px; }
+  /* theme toggle: one icon button, moon in light mode, sun in dark */
+  .theme-btn { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; transition: color 0.15s, background 0.15s; }
+  .theme-btn:hover { background: var(--sh-muted); }
+  .theme-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
+  .theme-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .theme-btn .sun { display: none; }
+  [data-theme="dark"] .theme-btn .sun { display: block; }
+  [data-theme="dark"] .theme-btn .moon { display: none; }
   header p { margin: 0; color: var(--muted); max-width: 980px; }
   code.ic { font: 0.9em var(--font-mono); background: var(--inline-code); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
   h2.section { margin: 28px 0 4px; font-size: 18px; font-weight: 600; }
@@ -48,14 +71,25 @@
   /* the form, one row across the top */
   .form { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; }
   .form label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
-  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .seg button { border: 0; background: transparent; color: var(--text); font: 500 14px var(--font-sans); padding: 8px 14px; cursor: pointer; white-space: nowrap; }
-  .seg button + button { border-left: 1px solid var(--line); }
-  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  /* segmented choices: shadcn Tabs list */
+  .seg { display: inline-flex; align-items: center; height: 36px; padding: 3px; gap: 2px; border-radius: 10px; background: var(--sh-muted); }
+  .seg button { height: 100%; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--sh-muted-fg); font: 500 14px var(--font-sans); cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s, box-shadow 0.15s; }
+  .seg button:hover { color: var(--sh-fg); }
+  .seg button[aria-pressed="true"] { background: var(--sh-bg); color: var(--sh-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06); }
+  [data-theme="dark"] .seg button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); border-color: var(--sh-input); box-shadow: none; }
+  .seg button:focus-visible, .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
   .seg code { font: 13px var(--font-mono); }
-  .form label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; padding-bottom: 9px; }
-  .send { border: 0; border-radius: 8px; background: var(--text); color: var(--bg); font: 600 15px var(--font-sans); padding: 10px 22px; cursor: pointer; }
-  .send:disabled { opacity: 0.5; cursor: progress; }
+  /* checkbox: shadcn Checkbox */
+  .form label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; font-weight: 500; height: 36px; cursor: pointer; }
+  .check input { appearance: none; margin: 0; width: 16px; height: 16px; flex: none; border: 1px solid var(--sh-input); border-radius: 4px; background: var(--sh-bg) center / 12px no-repeat; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
+  .check input:checked { background-color: var(--sh-primary); border-color: var(--sh-primary); background-image: var(--sh-check); }
+  .check input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
+  /* primary button: shadcn Button */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--sh-primary); color: var(--sh-primary-fg); font: 500 14px var(--font-sans); white-space: nowrap; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); transition: opacity 0.15s, transform 0.05s; }
+  .btn:hover { opacity: 0.9; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.5; pointer-events: none; }
+  .btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .result { flex-basis: 100%; font-size: 13px; color: var(--muted); }
   .result strong { color: var(--text); font-family: var(--font-mono); font-weight: 600; }
 
@@ -93,7 +127,8 @@
   .stage.waiting .dot { border-color: var(--wait); }
   .stage.error .dot { border-color: var(--err); }
   .stage { padding-top: 6px; padding-bottom: 6px; }
-  .stage .panel { padding: 16px 20px; }
+  .stage .panel { padding: 16px 20px; border: 1.5px solid var(--step-border); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+  .panel.flow-panel { border: 1.5px solid var(--step-border); }
   .stage-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
   .stage-title { display: flex; gap: 12px; align-items: center; }
   .stage h3 { margin: 0; font-size: 16px; font-weight: 600; }
@@ -121,9 +156,11 @@
   .block { margin-top: 10px; border-radius: 8px; overflow: hidden; }
   .block-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 12px; font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; }
   .block { position: relative; }
-  .copy { position: absolute; top: 36px; right: 8px; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--term-rule); background: var(--term-bg); color: var(--term-head); border-radius: 6px; padding: 5px 6px; cursor: pointer; font: 500 12px var(--font-sans); }
-  .copy:hover { color: var(--term-text); }
-  .copy svg { width: 15px; height: 15px; display: block; }
+  /* copy: shadcn ghost icon button inside the code block */
+  .copy { position: absolute; top: 6px; right: 8px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--term-head); cursor: pointer; transition: color 0.15s, background 0.15s; }
+  .copy:hover { background: rgba(255, 255, 255, 0.1); color: var(--term-text); }
+  .copy:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(161, 161, 161, 0.5); }
+  .copy svg { width: 16px; height: 16px; display: block; }
   .cmd-block .code { padding-right: 52px; }
   .code { margin: 0; padding: 10px 14px 12px; font: 13px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .cmd-block { background: var(--term-bg); border: 1px solid var(--term-line); color: var(--term-text); }
@@ -148,6 +185,62 @@
   th { color: var(--muted); font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; }
   td { white-space: nowrap; }
   td:last-child { white-space: normal; overflow-wrap: anywhere; min-width: 240px; }
+  /* the collector: record in, steps, events out */
+  .xform { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1.1fr) 28px minmax(0, 1fr); gap: 0; align-items: start; margin-top: 12px; }
+  .xform .to { align-self: center; text-align: center; font: 600 18px var(--font-mono); color: var(--muted); }
+  .xcol { min-width: 0; }
+  .xcol .code { max-height: 520px; overflow-y: auto; }
+  .xsteps { display: grid; gap: 10px; padding: 12px 14px; }
+  .xstep { font-size: 13.5px; color: var(--text); }
+  .xstep b { display: block; font: 600 12.5px var(--font-mono); color: var(--muted); margin-bottom: 2px; }
+  .xstep strong { font: 600 13px var(--font-mono); }
+  .xstep .block { margin: 6px 0; }
+  .xstep .cmd-block .code { margin: 0; background: transparent; border: 0; border-radius: 0; padding: 8px 44px 8px 10px; }
+  .xstep .code { padding: 6px 10px; margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .xwait { padding: 12px 14px; margin: 0; color: var(--muted); font-size: 13.5px; }
+  .xevents { display: grid; gap: 8px; padding: 8px; }
+  .xevents .code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  @media (max-width: 1100px) { .xform { grid-template-columns: minmax(0, 1fr); } .xform .to { transform: rotate(90deg); padding: 4px 0; } }
+  /* expanders, GitHub style: a one-line summary, click to see the rest */
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary .chev { display: inline-block; width: 12px; margin-right: 6px; color: var(--muted); transition: transform 0.15s; }
+  details[open] > summary .chev { transform: rotate(90deg); }
+  .runs { margin: 8px 0 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--out-bg); }
+  .runs > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 12px; font-size: 13px; color: var(--muted); }
+  .runs > summary b { font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .runs > summary .sum { font: 12.5px var(--font-mono); color: var(--text); }
+  .runs-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+  .runs-body p { margin: 6px 0 0; font-size: 13.5px; color: var(--text); }
+  .runs-body table td:last-child { min-width: 0; }
+  .runs-body .cmd-block { margin-top: 0; }
+  .node .runs { margin-top: 8px; }
+  .node .runs > summary { padding: 5px 8px; font-size: 12px; }
+  .out-block > summary { display: flex; align-items: center; padding: 6px 12px; font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .out-block[open] > summary { border-bottom: 1px solid var(--line); }
+  .out-block > summary .hint { margin-left: 8px; font: 500 12px var(--font-mono); letter-spacing: 0; text-transform: none; color: var(--muted); }
+  .ev { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  .ev > summary { padding: 6px 10px; font: 12.5px var(--font-mono); color: var(--text); }
+  .ev > summary .t { color: var(--j-key); font-weight: 600; }
+  .ev .code { border-top: 1px solid var(--line); }
+  td details > summary { font: 12.5px var(--font-mono); color: var(--j-key); }
+  td details .code { padding: 6px 0 0; }
+  /* the identifiers followed through every step */
+  mark.id { cursor: help; background: transparent; color: inherit; border-radius: 4px; padding: 1px 5px; margin: 0 1px; box-shadow: inset 0 0 0 1.5px var(--idc); background-color: color-mix(in srgb, var(--idc) 12%, transparent); }
+  .id-rid { --idc: #2f5bd3; } .id-subject { --idc: #9b3fc4; } .id-key { --idc: #c46a00; } .id-user { --idc: #1f8a55; } .id-team { --idc: #0f8a99; }
+  [data-theme="dark"] .id-rid { --idc: #8fb0ff; } [data-theme="dark"] .id-subject { --idc: #d19af0; } [data-theme="dark"] .id-key { --idc: #ffb35c; } [data-theme="dark"] .id-user { --idc: #7ee2a8; } [data-theme="dark"] .id-team { --idc: #5fd6e4; }
+  .tip { position: fixed; z-index: 50; max-width: 460px; padding: 10px 12px; border-radius: 8px; background: #171717; color: #fafafa; font: 12.5px/1.5 var(--font-sans); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); pointer-events: none; }
+  [data-theme="dark"] .tip { background: #fafafa; color: #171717; }
+  .tip b { display: block; margin-bottom: 4px; font-weight: 600; }
+  .tip .row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 2px 10px; }
+  .tip .row span:first-child { opacity: 0.7; }
+  .tip code { font: 12px var(--font-mono); overflow-wrap: anywhere; }
+  .legend { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 16px; }
+  .legend h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .legend ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 20px; }
+  .legend li { font-size: 13px; color: var(--muted); }
+  .legend li mark { font: 600 12.5px var(--font-mono); margin-right: 6px; }
+  .legend li .v { display: block; margin-top: 2px; font: 12px var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
   .note { color: var(--err); font: 13px/1.5 var(--font-mono); margin-top: 8px; }
 
   .links { margin: 24px 0 48px; display: grid; gap: 10px; }
@@ -159,8 +252,8 @@
 <body>
 <div class="wrap">
 <header>
-  <div class="title-row"><h1>Usage tracer</h1><div class="seg theme" id="theme" aria-label="Colour theme"><button data-t="light">Light</button><button data-t="dark">Dark</button></div></div>
-  <p>Send one model request on the dev cluster and follow it. The request itself only touches the gateway and the model. Metering happens after the response, from a log record the gateway writes, so it can't slow a request down or block it. Every step below is a real lookup: the dark block is the command the tracer ran, the light block is what came back.</p>
+  <div class="title-row"><h1>Usage tracer</h1><button id="theme-toggle" type="button" class="theme-btn" aria-label="Toggle light and dark mode"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button></div>
+  <p>Send one model request on the dev cluster and follow it. The request itself only touches the gateway and the model. Metering happens after the response, from a log record the gateway writes, so it can't slow a request down or block it. Every step below is a real lookup: the dark block is the command, the light block is its output.</p>
 </header>
 
 <section class="panel form" aria-label="Send a request">
@@ -174,19 +267,19 @@
     <div class="seg" data-name="model"><button aria-pressed="true" data-v="mock/small"><code>mock/small</code></button><button data-v="mock/large"><code>mock/large</code></button></div>
   </label>
   <label class="check"><input type="checkbox" id="cancel"> Cancel the stream after 1 second</label>
-  <button class="send" id="send">Send request</button>
+  <button class="btn" id="send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span>Send request</span></button>
   <div class="result" id="result">The first API-key request mints a key. The gateway refuses it (403) until it has loaded the key, so that send takes longer.</div>
 </section>
 
 <h2 class="section">1. The request</h2>
 <p class="section">What the caller waits for. Nothing that meters usage is on this path.</p>
-<section class="panel" style="padding:0">
+<section class="panel flow-panel" style="padding:0">
   <div class="flow" id="flow">
     <div class="node" data-node="client"><span class="logo" data-icon="terminal"></span><div><h3>Your machine</h3><p><code class="ic">curl</code> through a <code class="ic">kubectl port-forward</code> to the gateway</p></div></div>
     <div class="link"><span class="arrow">HTTPS →</span><span id="link-auth">OpenAI chat JSON, with an API key as the bearer token</span><span class="arrow back">← response</span></div>
-    <div class="node" data-node="gateway"><span class="logo" data-icon="envoyproxy"></span><div><h3>Envoy gateway</h3><p id="gw-text">Checks the API key or the Keycloak token. Envoy AI Gateway's <code class="ic">ext_proc</code> reads the model's reply and counts its tokens.</p></div></div>
+    <div class="node" data-node="gateway"><span class="logo" data-icon="envoyproxy"></span><div><h3>Envoy gateway</h3><p id="gw-text">Checks the API key or the Keycloak token. Envoy AI Gateway's <code class="ic">ext_proc</code> reads the model's reply and counts its tokens.</p><div data-runs="gateway"></div></div></div>
     <div class="link"><span class="arrow">HTTP →</span><span>the same chat request, to the model's service</span><span class="arrow back">← reply with <code class="ic">usage</code></span></div>
-    <div class="node" data-node="model"><span class="logo" data-icon="kubernetes"></span><div><h3>The model</h3><p><code class="ic">mock-provider</code>, a stand-in model running in the cluster</p></div></div>
+    <div class="node" data-node="model"><span class="logo" data-icon="kubernetes"></span><div><h3>The model</h3><p><code class="ic">mock-provider</code>, a stand-in model running in the cluster</p><div data-runs="model"></div></div></div>
     <span class="packet" id="packet"></span>
   </div>
   <div class="flow-status" id="flow-status">Not sent yet.</div>
@@ -194,6 +287,8 @@
 
 <h2 class="section">2. Metering, after the response</h2>
 <p class="section">Each step is checked every couple of seconds until it shows the request. Times are when the tracer first saw it there.</p>
+<section class="panel legend" id="legend" hidden></section>
+<div class="tip" id="tip" hidden></div>
 <section class="journey" id="journey" aria-live="polite"></section>
 
 <section class="panel links" id="links" hidden>
@@ -229,20 +324,20 @@ const c = (s) => `<code class="ic">${s}</code>`;
 const STEPS = [
   { key: "gateway", title: "Gateway access log", logos: ["envoyproxy"],
     what: `Envoy writes one JSON record when the request ends, with the caller, the model and the token counts the AI Gateway measured. This is the copy on the gateway pod's ${c("stdout")}, which Envoy writes out every 10 seconds; the collector's copy usually arrives first.`,
-    hop: { logos: ["envoyproxy"], proto: "inside Envoy, after the response", first: true,
-      text: `Once the response has gone back to the caller, Envoy writes the access-log record twice: to ${c("stdout")} and to the usage collector. Nothing from here on can slow down or block the request.` } },
+    hop: { logos: ["envoyproxy"], proto: "inside Envoy, when the request ends", first: true,
+      text: `When the request ends, whether it worked or failed, Envoy writes the access-log record twice: to ${c("stdout")} and to the usage collector. Nothing from here on can slow down or block the request. Only requests that reached the AI Gateway with a model name are logged: a request refused at the key check (401) or with a body that isn't JSON (400) leaves no record and isn't metered. A later failure, like an unknown model (404), a refused key (403) or a cut stream, is metered with its status and no tokens.` } },
   { key: "collector", title: "Usage collector", logos: ["openmeter"],
-    what: `OpenMeter's collector, configured by the pack. It turns the record into usage events and sends them to OpenMeter. It logs nothing per request, so this shows its counters since you pressed send: ${c("input_received")} records in, ${c("output_sent")} events sent to OpenMeter, ${c("output_error")} failed sends.`,
+    what: `OpenMeter's collector, configured by the pack in ${c("files/usage-collector.yaml")}. It turns the gateway's record into usage events and sends them to OpenMeter. It keeps nothing itself: the first place its events are stored is Kafka, so the events on the right are read from there.`,
     hop: { logos: ["opentelemetry"], proto: "OTLP/gRPC logs, to the collector on :4317",
       text: `Envoy buffers access-log records for up to 1 second (or 16 KB) and sends them as OpenTelemetry logs. It doesn't retry: if the collector is down, the record is lost.` } },
   { key: "kafka", title: `Kafka, topic ${c("om_default_events")}`, logos: ["apachekafka"],
     what: `The first durable copy. OpenMeter's API wrote every event here before answering the collector. The tracer reads the whole topic with a consumer that stops after 8 quiet seconds, so the time shown is late by about that much.`,
-    hop: { logos: ["cloudevents", "redis"], proto: `HTTP POST /api/v1/events, a JSON array of CloudEvents`,
-      text: `For an API key, the collector first asks the key manager who owns it (${c("GET /internal/v1/key-owners/&lt;client id&gt;")}). It sends events in batches of up to 100, or after 1 second. OpenMeter's API skips any event id it has already seen (kept in Redis), writes the rest to Kafka, and only then answers.` } },
+    hop: { logos: ["cloudevents"], proto: `HTTP POST /api/v1/events, a JSON array of CloudEvents`,
+      text: `For an API key, the collector first asks the key manager who owns it (${c("GET /internal/v1/key-owners/&lt;client id&gt;")}). It sends events in batches of up to 100, or after 1 second. OpenMeter's API writes them to Kafka and only then answers.` } },
   { key: "clickhouse", title: `ClickHouse, table ${c("openmeter.om_events")}`, logos: ["clickhouse"],
     what: `Where OpenMeter's sink worker moved the events. Every total and cost is computed from these rows.`,
-    hop: { logos: ["apachekafka", "clickhouse"], proto: "Kafka consumer, then ClickHouse's native protocol on :9000",
-      text: `OpenMeter's sink worker reads ${c("om_default_events")} and inserts the events into ${c("openmeter.om_events")}.` } },
+    hop: { logos: ["apachekafka", "redis", "clickhouse"], proto: "Kafka consumer, then ClickHouse's native protocol on :9000",
+      text: `OpenMeter's sink worker reads ${c("om_default_events")}, drops any event id it has already stored (it keeps those ids in Redis), and inserts the rest into ${c("openmeter.om_events")}.` } },
   { key: "openmeter", title: "OpenMeter events API", logos: ["openmeter"],
     what: `The events as OpenMeter's API returns them: one ${c("llm.request")} and one ${c("llm.tokens")} per token type, each with the person, team and key.`,
     hop: { logos: ["openmeter", "clickhouse"], proto: `HTTP GET /api/v1/events?id=…, answered with a ClickHouse query`,
@@ -253,16 +348,16 @@ const STEPS = [
       text: `The console's server pages through OpenMeter's events, newest first, and joins each ${c("llm.request")} with its ${c("llm.tokens")} events into one receipt.` } },
 ];
 
-// Theme: light unless the viewer picked dark (remembered in this browser).
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  document.querySelectorAll("#theme button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.t === t));
-  try { localStorage.setItem("tracer-theme", t); } catch {}
-}
-let savedTheme = "light";
-try { savedTheme = localStorage.getItem("tracer-theme") || "light"; } catch {}
-setTheme(savedTheme);
-document.getElementById("theme").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setTheme(b.dataset.t); });
+// Theme toggle: an explicit choice wins and is remembered; until then, follow the OS.
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch {}
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+  try { if (localStorage.getItem("theme")) return; } catch {}
+  document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+});
 const choice = {};
 document.querySelectorAll(".form .seg").forEach((seg) => {
   choice[seg.dataset.name] = seg.querySelector("[aria-pressed=true]").dataset.v;
@@ -281,26 +376,81 @@ function setAuthText(path) {
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
 document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
 
+// ---- the identifiers followed through every step ----
+let IDS = [], ID_RE = null;
+function setIds(t) {
+  const rec = t?.stages?.gateway?.found ? t.stages.gateway.data : {};
+  const owner = t?.stages?.collector?.data?.owner || {};
+  let groups = owner.groups || [];
+  if (!groups.length && rec.auth_groups) { try { groups = JSON.parse(atob(rec.auth_groups)); } catch {} }
+  const ids = [
+    ["rid", t?.requestId], ["subject", rec.auth_subject || owner.subject], ["key", rec.client_id || owner.clientId],
+    ["user", t?.person], ["team", groups.filter((g) => g.startsWith("team-")).sort()[0]],
+  ].filter(([, v]) => v);
+  const sig = JSON.stringify(ids);
+  if (sig === JSON.stringify(IDS)) return;
+  IDS = ids;
+  const sorted = [...ids].sort((a, b) => b[1].length - a[1].length);
+  ID_RE = sorted.length ? new RegExp(sorted.map(([, v]) => esc(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g") : null;
+  renderLegend();
+}
+// Box every followed value inside already-escaped text.
+function markIds(html, field = "", whole = "") {
+  if (!ID_RE) return html;
+  return html.replace(ID_RE, (v) => {
+    const hit = IDS.find(([, x]) => esc(x) === v);
+    return hit ? `<mark class="id id-${hit[0]}" data-f="${esc(field)}" data-w="${esc(whole)}">${v}</mark>` : v;
+  });
+}
+// Where each followed value first appears, in the gateway's record of the request.
+function origin(kind) {
+  const rec = lastTrace?.stages?.gateway?.data || {}, key = lastTrace?.path === "key";
+  const v = (IDS.find(([k]) => k === kind) || [])[1];
+  return {
+    rid: ["request_id", "set by Envoy for this request"],
+    subject: key ? ["(not in the record)", "the API key's owner, from the key manager's lookup"] : ["auth_subject", "from the verified Keycloak token"],
+    key: ["client_id", "the API key the caller used"],
+    user: key ? ["(not in the record)", "the key owner's username, from the key manager"] : ["auth_user", "from the verified Keycloak token"],
+    team: key ? ["(not in the record)", "the first team- group of the key's owner"] : ["auth_groups", "the first team- group in the token's groups"],
+  }[kind].concat(v);
+}
+const ID_ABOUT = {
+  rid: ["request id", "Envoy's id for the request. It becomes the event id in OpenMeter (token events add :input, :output, …), which is how a repeat is dropped."],
+  subject: ["subject", "Who is billed: the person's Keycloak subject. OpenMeter's customer is matched on it."],
+  key: ["API key", "The key's client id, or login for a Keycloak request. Usage can be totalled per key."],
+  user: ["person", "The Keycloak username, for totals per person."],
+  team: ["team", "The person's first team- group, for totals per team."],
+};
+function renderLegend() {
+  const el = document.getElementById("legend");
+  if (!IDS.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = `<h3>Followed through every step: each one is boxed wherever it appears</h3><ul>${IDS.map(([k, v]) => `<li><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark>${esc(ID_ABOUT[k][1])}<span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
+}
+
 // ---- highlighting: wrap each regex match in a span chosen by classify(match) ----
-function highlight(text, re, classify) {
+function highlight(text, re, classify, field = () => "") {
   let out = "", last = 0;
   for (const m of text.matchAll(re)) {
-    out += esc(text.slice(last, m.index));
+    out += markIds(esc(text.slice(last, m.index)), field(), "");
     const cls = classify(m);
-    out += cls ? `<span class="${cls}">${esc(m[0])}</span>` : esc(m[0]);
+    const whole = m[0].replace(/^"|"$/g, "");
+    out += cls ? `<span class="${cls}">${markIds(esc(m[0]), field(), whole)}</span>` : markIds(esc(m[0]), field(), whole);
     last = m.index + m[0].length;
   }
-  return out + esc(text.slice(last));
+  return out + markIds(esc(text.slice(last)));
 }
 const JSON_TOKENS = /"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:]/g;
 function hlJSON(text) {
+  let key = "";
   return highlight(text, JSON_TOKENS, (m) => {
     const s = m[0];
-    if (s[0] === '"') return text.slice(m.index + s.length).trimStart()[0] === ":" ? "j-key" : "j-str";
+    if (s[0] === '"' && text.slice(m.index + s.length).trimStart()[0] === ":") { key = s.slice(1, -1); return "j-key"; }
+    if (s[0] === '"') return "j-str";
     if (/^[a-z]/.test(s)) return "j-lit";
     if (/^[-\d]/.test(s)) return "j-num";
     return "j-punct";
-  });
+  }, () => key);
 }
 // Shell: the program at the start or after a pipe, flags, quoted strings, pipes and &.
 const SHELL_TOKENS = /'[^']*'|"(?:\\.|[^"\\])*"|\|\||&&|[|&]|(?<=\s)--?[\w.-]+(?:=\S*)?|\S+/g;
@@ -313,25 +463,71 @@ function hlShell(text) {
     if (/^--?[\w.-]/.test(s)) return "t-flag";
     if (expectCmd) { expectCmd = false; return "t-cmd"; }
     return "";
-  });
+  }, () => "the command");
 }
-function cell(v) {
-  if (v !== null && typeof v === "object") return hlJSON(JSON.stringify(v));
+function cell(v, col = "") {
+  if (v !== null && typeof v === "object") {
+    const keys = Object.keys(v);
+    return `<details><summary>${CHEV}{ ${keys.length} fields }</summary><pre class="code">${hlJSON(JSON.stringify(v, null, 2))}</pre></details>`;
+  }
   if (typeof v === "number" || typeof v === "boolean" || v === null) return hlJSON(String(v));
-  return esc(v);
+  return markIds(esc(v), col, String(v));
 }
 function table(rows) {
   if (!rows.length) return "";
   const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
-  return `<div class="scroll"><table><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((k) => `<td>${cell(r[k])}</td>`).join("")}</tr>`).join("")}</table></div>`;
+  return `<div class="scroll"><table><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((k) => `<td>${cell(r[k], k)}</td>`).join("")}</tr>`).join("")}</table></div>`;
 }
 const CLIPBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>';
+const COPIED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const CHEV = '<span class="chev">▸</span>';
+// An output block that folds. key keeps it open or closed across re-renders.
+const fold = (key, label, inner, open, hint = "") =>
+  `<details class="block out-block" data-k="${key}" ${open ? "open" : ""}><summary>${CHEV}${label}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</summary>${inner}</details>`;
+function keepOpen(root, renderFn) {
+  const state = {};
+  root.querySelectorAll("details[data-k]").forEach((d) => (state[d.dataset.k] = d.open));
+  renderFn();
+  root.querySelectorAll("details[data-k]").forEach((d) => { if (d.dataset.k in state) d.open = state[d.dataset.k]; });
+}
+
+// How each part runs, read live from the cluster by the tracer.
+let COMP = null;
+const RUNS = { gateway: ["gateway"], model: ["model"], collector: ["collector", "key-manager"], kafka: ["kafka"],
+  clickhouse: ["sink-worker", "redis", "clickhouse"], openmeter: ["openmeter-api", "postgres"], console: ["console"] };
+const NAMES = { gateway: "Envoy gateway", model: "Model", collector: "Usage collector", "key-manager": "Key manager", kafka: "Kafka",
+  "sink-worker": "Sink worker", redis: "Redis", clickhouse: "ClickHouse", "openmeter-api": "OpenMeter API", postgres: "Postgres", console: "Usage console" };
+const shortImage = (img) => img.split("@")[0].split("/").pop();
+function runsView(where, small = false) {
+  if (!COMP) return "";
+  return (RUNS[where] || []).map((name) => {
+    const comp = COMP[name]; if (!comp) return "";
+    const pods = comp.pods, w = pods[0];
+    const workloads = [...new Set(pods.map((x) => `${x.kind} ${x.workload}`))];
+    const sum = w ? `${workloads.join(", ")} · ${pods.length} pod${pods.length === 1 ? "" : "s"} · ${w.containers.map((x) => shortImage(x.image)).join(" + ")}` : "no pods running";
+    const rows = pods.flatMap((pod) => pod.containers.map((x) => ({ pod: pod.pod, container: x.name, image: x.image.split("@")[0] + (x.image.includes("@sha256:") ? " (pinned by digest)" : ""), runs: x.run || "(image default)", ports: x.ports.join(", ") || "-", ready: x.ready ? "yes" : "no", restarts: x.restarts, volumes: pod.volumes.join(", ") || "-" })));
+    return `<details class="runs" data-k="runs-${where}-${name}"><summary>${CHEV}<b>${esc(NAMES[name])} · how it runs</b><span class="sum">${esc(sum)}</span></summary>
+      <div class="runs-body"><p>${esc(comp.about)}</p>${table(rows)}${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(comp.command)}</pre>`, comp.command)}</div></details>`;
+  }).join("");
+}
+async function loadComponents() {
+  try {
+    const r = await fetch("/api/components");
+    if (!r.ok) return;
+    COMP = await r.json();
+    document.querySelectorAll("[data-runs]").forEach((el) => keepOpen(el, () => { el.innerHTML = runsView(el.dataset.runs, true); }));
+    lastJSON = ""; render(lastTrace);
+  } catch {}
+}
 const block = (kind, label, inner, copy) =>
-  `<div class="block ${kind}"><div class="block-head"><span>${label}</span></div>${inner}${copy ? `<button class="copy" data-copy="${esc(copy)}" title="Copy the command" aria-label="Copy the command">${CLIPBOARD}</button>` : ""}</div>`;
+  `<div class="block ${kind}">${label ? `<div class="block-head"><span>${label}</span></div>` : ""}${inner}${copy ? `<button class="copy" data-copy="${esc(copy)}" title="Copy the command" aria-label="Copy the command">${CLIPBOARD}</button>` : ""}</div>`;
 
 // ---- the metering timeline ----
 let lastJSON = "", seen = new Set();
+let lastTrace = null;
 function render(trace) {
+  lastTrace = trace;
+  setIds(trace);
   const json = JSON.stringify(trace);
   if (json === lastJSON) return;
   lastJSON = json;
@@ -346,22 +542,56 @@ function render(trace) {
     const cls = !trace ? "idle" : s?.found ? "found" : s?.error ? "error" : "waiting";
     const pill = !trace ? "not sent" : s?.found ? `seen ${(s.afterMs / 1000).toFixed(1)} s after send` : s?.error ? "error, retrying" : s?.waiting ? `waiting for ${s.waiting}` : "looking…";
     let body = "";
-    if (s?.command) body += block("cmd-block", "Command the tracer ran", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(s.command)}</pre>`, s.command);
-    if (s?.found) {
-      const d = s.data;
-      const inner = Array.isArray(d) ? table(d) : step.key === "collector" ? table([d]) : `<pre class="code">${hlJSON(JSON.stringify(d, null, 2))}</pre>`;
-      body += block("out-block", Array.isArray(d) ? `What came back · ${d.length} row${d.length === 1 ? "" : "s"}` : "What came back", inner);
+    if (s?.command && step.key !== "collector") body += block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(s.command)}</pre>`, s.command);
+    if (s?.found && step.key === "collector") {
+      body += collectorView(trace);
+    } else if (s?.found) {
+      const d = step.key === "kafka" ? s.data.map(({ event, ...row }) => row) : s.data;
+      const inner = Array.isArray(d) ? table(d) : `<pre class="code">${hlJSON(JSON.stringify(d, null, 2))}</pre>`;
+      body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : `${Object.keys(d).length} fields`);
     }
     if (s?.error) body += `<div class="note">${esc(s.error)}</div>`;
-    html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><p class="what">${step.what}</p>${body}</div></article>`);
+    html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><p class="what">${step.what}</p>${runsView(step.key)}${body}</div></article>`);
   });
   const journey = document.getElementById("journey");
-  journey.innerHTML = html.join("") + `<span class="arrowhead" id="arrowhead"></span>`;
+  keepOpen(journey, () => { journey.innerHTML = html.join("") + `<span class="arrowhead" id="arrowhead"></span>`; });
   // An arrow runs down the line to each step the moment it finds the request.
   const fresh = trace ? STEPS.map((s) => s.key).filter((k) => found(k) && !seen.has(k)) : [];
   fresh.forEach((k) => seen.add(k));
   if (fresh.length) arrowTo(fresh[fresh.length - 1]);
   showLinks(trace);
+}
+// What the collector did with this request: the record in, its three steps with this request's values, the events out.
+function collectorView(t) {
+  const rec = t.stages.gateway?.found ? t.stages.gateway.data : null;
+  const owner = t.stages.collector.data.owner;
+  const kafka = t.stages.kafka?.found ? t.stages.kafka.data : null;
+  const recCol = rec ? `<pre class="code">${hlJSON(JSON.stringify(rec, null, 2))}</pre>`
+    : `<p class="xwait">The collector has its copy already; the tracer shows the gateway's ${c("stdout")} copy, which Envoy writes out every 10 seconds.</p>`;
+  const r = rec || {};
+  const routeName = (r.route || "").split("/")[2] || "";
+  const apiKey = routeName.endsWith("-external");
+  let groups = [];
+  if (!apiKey && r.auth_groups) { try { groups = JSON.parse(atob(r.auth_groups)); } catch { groups = String(r.auth_groups).split(","); } }
+  if (owner) groups = owner.groups || [];
+  const team = groups.filter((g) => g.startsWith("team-")).sort()[0] || "none";
+  const n = (v) => (v == null ? 0 : Number(v));
+  const input = r.input_tokens == null ? null : Math.max(n(r.input_tokens) - n(r.cached_input_tokens) - n(r.cache_creation_input_tokens), 0);
+  const steps = [
+    `<div class="xstep"><b>1 · normalize</b>${rec ? `The route ${c(esc(routeName))} ends in ${c(apiKey ? "-external" : "-internal")}, so this came in with ${apiKey ? "an API key" : "a Keycloak token"}. Records with no caller or no request id are dropped here.` : "Reads the record and keeps it only if it is a model request with a known caller."}</div>`,
+    apiKey
+      ? `<div class="xstep"><b>2 · identify</b>An API key says nothing about its owner, so the collector asks the key manager who minted ${c(esc(r.client_id || "the key"))}. The same lookup:${t.stages.collector.command ? block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(t.stages.collector.command)}</pre>`, t.stages.collector.command) : ""}It answered:${owner ? `<pre class="code">${hlJSON(JSON.stringify(owner, null, 2))}</pre>` : ""}</div>`
+      : `<div class="xstep"><b>2 · identify</b>The gateway verified the Keycloak token and passed on its subject, username and groups${rec ? `: ${c(esc(r.auth_user))}, groups ${c(esc(JSON.stringify(groups)))}` : ""}. No lookup is needed.</div>`,
+    `<div class="xstep"><b>3 · events</b>One ${c("llm.request")} event with the request id as its id, then one ${c("llm.tokens")} event for each token type that isn't zero.${rec && input != null ? ` Uncached input is ${n(r.input_tokens)} input − ${n(r.cached_input_tokens)} cached − ${n(r.cache_creation_input_tokens)} cache write = <strong>${input}</strong>.` : rec ? " This request reported no tokens, so only the request event is sent." : ""} The team is the first ${c("team-")} group (${c(esc(team))}), and the bill goes to the person's OIDC subject.</div>`,
+  ];
+  const readable = (ev) => { try { return { ...ev, data: typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data }; } catch { return ev; } };
+  const evLine = (ev) => { const d = readable(ev).data || {}; return ev.type === "llm.tokens" ? `${d.token_type} · ${d.tokens} tokens` : `status ${d.response_code} · usage reported: ${d.usage_reported}`; };
+  const evCol = kafka ? `<p class="xwait">Kafka keeps ${c("data")} as a JSON string and ${c("time")} in Unix seconds; ${c("data")} is unpacked here to read it. Click an event to see all of it.</p><div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary><pre class="code">${hlJSON(JSON.stringify(readable(m.event), null, 2))}</pre></details>`).join("")}</div>`
+    : `<p class="xwait">These appear once Kafka has them (step 3).</p>`;
+  return `<div class="xform">
+    <div class="xcol">${fold("x-record", "Record in · from the gateway", recCol, true)}</div><div class="to">→</div>
+    <div class="xcol">${fold("x-steps", "What the collector does", `<div class="xsteps">${steps.join("")}</div>`, true)}</div><div class="to">→</div>
+    <div class="xcol">${fold("x-events", kafka ? `Events out · ${kafka.length} CloudEvents` : "Events out", evCol, true, kafka ? "as stored in Kafka" : "")}</div></div>`;
 }
 function arrowTo(key) {
   const journey = document.getElementById("journey");
@@ -383,7 +613,7 @@ function showLinks(trace) {
 }
 document.getElementById("journey").addEventListener("click", (e) => {
   const b = e.target.closest("[data-copy]"); if (!b) return;
-  navigator.clipboard?.writeText(b.dataset.copy).then(() => { b.innerHTML = "copied"; setTimeout(() => (b.innerHTML = CLIPBOARD), 1200); });
+  navigator.clipboard?.writeText(b.dataset.copy).then(() => { b.innerHTML = COPIED; setTimeout(() => (b.innerHTML = CLIPBOARD), 1200); });
 });
 
 // ---- the request path: a dot goes from your machine to the model and back ----
@@ -446,7 +676,26 @@ document.getElementById("send").addEventListener("click", async () => {
     follow(j.trace, true);
   } catch (e) { out.textContent = `Could not send: ${e.message}`; btn.disabled = false; }
 });
+// Hover a boxed value: where it came from in the request, and what it is called here.
+document.addEventListener("mouseover", (e) => {
+  const mk = e.target.closest("mark.id"), tip = document.getElementById("tip");
+  if (!mk) { tip.hidden = true; return; }
+  const kind = mk.className.match(/id-(\w+)/)[1];
+  const [field, how, value] = origin(kind);
+  const box = mk.closest("[data-key]"), step = box ? STEPS.find((x) => x.key === box.dataset.key) : null;
+  const where = step ? `${STEPS.indexOf(step) + 1} · ${step.title.replace(/<[^>]+>/g, "")}` : mk.closest(".legend") ? "the list above" : "this box";
+  const here = mk.dataset.f || "(text)";
+  const whole = mk.dataset.w || mk.textContent;
+  tip.innerHTML = `<b>${esc(ID_ABOUT[kind][0])}</b>
+    <div class="row"><span>In the request</span><span><code>${esc(field)}</code> = <code>${esc(value)}</code><br>${esc(how)}</span>
+    <span>Here</span><span>${esc(where)}: <code>${esc(here)}</code> = <code>${esc(whole)}</code></span></div>`;
+  tip.hidden = false;
+  const r = mk.getBoundingClientRect(), w = Math.min(460, innerWidth - 24);
+  tip.style.left = `${Math.max(12, Math.min(r.left, innerWidth - w - 12))}px`;
+  tip.style.top = `${r.bottom + 8 + tip.offsetHeight > innerHeight ? r.top - tip.offsetHeight - 8 : r.bottom + 8}px`;
+});
 render(null);
+loadComponents();
 const m = location.hash.match(/^#trace=(\d+)$/);
 if (m) follow(m[1], true);
 </script>

@@ -44,6 +44,8 @@ FORWARDS = {
     "gateway-external": (GW_NS, "gateway:nebari-gateway", 28443, 443),
     "gateway-internal": (GW_NS, "gateway:nebari-internal-gateway", 28444, 443),
     "key-manager": (NS, "svc/llm-key-manager", 28440, 8080),
+    # The key-owner lookup the collector makes (internal port, cluster-only).
+    "key-owners": (NS, "svc/llm-key-manager-owners", 28446, 8081),
     "openmeter": (NS, f"svc/{RELEASE}-openmeter-api", 28441, 80),
     "collector": (NS, "deploy/llm-operator-usage-collector", 28442, 4195),
     "console": (NS, f"svc/{RELEASE}-openmeter-console", 28445, 80),
@@ -130,6 +132,70 @@ def api_key(person, token):
         body = json.dumps({"modelName": "mock-provider", "description": "usage tracer"}).encode()
         _keys[person] = http_json("key-manager", "/api/keys", "POST", body, {"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     return _keys[person]
+
+
+# ---- how each part runs --------------------------------------------------------
+
+# name -> (namespace, label selector, what it is). The pods are read live.
+COMPONENTS = {
+    "gateway": (GW_NS, "gateway.envoyproxy.io/owning-gateway-name in (nebari-gateway,nebari-internal-gateway)",
+                "Envoy (C++), in pods Envoy Gateway creates for each Gateway: one for API keys (nebari-gateway), one for logins (nebari-internal-gateway). Envoy AI Gateway's ext_proc (Go) runs as a sidecar container in the same pod."),
+    "model": (NS, "app=mock-provider", "A small Python server (dev/mock-vllm) that answers like an OpenAI-compatible model."),
+    "collector": (NS, "app=llm-operator-usage-collector",
+                  "OpenMeter's Benthos collector (Go). Its pipeline is the pack's files/usage-collector.yaml, mounted at /etc/usage-collector/."),
+    "key-manager": (NS, "app=llm-key-manager",
+                    "The pack's key manager (Go). The collector calls its owner lookup on port 8081, through the llm-key-manager-owners Service."),
+    "kafka": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=kafka", "Confluent's Kafka image (Java), one broker."),
+    "sink-worker": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=sink-worker",
+                    "OpenMeter's sink worker (Go): the same image as the API, running the openmeter-sink-worker binary."),
+    "redis": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=redis", "Redis (C). The sink worker keeps the event ids it has stored here, to drop repeats."),
+    "clickhouse": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=clickhouse", "ClickHouse server (C++)."),
+    "openmeter-api": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=api", "OpenMeter (Go): the openmeter binary, serving its HTTP API."),
+    "postgres": (NS, f"cnpg.io/cluster={RELEASE}-openmeter-db",
+                 "PostgreSQL, run by CloudNativePG. OpenMeter keeps its own records here (customers, features, prices); usage events are not stored here."),
+    "console": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=console",
+                "The usage console: a Go server that reads OpenMeter's API and serves the React app, in one container."),
+}
+_components = {"at": 0, "data": None}
+
+
+def owner_of(pod):
+    ref = (pod["metadata"].get("ownerReferences") or [{}])[0]
+    kind, name = ref.get("kind", ""), ref.get("name", "")
+    if kind == "ReplicaSet":  # <deployment>-<template hash>
+        return "Deployment", name.rsplit("-", 1)[0]
+    if kind == "Cluster":
+        return "CloudNativePG Cluster", name
+    return kind, name
+
+
+def components():
+    """Every part's pods, containers and images, read from the cluster (cached 30 s)."""
+    if _components["data"] and time.time() - _components["at"] < 30:
+        return _components["data"]
+    out = {}
+    for name, (ns, selector, about) in COMPONENTS.items():
+        pods = json.loads(run(KUBECTL + ["-n", ns, "get", "pods", "-l", selector, "-o", "json"]))["items"]
+        rows = []
+        for pod in pods:
+            if pod["status"].get("phase") in ("Succeeded", "Failed"):
+                continue
+            statuses = {c["name"]: c for c in pod["status"].get("containerStatuses", [])}
+            kind, workload = owner_of(pod)
+            rows.append({
+                "pod": pod["metadata"]["name"], "kind": kind, "workload": workload, "node": pod["spec"].get("nodeName"),
+                "volumes": [v["persistentVolumeClaim"]["claimName"] for v in pod["spec"].get("volumes", []) if "persistentVolumeClaim" in v],
+                "containers": [{
+                    "name": c["name"], "image": c["image"],
+                    "run": " ".join(c.get("command", []) + c.get("args", [])),
+                    "ports": [pt["containerPort"] for pt in c.get("ports", [])],
+                    "ready": statuses.get(c["name"], {}).get("ready", False),
+                    "restarts": statuses.get(c["name"], {}).get("restartCount", 0),
+                } for c in pod["spec"]["containers"]],
+            })
+        out[name] = {"about": about, "namespace": ns, "pods": rows, "command": f"kubectl -n {ns} get pods -l '{selector}' -o wide"}
+    _components.update(at=time.time(), data=out)
+    return out
 
 
 # ---- one traced request ---------------------------------------------------------------
@@ -221,17 +287,25 @@ def stage_gateway(t):
 
 
 def stage_collector(t):
+    """The collector logs nothing per request and keeps nothing: its counters
+    show it handled the record, and for an API key the tracer repeats its
+    key-owner lookup. The events it produced are shown from Kafka."""
     now = collector_metrics()
     delta = {k: now.get(k, 0) - t["collectorBefore"].get(k, 0) for k in ("input_received", "output_sent", "output_error")}
-    cmd = f"kubectl -n {NS} port-forward deploy/llm-operator-usage-collector 14195:4195 & curl -s localhost:14195/metrics | grep -E '^(input_received|output_sent|output_error)'"
-    return (delta if delta["input_received"] > 0 else None), cmd
+    if delta["input_received"] <= 0:
+        return None, None
+    owner = None
+    if "client_id" in t["match"]:
+        owner = http_json("key-owners", f"/internal/v1/key-owners/{t['match']['client_id']}")
+    cmd = f"kubectl -n {NS} port-forward svc/llm-key-manager-owners 18081:8081 & curl -s localhost:18081/internal/v1/key-owners/{t['match']['client_id']}" if owner else None
+    return {"counters": delta, "owner": owner}, cmd
 
 
 def stage_openmeter(t):
     rid = t["requestId"]
     events = http_json("openmeter", f"/api/v1/events?id={rid}&limit=20")
     rows = [
-        {"type": e["event"]["type"], "id": e["event"]["id"], **{k: e["event"]["data"].get(k) for k in ("user", "team", "api_key", "model", "token_type", "tokens", "usage_reported") if k in e["event"]["data"]}}
+        {"type": e["event"]["type"], "id": e["event"]["id"], "subject": e["event"].get("subject"), **{k: e["event"]["data"].get(k) for k in ("user", "team", "api_key", "model", "token_type", "tokens", "usage_reported") if k in e["event"]["data"]}}
         for e in events
     ]
     rows.sort(key=lambda r: (r["type"] != "llm.request", r["id"]))
@@ -254,13 +328,13 @@ def stage_kafka(t):
             ev = json.loads(payload)
         except ValueError:
             ev = {"raw": payload[:200]}
-        msgs.append({"partition": m[1] if m else None, "offset": m[2] if m else None, "id": ev.get("id"), "type": ev.get("type")})
+        msgs.append({"partition": m[1] if m else None, "offset": m[2] if m else None, "id": ev.get("id"), "type": ev.get("type"), "event": ev})
     return (msgs or None), shown(args) + f" | grep {rid}"
 
 
 def stage_clickhouse(t):
     rid = t["requestId"]
-    query = "SELECT type, id, toString(time) AS time, data FROM openmeter.om_events WHERE startsWith(id, {rid:String}) ORDER BY id FORMAT JSONEachRow"
+    query = "SELECT type, id, subject, toString(time) AS time, data FROM openmeter.om_events WHERE startsWith(id, {rid:String}) ORDER BY id FORMAT JSONEachRow"
     # The container has its password in CLICKHOUSE_PASSWORD, so the tracer never handles it.
     script = 'exec clickhouse-client --password "$CLICKHOUSE_PASSWORD" --param_rid="$1" -q "$2"'
     args = KUBECTL + ["-n", NS, "exec", f"{RELEASE}-openmeter-clickhouse-0", "--", "sh", "-c", script, "sh", rid, query]
@@ -347,12 +421,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             return self.reply(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
+        if self.path == "/api/components":
+            try:
+                return self.reply(200, components())
+            except Exception as e:
+                return self.reply(500, {"error": str(e)[:300]})
         m = re.fullmatch(r"/api/trace/(\d+)", self.path)
         if m and m[1] in _traces:
             return self.reply(200, poll(m[1]))
