@@ -15,14 +15,17 @@ GATEWAY_API_VERSION ?= v1.5.1
 GIE_VERSION ?= v1.4.0
 ENVOY_GATEWAY_VERSION ?= v1.8.1
 AI_GATEWAY_VERSION ?= v1.1.0
-
-# Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side,
-# which conflicts with the standalone install in `setup` (owned by a different
-# field manager). Force ownership so the chart wins. Helm 3 has no server-side
-# apply and skips already-present crds/, so it neither needs nor accepts this
-# flag - keep it empty there. Empty when helm is missing (setup fails later).
+# Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side.
+# Those are the experimental channel, and the safe-upgrades admission policy
+# that Gateway API v1.5 installs with the standard channel in `setup` refuses
+# experimental CRDs on top of standard ones, so the chart install fails. On
+# Helm 4, `setup` therefore applies only Envoy Gateway's own CRDs from the
+# chart and installs the chart without its crds/ (and without a second copy of
+# the admission policy). Helm 3 skips already-present crds/, so it needs none
+# of this - keep it empty there. Empty when helm is missing (setup fails later).
 HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v?([0-9]+).*/\1/')
-HELM_FORCE_CONFLICTS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--force-conflicts,)
+EG_CHART := oci://docker.io/envoyproxy/gateway-helm
+EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
 .PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
@@ -39,9 +42,7 @@ setup: ## Create kind cluster and install dependencies
 	# cert-manager
 	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
 	$(KUBECTL) -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
-	# Gateway API CRDs. Server-side apply so the field ownership matches the
-	# eg chart's own SSA on Helm 4, letting it cleanly take co-ownership with
-	# --force-conflicts (see HELM_FORCE_CONFLICTS above) instead of erroring.
+	# Gateway API CRDs (standard channel).
 	$(KUBECTL) apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	# GIE CRDs (includes the graduated inference.networking.k8s.io group)
 	$(KUBECTL) apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/$(GIE_VERSION)/manifests.yaml
@@ -54,7 +55,13 @@ setup: ## Create kind cluster and install dependencies
 	# Envoy Gateway, wired with the AI Gateway ext_proc extension (enableBackend,
 	# extensionManager, backendResources). Without this the per-model routing
 	# layer 404s and passthrough upstreams never get a TLS transport socket.
-	helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(HELM_FORCE_CONFLICTS) -f eg-extension-values.yaml
+	@if [ -n "$(EG_SKIP_BUNDLED_CRDS)" ]; then \
+		tmp=$$(mktemp -d) && \
+		helm pull $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) --untar --untardir $$tmp && \
+		$(KUBECTL) apply --server-side -f $$tmp/gateway-helm/charts/crds/crds/generated/ && \
+		rm -rf $$tmp; \
+	fi
+	helm upgrade -i eg $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(EG_SKIP_BUNDLED_CRDS) -f eg-extension-values.yaml
 	$(KUBECTL) -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# CRDs (served LLMModels and external-provider PassthroughModels)
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
