@@ -241,6 +241,10 @@
   /* JSON never wraps: it scrolls sideways */
   .out-block .code, .xcol .code, .ev .code, .more .code, .xstep .code { white-space: pre; overflow-wrap: normal; overflow-x: auto; }
   .more { border-top: 1px dashed var(--line); }
+  .jv .full, .jv:has(> .more[open]) .brief { display: none; }
+  .jv:has(> .more[open]) .full { display: block; }
+  .more .when-open, .more[open] .when-closed { display: none; }
+  .more[open] .when-open { display: inline; }
   .more > summary, .cmdfold > summary { padding: 6px 12px; font: 500 12.5px var(--font-sans); color: var(--accent); }
   .cmdfold { margin-top: 10px; }
   .cmdfold > summary { padding: 2px 0; }
@@ -264,7 +268,7 @@
 <div class="wrap">
 <header>
   <div class="title-row"><h1>Usage tracer</h1><button id="theme-toggle" type="button" class="theme-btn" aria-label="Toggle light and dark mode"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button></div>
-  <p>Send one model request on the dev cluster and follow it. The request itself only touches the gateway and the model. Metering happens after the response, from a log record the gateway writes, so it can't slow a request down or block it. Every step below is a real lookup: the dark block is the command, the light block is its output.</p>
+  <p>Send one request on the dev cluster and follow it through metering.</p>
 </header>
 
 <section class="panel form" aria-label="Send a request">
@@ -279,33 +283,33 @@
   </label>
   <label class="check"><input type="checkbox" id="cancel"> Cancel the stream after 1 second</label>
   <button class="btn" id="send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span>Send request</span></button>
-  <div class="result" id="result">The first API-key request mints a key. The gateway refuses it (403) until it has loaded the key, so that send takes longer.</div>
+  <div class="result" id="result">The first API-key send mints a key, so it's slower.</div>
 </section>
 
 <h2 class="section">1. The request</h2>
-<p class="section">What the caller waits for. Nothing that meters usage is on this path.</p>
+<p class="section">No metering on this path.</p>
 <section class="panel flow-panel" style="padding:0">
   <div class="flow" id="flow">
-    <div class="node" data-node="client"><span class="logo" data-icon="terminal"></span><div><h3>Your machine</h3><p><code class="ic">curl</code> through a <code class="ic">kubectl port-forward</code> to the gateway</p></div></div>
-    <div class="link"><span class="arrow">HTTPS →</span><span id="link-auth">OpenAI chat JSON, with an API key as the bearer token</span><span class="arrow back">← response</span></div>
-    <div class="node" data-node="gateway"><span class="logo" data-icon="envoyproxy"></span><div><h3>Envoy gateway</h3><p id="gw-text">Checks the API key or the Keycloak token. Envoy AI Gateway's <code class="ic">ext_proc</code> reads the model's reply and counts its tokens.</p><div data-runs="gateway"></div></div></div>
-    <div class="link"><span class="arrow">HTTP →</span><span>the same chat request, to the model's service</span><span class="arrow back">← reply with <code class="ic">usage</code></span></div>
-    <div class="node" data-node="model"><span class="logo" data-icon="kubernetes"></span><div><h3>The model</h3><p><code class="ic">mock-provider</code>, a stand-in model running in the cluster</p><div data-runs="model"></div></div></div>
+    <div class="node" data-node="client"><span class="logo" data-icon="terminal"></span><div><h3>Your machine</h3><p><code class="ic">curl</code> via port-forward</p></div></div>
+    <div class="link"><span class="arrow">HTTPS →</span><span id="link-auth">OpenAI chat, API key</span><span class="arrow back">← response</span></div>
+    <div class="node" data-node="gateway"><span class="logo" data-icon="envoyproxy"></span><div><h3>Envoy gateway</h3><p id="gw-text">Checks the key or token; <code class="ic">ext_proc</code> counts tokens.</p><div data-runs="gateway"></div></div></div>
+    <div class="link"><span class="arrow">HTTP →</span><span>chat request</span><span class="arrow back">← reply with <code class="ic">usage</code></span></div>
+    <div class="node" data-node="model"><span class="logo" data-icon="kubernetes"></span><div><h3>The model</h3><p><code class="ic">mock-provider</code>, a stand-in</p><div data-runs="model"></div></div></div>
     <span class="packet" id="packet"></span>
   </div>
   <div class="flow-status" id="flow-status">Not sent yet.</div>
 </section>
 
 <h2 class="section">2. Metering, after the response</h2>
-<p class="section">Each step is checked every couple of seconds until it shows the request. Times are when the tracer first saw it there.</p>
+<p class="section">Times: when the tracer first saw it there.</p>
 <section class="panel legend" id="legend" hidden></section>
 <div class="tip" id="tip" hidden></div>
 <section class="journey" id="journey" aria-live="polite"></section>
 
 <section class="panel links" id="links" hidden>
   <h2>Come back to this request</h2>
-  <div class="row">This trace, while the tracer runs: <a id="link-trace" href="#"></a></div>
-  <div class="row" id="row-console" hidden>This request in the usage console: <a id="link-console" href="#" target="_blank" rel="noopener"></a></div>
+  <div class="row">This trace: <a id="link-trace" href="#"></a></div>
+  <div class="row" id="row-console" hidden>In the usage console: <a id="link-console" href="#" target="_blank" rel="noopener"></a></div>
 </section>
 </div>
 
@@ -333,30 +337,31 @@ const c = (s) => `<code class="ic">${s}</code>`;
 
 // The metering path: [hop into the step, then the step]. A hop says what moves between two steps and how.
 const STEPS = [
+  // what and hop text: a string, or [shown, behind "more"].
   { key: "gateway", title: "Gateway access log", logos: ["envoyproxy"],
-    what: `Envoy writes one JSON record when the request ends, with the caller, the model and the token counts the AI Gateway measured. This is the copy on the gateway pod's ${c("stdout")}, which Envoy writes out every 10 seconds; the collector's copy usually arrives first.`,
-    hop: { logos: ["envoyproxy"], proto: "inside Envoy, when the request ends", first: true,
-      text: `When the request ends, whether it worked or failed, Envoy writes the access-log record twice: to ${c("stdout")} and to the usage collector. Nothing from here on can slow down or block the request. Only requests that reached the AI Gateway with a model name are logged: a request refused at the key check (401) or with a body that isn't JSON (400) leaves no record and isn't metered. A later failure, like an unknown model (404), a refused key (403) or a cut stream, is metered with its status and no tokens.` } },
+    what: [`From the gateway pod's ${c("stdout")}.`, `Envoy flushes this copy every 10 s, so it often shows up after the collector's.`],
+    hop: { logos: ["envoyproxy"], proto: "Envoy, after the response", first: true,
+      text: [`Written to ${c("stdout")} and sent to the collector. Can't slow the request.`, `Not logged: 401 (bad key), 400 (body not JSON). Logged with no tokens: 404, 403, cut streams.`] } },
   { key: "collector", title: "Usage collector", logos: ["openmeter"],
-    what: `OpenMeter's collector, configured by the pack in ${c("files/usage-collector.yaml")}. It turns the gateway's record into usage events and sends them to OpenMeter. It keeps nothing itself: the first place its events are stored is Kafka, so the events on the right are read from there.`,
-    hop: { logos: ["opentelemetry"], proto: "OTLP/gRPC logs, to the collector on :4317",
-      text: `Envoy buffers access-log records for up to 1 second (or 16 KB) and sends them as OpenTelemetry logs. It doesn't retry: if the collector is down, the record is lost.` } },
-  { key: "kafka", title: `Kafka, topic ${c("om_default_events")}`, logos: ["apachekafka"],
-    what: `The first durable copy. OpenMeter's API wrote every event here before answering the collector. The tracer reads the whole topic with a consumer that stops after 8 quiet seconds, so the time shown is late by about that much.`,
-    hop: { logos: ["cloudevents"], proto: `HTTP POST /api/v1/events, a JSON array of CloudEvents`,
-      text: `For an API key, the collector first asks the key manager who owns it (${c("GET /internal/v1/key-owners/&lt;client id&gt;")}). It sends events in batches of up to 100, or after 1 second. OpenMeter's API writes them to Kafka and only then answers.` } },
-  { key: "clickhouse", title: `ClickHouse, table ${c("openmeter.om_events")}`, logos: ["clickhouse"],
-    what: `Where OpenMeter's sink worker moved the events. Every total and cost is computed from these rows.`,
-    hop: { logos: ["apachekafka", "redis", "clickhouse"], proto: "Kafka consumer, then ClickHouse's native protocol on :9000",
-      text: `OpenMeter's sink worker reads ${c("om_default_events")}, drops any event id it has already stored (it keeps those ids in Redis), and inserts the rest into ${c("openmeter.om_events")}.` } },
+    what: [`Turns the record into usage events. Stores nothing.`, `Pipeline: ${c("files/usage-collector.yaml")}. Its events are shown as Kafka stored them.`],
+    hop: { logos: ["opentelemetry"], proto: "OTLP/gRPC → :4317",
+      text: [`Batched for up to 1 s. No retry.`, `If the collector is down, the record is lost.`] } },
+  { key: "kafka", title: `Kafka ${c("om_default_events")}`, logos: ["apachekafka"],
+    what: [`First durable copy.`, `The time is about 8 s late: the tracer's consumer waits for 8 quiet seconds.`],
+    hop: { logos: ["cloudevents"], proto: "HTTP POST /api/v1/events (CloudEvents)",
+      text: [`Batched: 100 events or 1 s.`, `An API key is resolved to its owner first. The API answers once Kafka has the events.`] } },
+  { key: "clickhouse", title: `ClickHouse ${c("openmeter.om_events")}`, logos: ["clickhouse"],
+    what: `Totals and costs are computed from here.`,
+    hop: { logos: ["apachekafka", "redis", "clickhouse"], proto: "sink worker: Kafka → ClickHouse :9000",
+      text: `Repeated event ids are dropped (Redis).` } },
   { key: "openmeter", title: "OpenMeter events API", logos: ["openmeter"],
-    what: `The events as OpenMeter's API returns them: one ${c("llm.request")} and one ${c("llm.tokens")} per token type, each with the person, team and key.`,
-    hop: { logos: ["openmeter", "clickhouse"], proto: `HTTP GET /api/v1/events?id=…, answered with a ClickHouse query`,
-      text: `Nothing moves here. OpenMeter's API answers by querying the same ClickHouse table, so this is the read-back of the step above.` } },
+    what: `One ${c("llm.request")}, plus one ${c("llm.tokens")} per token type.`,
+    hop: { logos: ["openmeter", "clickhouse"], proto: "HTTP GET /api/v1/events",
+      text: `Read back from ClickHouse. Nothing moves.` } },
   { key: "console", title: "Usage console", logos: ["console"],
-    what: `The receipt the console builds from OpenMeter's events, priced at OpenMeter's prices.`,
-    hop: { logos: ["openmeter"], proto: "HTTP GET /api/v2/events, JSON",
-      text: `The console's server pages through OpenMeter's events, newest first, and joins each ${c("llm.request")} with its ${c("llm.tokens")} events into one receipt.` } },
+    what: `The priced receipt.`,
+    hop: { logos: ["openmeter"], proto: "HTTP GET /api/v2/events",
+      text: `Joins the request and token events.` } },
 ];
 
 // Theme toggle: an explicit choice wins and is remembered; until then, follow the OS.
@@ -381,8 +386,8 @@ document.querySelectorAll(".form .seg").forEach((seg) => {
 });
 function setAuthText(path) {
   document.getElementById("link-auth").textContent = path === "login"
-    ? "OpenAI chat JSON, with the Keycloak access token as the bearer token"
-    : "OpenAI chat JSON, with an API key as the bearer token";
+    ? "OpenAI chat, Keycloak token"
+    : "OpenAI chat, API key";
 }
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
 document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
@@ -435,7 +440,7 @@ function renderLegend() {
   const el = document.getElementById("legend");
   if (!IDS.length) { el.hidden = true; return; }
   el.hidden = false;
-  el.innerHTML = `<h3>Boxed wherever they appear. Hover one to see where it came from.</h3><ul>${IDS.map(([k, v]) => `<li title="${esc(ID_ABOUT[k][1])}"><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark><span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
+  el.innerHTML = `<h3>Followed through every step</h3><ul>${IDS.map(([k, v]) => `<li title="${esc(ID_ABOUT[k][1])}"><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark><span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
 }
 
 // ---- highlighting: wrap each regex match in a span chosen by classify(match) ----
@@ -509,19 +514,23 @@ const IMPORTANT = {
 };
 const COLUMNS = { kafka: ["offset", "id", "type"], clickhouse: ["type", "id", "subject", "data"], openmeter: ["type", "id", "subject", "user", "team", "api_key", "token_type", "tokens"] };
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));
-// JSON with only the important fields, and a fold with all of them.
+// JSON with only the important fields; the toggle swaps the same block to all of them.
 function jsonView(obj, keys, k, dataKeys) {
   const short = pick(obj, keys);
   if (dataKeys && short.data && typeof short.data === "object") short.data = pick(short.data, dataKeys);
   const full = JSON.stringify(obj, null, 2), brief = JSON.stringify(short, null, 2);
-  return `<pre class="code">${hlJSON(brief)}</pre>` + (full !== brief ? `<details class="more" data-k="${k}"><summary>${CHEV}Show all fields</summary><pre class="code">${hlJSON(full)}</pre></details>` : "");
+  if (full === brief) return `<pre class="code">${hlJSON(full)}</pre>`;
+  return `<div class="jv"><pre class="code brief">${hlJSON(brief)}</pre><pre class="code full">${hlJSON(full)}</pre>
+    <details class="more" data-k="${k}"><summary>${CHEV}<span class="when-closed">Show all fields</span><span class="when-open">Show fewer fields</span></summary></details></div>`;
 }
-// A table with the important columns, and a fold with all of them.
+// A table with the important columns; the toggle swaps the same table to all of them.
 function tableView(rows, cols, k) {
   if (!cols) return table(rows);
   const all = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const brief = table(rows.map((r) => pick(r, cols)));
-  return brief + (all.length > cols.length ? `<details class="more" data-k="${k}"><summary>${CHEV}Show all ${all.length} columns</summary>${table(rows)}</details>` : "");
+  if (all.length <= cols.length) return brief;
+  return `<div class="jv"><div class="brief">${brief}</div><div class="full">${table(rows)}</div>
+    <details class="more" data-k="${k}"><summary>${CHEV}<span class="when-closed">Show all ${all.length} columns</span><span class="when-open">Show fewer columns</span></summary></details></div>`;
 }
 // A command, folded to its program name.
 function cmdView(cmd, k) {
@@ -529,9 +538,9 @@ function cmdView(cmd, k) {
   return `<details class="cmdfold" data-k="${k}"><summary>${CHEV}<code>$ ${esc(prog)} …</code>the command</summary>${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(cmd)}</pre>`, cmd)}</details>`;
 }
 // The first sentence, with the rest behind "more".
-function brief(html, k) {
-  const m = html.match(/^([\s\S]*?\.)\s+(?=[A-Z])([\s\S]+)$/);
-  return m ? `${m[1]} <details class="inline-more" data-k="${k}"><summary>more</summary>${m[2]}</details>` : html;
+function brief(text, k) {
+  if (!Array.isArray(text)) return text;
+  return `${text[0]} <details class="inline-more" data-k="${k}"><summary>more</summary>${text[1]}</details>`;
 }
 
 // How each part runs, read live from the cluster by the tracer.
@@ -593,7 +602,7 @@ function render(trace) {
       const d = step.key === "kafka" ? s.data.map(({ event, ...row }) => row) : s.data;
       const inner = Array.isArray(d) ? tableView(d, COLUMNS[step.key], `cols-${step.key}`)
         : jsonView(d, step.key === "gateway" ? IMPORTANT.record : step.key === "console" ? IMPORTANT.receipt : Object.keys(d), `all-${step.key}`);
-      body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : `${Object.keys(d).length} fields`);
+      body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : "");
     }
     if (s?.error) body += `<div class="note">${esc(s.error)}</div>`;
     html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><div class="what">${brief(step.what, `what-${step.key}`)}</div>${runsView(step.key)}${body}</div></article>`);
@@ -623,15 +632,15 @@ function collectorView(t) {
   const n = (v) => (v == null ? 0 : Number(v));
   const input = r.input_tokens == null ? null : Math.max(n(r.input_tokens) - n(r.cached_input_tokens) - n(r.cache_creation_input_tokens), 0);
   const steps = [
-    `<div class="xstep"><b>1 · normalize</b>${rec ? `The route ${c(esc(routeName))} ends in ${c(apiKey ? "-external" : "-internal")}, so this came in with ${apiKey ? "an API key" : "a Keycloak token"}. Records with no caller or no request id are dropped here.` : "Reads the record and keeps it only if it is a model request with a known caller."}</div>`,
+    `<div class="xstep"><b>1 · normalize</b>${rec ? `Route ${c(apiKey ? "…-external" : "…-internal")}: ${apiKey ? "API key" : "Keycloak token"}.` : "Keeps model requests with a known caller."} ${brief(["", `The operator gives each model two routes: ${c("-external")} on the public gateway, which takes API keys, and ${c("-internal")} on the internal gateway, which takes Keycloak logins. The route says which check passed, so which caller fields can be trusted. A record with no caller or request id is dropped.`], "why-route")}</div>`,
     apiKey
-      ? `<div class="xstep"><b>2 · identify</b>An API key says nothing about its owner, so the collector asks the key manager who minted ${c(esc(r.client_id || "the key"))}. It answered:${owner ? jsonView(owner, IMPORTANT.owner, "all-x-owner") : ""}${t.stages.collector.command ? cmdView(t.stages.collector.command, "cmd-collector") : ""}</div>`
-      : `<div class="xstep"><b>2 · identify</b>The gateway verified the Keycloak token and passed on its subject, username and groups${rec ? `: ${c(esc(r.auth_user))}, groups ${c(esc(JSON.stringify(groups)))}` : ""}. No lookup is needed.</div>`,
-    `<div class="xstep"><b>3 · events</b>One ${c("llm.request")} event with the request id as its id, then one ${c("llm.tokens")} event for each token type that isn't zero.${rec && input != null ? ` Uncached input is ${n(r.input_tokens)} input − ${n(r.cached_input_tokens)} cached − ${n(r.cache_creation_input_tokens)} cache write = <strong>${input}</strong>.` : rec ? " This request reported no tokens, so only the request event is sent." : ""} The team is the first ${c("team-")} group (${c(esc(team))}), and the bill goes to the person's OIDC subject.</div>`,
+      ? `<div class="xstep"><b>2 · identify</b>Asks the key manager who owns the key:${owner ? jsonView(owner, IMPORTANT.owner, "all-x-owner") : ""}${t.stages.collector.command ? cmdView(t.stages.collector.command, "cmd-collector") : ""}</div>`
+      : `<div class="xstep"><b>2 · identify</b>Uses the token's user and groups. No lookup.</div>`,
+    `<div class="xstep"><b>3 · events</b>${c("llm.request")} + one ${c("llm.tokens")} per token type.${rec && input != null ? ` Input: ${n(r.input_tokens)} − ${n(r.cached_input_tokens)} cached${n(r.cache_creation_input_tokens) ? ` − ${n(r.cache_creation_input_tokens)} cache write` : ""} = <strong>${input}</strong>.` : rec ? " No tokens reported." : ""} Team: ${c(esc(team))}.</div>`,
   ];
   const readable = (ev) => { try { return { ...ev, data: typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data }; } catch { return ev; } };
   const evLine = (ev) => { const d = readable(ev).data || {}; return ev.type === "llm.tokens" ? `${d.token_type} · ${d.tokens} tokens` : `status ${d.response_code} · usage reported: ${d.usage_reported}`; };
-  const evCol = kafka ? `<p class="xwait">Click an event to open it.</p><div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary>${jsonView(readable(m.event), IMPORTANT.event, `all-ev-${i}`, IMPORTANT.eventData)}</details>`).join("")}</div>`
+  const evCol = kafka ? `<div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary>${jsonView(readable(m.event), IMPORTANT.event, `all-ev-${i}`, IMPORTANT.eventData)}</details>`).join("")}</div>`
     : `<p class="xwait">These appear once Kafka has them (step 3).</p>`;
   return `<div class="xform">
     <div class="xcol">${fold("x-record", "Record in · from the gateway", recCol, true)}</div><div class="to">→</div>
@@ -677,16 +686,16 @@ async function move(from, to, back) {
 }
 async function playRequest(t) {
   const status = document.getElementById("flow-status");
-  status.innerHTML = `Replaying the request (it took <strong>${t.tookMs} ms</strong>)…`;
+  status.innerHTML = `Replaying…`;
   light("client");
   await move("client", "gateway", false);
-  if (t.status === "403") { status.innerHTML = `The gateway refused the request: HTTP <strong>403</strong>. It is still metered, as blocked.`; await move("gateway", "client", true); }
+  if (t.status === "403") { status.innerHTML = `HTTP <strong>403</strong>: refused, metered as blocked`; await move("gateway", "client", true); }
   else {
     await move("gateway", "model", false); await sleep(250);
     await move("model", "gateway", true);
     await move("gateway", "client", true);
-    const u = t.usage ? `${t.usage.prompt_tokens} tokens in, ${t.usage.completion_tokens} out` : "no usage in the response (the stream was cut)";
-    status.innerHTML = `HTTP <strong>${esc(t.status)}</strong> in <strong>${t.tookMs} ms</strong>, ${esc(u)}. The caller is done here; metering starts below.`;
+    const u = t.usage ? `${t.usage.prompt_tokens} in, ${t.usage.completion_tokens} out` : "stream cut, no usage";
+    status.innerHTML = `HTTP <strong>${esc(t.status)}</strong> in <strong>${t.tookMs} ms</strong> · ${esc(u)}`;
   }
   document.getElementById("packet").style.opacity = 0;
   light(null);
