@@ -8,6 +8,7 @@ on:
       - "key-manager/**"
       - "frontend/**"
       - "model-downloader/**"
+      - "usage-console/**"
       - ".github/workflows/build-images.yaml"
       # The release workflow pins images to sha-<release-commit>, so the
       # release commit (a Chart.yaml bump) must produce images with that
@@ -21,6 +22,7 @@ on:
       - "key-manager/**"
       - "frontend/**"
       - "model-downloader/**"
+      - "usage-console/**"
   workflow_dispatch:
 
 # Each job grants id-token + attestations so the reusable pack-build-image
@@ -85,6 +87,22 @@ jobs:
     with:
       image: frontend
       context: frontend/
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+
+  # The read-only usage console and openmeter-api (the openmeter subchart).
+  usage-console:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    with:
+      image: usage-console
+      context: usage-console/
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}

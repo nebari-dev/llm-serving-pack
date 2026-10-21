@@ -25,5 +25,6 @@ jobs:
         keyManager.image.tag
         frontend.image.tag
         modelDownloader.image.tag
+        openmeter.console.image.tag
     secrets:
       NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}
