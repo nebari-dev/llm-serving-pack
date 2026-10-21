@@ -2,6 +2,7 @@ package openmeter
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -66,7 +67,7 @@ func (s *Server) listReceipts(ctx context.Context, limit int) ([]model.Receipt, 
 		r.InputTokens = t["input"] + t["cache_read"] + t["cache_write"]
 		r.OutputTokens = t["output"]
 		r.ReasoningTokens = t["reasoning"]
-		if r.Verdict != "truncated" {
+		if r.Verdict == "allowed" {
 			if r.CostUSD, err = prices.cost(ctx, r.Backend, r.ResolvedModel, t); err != nil {
 				return nil, err
 			}
@@ -103,7 +104,14 @@ func receiptFrom(e Event) model.Receipt {
 		Rules:          []model.RuleEval{},
 		Trace:          []model.TraceStep{},
 	}
-	if str(d["usage_reported"]) == "false" {
+	switch {
+	case status == http.StatusTooManyRequests:
+		// Refused before it reached the model, as the traffic chart counts it.
+		r.Verdict, r.ErrorCode = "throttled", "rate_limited"
+	case status >= 400:
+		r.Verdict, r.ErrorCode = "blocked", "refused"
+		r.ErrorDetail = "The gateway refused this request (HTTP " + strconv.Itoa(status) + ")."
+	case str(d["usage_reported"]) == "false":
 		// A stream the caller cancelled, or a response the gateway couldn't
 		// read usage from: the request happened, its tokens are unknown.
 		r.Verdict = "truncated"

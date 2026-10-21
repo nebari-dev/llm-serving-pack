@@ -458,3 +458,25 @@ func TestReceiptCostFindsPricesUnderOpenMeterModelIDs(t *testing.T) {
 		t.Fatalf("costs %v", cost)
 	}
 }
+
+// A request the gateway refused after identifying the caller (a key not yet
+// allowed on the model, a rate limit) has no tokens because it never reached
+// the model: it is blocked or throttled, not a truncated stream.
+func TestRefusedRequestsAreBlockedOrThrottled(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for id, code := range map[string]string{"r403": "403", "r429": "429"} {
+		d := alice("mock/small", "key-a1", "api_key")
+		d["response_code"], d["usage_reported"] = code, "false"
+		f.request(id, now.Add(-time.Minute), d, nil)
+	}
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), "/receipts")
+
+	verdict := map[string]string{}
+	for _, r := range rs {
+		verdict[r.ID] = r.Verdict
+	}
+	if verdict["r403"] != "blocked" || verdict["r429"] != "throttled" {
+		t.Fatalf("verdicts %v", verdict)
+	}
+}
