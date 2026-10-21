@@ -11,9 +11,12 @@ import (
 // UserInfo holds the authenticated user's identity extracted from JWT claims.
 type UserInfo struct {
 	Username string
-	Name     string
-	Email    string
-	Groups   []string
+	// Subject is the token's "sub" claim: the user's stable identity. Empty
+	// for the injected dev-mode identity.
+	Subject string
+	Name    string
+	Email   string
+	Groups  []string
 }
 
 type contextKey string
@@ -118,11 +121,13 @@ func userInfoFromClaims(claims map[string]interface{}, groupsClaim string) *User
 		// Fall back to the subject when preferred_username is absent.
 		username, _ = claims["sub"].(string)
 	}
+	subject, _ := claims["sub"].(string)
 	name, _ := claims["name"].(string)
 	email, _ := claims["email"].(string)
 
 	return &UserInfo{
 		Username: username,
+		Subject:  subject,
 		Name:     name,
 		Email:    email,
 		Groups:   extractGroups(claims, groupsClaim),

@@ -143,7 +143,7 @@ func TestCreateKey(t *testing.T) {
 				Build()
 
 			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), tc.modelName, tc.username, tc.description)
+			result, err := mgr.CreateKey(context.Background(), tc.modelName, secrets.Creator{Username: tc.username}, tc.description)
 			if err != nil {
 				t.Fatalf("CreateKey error: %v", err)
 			}
@@ -239,7 +239,7 @@ func TestCreateKey_ClientIDFormat(t *testing.T) {
 				Build()
 
 			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), "my-model", tc.username, "test")
+			result, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: tc.username}, "test")
 			if err != nil {
 				t.Fatalf("CreateKey error: %v", err)
 			}
@@ -271,11 +271,11 @@ func TestCreateKey_ClientIDUniqueAcrossModels(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	a, err := mgr.CreateKey(context.Background(), "model-a", "chuck", "test")
+	a, err := mgr.CreateKey(context.Background(), "model-a", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey model-a: %v", err)
 	}
-	b, err := mgr.CreateKey(context.Background(), "model-b", "chuck", "test")
+	b, err := mgr.CreateKey(context.Background(), "model-b", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey model-b: %v", err)
 	}
@@ -312,11 +312,11 @@ func TestCreateKey_ClientIDUnambiguousBoundary(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	a, err := mgr.CreateKey(context.Background(), "jane-chat", "mary", "test")
+	a, err := mgr.CreateKey(context.Background(), "jane-chat", secrets.Creator{Username: "mary"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey mary/jane-chat: %v", err)
 	}
-	b, err := mgr.CreateKey(context.Background(), "chat", "mary-jane", "test")
+	b, err := mgr.CreateKey(context.Background(), "chat", secrets.Creator{Username: "mary-jane"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey mary-jane/chat: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	mgr := secrets.NewManager(fakeClient, testNamespace)
 	minted := make([]*secrets.CreateKeyResult, 0, 3)
 	for range 3 {
-		r, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+		r, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "chuck"}, "test")
 		if err != nil {
 			t.Fatalf("CreateKey: %v", err)
 		}
@@ -356,7 +356,7 @@ func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	}
 	live := []*secrets.CreateKeyResult{minted[0], minted[2]}
 
-	fresh, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+	fresh, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey after revoke: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestCreateKey_EmptyUsername(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	_, err := mgr.CreateKey(context.Background(), "my-model", "", "test")
+	_, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: ""}, "test")
 	if err == nil {
 		t.Fatal("expected error for empty username, got nil")
 	}
@@ -408,7 +408,7 @@ func TestCreateKey_SecretNotFound(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	_, err := mgr.CreateKey(context.Background(), "missing-model", "chuck", "test")
+	_, err := mgr.CreateKey(context.Background(), "missing-model", secrets.Creator{Username: "chuck"}, "test")
 	if err == nil {
 		t.Fatal("expected error when Secret does not exist, got nil")
 	}
@@ -674,7 +674,7 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 				Build()
 
 			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), "my-model", tc.username, "test")
+			result, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: tc.username}, "test")
 			if err != nil {
 				t.Fatalf("CreateKey error: %v", err)
 			}
@@ -742,7 +742,7 @@ func TestCreateKeyThenListKeys(t *testing.T) {
 	mgr := secrets.NewManager(fakeClient, testNamespace)
 
 	before := time.Now().Truncate(time.Second)
-	result, err := mgr.CreateKey(context.Background(), "my-model", "chuck", "integration test key")
+	result, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: "chuck"}, "integration test key")
 	after := time.Now().Add(time.Second)
 	if err != nil {
 		t.Fatalf("CreateKey error: %v", err)
@@ -774,5 +774,56 @@ func TestCreateKeyThenListKeys(t *testing.T) {
 	}
 	if key.CreatedAt.Before(before) || key.CreatedAt.After(after) {
 		t.Errorf("CreatedAt %v is outside the expected range [%v, %v]", key.CreatedAt, before, after)
+	}
+}
+
+// A username can be renamed and reused; the OIDC subject cannot. Usage made
+// with a key is attributed to its creator's subject, so the key has to
+// remember it.
+func TestCreateKey_RemembersCreatorSubject(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	created, err := mgr.CreateKey(context.Background(), "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice"}, "test")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	keys, err := mgr.ListAllKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeys: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ClientID != created.ClientID {
+		t.Fatalf("ListAllKeys = %+v, want the one key just created", keys)
+	}
+	if keys[0].Creator != "alice" || keys[0].CreatorSubject != "sub-alice" {
+		t.Errorf("key creator = %q subject = %q, want alice / sub-alice", keys[0].Creator, keys[0].CreatorSubject)
+	}
+}
+
+// Usage made with a key is reported per team as well as per person, and the
+// team comes from the creator's groups at the time they minted the key.
+func TestCreateKey_RemembersCreatorGroups(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	if _, err := mgr.CreateKey(context.Background(), "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice", Groups: []string{"llm-users", "team-a"}}, "test"); err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	keys, err := mgr.ListAllKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeys: %v", err)
+	}
+	if len(keys) != 1 || strings.Join(keys[0].CreatorGroups, ",") != "llm-users,team-a" {
+		t.Errorf("key creator groups = %v, want [llm-users team-a]", keys)
 	}
 }

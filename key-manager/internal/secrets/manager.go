@@ -18,12 +18,28 @@ import (
 
 // KeyInfo contains metadata about an API key (never the key value itself).
 type KeyInfo struct {
-	ClientID    string    `json:"clientId"`
-	Creator     string    `json:"creator"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"createdAt"`
-	ModelName   string    `json:"modelName"`
-	Namespace   string    `json:"namespace"`
+	ClientID string `json:"clientId"`
+	Creator  string `json:"creator"`
+	// CreatorSubject is the creator's OIDC subject. Empty for keys minted
+	// before it was recorded, and when the key manager runs in dev mode.
+	CreatorSubject string `json:"creatorSubject,omitempty"`
+	// CreatorGroups are the creator's OIDC groups when they minted the key.
+	// Usage reports use them to total usage per team.
+	CreatorGroups []string  `json:"creatorGroups,omitempty"`
+	Description   string    `json:"description"`
+	CreatedAt     time.Time `json:"createdAt"`
+	ModelName     string    `json:"modelName"`
+	Namespace     string    `json:"namespace"`
+}
+
+// Creator is the user minting a key.
+type Creator struct {
+	// Username is the human-readable name key ownership is checked against.
+	Username string
+	// Subject is the user's OIDC subject ("sub" claim), their stable identity.
+	Subject string
+	// Groups are the user's OIDC groups.
+	Groups []string
 }
 
 // CreateKeyResult is returned when a new key is created.
@@ -184,14 +200,14 @@ func (m *Manager) getConfigMap(ctx context.Context, modelName string) (*corev1.C
 
 // CreateKey generates a new API key for a model, writes it to the Secret,
 // and stores metadata in the ConfigMap. Returns the key (only time it's shown).
-func (m *Manager) CreateKey(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
-	if username == "" {
+func (m *Manager) CreateKey(ctx context.Context, modelName string, creator Creator, description string) (*CreateKeyResult, error) {
+	if creator.Username == "" {
 		return nil, fmt.Errorf("username is required")
 	}
 	const maxRetries = 3
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		result, err := m.createKeyOnce(ctx, modelName, username, description)
+		result, err := m.createKeyOnce(ctx, modelName, creator, description)
 		if err == nil {
 			return result, nil
 		}
@@ -203,7 +219,8 @@ func (m *Manager) CreateKey(ctx context.Context, modelName, username, descriptio
 	return nil, fmt.Errorf("creating key for model %s: too many conflicts", modelName)
 }
 
-func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
+func (m *Manager) createKeyOnce(ctx context.Context, modelName string, creator Creator, description string) (*CreateKeyResult, error) {
+	username := creator.Username
 	secret, err := m.getSecret(ctx, modelName)
 	if err != nil {
 		return nil, err
@@ -270,12 +287,14 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 
 	// Write metadata to the ConfigMap.
 	info := KeyInfo{
-		ClientID:    clientID,
-		Creator:     username,
-		Description: description,
-		CreatedAt:   time.Now().UTC().Truncate(time.Second),
-		ModelName:   modelName,
-		Namespace:   m.namespace,
+		ClientID:       clientID,
+		Creator:        username,
+		CreatorSubject: creator.Subject,
+		CreatorGroups:  creator.Groups,
+		Description:    description,
+		CreatedAt:      time.Now().UTC().Truncate(time.Second),
+		ModelName:      modelName,
+		Namespace:      m.namespace,
 	}
 	infoJSON, err := json.Marshal(info)
 	if err != nil {
@@ -306,6 +325,21 @@ func (m *Manager) ListKeys(ctx context.Context, modelName string) ([]KeyInfo, er
 
 // ListKeysForUser returns metadata for keys created by a specific user across all models.
 func (m *Manager) ListKeysForUser(ctx context.Context, username string) ([]KeyInfo, error) {
+	all, err := m.ListAllKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []KeyInfo
+	for _, info := range all {
+		if info.Creator == username {
+			result = append(result, info)
+		}
+	}
+	return result, nil
+}
+
+// ListAllKeys returns metadata for every key across all models.
+func (m *Manager) ListAllKeys(ctx context.Context) ([]KeyInfo, error) {
 	// List all ConfigMaps in the namespace and filter by label/name to find API key metadata ConfigMaps.
 	allCMs := &corev1.ConfigMapList{}
 	if err := m.client.List(ctx, allCMs, client.InNamespace(m.namespace)); err != nil {
@@ -323,11 +357,7 @@ func (m *Manager) ListKeysForUser(ctx context.Context, username string) ([]KeyIn
 		if !strings.HasSuffix(cm.Name, "-api-key-metadata") {
 			continue
 		}
-		for _, info := range parseConfigMapKeys(cm) {
-			if info.Creator == username {
-				result = append(result, info)
-			}
-		}
+		result = append(result, parseConfigMapKeys(cm)...)
 	}
 	return result, nil
 }

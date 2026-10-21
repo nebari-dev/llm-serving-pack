@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,9 +37,11 @@ type mockKeyManager struct {
 	createErr    error
 	revokeErr    error
 	listUserErr  error
+	createdBy    secrets.Creator // the creator passed to the last CreateKey call
 }
 
-func (m *mockKeyManager) CreateKey(ctx context.Context, modelName, username, description string) (*secrets.CreateKeyResult, error) {
+func (m *mockKeyManager) CreateKey(ctx context.Context, modelName string, creator secrets.Creator, description string) (*secrets.CreateKeyResult, error) {
+	m.createdBy = creator
 	return m.createResult, m.createErr
 }
 
@@ -498,5 +501,30 @@ func TestDeleteKey(t *testing.T) {
 				t.Errorf("status = %d, want %d (body: %s)", rr.Code, tc.wantStatus, rr.Body.String())
 			}
 		})
+	}
+}
+
+// Usage made with a key is attributed to its creator's token subject, so a key
+// minted through the API has to carry the subject of the token that minted it.
+func TestCreateKeyRecordsTheCallersTokenSubject(t *testing.T) {
+	km := &mockKeyManager{createResult: &secrets.CreateKeyResult{ClientID: "c", APIKey: "k"}}
+	h := newHandlerWithMocks(&mockModelLister{models: []models.ModelInfo{{Name: "my-model"}}}, km)
+	// The identity the auth middleware derives from a verified token.
+	caller := userInfoFromClaims(map[string]interface{}{
+		"preferred_username": "alice",
+		"sub":                "sub-alice",
+		"groups":             []interface{}{"llm-users", "team-a"},
+	}, "groups")
+
+	rr := callHandler(t, h, http.MethodPost, "/api/keys", map[string]string{"modelName": "my-model"}, caller)
+
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("POST /api/keys = %d %s, want 201", rr.Code, rr.Body.String())
+	}
+	if km.createdBy.Username != "alice" || km.createdBy.Subject != "sub-alice" {
+		t.Errorf("key created for user %q subject %q, want alice / sub-alice", km.createdBy.Username, km.createdBy.Subject)
+	}
+	if strings.Join(km.createdBy.Groups, ",") != "llm-users,team-a" {
+		t.Errorf("key created with groups %v, want the token's groups [llm-users team-a]", km.createdBy.Groups)
 	}
 }
