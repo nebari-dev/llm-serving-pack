@@ -58,9 +58,11 @@ kafka:
 clickhouse:
   image: clickhouse/clickhouse-server:25.12.3-alpine@sha256:74da41cd61db84f652c6364fd30d59e19b7276d34f7c82515f5f0e70d6f325da
   persistence: {enabled: true, size: 20Gi, storageClass: ""}
+  # ClickHouse caps itself at 90% of the limit and sits near 1 GiB when idle;
+  # at 1 GiB it refused queries and was OOM-killed.
   resources:
-    requests: {cpu: 100m, memory: 384Mi}
-    limits: {memory: 1Gi}
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 2Gi}
 postgres:
   image: postgres:14.20-alpine3.23@sha256:14f02666642586a64d6fae8ef42d479fd76456a77c73ae8a626b8fe323b76d22
   persistence: {enabled: true, size: 5Gi, storageClass: ""}
