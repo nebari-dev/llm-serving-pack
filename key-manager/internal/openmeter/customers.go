@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
@@ -51,6 +52,17 @@ func (c storedCustomer) subjectKeys() ([]string, error) {
 		}
 	}
 	return ua.SubjectKeys, nil
+}
+
+// ref names the customer in logs: its key, or its id if it has no key.
+func (c storedCustomer) ref() string {
+	for _, field := range []string{"key", "id"} {
+		var v string
+		if json.Unmarshal(c[field], &v) == nil && v != "" {
+			return v
+		}
+	}
+	return "(unnamed)"
 }
 
 func (c storedCustomer) setSubjectKeys(keys []string) error {
@@ -141,6 +153,36 @@ func (c *Client) replaceCustomer(ctx context.Context, key string, cust storedCus
 	return c.do(ctx, http.MethodPut, "/api/v1/customers/"+url.PathEscape(key), cust, nil)
 }
 
+// customersWithSubjectKey returns the customers holding subjectKey, by key
+// (or id, for a customer with no key). OpenMeter's subject filter is a
+// partial match, so the results are checked for the exact key.
+func (c *Client) customersWithSubjectKey(ctx context.Context, subjectKey string) ([]string, error) {
+	var holders []string
+	for page := 1; ; page++ {
+		var resp struct {
+			TotalCount int              `json:"totalCount"`
+			PageSize   int              `json:"pageSize"`
+			Items      []storedCustomer `json:"items"`
+		}
+		q := url.Values{"subject": {subjectKey}, "page": {strconv.Itoa(page)}, "pageSize": {"100"}}
+		if err := c.do(ctx, http.MethodGet, "/api/v1/customers?"+q.Encode(), nil, &resp); err != nil {
+			return nil, err
+		}
+		for _, item := range resp.Items {
+			keys, err := item.subjectKeys()
+			if err != nil {
+				return nil, err
+			}
+			if slices.Contains(keys, subjectKey) {
+				holders = append(holders, item.ref())
+			}
+		}
+		if len(resp.Items) == 0 || page*resp.PageSize >= resp.TotalCount {
+			return holders, nil
+		}
+	}
+}
+
 // KeyLister lists the metadata of every API key (secrets.Manager).
 type KeyLister interface {
 	ListAllKeys(ctx context.Context) ([]secrets.KeyInfo, error)
@@ -152,7 +194,8 @@ type CustomerSync struct {
 	client *Client
 	logger *slog.Logger
 
-	lastSkipped int // keys left out on the previous Sync, to warn only on change
+	lastSkipped   int               // keys left out on the previous Sync, to warn only on change
+	lastConflicts map[string]string // conflicts found by the previous Sync, to warn only on change
 }
 
 // NewCustomerSync returns a CustomerSync. If logger is nil, slog.Default() is
@@ -173,6 +216,13 @@ type owner struct {
 // Sync makes sure every key creator has a customer holding their subject and
 // all their keys' client IDs. Subject keys are only ever added: a revoked
 // key's past usage stays attributed. It is safe to run repeatedly.
+//
+// OpenMeter lets a subject key belong to one customer only. A client ID that
+// another customer already holds (client IDs used to be reissued after a
+// revoke, and whoever runs OpenMeter can attach any subject key) is left
+// where it is and logged; the creator's customer gets the rest. Moving it
+// would hand that customer's past usage under the ID to the key's creator,
+// which only the operator can judge.
 func (s *CustomerSync) Sync(ctx context.Context) error {
 	keys, err := s.keys.ListAllKeys(ctx)
 	if err != nil {
@@ -201,41 +251,63 @@ func (s *CustomerSync) Sync(ctx context.Context) error {
 	}
 	s.lastSkipped = skipped
 	var errs []error
+	conflicts := map[string]string{} // subject key -> customer holding it
 	for subject, o := range owners {
-		if err := s.syncOwner(ctx, subject, o); err != nil {
+		if err := s.syncOwner(ctx, subject, o, conflicts); err != nil {
 			errs = append(errs, fmt.Errorf("customer %s: %w", subject, err))
 		}
 	}
+	for k, holder := range conflicts {
+		if s.lastConflicts[k] != holder {
+			s.logger.Warn("openmeter: subject key is already on another customer, so it is not attached to its key creator's customer; move it in OpenMeter if the creator should be billed for usage under it",
+				"subjectKey", k, "heldBy", holder)
+		}
+	}
+	s.lastConflicts = conflicts
 	return errors.Join(errs...)
 }
 
-func (s *CustomerSync) syncOwner(ctx context.Context, subject string, o *owner) error {
-	want := append([]string{subject}, o.clientIDs...)
+// syncOwner adds the subject keys o's customer is missing, recording in
+// conflicts each one another customer holds instead of adding it.
+func (s *CustomerSync) syncOwner(ctx context.Context, subject string, o *owner, conflicts map[string]string) error {
 	existing, err := s.client.getCustomer(ctx, subject)
-	if errors.Is(err, errNotFound) {
-		slices.Sort(want)
-		return s.client.createCustomer(ctx, customer{
-			Key:              subject,
-			Name:             o.username,
-			UsageAttribution: usageAttribution{SubjectKeys: want},
-		})
-	}
-	if err != nil {
+	isNew := errors.Is(err, errNotFound)
+	if err != nil && !isNew {
 		return err
 	}
 	have, err := existing.subjectKeys()
 	if err != nil {
 		return err
 	}
-	merged := slices.Clone(have)
-	for _, k := range want {
-		if !slices.Contains(merged, k) {
-			merged = append(merged, k)
+	var add []string
+	for _, k := range append([]string{subject}, o.clientIDs...) {
+		if slices.Contains(have, k) {
+			continue
 		}
+		holders, err := s.client.customersWithSubjectKey(ctx, k)
+		if err != nil {
+			return err
+		}
+		if len(holders) > 0 {
+			if holders[0] != subject {
+				conflicts[k] = holders[0]
+			}
+			continue
+		}
+		add = append(add, k)
 	}
-	if len(merged) == len(have) {
+	if len(add) == 0 {
 		return nil // nothing new
 	}
+	if isNew {
+		slices.Sort(add)
+		return s.client.createCustomer(ctx, customer{
+			Key:              subject,
+			Name:             o.username,
+			UsageAttribution: usageAttribution{SubjectKeys: add},
+		})
+	}
+	merged := append(slices.Clone(have), add...)
 	slices.Sort(merged)
 	if err := existing.setSubjectKeys(merged); err != nil {
 		return err

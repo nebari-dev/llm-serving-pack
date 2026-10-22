@@ -1,12 +1,16 @@
 package openmeter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -50,10 +54,16 @@ func (f *fakeOpenMeter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(c)
+	case r.Method == http.MethodGet && key == "":
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		f.list(w, r.URL.Query().Get("subject"), max(page, 1))
 	case r.Method == http.MethodPost && key == "":
 		var c map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&c)
 		k, _ := c["key"].(string)
+		if f.refuseTakenSubject(w, k, c) {
+			return
+		}
 		f.customers[k] = c
 		f.writes++
 		w.WriteHeader(http.StatusCreated)
@@ -61,12 +71,58 @@ func (f *fakeOpenMeter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut && key != "":
 		var c map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&c)
+		if f.refuseTakenSubject(w, key, c) {
+			return
+		}
 		f.customers[key] = c
 		f.writes++
 		_ = json.NewEncoder(w).Encode(c)
 	default:
 		http.Error(w, "unexpected request "+r.Method+" "+r.URL.Path, http.StatusBadRequest)
 	}
+}
+
+// refuseTakenSubject answers 409, as OpenMeter refuses the write, when c
+// names a subject key another customer already holds.
+func (f *fakeOpenMeter) refuseTakenSubject(w http.ResponseWriter, key string, c map[string]any) bool {
+	for _, sk := range subjectKeysOf(c) {
+		for other, oc := range f.customers {
+			if other != key && slices.Contains(subjectKeysOf(oc), sk) {
+				http.Error(w, "subject "+sk+" belongs to customer "+other, http.StatusConflict)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// list serves GET /api/v1/customers?subject=...&page=..., a case-insensitive
+// partial match on subject keys, in pages of 1 so the sync must follow pages.
+func (f *fakeOpenMeter) list(w http.ResponseWriter, subject string, page int) {
+	var matches []map[string]any
+	for _, k := range slices.Sorted(maps.Keys(f.customers)) {
+		c := f.customers[k]
+		if slices.ContainsFunc(subjectKeysOf(c), func(sk string) bool {
+			return strings.Contains(strings.ToLower(sk), strings.ToLower(subject))
+		}) {
+			matches = append(matches, c)
+		}
+	}
+	items := []map[string]any{}
+	if page <= len(matches) {
+		items = matches[page-1 : page]
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"totalCount": len(matches), "page": page, "pageSize": 1, "items": items})
+}
+
+func subjectKeysOf(c map[string]any) []string {
+	attribution, _ := c["usageAttribution"].(map[string]any)
+	raw, _ := attribution["subjectKeys"].([]any)
+	keys := make([]string, 0, len(raw))
+	for _, k := range raw {
+		keys = append(keys, k.(string))
+	}
+	return keys
 }
 
 // put stores a customer as given, as if created by whoever runs OpenMeter.
@@ -82,12 +138,7 @@ func (f *fakeOpenMeter) put(t *testing.T, key, customerJSON string) {
 func (f *fakeOpenMeter) subjectKeys(key string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	attribution, _ := f.customers[key]["usageAttribution"].(map[string]any)
-	raw, _ := attribution["subjectKeys"].([]any)
-	keys := make([]string, 0, len(raw))
-	for _, k := range raw {
-		keys = append(keys, k.(string))
-	}
+	keys := subjectKeysOf(f.customers[key])
 	slices.Sort(keys)
 	return keys
 }
@@ -222,5 +273,53 @@ func TestAddingAKeyKeepsTheCustomersOtherFields(t *testing.T) {
 		if got := om.field("sub-alice", name); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %v, want %v (kept from before the sync)", name, got, want)
 		}
+	}
+}
+
+// OpenMeter lets one subject key belong to one customer only. A key's client
+// ID can already be on another customer: client IDs used to be reissued
+// after a revoke, and whoever runs OpenMeter can attach any subject key. The
+// sync must still give the key's creator a customer with the rest of their
+// keys, leave the other customer as it is, and say which client ID it could
+// not attach and where it is.
+func TestClientIDOnAnotherCustomerIsReportedAndTheRestAttached(t *testing.T) {
+	om, client := newFakeOpenMeter(t)
+	om.put(t, "sub-old-alice", `{"key": "sub-old-alice", "name": "alice",
+		"usageAttribution": {"subjectKeys": ["sub-old-alice", "user-alice-a-1"]}}`)
+	om.put(t, "sub-carol", `{"key": "sub-carol", "name": "carol",
+		"usageAttribution": {"subjectKeys": ["sub-carol", "user-alice-a-10"]}}`)
+	var logs bytes.Buffer
+	s := NewCustomerSync(fakeKeys{
+		key("user-alice-a-1", "alice", "sub-new-alice"),
+		key("user-alice-a-2", "alice", "sub-new-alice"),
+	}, client, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	if err := s.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	if got, want := om.subjectKeys("sub-new-alice"), []string{"sub-new-alice", "user-alice-a-2"}; !slices.Equal(got, want) {
+		t.Errorf("new alice's subject keys = %v, want %v", got, want)
+	}
+	if got, want := om.subjectKeys("sub-old-alice"), []string{"sub-old-alice", "user-alice-a-1"}; !slices.Equal(got, want) {
+		t.Errorf("old alice's subject keys = %v, want %v (left as they were)", got, want)
+	}
+	if !strings.Contains(logs.String(), "user-alice-a-1") || !strings.Contains(logs.String(), "sub-old-alice") {
+		t.Errorf("log does not name the client ID and the customer holding it:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "sub-carol") {
+		t.Errorf("log names sub-carol, whose user-alice-a-10 only partly matches user-alice-a-1:\n%s", logs.String())
+	}
+
+	logs.Reset()
+	before := om.writes
+	if err := s.Sync(context.Background()); err != nil {
+		t.Fatalf("second Sync: %v", err)
+	}
+	if om.writes != before {
+		t.Errorf("second Sync made %d writes, want 0", om.writes-before)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("second Sync logged again for an unchanged conflict:\n%s", logs.String())
 	}
 }
