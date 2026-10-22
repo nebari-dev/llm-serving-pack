@@ -54,7 +54,9 @@ tests:
     target_processors: /pipeline/processors
     mocks:
       /pipeline/processors/1/branch/processors/0:
-        mapping: 'root = throw("unknown API key")'
+        mapping: |
+          meta http_status_code = 404
+          root = "unknown API key"
     input_batch:
       - content: |
           {"record": {"attributes": {
@@ -64,8 +66,26 @@ tests:
             "model": "m", "input_tokens": "1", "output_tokens": "1", "response_code": "200"}}}
     output_batches:
       - - json_contains: {id: req-4, subject: user-old-key-1, data: {user: "", team: none, api_key: user-old-key-1}}
+          bloblang: 'this.data.owner_lookup == null'
         - json_contains: {id: "req-4:input", subject: user-old-key-1}
         - json_contains: {id: "req-4:output", subject: user-old-key-1}
+
+  - name: A lookup that keeps failing is billed to the key and marked, so the gap is visible
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = throw("key manager unavailable")'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-5", "start_time": "2026-01-15T10:00:05Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "auth_subject": "sub-victim", "auth_user": "victim", "auth_groups": "team-a",
+            "model": "m", "input_tokens": "1", "output_tokens": "1", "response_code": "200"}}}
+    output_batches:
+      - - json_contains: {id: req-5, subject: user-alice-bedrock-0123-1, data: {user: "", team: none, owner_lookup: failed}}
+        - json_contains: {id: "req-5:input", subject: user-alice-bedrock-0123-1, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-5:output", subject: user-alice-bedrock-0123-1, data: {owner_lookup: failed}}
 
   - name: Stream cancelled by the client is counted as a request with no tokens
     target_processors: /pipeline/processors

@@ -10,7 +10,9 @@
 #                   an authenticated caller.
 #   2. identify   - for an API-key request, ask the key-manager who minted the
 #                   key (KEY_OWNER_URL); for a token request, use the verified
-#                   token's subject and groups from the gateway.
+#                   token's subject and groups from the gateway. If the
+#                   lookup keeps failing, the usage is billed to the key and
+#                   its events carry `owner_lookup: failed`.
 #   3. events     - one `llm.request` event, id = <request id>, plus one
 #                   `llm.tokens` event per non-zero token type,
 #                   id = <request id>:<type>. OpenMeter drops an event whose
@@ -88,18 +90,40 @@ pipeline:
         # Only API-key requests need the lookup; the result is merged back.
         request_map: 'root = if this.access_path == "api_key" { this.client_id } else { deleted() }'
         processors:
-          - http:
-              url: '${KEY_OWNER_URL}/internal/v1/key-owners/${! content() }'
-              verb: GET
-              timeout: 5s
-              retries: 3
+          # A failed lookup (key manager restarting, 503, timeout) is retried
+          # for up to 15s, inside the input's 30s timeout; failing the entry
+          # instead would drop its usage. A 404 is an answer, not a failure:
+          # the key manager has no such key.
+          - retry:
+              backoff:
+                initial_interval: 250ms
+                max_interval: 4s
+                max_elapsed_time: 15s
+              processors:
+                - http:
+                    url: '${KEY_OWNER_URL}/internal/v1/key-owners/${! content() }'
+                    verb: GET
+                    timeout: 5s
+                    retries: 0
+                    successful_on: [404]
           - catch:
-              # Unknown key (minted before owners were recorded): bill the key.
-              - mapping: 'root = {}'
+              # Still failing: bill the key, mark the events and log it, so
+              # the gap is visible. OpenMeter keeps the first event with an
+              # id, so a later replay cannot correct them.
+              - log:
+                  level: ERROR
+                  message: "key-owner lookup failed for ${! content() }; its usage is billed to the key and marked owner_lookup=failed: ${! error() }"
+              - mapping: |
+                  meta http_status_code = deleted()
+                  root = {"owner_lookup": "failed"}
+          - mapping: |
+              # Unknown key: bill the key itself.
+              root = if @http_status_code == 404 { {} } else { this }
         result_map: |
           root.subject = this.subject.or(deleted())
           root.username = this.username.or(deleted())
           root.groups = this.groups.or(deleted())
+          root.owner_lookup = this.owner_lookup.or(deleted())
 
     - label: events
       mapping: |
@@ -113,7 +137,7 @@ pipeline:
           "user": this.username.or(""),
           "team": $team,
           "api_key": this.client_id,
-        }
+        }.merge(if this.owner_lookup != null { {"owner_lookup": this.owner_lookup} } else { {} })
         let event = {
           "specversion": "1.0",
           "source": "nebari-llm-gateway",
