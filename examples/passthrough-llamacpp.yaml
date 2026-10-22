@@ -1,0 +1,34 @@
+# PassthroughModel routing the shared LLM endpoints to a self-hosted
+# llama.cpp server (llama-server) on another machine, e.g. a Mac Studio.
+# Hostname, port, and model id are illustrative.
+#
+# Prerequisites (see the Self-hosted servers guide):
+#   - llama-server serving HTTPS at macstudio.corp.example.com:8443 with a
+#     certificate for that name, --alias qwen3-30b-a3b, and
+#     --api-key-file holding the key below
+#   - A Secret holding that same key:
+#       kubectl create secret generic macstudio-api-key -n nebari-llm-serving-system \
+#         --from-literal=apiKey="$(cat api-key)"
+#   - A ConfigMap holding the CA that signed the server certificate:
+#       kubectl create configmap corp-ca -n nebari-llm-serving-system \
+#         --from-file=ca.crt=corp-root-ca.pem
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: macstudio
+  namespace: nebari-llm-serving-system
+spec:
+  provider:
+    hostname: macstudio.corp.example.com
+    port: 8443
+    credentialSecretName: macstudio-api-key
+    tls:
+      # Trust the corporate CA instead of the gateway's public roots.
+      caConfigMapName: corp-ca
+  models:
+    declared:
+      # Must match the llama-server --alias so clients and the server agree.
+      - qwen3-30b-a3b
+  access:
+    groups:
+      - llm

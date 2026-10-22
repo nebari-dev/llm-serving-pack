@@ -208,3 +208,25 @@ func TestProviderHostnameCompatibility(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderTLSTrust(t *testing.T) {
+	p := llmv1alpha1.ProviderSpec{Hostname: "macstudio.corp.example.com", CredentialSecretName: "key"}
+	r, err := Resolve(p)
+	if err != nil || r.CAConfigMapName != "" {
+		t.Fatalf("omitted tls must keep the system roots: %+v, %v", r, err)
+	}
+	p.TLS = &llmv1alpha1.ProviderTLS{CAConfigMapName: "nebari-trust-bundle"}
+	r, err = Resolve(p)
+	if err != nil || r.CAConfigMapName != "nebari-trust-bundle" {
+		t.Fatalf("CA ConfigMap not resolved: %+v, %v", r, err)
+	}
+	for _, name := range []string{"", "Corp_CA", "corp-ca/ca.crt", "corp-ca "} {
+		t.Run(name, func(t *testing.T) {
+			p.TLS = &llmv1alpha1.ProviderTLS{CAConfigMapName: name}
+			_, err := Resolve(p)
+			if err == nil || !strings.Contains(err.Error(), "tls.caConfigMapName") {
+				t.Fatalf("invalid ConfigMap name %q: got %v", name, err)
+			}
+		})
+	}
+}

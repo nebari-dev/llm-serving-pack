@@ -298,6 +298,39 @@ kubectl -n envoy-gateway-system get sa \
 
 The `<name>-api-keys` Secret is the key-manager's user API-key store, not an upstream credential; a 401 issued by the gateway itself points at the user's minted key, not the AWS identity.
 
+**Upstream connection fails (HTTP 503, `upstream connect error or disconnect/reset before headers`).** A 503 alone does not establish a certificate problem. Envoy hides the detailed transport failure from the response body by default. Check the Envoy proxy access logs for `CERTIFICATE_VERIFY_FAILED` in the response-code details to confirm a TLS certificate verification failure:
+
+```bash
+kubectl -n envoy-gateway-system get pods
+kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+  | grep CERTIFICATE_VERIFY_FAILED
+```
+
+By default the gateway accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status:
+
+```bash
+kubectl -n nebari-llm-serving-system get backendtlspolicy <name>-backend-tls \
+  -o jsonpath='{range .status.ancestors[*].conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+```
+
+`NoValidCACertificate` / `InvalidCACertificateRef` means the ConfigMap is missing from the PassthroughModel's namespace, or has neither a `ca.crt` key nor exactly one key. If the policy is accepted, inspect the certificate the server presents:
+
+```bash
+openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>/dev/null \
+  | openssl x509 -noout -text | grep -E 'Issuer:|Subject:|DNS:|Signature Algorithm'
+```
+
+The certificate must list `spec.provider.hostname` in its subject alternative names and chain to a CA in the ConfigMap.
+
+**A CA bundle update does not take effect, even though the policy is accepted.** `Accepted=True` and `ResolvedRefs=True` on the `BackendTLSPolicy` do not prove Envoy loaded the CA certificates. With Envoy Gateway 1.8.1, malformed PEM can pass those checks while Envoy rejects the TLS configuration with `Failed to load trusted CA certificates from <inline>`:
+
+```bash
+kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+  | grep -E 'Failed to load trusted CA certificates|CERTIFICATE_VERIFY_FAILED|Secret is not supplied by SDS'
+```
+
+If the bundle previously worked, Envoy can retain its last valid trust configuration, so requests may still succeed after an invalid update. A newly referenced invalid bundle can instead fail requests with HTTP 503. Correct the PEM in the ConfigMap, check for new rejected-update messages, and verify a request against the server presenting the new certificate. Valid ConfigMap updates are picked up without restarting Envoy.
+
 **PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
 ```bash

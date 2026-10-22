@@ -63,6 +63,11 @@ type ProviderSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	Port int32 `json:"port,omitempty"`
+	// tls selects which certificate authorities the gateway trusts for the
+	// provider. When omitted, the gateway verifies the provider against its
+	// built-in public CA roots.
+	// +optional
+	TLS *ProviderTLS `json:"tls,omitempty"`
 	// schemaVersion is the upstream API schema version, passed through to
 	// the AIServiceBackend schema for backends that take one. The OpenAI
 	// backend uses it as the URL path prefix, e.g. "api/v1" for OpenRouter
@@ -77,6 +82,21 @@ type ProviderSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +optional
 	CredentialSecretName string `json:"credentialSecretName,omitempty"`
+}
+
+// ProviderTLS configures verification of the provider's serving certificate.
+// The connection to the provider always uses TLS; these settings only change
+// which certificate authorities the gateway accepts for it.
+type ProviderTLS struct {
+	// caConfigMapName names a ConfigMap in the PassthroughModel's own
+	// namespace holding the PEM certificate authorities that sign the
+	// provider's certificate, under the "ca.crt" key or as the ConfigMap's
+	// only key (the shape a trust-manager Bundle target writes). The gateway
+	// trusts this bundle instead of its built-in public roots, which suits a
+	// self-hosted server with a certificate from a private or corporate CA.
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	CAConfigMapName string `json:"caConfigMapName"`
 }
 
 // ProviderBackend selects a concrete upstream API variant. Adding a provider
