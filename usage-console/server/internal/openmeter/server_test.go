@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
@@ -156,7 +155,7 @@ func TestSpendByTeamComparesWithThePreviousRange(t *testing.T) {
 	f.request("b1", now.Add(-time.Hour), bob("mock/large", "key-b1"), map[string]int{"input": 5, "output": 5})
 	f.request("b2", now.Add(-time.Hour), bob("mock/unpriced", "key-b1"), map[string]int{"input": 7})
 
-	v := get[api.SpendView](t, newAPI(t, f), "/spend?range=24h&by=team")
+	v := get[openmeter.SpendView](t, newAPI(t, f), "/spend?range=24h&by=team")
 
 	if v.By != "team" || v.To != now.UnixMilli() || v.From != now.Add(-24*time.Hour).UnixMilli() {
 		t.Fatalf("window %+v", v)
@@ -185,7 +184,7 @@ func TestSpendTrendAndMonthProjection(t *testing.T) {
 	// Earlier this month, outside the 24h range.
 	f.request("a0", now.Add(-5*24*time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 700})
 
-	v := get[api.SpendView](t, newAPI(t, f), "/spend?range=24h&by=team")
+	v := get[openmeter.SpendView](t, newAPI(t, f), "/spend?range=24h&by=team")
 
 	tr := v.Trend
 	if tr.BucketMS != time.Hour.Milliseconds() || len(tr.Points) != 24 {
@@ -267,15 +266,15 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 // The console is read-only: whoever reaches it may read, and every write is
 // disabled with the reason.
 func TestSessionIsReadOnly(t *testing.T) {
-	s := get[api.Session](t, newAPI(t, &fakeOpenMeter{}), "/session")
+	s := get[openmeter.Session](t, newAPI(t, &fakeOpenMeter{}), "/session")
 
 	if s.Tenant.ID != "demo" || len(s.Actor.Roles) == 0 || s.Actor.Role != "viewer" {
 		t.Fatalf("session %+v", s)
 	}
-	if !s.Permissions[api.ActRead].Allowed {
+	if !s.Permissions[openmeter.ActRead].Allowed {
 		t.Fatalf("read not allowed: %+v", s.Permissions)
 	}
-	for _, a := range []api.Action{api.ActBudgets, api.ActRouting, api.ActOwnKeys, api.ActPrices, api.ActPublishRules} {
+	for _, a := range []openmeter.Action{openmeter.ActBudgets, openmeter.ActRouting, openmeter.ActOwnKeys, openmeter.ActPrices, openmeter.ActPublishRules} {
 		if p, ok := s.Permissions[a]; !ok || p.Allowed {
 			t.Fatalf("%s: %+v (present %v)", a, p, ok)
 		}
@@ -294,7 +293,7 @@ func TestSummaryComparesRanges(t *testing.T) {
 	f.request("b0", now.Add(-30*time.Hour), bob("mock/small", "key-b1"), map[string]int{"input": 100})
 	f.request("a0", now.Add(-31*time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 100})
 
-	s := get[api.Summary](t, newAPI(t, f), "/summary?range=24h")
+	s := get[openmeter.Summary](t, newAPI(t, f), "/summary?range=24h")
 
 	if s.Current.Requests != 2 || s.Current.SpendUSD != 0.5 || s.Previous.Requests != 2 || s.Previous.SpendUSD != 0.2 {
 		t.Fatalf("totals %+v / %+v", s.Current, s.Previous)
@@ -313,7 +312,7 @@ func TestSpendByKeySplitsLoginUsageByPerson(t *testing.T) {
 	b["access_path"] = "jwt"
 	f.request("b1", now.Add(-time.Hour), b, map[string]int{"input": 300})
 
-	v := get[api.SpendView](t, newAPI(t, f), "/spend?range=24h&by=key")
+	v := get[openmeter.SpendView](t, newAPI(t, f), "/spend?range=24h&by=key")
 
 	if len(v.Rows) != 2 || v.Rows[0].ID != "login:bob" || v.Rows[0].Label != "bob (Keycloak login)" || v.Rows[1].ID != "login:alice" || !v.Rows[0].NoDrill {
 		t.Fatalf("rows %+v", v.Rows)
@@ -331,15 +330,15 @@ func TestPageCallsAnswer(t *testing.T) {
 	h := newAPI(t, f)
 
 	since := now.Add(-24 * time.Hour).UnixMilli()
-	c := get[api.ReceiptCount](t, h, "/receipts/count?since="+strconv.FormatInt(since, 10))
+	c := get[openmeter.ReceiptCount](t, h, "/receipts/count?since="+strconv.FormatInt(since, 10))
 	if c.Count == nil || *c.Count != 2 || c.Since != since {
 		t.Fatalf("count %+v", c)
 	}
-	a := get[api.ActivityView](t, h, "/activity?range=7d")
+	a := get[openmeter.ActivityView](t, h, "/activity?range=7d")
 	if a.Changes == nil || a.Events == nil || a.Until != now.UnixMilli() {
 		t.Fatalf("activity %+v", a)
 	}
-	sv := get[api.SavingsView](t, h, "/spend/savings")
+	sv := get[openmeter.SavingsView](t, h, "/spend/savings")
 	if sv.Opportunities == nil {
 		t.Fatalf("savings %+v", sv)
 	}
@@ -424,7 +423,7 @@ func TestSpendByProvider(t *testing.T) {
 	nova["model_resource"] = "bedrock"
 	f.request("a2", now.Add(-time.Hour), nova, map[string]int{"input": 100})
 
-	v := get[api.SpendView](t, newAPI(t, f), "/spend?range=24h&by=provider")
+	v := get[openmeter.SpendView](t, newAPI(t, f), "/spend?range=24h&by=provider")
 
 	if v.By != "provider" || len(v.Rows) != 2 || v.Rows[0].ID != "mock" || v.Rows[1].ID != "bedrock" || v.Rows[1].SpendUSD != 0.01 {
 		t.Fatalf("rows %+v", v.Rows)

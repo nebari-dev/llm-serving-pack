@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
 )
 
 // receiptCount counts requests in [since, before) from the llm_requests
@@ -25,7 +23,7 @@ func (s *Server) receiptCount(r *http.Request) (any, error) {
 	if v := ms("before"); v > 0 {
 		to = time.UnixMilli(v)
 	}
-	out := api.ReceiptCount{Since: from.UnixMilli()}
+	out := ReceiptCount{Since: from.UnixMilli()}
 	for _, f := range []string{"key", "team", "project", "model", "verdict", "provider", "backend", "reason", "session"} {
 		if q.Has(f) {
 			out.Reason = "Counts aren't available with filters."
@@ -49,14 +47,14 @@ func (s *Server) receiptCount(r *http.Request) (any, error) {
 func (s *Server) activity(r *http.Request) (any, error) {
 	_, span := rangeOf(r)
 	now := s.Now().UTC()
-	return api.ActivityView{Since: now.Add(-span).UnixMilli(), Until: now.UnixMilli(), Changes: []api.ActivityChange{}, Events: []api.TrafficEvent{}}, nil
+	return ActivityView{Since: now.Add(-span).UnixMilli(), Until: now.UnixMilli(), Changes: []ActivityChange{}, Events: []TrafficEvent{}}, nil
 }
 
 // savings would suggest cheaper models through aliases, which this pack
 // doesn't route.
 func (s *Server) savings(*http.Request) (any, error) {
 	now := s.Now().UTC()
-	return api.SavingsView{From: now.Add(-catalogSpan).UnixMilli(), To: now.UnixMilli(), Opportunities: []api.SavingsOpportunity{}}, nil
+	return SavingsView{From: now.Add(-catalogSpan).UnixMilli(), To: now.UnixMilli(), Opportunities: []SavingsOpportunity{}}, nil
 }
 
 // gatewayOverhead is the gateway's own time per request, which the usage

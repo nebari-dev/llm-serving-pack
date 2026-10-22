@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/demo"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
@@ -33,7 +32,8 @@ func main() {
 	consoleDir := flag.String("console-dir", "", "the built console (console/dist) to serve; empty serves the API only")
 	flag.Parse()
 
-	s := &openmeter.Server{Client: openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN")), Tenant: demo.Tenant, Now: time.Now}
+	// The console calls its tenant "demo" (API_BASE in console/src/data/catalog.ts).
+	s := &openmeter.Server{Client: openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN")), Tenant: "demo", Now: time.Now}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", s.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })

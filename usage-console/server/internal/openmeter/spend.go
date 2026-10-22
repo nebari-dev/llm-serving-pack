@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
 )
 
 // ranges are the console's time ranges.
@@ -47,7 +45,7 @@ func (s *Server) spend(r *http.Request) (any, error) {
 	}
 	now := s.Now().UTC()
 	from, prevFrom := now.Add(-span), now.Add(-2*span)
-	out := api.SpendView{Range: name, By: by, From: from.UnixMilli(), To: now.UnixMilli(), PrevFrom: prevFrom.UnixMilli(), Rows: []api.SpendRow{}}
+	out := SpendView{Range: name, By: by, From: from.UnixMilli(), To: now.UnixMilli(), PrevFrom: prevFrom.UnixMilli(), Rows: []SpendRow{}}
 
 	cur, err := s.usage(ctx, from, now, nil)
 	if err != nil {
@@ -96,17 +94,17 @@ func queryWindow(bucket time.Duration) *window {
 	return &byMinute
 }
 
-func (s *Server) spendTrend(ctx context.Context, rangeName, by string, now time.Time) (api.SpendTrend, error) {
+func (s *Server) spendTrend(ctx context.Context, rangeName, by string, now time.Time) (SpendTrend, error) {
 	tb := trendBuckets[rangeName]
 	start := now.Truncate(tb.bucket).Add(-time.Duration(tb.points-1) * tb.bucket)
 	cells, err := s.usage(ctx, start, now, queryWindow(tb.bucket))
 	if err != nil {
-		return api.SpendTrend{}, err
+		return SpendTrend{}, err
 	}
 	field := spendDims[by]
-	tr := api.SpendTrend{BucketMS: tb.bucket.Milliseconds(), Points: make([]api.TrendPoint, tb.points), Order: []string{}, Labels: map[string]string{}}
+	tr := SpendTrend{BucketMS: tb.bucket.Milliseconds(), Points: make([]TrendPoint, tb.points), Order: []string{}, Labels: map[string]string{}}
 	for i := range tr.Points {
-		tr.Points[i] = api.TrendPoint{T: start.Add(time.Duration(i) * tb.bucket).UnixMilli(), Values: map[string]float64{}}
+		tr.Points[i] = TrendPoint{T: start.Add(time.Duration(i) * tb.bucket).UnixMilli(), Values: map[string]float64{}}
 	}
 	for _, c := range cells {
 		if i := int(c.Start.Sub(start) / tb.bucket); i >= 0 && i < tb.points {
@@ -148,10 +146,10 @@ const projectionDays = 7
 
 // projection is month-end spend: this UTC month to date, plus the trailing
 // daily average for each day left.
-func (s *Server) projection(ctx context.Context, now time.Time) (api.Projection, error) {
+func (s *Server) projection(ctx context.Context, now time.Time) (Projection, error) {
 	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
-	p := api.Projection{PeriodStart: start.UnixMilli(), PeriodEnd: end.UnixMilli(), TrailingDays: projectionDays, RemainingDays: end.Sub(now).Hours() / 24}
+	p := Projection{PeriodStart: start.UnixMilli(), PeriodEnd: end.UnixMilli(), TrailingDays: projectionDays, RemainingDays: end.Sub(now).Hours() / 24}
 	mtd, err := s.usage(ctx, start, now, nil)
 	if err != nil {
 		return p, err
@@ -176,12 +174,12 @@ func (s *Server) projection(ctx context.Context, now time.Time) (api.Projection,
 }
 
 // spendRows sums cells by the dimension, biggest spend first.
-func spendRows(by string, cur, prev []cell) []api.SpendRow {
+func spendRows(by string, cur, prev []cell) []SpendRow {
 	field := spendDims[by]
-	rows := map[string]*api.SpendRow{}
-	row := func(id string) *api.SpendRow {
+	rows := map[string]*SpendRow{}
+	row := func(id string) *SpendRow {
 		if rows[id] == nil {
-			rows[id] = &api.SpendRow{ID: id, Label: id}
+			rows[id] = &SpendRow{ID: id, Label: id}
 		}
 		return rows[id]
 	}
@@ -197,7 +195,7 @@ func spendRows(by string, cur, prev []cell) []api.SpendRow {
 	for _, c := range prev {
 		row(group(c, field)).PrevSpendUSD += c.USD
 	}
-	out := []api.SpendRow{}
+	out := []SpendRow{}
 	for _, x := range rows {
 		if user, ok := strings.CutPrefix(x.ID, loginKey+":"); ok {
 			// Traffic filters by key, and every login shares one.
@@ -206,7 +204,7 @@ func spendRows(by string, cur, prev []cell) []api.SpendRow {
 		x.SpendUSD, x.PrevSpendUSD = roundUSD(x.SpendUSD), roundUSD(x.PrevSpendUSD)
 		out = append(out, *x)
 	}
-	slices.SortFunc(out, func(a, b api.SpendRow) int {
+	slices.SortFunc(out, func(a, b SpendRow) int {
 		return cmp.Or(cmp.Compare(b.SpendUSD, a.SpendUSD), cmp.Compare(a.ID, b.ID))
 	})
 	return out

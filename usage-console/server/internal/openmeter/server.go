@@ -50,7 +50,7 @@ func (s *Server) Handler() http.Handler {
 	h("/series/spend", s.spendSeries)
 	// Stargate's configuration: this pack doesn't route, guard or cap, so
 	// there is none.
-	for _, p := range []string{"/backends", "/routes", "/budgets", "/policies", "/changes", "/members", "/aliases", "/degradations"} {
+	for _, p := range []string{"/backends", "/routes", "/budgets", "/policies", "/changes", "/degradations"} {
 		h(p, none)
 	}
 	return mux

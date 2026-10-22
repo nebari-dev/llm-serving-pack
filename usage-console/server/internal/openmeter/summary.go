@@ -2,9 +2,6 @@ package openmeter
 
 import (
 	"net/http"
-
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/api"
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/store"
 )
 
 // summary is the Overview's totals for the range and the span before it.
@@ -14,7 +11,7 @@ func (s *Server) summary(r *http.Request) (any, error) {
 	name, span := rangeOf(r)
 	now := s.Now().UTC()
 	from := now.Add(-span)
-	out := api.Summary{Range: name, From: from.UnixMilli(), To: now.UnixMilli(), KeyAnomalies: []api.KeyAnomaly{}, UnpricedPairs: []api.UnpricedPair{}}
+	out := Summary{Range: name, From: from.UnixMilli(), To: now.UnixMilli(), KeyAnomalies: []KeyAnomaly{}, UnpricedPairs: []UnpricedPair{}}
 	cur, err := s.usage(ctx, from, now, nil)
 	if err != nil {
 		return nil, err
@@ -35,14 +32,14 @@ func (s *Server) summary(r *http.Request) (any, error) {
 	for team, d := range delta {
 		d = roundUSD(d)
 		if d > 0 && (out.TopTeamIncrease == nil || d > out.TopTeamIncrease.DeltaUSD) {
-			out.TopTeamIncrease = &api.TeamIncrease{Team: team, DeltaUSD: d}
+			out.TopTeamIncrease = &TeamIncrease{Team: team, DeltaUSD: d}
 		}
 	}
 	return out, nil
 }
 
-func totals(cells []cell) store.WindowTotals {
-	var w store.WindowTotals
+func totals(cells []cell) WindowTotals {
+	var w WindowTotals
 	for _, c := range cells {
 		w.Requests += c.Requests
 		w.SpendUSD += c.USD
