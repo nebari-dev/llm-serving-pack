@@ -8,10 +8,7 @@ WORKDIR /src
 COPY console/package.json console/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY console/ ./
-# Pages with no backend in this pack: routing, guardrails, model catalog,
-# configuration history, settings and onboarding.
-ARG HIDE_PAGES=/routing,/guardrails,/models,/activity,/settings,/onboarding
-RUN VITE_DATA=api VITE_HIDE_PAGES=${HIDE_PAGES} npm run build
+RUN VITE_DATA=api npm run build
 
 FROM golang:1.26.10-bookworm@sha256:ee3901c61e423732605a51f1b8157c849ec01194ea0a274213b5202b2c11e7bf AS api
 WORKDIR /src

@@ -102,7 +102,6 @@ jobs:
         working-directory: usage-console/console
         run: VITE_DATA=api npm run build
 
-      # Its api-mode suite needs a running control plane and skips without one.
       - name: Run console tests
         working-directory: usage-console/console
         run: npm test

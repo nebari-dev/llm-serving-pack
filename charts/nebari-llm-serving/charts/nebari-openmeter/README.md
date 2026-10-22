@@ -52,10 +52,9 @@ sets per-token USD rates for models with no public price.
 
 Overview, Traffic (one receipt per request, live), Spend (by team, person,
 project, key, model or provider, with the month-end projection) and Keys
-(each key's owner, team and last 24 hours). Pages for things this pack doesn't
-do (routing, guardrails, budgets, the model catalog, settings) are hidden at
-build time with `VITE_HIDE_PAGES`. Everyone who reaches the console is a
-viewer: there is nothing to edit.
+(each key's owner, team and last 24 hours). It has no pages for things this
+pack doesn't do (routing, guardrails, the model catalog, settings). Everyone
+who reaches the console is a viewer: there is nothing to edit.
 
 ## Known limits
 
