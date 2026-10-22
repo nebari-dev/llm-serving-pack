@@ -5,13 +5,12 @@ import (
 )
 
 // summary is the Overview's totals for the range and the span before it.
-// Key anomalies and unpriced pairs aren't computed here.
 func (s *Server) summary(r *http.Request) (any, error) {
 	ctx := r.Context()
 	name, span := rangeOf(r)
 	now := s.Now().UTC()
 	from := now.Add(-span)
-	out := Summary{Range: name, From: from.UnixMilli(), To: now.UnixMilli(), KeyAnomalies: []KeyAnomaly{}, UnpricedPairs: []UnpricedPair{}}
+	out := Summary{Range: name, From: from.UnixMilli(), To: now.UnixMilli()}
 	cur, err := s.usage(ctx, from, now, nil)
 	if err != nil {
 		return nil, err

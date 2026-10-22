@@ -77,7 +77,7 @@ func (s *Server) models(r *http.Request) (any, error) {
 	for _, c := range cells {
 		if c.Model != "" && !seen[c.Model] {
 			seen[c.Model] = true
-			out = append(out, model.Model{ID: c.Model, Display: c.Model, Provider: prices.providers[c.Resource]})
+			out = append(out, model.Model{ID: c.Model, Provider: prices.providers[c.Resource]})
 		}
 	}
 	slices.SortFunc(out, func(a, b model.Model) int { return cmp.Compare(a.ID, b.ID) })
@@ -107,7 +107,7 @@ func (s *Server) keys(r *http.Request) (any, error) {
 			k = &model.APIKey{
 				ID: c.Key, Name: c.Key, Prefix: c.Key, Team: c.Team, Owner: c.User,
 				Project: c.Resource, ProjectID: projectID(c.Team, c.Resource),
-				AllowedModels: []string{}, AllowedRegions: []string{}, Hourly24h: make([]int, 24), Status: "active",
+				Hourly24h: make([]int, 24),
 			}
 			by[c.Key] = k
 		}
@@ -241,4 +241,3 @@ func deref(p *string) string {
 }
 
 // none answers a list this pack has nothing for.
-func none(*http.Request) (any, error) { return []any{}, nil }

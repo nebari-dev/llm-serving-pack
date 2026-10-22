@@ -23,7 +23,7 @@ func (s *Server) receiptCount(r *http.Request) (any, error) {
 		to = time.UnixMilli(v)
 	}
 	out := ReceiptCount{Since: from.UnixMilli()}
-	for _, f := range []string{"key", "team", "project", "model", "verdict", "provider", "backend", "reason", "session"} {
+	for _, f := range []string{"key", "team", "project", "model", "verdict", "session"} {
 		if q.Has(f) {
 			out.Reason = "Counts aren't available with filters."
 			return out, nil
@@ -39,25 +39,4 @@ func (s *Server) receiptCount(r *http.Request) (any, error) {
 	}
 	out.Count = &n
 	return out, nil
-}
-
-// activity is configuration history and traffic events; this pack records
-// neither.
-func (s *Server) activity(r *http.Request) (any, error) {
-	_, span := rangeOf(r)
-	now := s.Now().UTC()
-	return ActivityView{Since: now.Add(-span).UnixMilli(), Until: now.UnixMilli(), Changes: []ActivityChange{}, Events: []TrafficEvent{}}, nil
-}
-
-// savings would suggest cheaper models through aliases, which this pack
-// doesn't route.
-func (s *Server) savings(*http.Request) (any, error) {
-	now := s.Now().UTC()
-	return SavingsView{From: now.Add(-catalogSpan).UnixMilli(), To: now.UnixMilli(), Opportunities: []SavingsOpportunity{}}, nil
-}
-
-// gatewayOverhead is the gateway's own time per request, which the usage
-// events don't carry.
-func (s *Server) gatewayOverhead(*http.Request) (any, error) {
-	return map[string]any{"p50Ms": nil, "p95Ms": nil, "samples": 0, "windowMinutes": 15, "goalMs": 0}, nil
 }

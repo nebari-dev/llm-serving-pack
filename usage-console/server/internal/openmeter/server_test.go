@@ -211,8 +211,7 @@ func TestSpendTrendAndMonthProjection(t *testing.T) {
 	}
 }
 
-// Every call the console makes when it loads answers, so it opens. What this
-// pack has no data for (routing, guardrails, budgets) is empty.
+// Every call the console makes when it loads answers, so it opens.
 func TestConsoleStartupCallsAnswer(t *testing.T) {
 	f := &fakeOpenMeter{cost: map[string]float64{"mock/small": 0.001}}
 	f.request("a1", now.Add(-90*time.Minute), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 100})
@@ -220,7 +219,7 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 	f.request("b1", now.Add(-50*time.Hour), bob("mock/small", "key-b1"), map[string]int{"input": 200})
 	h := newAPI(t, f)
 
-	for _, p := range []string{"/models", "/backends", "/routes", "/budgets", "/policies", "/changes", "/receipts?limit=240"} {
+	for _, p := range []string{"/models", "/receipts?limit=240"} {
 		get[[]map[string]any](t, h, p)
 	}
 
@@ -239,7 +238,7 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 		t.Fatalf("keys %+v", keys)
 	}
 	k := keys[0]
-	if k["id"] != "key-a1" || k["owner"] != "alice" || k["team"] != "team-a" || k["project"] != "mock-provider" || k["status"] != "active" {
+	if k["id"] != "key-a1" || k["owner"] != "alice" || k["team"] != "team-a" || k["project"] != "mock-provider" {
 		t.Fatalf("key %+v", k)
 	}
 	if k["requests24h"] != 1.0 || k["spend24hUsd"] != 0.1 || len(k["hourly24h"].([]any)) != 24 || k["lastUsedAt"] != float64(now.Add(-90*time.Minute).Truncate(time.Hour).UnixMilli()) {
@@ -264,15 +263,12 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 }
 
 // Everyone who reaches the console is a viewer, signed in by the gateway in
-// front: dev mode, so the console offers no sign-out, and no Warden.
+// front: dev mode, so the console offers no sign-out.
 func TestSessionIsAViewer(t *testing.T) {
 	s := get[openmeter.Session](t, newAPI(t, &fakeOpenMeter{}), "/session")
 
 	if s.Tenant.ID != "demo" || len(s.Actor.Roles) != 1 || s.Actor.Roles[0] != "viewer" || s.Auth.Mode != "dev" {
 		t.Fatalf("session %+v", s)
-	}
-	if s.Warden != nil {
-		t.Fatalf("warden %+v", s.Warden)
 	}
 }
 
@@ -311,10 +307,9 @@ func TestSpendByKeySplitsLoginUsageByPerson(t *testing.T) {
 	}
 }
 
-// The calls pages make after loading answer too: the receipt count from
-// OpenMeter, and empty answers where this pack keeps nothing (configuration
-// history, savings, gateway timing).
-func TestPageCallsAnswer(t *testing.T) {
+// Traffic's count answers from OpenMeter for the window, and says it can't
+// count with filters.
+func TestReceiptCount(t *testing.T) {
 	f := &fakeOpenMeter{}
 	f.request("a1", now.Add(-2*time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
 	f.request("a2", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
@@ -326,17 +321,9 @@ func TestPageCallsAnswer(t *testing.T) {
 	if c.Count == nil || *c.Count != 2 || c.Since != since {
 		t.Fatalf("count %+v", c)
 	}
-	a := get[openmeter.ActivityView](t, h, "/activity?range=7d")
-	if a.Changes == nil || a.Events == nil || a.Until != now.UnixMilli() {
-		t.Fatalf("activity %+v", a)
-	}
-	sv := get[openmeter.SavingsView](t, h, "/spend/savings")
-	if sv.Opportunities == nil {
-		t.Fatalf("savings %+v", sv)
-	}
-	o := get[map[string]any](t, h, "/gateway/overhead")
-	if o["samples"] != 0.0 {
-		t.Fatalf("overhead %+v", o)
+	c = get[openmeter.ReceiptCount](t, h, "/receipts/count?model=mock/small")
+	if c.Count != nil || c.Reason == "" {
+		t.Fatalf("filtered count %+v", c)
 	}
 }
 

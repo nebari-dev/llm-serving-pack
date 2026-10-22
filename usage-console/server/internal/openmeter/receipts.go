@@ -99,10 +99,6 @@ func receiptFrom(e Event) model.Receipt {
 		Backend:        str(d["model_resource"]),
 		Status:         status,
 		Verdict:        "allowed",
-		InboundVerdict: "skipped",
-		Redactions:     []model.Redaction{},
-		Rules:          []model.RuleEval{},
-		Trace:          []model.TraceStep{},
 	}
 	switch {
 	case status == http.StatusTooManyRequests:

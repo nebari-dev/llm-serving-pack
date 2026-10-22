@@ -36,9 +36,6 @@ func (s *Server) Handler() http.Handler {
 	h("/receipts", s.receipts)
 	mux.HandleFunc("GET "+p+"/stream/traffic", s.streamTraffic)
 	h("/receipts/count", s.receiptCount)
-	h("/activity", s.activity)
-	h("/spend/savings", s.savings)
-	h("/gateway/overhead", s.gatewayOverhead)
 	h("/spend", s.spend)
 	h("/session", s.session)
 	h("/summary", s.summary)
@@ -48,11 +45,6 @@ func (s *Server) Handler() http.Handler {
 	h("/keys", s.keys)
 	h("/series/traffic", s.trafficSeries)
 	h("/series/spend", s.spendSeries)
-	// The pages also read backends, routes, budgets, policies, config
-	// changes and degradations; this pack has none of them.
-	for _, p := range []string{"/backends", "/routes", "/budgets", "/policies", "/changes", "/degradations"} {
-		h(p, none)
-	}
 	return mux
 }
 

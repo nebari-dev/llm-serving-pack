@@ -1,7 +1,5 @@
 package openmeter
 
-import "github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
-
 // The console's response types. JSON field names match
 // console/src/data/catalog.ts and mock.ts, which the console reads them as.
 
@@ -15,8 +13,6 @@ type Session struct {
 	Versions    struct {
 		ControlPlane string `json:"controlPlane"`
 	} `json:"versions"`
-	// Warden is nil: this pack has no Warden in the request path.
-	Warden *SessionWarden `json:"warden"`
 }
 
 type SessionTenant struct {
@@ -29,13 +25,6 @@ type SessionActor struct {
 	Roles []string `json:"roles"`
 }
 
-type SessionWarden struct {
-	Connected          bool    `json:"connected"`
-	Version            string  `json:"version,omitempty"`
-	SnapshotAgeSeconds float64 `json:"snapshotAgeSeconds,omitempty"`
-	Passthrough        bool    `json:"passthrough"`
-}
-
 type SessionAuth struct {
 	// Mode is "dev": the gateway in front signs people in, so the console
 	// has nothing to sign out of.
@@ -46,8 +35,6 @@ type SessionAuth struct {
 // Unpriced requests, which have no price yet.
 type WindowTotals struct {
 	Requests int     `json:"requests"`
-	Blocked  int     `json:"blocked"`
-	Redacted int     `json:"redacted"`
 	SpendUSD float64 `json:"spendUsd"`
 	Unpriced int     `json:"unpriced"`
 }
@@ -63,37 +50,11 @@ type Summary struct {
 	// TopTeamIncrease is the team whose spend rose most against the previous
 	// window, or nil when none rose.
 	TopTeamIncrease *TeamIncrease `json:"topTeamIncrease"`
-	KeyAnomalies    []KeyAnomaly  `json:"keyAnomalies"`
-	// UnpricedPairs are the (model, backend) pairs that served requests in
-	// the range with no price, for the attention list.
-	UnpricedPairs []UnpricedPair `json:"unpricedPairs"`
-}
-
-// UnpricedPair is a (model, backend) whose requests have no price: Requests
-// of them in the range, the first at Since.
-type UnpricedPair struct {
-	Model    string `json:"model"`
-	Backend  string `json:"backend"`
-	Requests int    `json:"requests"`
-	Since    int64  `json:"since"`
 }
 
 type TeamIncrease struct {
 	Team     string  `json:"team"`
 	DeltaUSD float64 `json:"deltaUsd"`
-}
-
-// KeyAnomaly is a key whose last 24 hours cost well over its daily average
-// for the 7 days before.
-type KeyAnomaly struct {
-	KeyID       string  `json:"keyId"`
-	KeyName     string  `json:"keyName"`
-	SpendUSD    float64 `json:"spendUsd"`
-	BaselineUSD float64 `json:"baselineUsd"`
-	Ratio       float64 `json:"ratio"`
-	// TopModel took the largest share of the key's last-24h spend.
-	TopModel      string  `json:"topModel"`
-	TopModelShare float64 `json:"topModelShare"`
 }
 
 // ReceiptCount is how many receipts match. Count is null when it can't be
@@ -167,108 +128,4 @@ type Projection struct {
 	RemainingDays    float64 `json:"remainingDays"`
 	ProjectedUSD     float64 `json:"projectedUsd"`
 	Unpriced         int     `json:"unpriced"`
-}
-
-type SavingsView struct {
-	// The window is [from, to); FirstAt is its earliest served request (0
-	// when none), and Days how many days from it (or from) to to.
-	From        int64   `json:"from"`
-	To          int64   `json:"to"`
-	FirstAt     int64   `json:"firstAt"`
-	Days        float64 `json:"days"`
-	OutputLimit int     `json:"outputLimit"`
-	// Served counts the window's served requests; Unpriced those with no
-	// price; Rerouted those that ran on a model other than the one asked
-	// for (a policy, a fallback, or an alias since retargeted).
-	Served        int                  `json:"served"`
-	Unpriced      int                  `json:"unpriced"`
-	Rerouted      int                  `json:"rerouted"`
-	Opportunities []SavingsOpportunity `json:"opportunities"`
-}
-
-// SavingsOpportunity is one group's best move: its requests on Model moved
-// to Target on TargetBackend. Alias is set when the requests came through
-// an alias (retargeting it moves them); otherwise Key asked for Model by
-// name.
-type SavingsOpportunity struct {
-	ID            string `json:"id"`
-	Alias         string `json:"alias,omitempty"`
-	Key           string `json:"key,omitempty"`
-	KeyID         string `json:"keyId,omitempty"`
-	Model         string `json:"model"`
-	Target        string `json:"target"`
-	TargetBackend string `json:"targetBackend"`
-	// Over the counted requests: what they cost, what Target would have,
-	// and the difference.
-	Requests  int     `json:"requests"`
-	ActualUSD float64 `json:"actualUsd"`
-	TargetUSD float64 `json:"targetUsd"`
-	SavedUSD  float64 `json:"savedUsd"`
-	// Served is every served request in the group; Excluded says why the
-	// rest weren't counted, each under its first reason.
-	Served   int             `json:"served"`
-	Excluded SavingsExcluded `json:"excluded"`
-	// Keys are the counted requests' keys, by name. NotAllowedKeys don't
-	// allow Target yet: moving them first needs it added, or they'd be
-	// refused (403 model_not_allowed). NotAllowedRequests are theirs.
-	Keys               []string `json:"keys"`
-	NotAllowedKeys     []string `json:"notAllowedKeys"`
-	NotAllowedRequests int      `json:"notAllowedRequests"`
-}
-
-type SavingsExcluded struct {
-	Unpriced       int `json:"unpriced"`       // no price, so no cost to compare
-	KeyInactive    int `json:"keyInactive"`    // the key is revoked, expired or gone
-	LongOutput     int `json:"longOutput"`     // output over OutputLimit
-	OverContext    int `json:"overContext"`    // input + output over Target's context
-	TargetUnpriced int `json:"targetUnpriced"` // Target had no price for them
-}
-
-type ActivityView struct {
-	Since   int64            `json:"since"`
-	Until   int64            `json:"until"`
-	Changes []ActivityChange `json:"changes"`
-	Events  []TrafficEvent   `json:"events"`
-}
-
-// ActivityChange is a config change with its effect on traffic.
-type ActivityChange struct {
-	model.Change
-	Impact ActivityImpact `json:"impact"`
-}
-
-// ActivityImpact compares the buckets either side of a change. The change's
-// own bucket counts as after, so up to 5 minutes before it land there too.
-type ActivityImpact struct {
-	WindowMinutes int   `json:"windowMinutes"`
-	Pivot         int64 `json:"pivot"` // start of the change's bucket, epoch ms
-	Before        Agg   `json:"before"`
-	After         Agg   `json:"after"`
-	// Bins are requests per 5-minute bucket; the first Split are before.
-	Bins       []int `json:"bins"`
-	Split      int   `json:"split"`
-	Comparable bool  `json:"comparable"`
-}
-
-// Agg is tenant traffic over one side of a change.
-type Agg struct {
-	Requests int `json:"requests"`
-	// CostPerRequestUSD is over served requests with a price; null when
-	// there were none. Unpriced counts the served ones it leaves out.
-	CostPerRequestUSD    *float64 `json:"costPerRequestUsd"`
-	Unpriced             int      `json:"unpriced"`
-	ErrorRate            float64  `json:"errorRate"`            // 5xx and 429, share 0-1
-	BlockedRedactedShare float64  `json:"blockedRedactedShare"` // share 0-1
-}
-
-// TrafficEvent is something traffic did on its own: a backend started or
-// stopped failing, or a budget crossed a share of its cap.
-type TrafficEvent struct {
-	ID     string `json:"id"`
-	TS     int64  `json:"ts"`
-	Kind   string `json:"kind"`
-	Title  string `json:"title"`
-	Detail string `json:"detail"`
-	Tone   string `json:"tone"`
-	To     string `json:"to"`
 }
