@@ -25,16 +25,48 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
 
-// customer is the part of an OpenMeter v1 customer the sync reads and writes.
+// customer is a new OpenMeter v1 customer, as the sync creates it.
 type customer struct {
-	ID               string           `json:"id,omitempty"`
-	Key              string           `json:"key,omitempty"`
+	Key              string           `json:"key"`
 	Name             string           `json:"name"`
 	UsageAttribution usageAttribution `json:"usageAttribution"`
 }
 
 type usageAttribution struct {
 	SubjectKeys []string `json:"subjectKeys"`
+}
+
+// storedCustomer is an existing customer as OpenMeter returned it, every
+// field kept. OpenMeter's PUT replaces the whole customer, and whoever runs
+// OpenMeter may have set fields the sync knows nothing about (billing
+// address, currency, metadata, ...), so the sync writes back exactly what it
+// read with only the subject keys changed.
+type storedCustomer map[string]json.RawMessage
+
+func (c storedCustomer) subjectKeys() ([]string, error) {
+	var ua usageAttribution
+	if raw, ok := c["usageAttribution"]; ok {
+		if err := json.Unmarshal(raw, &ua); err != nil {
+			return nil, fmt.Errorf("reading usageAttribution: %w", err)
+		}
+	}
+	return ua.SubjectKeys, nil
+}
+
+func (c storedCustomer) setSubjectKeys(keys []string) error {
+	ua := map[string]json.RawMessage{}
+	if raw, ok := c["usageAttribution"]; ok {
+		if err := json.Unmarshal(raw, &ua); err != nil {
+			return fmt.Errorf("reading usageAttribution: %w", err)
+		}
+	}
+	b, err := json.Marshal(keys)
+	if err != nil {
+		return err
+	}
+	ua["subjectKeys"] = b
+	c["usageAttribution"], err = json.Marshal(ua)
+	return err
 }
 
 // errNotFound is returned when OpenMeter has no customer with the given key.
@@ -95,8 +127,8 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (c *Client) getCustomer(ctx context.Context, key string) (customer, error) {
-	var out customer
+func (c *Client) getCustomer(ctx context.Context, key string) (storedCustomer, error) {
+	var out storedCustomer
 	err := c.do(ctx, http.MethodGet, "/api/v1/customers/"+url.PathEscape(key), nil, &out)
 	return out, err
 }
@@ -105,7 +137,7 @@ func (c *Client) createCustomer(ctx context.Context, cust customer) error {
 	return c.do(ctx, http.MethodPost, "/api/v1/customers", cust, nil)
 }
 
-func (c *Client) replaceCustomer(ctx context.Context, key string, cust customer) error {
+func (c *Client) replaceCustomer(ctx context.Context, key string, cust storedCustomer) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/customers/"+url.PathEscape(key), cust, nil)
 }
 
@@ -191,16 +223,22 @@ func (s *CustomerSync) syncOwner(ctx context.Context, subject string, o *owner) 
 	if err != nil {
 		return err
 	}
-	merged := slices.Clone(existing.UsageAttribution.SubjectKeys)
+	have, err := existing.subjectKeys()
+	if err != nil {
+		return err
+	}
+	merged := slices.Clone(have)
 	for _, k := range want {
 		if !slices.Contains(merged, k) {
 			merged = append(merged, k)
 		}
 	}
-	if len(merged) == len(existing.UsageAttribution.SubjectKeys) {
+	if len(merged) == len(have) {
 		return nil // nothing new
 	}
 	slices.Sort(merged)
-	existing.UsageAttribution.SubjectKeys = merged
+	if err := existing.setSubjectKeys(merged); err != nil {
+		return err
+	}
 	return s.client.replaceCustomer(ctx, subject, existing)
 }

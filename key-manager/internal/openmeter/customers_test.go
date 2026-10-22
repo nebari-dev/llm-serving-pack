@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -14,17 +15,19 @@ import (
 )
 
 // fakeOpenMeter serves the slice of OpenMeter's v1 customer API the sync uses:
-// GET, POST and PUT on /api/v1/customers, keyed by customer key.
+// GET, POST and PUT on /api/v1/customers, keyed by customer key. Customers are
+// stored as the JSON objects written, so a field a write leaves out is gone,
+// as with OpenMeter's PUT.
 type fakeOpenMeter struct {
 	mu        sync.Mutex
-	customers map[string]customer // by key
-	writes    int                 // POST + PUT requests served
-	fail      bool                // answer every request with 500
+	customers map[string]map[string]any // by key
+	writes    int                       // POST + PUT requests served
+	fail      bool                      // answer every request with 500
 }
 
 func newFakeOpenMeter(t *testing.T) (*fakeOpenMeter, *Client) {
 	t.Helper()
-	f := &fakeOpenMeter{customers: map[string]customer{}}
+	f := &fakeOpenMeter{customers: map[string]map[string]any{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, NewClient(srv.URL, "", srv.Client())
@@ -48,14 +51,15 @@ func (f *fakeOpenMeter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(c)
 	case r.Method == http.MethodPost && key == "":
-		var c customer
+		var c map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&c)
-		f.customers[c.Key] = c
+		k, _ := c["key"].(string)
+		f.customers[k] = c
 		f.writes++
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(c)
 	case r.Method == http.MethodPut && key != "":
-		var c customer
+		var c map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&c)
 		f.customers[key] = c
 		f.writes++
@@ -65,12 +69,33 @@ func (f *fakeOpenMeter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// put stores a customer as given, as if created by whoever runs OpenMeter.
+func (f *fakeOpenMeter) put(t *testing.T, key, customerJSON string) {
+	t.Helper()
+	var c map[string]any
+	if err := json.Unmarshal([]byte(customerJSON), &c); err != nil {
+		t.Fatalf("customer JSON: %v", err)
+	}
+	f.customers[key] = c
+}
+
 func (f *fakeOpenMeter) subjectKeys(key string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	keys := slices.Clone(f.customers[key].UsageAttribution.SubjectKeys)
+	attribution, _ := f.customers[key]["usageAttribution"].(map[string]any)
+	raw, _ := attribution["subjectKeys"].([]any)
+	keys := make([]string, 0, len(raw))
+	for _, k := range raw {
+		keys = append(keys, k.(string))
+	}
 	slices.Sort(keys)
 	return keys
+}
+
+func (f *fakeOpenMeter) field(key, name string) any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.customers[key][name]
 }
 
 type fakeKeys []secrets.KeyInfo
@@ -103,7 +128,7 @@ func TestKeysAreAttributedToTheirCreatorsCustomer(t *testing.T) {
 	if got, want := om.subjectKeys("sub-bob"), []string{"sub-bob", "user-bob-a-1"}; !slices.Equal(got, want) {
 		t.Errorf("bob's customer subject keys = %v, want %v", got, want)
 	}
-	if name := om.customers["sub-alice"].Name; name != "alice" {
+	if name := om.field("sub-alice", "name"); name != "alice" {
 		t.Errorf("alice's customer name = %q, want alice", name)
 	}
 }
@@ -112,10 +137,8 @@ func TestKeysAreAttributedToTheirCreatorsCustomer(t *testing.T) {
 // subject keys the pack does not know about. They must survive the sync.
 func TestExistingCustomerKeepsItsOtherSubjectKeys(t *testing.T) {
 	om, client := newFakeOpenMeter(t)
-	om.customers["sub-alice"] = customer{
-		ID: "01CUSTOMER", Key: "sub-alice", Name: "Alice (billing name)",
-		UsageAttribution: usageAttribution{SubjectKeys: []string{"sub-alice", "batch-job-7"}},
-	}
+	om.put(t, "sub-alice", `{"id": "01CUSTOMER", "key": "sub-alice", "name": "Alice (billing name)",
+		"usageAttribution": {"subjectKeys": ["sub-alice", "batch-job-7"]}}`)
 
 	err := NewCustomerSync(fakeKeys{key("user-alice-a-1", "alice", "sub-alice")}, client, nil).Sync(context.Background())
 	if err != nil {
@@ -125,7 +148,7 @@ func TestExistingCustomerKeepsItsOtherSubjectKeys(t *testing.T) {
 	if got, want := om.subjectKeys("sub-alice"), []string{"batch-job-7", "sub-alice", "user-alice-a-1"}; !slices.Equal(got, want) {
 		t.Errorf("subject keys = %v, want %v", got, want)
 	}
-	if name := om.customers["sub-alice"].Name; name != "Alice (billing name)" {
+	if name := om.field("sub-alice", "name"); name != "Alice (billing name)" {
 		t.Errorf("customer name = %q, the sync must not rename an existing customer", name)
 	}
 }
@@ -169,5 +192,35 @@ func TestOpenMeterFailureIsReported(t *testing.T) {
 	err := NewCustomerSync(fakeKeys{key("user-alice-a-1", "alice", "sub-alice")}, client, nil).Sync(context.Background())
 	if err == nil {
 		t.Error("Sync returned no error while OpenMeter was failing")
+	}
+}
+
+// OpenMeter's PUT replaces the whole customer. Whoever runs OpenMeter may have
+// set billing details on it; adding a key's client ID must keep them.
+func TestAddingAKeyKeepsTheCustomersOtherFields(t *testing.T) {
+	om, client := newFakeOpenMeter(t)
+	om.put(t, "sub-alice", `{"id": "01CUSTOMER", "key": "sub-alice", "name": "Alice",
+		"description": "Research group lead", "primaryEmail": "alice@example.com", "currency": "USD",
+		"metadata": {"costCenter": "cc-1"}, "billingAddress": {"country": "US", "city": "Springfield"},
+		"usageAttribution": {"subjectKeys": ["sub-alice"]}}`)
+
+	err := NewCustomerSync(fakeKeys{key("user-alice-a-1", "alice", "sub-alice")}, client, nil).Sync(context.Background())
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	if got, want := om.subjectKeys("sub-alice"), []string{"sub-alice", "user-alice-a-1"}; !slices.Equal(got, want) {
+		t.Errorf("subject keys = %v, want %v", got, want)
+	}
+	for name, want := range map[string]any{
+		"description":    "Research group lead",
+		"primaryEmail":   "alice@example.com",
+		"currency":       "USD",
+		"metadata":       map[string]any{"costCenter": "cc-1"},
+		"billingAddress": map[string]any{"country": "US", "city": "Springfield"},
+	} {
+		if got := om.field("sub-alice", name); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %v, want %v (kept from before the sync)", name, got, want)
+		}
 	}
 }
