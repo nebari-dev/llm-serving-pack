@@ -1,5 +1,5 @@
 import { Menu as MenuPrimitive } from '@base-ui/react/menu'
-import { Bell, Check, ChevronDown, Clock, LogOut, Monitor, Moon, Search, Sun } from 'lucide-react'
+import { Check, ChevronDown, Clock, LogOut, Monitor, Moon, Search, Sun } from 'lucide-react'
 import { Avatar, AvatarFallback } from '@/components/avatar'
 import { Kbd } from '@/components/gw/page'
 import { Button } from '@/components/ui/button'
@@ -17,24 +17,13 @@ import { MenuBarActions, MenuBarBrand, NavigationMenu } from '@/components/ui/na
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { useTheme } from '@/hooks/theme-provider'
 import { isThemeMode } from '@/hooks/use-theme-preference'
-import { dataMode, type Session, seedNotifications, session, signOut } from '@/data/catalog'
-import { ago } from '@/lib/format'
+import { dataMode, type Session, session, signOut } from '@/data/catalog'
 import { cn } from '@/lib/utils'
-import { useDegradations } from '@/state/degradations'
 import { type Env, timeRanges, useApp } from '@/state/app-state'
 import { NebariLogo } from './nebari-logo'
 
 const headerAction =
   'hover:bg-header-action-hover hover:no-underline focus-visible:ring-offset-0 active:bg-header-action-hover data-[popup-open]:bg-header-action-hover data-[popup-open]:no-underline'
-
-type Note = { id: string; unread: boolean; title: string; body: string; when: string }
-
-/** The bell: fixtures in mock mode; against the control plane, what's degraded right now. */
-function useNotifications(): Note[] {
-  const live = useDegradations()
-  if (dataMode !== 'api') return seedNotifications.map((n) => ({ ...n, id: String(n.id) }))
-  return live.map((d) => ({ id: d.kind + d.title, unread: true, title: d.title, body: d.detail, when: d.since ? ago(d.since) : 'now' }))
-}
 
 function initials(a: Session['actor']) {
   const words = (a.name ?? a.email.split('@')[0]).split(/[\s._-]+/).filter(Boolean)
@@ -57,8 +46,6 @@ export function envDisplay(mode: 'api' | 'mock', served: string, mockEnv: Env): 
 export function AppHeader() {
   const { env, setEnv, range, setRange, setPaletteOpen } = useApp()
   const { themeMode, setThemeMode } = useTheme()
-  const notifications = useNotifications()
-  const unread = notifications.filter((n) => n.unread).length
   const { label: envLabel, production } = envDisplay(dataMode, session.environment, env)
   const actor = session.actor
   // Dev mode: no IdP, every caller is the dev user (dev@localhost, owner).
@@ -146,7 +133,7 @@ export function AppHeader() {
           >
             <span className="inline-flex items-center gap-2">
               <Search className="size-4" />
-              Jump to key, model, rule, trace ID
+              Jump to key, model, trace ID
             </span>
             <Kbd>⌘K</Kbd>
           </Button>
@@ -169,32 +156,6 @@ export function AppHeader() {
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuGroup>
-              </DropdownMenuContent>
-            </DropdownMenuPortal>
-          </DropdownMenu>
-
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger variant="ghost" aria-label={`Notifications, ${unread} unread`} className={cn('relative w-8 px-0', headerAction)}>
-              <Bell />
-              {unread > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-full bg-notification-badge px-1 pt-px text-[9px] leading-none font-semibold text-white tabular-nums">
-                  {unread}
-                </span>
-              )}
-            </DropdownMenuTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuContent align="end" className="max-h-(--available-height) w-[552px] overflow-y-auto p-0">
-                {notifications.length === 0 && <p className="px-4 py-3 text-sm text-muted-foreground">Nothing needs attention.</p>}
-                {notifications.map((n) => (
-                  <DropdownMenuItem key={n.id} className="flex items-start gap-3 rounded-none border-b border-border px-4 py-3 last:border-b-0">
-                    <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', n.unread ? 'bg-primary' : 'bg-transparent')} aria-hidden="true" />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="text-sm font-medium">{n.title}</span>
-                      <span className="text-xs text-muted-foreground">{n.body}</span>
-                    </span>
-                    <span className="text-xs whitespace-nowrap text-muted-foreground">{n.when}</span>
-                  </DropdownMenuItem>
-                ))}
               </DropdownMenuContent>
             </DropdownMenuPortal>
           </DropdownMenu>

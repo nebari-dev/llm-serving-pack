@@ -1,57 +1,23 @@
-import { ArrowRight, Copy, Download, Link2, Lock, Printer, ShieldAlert } from 'lucide-react'
+import { ArrowRight, Copy, Download, Link2, Printer, ShieldAlert } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { changes, dataMode, type PriceSource, type Receipt } from '@/data/catalog'
+import { dataMode, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
-import { DecisionTrace } from './decision-trace'
 import { Duration, Money, TokenCount } from './numbers'
 import { failedAfterAllowed, VerdictBadge } from './verdict'
 
 // Request receipt. A drawer, deep-linkable (?receipt=id), printable and
 // exportable as JSON.
 
-// The alert above the trace names what stopped the request, from its error
-// code: a rule, a budget, the key's allowlist, Warden, routing or the provider.
-const failures: Record<string, { title: string; refused: boolean }> = {
-  policy_blocked: { title: 'This request was blocked by a rule.', refused: true },
-  budget_exceeded: { title: 'This request was blocked by a budget.', refused: true },
-  budget_throttled: { title: 'A budget over its cap throttled this request. The caller may retry after the Retry-After delay.', refused: true },
-  model_not_allowed: { title: "This key isn't allowed to call this model.", refused: true },
-  policy_unavailable: { title: "Policy couldn't be evaluated, so the request failed closed.", refused: true },
-  policy_deadline: { title: "A rule couldn't be evaluated in time, so the request failed closed.", refused: true },
-  model_not_found: { title: 'No model by that name.', refused: true },
-  no_route: { title: 'No route serves this model.', refused: true },
-  no_healthy_backend: { title: 'No healthy backend serves this model.', refused: true },
-  upstream_error: { title: 'The provider returned an error.', refused: false },
-  upstream_rate_limited: { title: 'The provider rate-limited this request.', refused: false },
-  client_disconnected: { title: 'The caller disconnected before the response finished.', refused: false },
-}
-
+// The alert at the top says what stopped the request.
 function failure(r: Receipt) {
-  return failures[r.errorCode ?? ''] ?? { title: r.verdict === 'blocked' ? 'This request was blocked.' : 'This request failed.', refused: r.verdict === 'blocked' }
-}
-
-const inbound: Record<Receipt['inboundVerdict'], string> = {
-  allowed: 'clean',
-  stripped: 'stripped',
-  blocked: 'blocked',
-  skipped: 'not inspected',
-}
-
-// What policyMode means for this request, when it isn't the normal case.
-const sourceLabel: Record<PriceSource, string> = { seed: 'seed', litellm: 'LiteLLM', manual: 'override' }
-
-const modes: Record<NonNullable<Receipt['policyMode']>, { label: string; note?: string }> = {
-  enforced: { label: 'enforced' },
-  passthrough: { label: 'passthrough', note: "Warden's kill switch was on: rules were recorded but not enforced." },
-  'fail-open': { label: 'fail-open', note: "Policy couldn't be evaluated, and the rule's fail mode let the request through unpoliced." },
-  'fail-closed': { label: 'fail-closed', note: "Policy couldn't be evaluated, and the rule's fail mode refused the request." },
+  return { title: r.verdict === 'blocked' ? 'This request was blocked.' : 'This request failed.', refused: r.verdict === 'blocked' }
 }
 
 const api = dataMode === 'api'
@@ -115,10 +81,7 @@ function NotFound({ id }: { id: string | null }) {
 
 function ReceiptBody({ r }: { r: Receipt }) {
   const { pathname } = useLocation()
-  const basis = r.costBasis
-  const precedingChange = changes.find((c) => c.ts < r.ts)
   const { sameKey, sameSession } = useRelated(r)
-  const mode = r.policyMode ? modes[r.policyMode] : undefined
 
   const copy = (text: string, what: string) => {
     void navigator.clipboard?.writeText(text)
@@ -127,21 +90,16 @@ function ReceiptBody({ r }: { r: Receipt }) {
 
   const cacheWrites = r.cacheWriteTokens ?? 0
   const inputBilled = Math.max(r.inputTokens - r.cachedInputTokens - cacheWrites, 0)
-  // Priced from the snapshot stored with the receipt, never today's prices.
-  // Older snapshots have no cache-write rate and no sources.
+  // Output tokens include reasoning (as OpenAI and Agent Router count them).
   const lines = [
-    { label: 'Input', tok: inputBilled, rate: basis?.inPerM, source: basis?.sources?.input },
-    { label: 'Cached input', tok: r.cachedInputTokens, rate: basis?.cachedPerM, source: basis?.sources?.cachedInput },
-    ...(cacheWrites > 0 || basis?.cacheWritePerM != null ? [{ label: 'Cache write', tok: cacheWrites, rate: basis?.cacheWritePerM, source: basis?.sources?.cacheWrite }] : []),
-    // Output tokens include reasoning (as OpenAI and Agent Router count them), which bills at its own rate.
-    { label: 'Output', tok: Math.max(r.outputTokens - r.reasoningTokens, 0), rate: basis?.outPerM, source: basis?.sources?.output },
-    { label: 'Reasoning', tok: r.reasoningTokens, rate: basis?.reasoningPerM, source: basis?.sources?.reasoning },
+    { label: 'Input', tok: inputBilled },
+    { label: 'Cached input', tok: r.cachedInputTokens },
+    ...(cacheWrites > 0 ? [{ label: 'Cache write', tok: cacheWrites }] : []),
+    { label: 'Output', tok: Math.max(r.outputTokens - r.reasoningTokens, 0) },
+    { label: 'Reasoning', tok: r.reasoningTokens },
   ]
   // Refused before the upstream call: blocked, or throttled for now.
   const blocked = r.verdict === 'blocked' || r.verdict === 'throttled'
-  const lineTotal = lines.reduce((sum, l) => sum + (l.rate == null ? 0 : (l.tok * l.rate) / 1e6), 0)
-  // The recorded total is the number of record; say so if the lines disagree with it.
-  const mismatch = basis && r.costUsd !== null && !r.inFlight && !blocked && Math.abs(lineTotal - r.costUsd) > 1e-6
   const unpriced = r.costUsd === null && !r.inFlight
 
   return (
@@ -151,7 +109,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
         <div className="flex flex-wrap items-center gap-2">
           <VerdictBadge verdict={r.verdict} />
           {failedAfterAllowed(r) ? (
-            // Allowed by the guardrails, then failed upstream: say so, not just the code.
+            // Allowed, then failed upstream: say so, not just the code.
             <span className="rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
               Failed · <span className="font-mono">{r.status}</span>
             </span>
@@ -161,16 +119,6 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </span>
           )}
           {r.inFlight && <span className="text-xs text-muted-foreground">Streaming — usage arrives at end of stream</span>}
-          {mode?.note && (
-            <span className="inline-flex items-center gap-1 rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
-              Policy {mode.label}
-            </span>
-          )}
-          {r.contentCaptured && (
-            <span className="inline-flex items-center gap-1 rounded-sm border border-v-degraded-border bg-v-degraded-bg px-1.5 text-xs leading-5 font-medium text-v-degraded-fg">
-              <ShieldAlert className="size-3" /> Content capture on
-            </span>
-          )}
         </div>
         <DrawerTitle className="font-mono text-lg">
           {r.requestedModel}
@@ -188,16 +136,6 @@ function ReceiptBody({ r }: { r: Receipt }) {
           <span>
             <Duration ms={r.durationMs} unknown={r.inFlight} className="text-foreground" /> total
           </span>
-          {r.ttftMs && (
-            <span>
-              <Duration ms={r.ttftMs} className="text-foreground" /> to first token
-            </span>
-          )}
-          {r.overheadUs != null && (
-            <span title="The gateway's own time before calling the provider: key check, Warden and Agent Router.">
-              <span className="num font-mono text-foreground">{(r.overheadUs / 1000).toFixed(1)}ms</span> gateway overhead
-            </span>
-          )}
           <span className="text-muted-foreground">
             {clock(r.ts)} · {ago(r.ts)}
           </span>
@@ -224,90 +162,24 @@ function ReceiptBody({ r }: { r: Receipt }) {
           </div>
         )}
 
-        {/* 2. Decision trace */}
-        <Sub title="Decision trace">
-          <DecisionTrace steps={r.trace} totalMs={r.durationMs} />
-        </Sub>
-
-        {/* 3. Policy detail */}
-        <Sub title="Policy">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                <th className="py-1 pr-2 font-medium">#</th>
-                <th className="py-1 pr-2 font-medium">Rule</th>
-                <th className="py-1 pr-2 font-medium">Matched</th>
-                <th className="py-1 pr-2 font-medium">Action</th>
-                <th className="py-1 text-right font-medium">Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {r.rules.map((x, i) => (
-                <tr key={`${x.policyId ?? ''}/${x.ruleId}`} className={cn('border-b border-border last:border-0', !x.matched && 'text-muted-foreground')}>
-                  <td className="num py-1.5 pr-2 font-mono text-xs">{i + 1}</td>
-                  <td className="py-1.5 pr-2">
-                    <Link to={`/guardrails?rule=${x.policyId ?? x.ruleId}`} className="font-mono text-xs hover:underline">
-                      {x.policy && x.policy !== x.name ? `${x.policy}/${x.name}` : x.name} v{x.version}
-                    </Link>
-                  </td>
-                  <td className="py-1.5 pr-2 text-xs">{x.matched ? 'Yes' : 'No'}</td>
-                  <td className={cn('py-1.5 pr-2 text-xs', x.matched && x.action === 'block' && 'font-medium text-v-blocked-fg')}>{x.action}</td>
-                  <td className="num py-1.5 text-right font-mono text-xs">{x.ms.toFixed(2)}ms</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {blocked && <p className="mt-2 text-xs text-muted-foreground">First block wins and short-circuits; later rules were not evaluated.</p>}
-          {r.redactions.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
-              <span className="text-muted-foreground">Redacted before egress:</span>
-              {r.redactions.map((x) => (
-                <span key={x.type} className="rounded-sm border border-v-redacted-border bg-v-redacted-bg px-1.5 font-mono text-xs leading-5 text-v-redacted-fg">
-                  {x.count}× {x.type}
-                  {x.rehydrated ? ` · ${x.rehydrated} restored in the response` : ''}
-                </span>
-              ))}
-              <span className="text-xs text-muted-foreground">Types and counts only — matched values are never stored.</span>
-            </div>
-          )}
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span>
-              Policy mode: <span className="font-medium text-foreground">{mode?.label ?? 'not evaluated'}</span>
-            </span>
-            <span>
-              Inbound inspection: <span className="font-medium text-foreground">{inbound[r.inboundVerdict] ?? r.inboundVerdict}</span>
-            </span>
-          </div>
-          {mode?.note && <p className="mt-2 text-xs text-v-degraded-fg">{mode.note}</p>}
-        </Sub>
-
-        {/* 4. Usage and cost */}
+        {/* 2. Usage and cost */}
         <Sub title="Usage and cost">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-xs text-muted-foreground">
                 <th className="py-1 text-left font-medium">Type</th>
                 <th className="py-1 text-right font-medium">Tokens</th>
-                <th className="py-1 text-right font-medium">Rate / 1M</th>
                 <th className="py-1 text-right font-medium">Cost</th>
               </tr>
             </thead>
             <tbody>
               {lines.map((l) => (
                 <tr key={l.label} className="border-b border-border">
-                  <td className="py-1.5">
-                    {l.label}
-                    {l.source && <span className="ml-1.5 text-xs text-muted-foreground">{sourceLabel[l.source]}</span>}
-                  </td>
+                  <td className="py-1.5">{l.label}</td>
                   <td className="py-1.5 text-right">
                     <TokenCount value={l.tok} exact unknown={r.inFlight && l.label !== 'Input' && l.label !== 'Cached input'} />
                   </td>
-                  <td className="py-1.5 text-right">
-                    <Money value={l.rate ?? 0} unknown={l.rate == null} className="text-muted-foreground" />
-                  </td>
-                  <td className="py-1.5 text-right">
-                    <Money value={blocked ? 0 : ((l.rate ?? 0) * l.tok) / 1e6} precision="micro" unknown={r.inFlight || l.rate == null} />
-                  </td>
+                  <td />
                 </tr>
               ))}
               <tr className="font-medium">
@@ -315,7 +187,6 @@ function ReceiptBody({ r }: { r: Receipt }) {
                 <td className="py-1.5 text-right">
                   <TokenCount value={r.inputTokens + r.outputTokens} exact unknown={r.inFlight} />
                 </td>
-                <td />
                 <td className="py-1.5 text-right">
                   <Money value={r.costUsd} precision="micro" unknown={r.inFlight} />
                 </td>
@@ -323,40 +194,17 @@ function ReceiptBody({ r }: { r: Receipt }) {
             </tbody>
           </table>
           <p className="mt-2 text-xs text-muted-foreground">
-            {basis
-              ? basis.backend
-                ? `Priced with the ${basis.display} rates on ${basis.backend} ${basis.pricedLater ? 'that were set after this request arrived' : `recorded with this receipt at ${clock(r.ts)}`}, not today's prices.`
-                : `Priced with the ${basis.display} (${basis.provider}) rates recorded with this receipt at ${clock(r.ts)}, not today's prices.`
-              : unpriced
-                ? `${r.resolvedModel} on ${r.backend} had no price when this request arrived, so it has no cost and isn't in spend or budgets yet. It's costed once someone sets a price for that pair on Models → Pricing.`
-                : blocked
+            {unpriced
+              ? `${r.resolvedModel} on ${r.backend} has no price, so this request has no cost and isn't in spend. It's costed once OpenMeter has a price for it.`
+              : blocked
                 ? `${r.verdict === 'throttled' ? 'Throttled' : 'Blocked'} before the upstream call: nothing was billed.`
                 : r.inFlight
                   ? 'Priced when the stream ends and usage arrives.'
-                  : r.costUsd === 0
-                    ? "Nothing was priced: the request didn't complete upstream."
-                    : "No price snapshot was recorded with this receipt, so the rates behind its total can't be shown."}
-            {basis && blocked && ` ${r.verdict === 'throttled' ? 'Throttled' : 'Blocked'} before the upstream call: nothing was billed.`}
+                  : "Priced at OpenMeter's prices in effect now."}
           </p>
-          {mismatch && (
-            <p className="mt-1 text-xs text-v-degraded-fg">
-              These lines add up to <Money value={lineTotal} precision="micro" />, but the receipt records <Money value={r.costUsd} precision="micro" />. The recorded total is the one used for spend and budgets.
-            </p>
-          )}
         </Sub>
 
-        {/* 5. Content */}
-        <Sub title="Content">
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Lock className="size-4" aria-hidden="true" /> {api ? 'Not captured for this request: only its hashes were stored.' : 'Not captured for this route. Hashes only.'}
-          </p>
-          <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 font-mono text-xs">
-            <KV k="request_hash">{r.requestHash}</KV>
-            <KV k="response_hash">{r.responseHash}</KV>
-          </dl>
-        </Sub>
-
-        {/* 6. Related */}
+        {/* 3. Related */}
         <Sub title="Related">
           <dl className="mb-3 grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm">
             <KV k="Key">
@@ -368,11 +216,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
               </span>
             </KV>
             <KV k="Backend">
-              <span className="font-mono">{r.backend}</span> <span className="text-muted-foreground">· {r.provider} · {r.region}</span>
-            </KV>
-            <KV k="Route reason">
-              {r.routeReason}
-              {r.fallbackFrom && <span className="text-muted-foreground"> from {r.fallbackFrom}</span>}
+              <span className="font-mono">{r.backend}</span>
             </KV>
             {r.actor && <KV k="Actor">{r.actor}</KV>}
             {r.sessionId && (
@@ -381,12 +225,6 @@ function ReceiptBody({ r }: { r: Receipt }) {
               </KV>
             )}
           </dl>
-          {precedingChange && (
-            <p className="mb-3 rounded-md border border-border bg-muted p-2 text-xs text-muted-foreground-strong">
-              Most recent config change before this request: <span className="font-medium text-foreground">{precedingChange.action}</span>{' '}
-              <span className="font-mono">{precedingChange.target}</span> by {precedingChange.actor}, {ago(precedingChange.ts, r.ts).replace(/ ago$/, '')} earlier.
-            </p>
-          )}
           <RelatedList title={sameSession.length ? 'Same session' : 'Same key, the hour before'} items={sameSession.length ? sameSession : sameKey} />
         </Sub>
       </DrawerBody>

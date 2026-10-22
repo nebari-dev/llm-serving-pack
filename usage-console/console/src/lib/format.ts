@@ -11,12 +11,6 @@ export function microMoney(usd: number) {
   if (usd === 0) return '$0.0000'
   return '$' + usd.toFixed(4)
 }
-
-/** Cost per request to 4 places; null is "no price" (none of the requests had one), never $0. */
-export function perRequest(usd: number | null) {
-  return usd === null ? 'no price' : `$${usd.toFixed(4)}`
-}
-
 /** "3 requests have no price and aren't in this total", for a total that leaves them out. */
 export function unpricedNote(n: number, what = 'this total') {
   return `${n.toLocaleString('en-US')} request${n === 1 ? ' has' : 's have'} no price and ${n === 1 ? "isn't" : "aren't"} in ${what}`
@@ -36,15 +30,6 @@ export function int(n: number) {
 export function clock(ts: number) {
   return new Date(ts).toLocaleTimeString('en-GB', { hour12: false })
 }
-
-/** Seconds as "4m 12s". */
-export function age(sec: number) {
-  const s = Math.round(sec)
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`
-  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
-}
-
 export function ago(ts: number, now = Date.now()) {
   const s = Math.round((now - ts) / 1000)
   if (s < 60) return `${s}s ago`

@@ -1,37 +1,31 @@
-import { ArrowRight, Download, TrendingUp } from 'lucide-react'
+import { Download } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
-import { StackedBars, Meter } from '@/components/gw/charts'
+import { useNavigate } from 'react-router-dom'
+import { StackedBars } from '@/components/gw/charts'
 import { Delta, Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
-import { StateChip } from '@/components/gw/verdict'
-import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgetLabel, budgets, dataMode, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { dataMode, type SpendRow, type SpendView } from '@/data/catalog'
 import { downloadText, spendCsv } from '@/lib/csv'
 import { int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
 import { type Dim, dims, mockSpendView } from './spend-data'
-import { LiveSavings } from './spend-live'
 
-// Spend and budgets. Two modes on one screen (trend / breakdown),
-// every cell drills through to the filtered traffic view, budgets state their
-// enforcement in words, and projections always carry their basis.
+// Spend. Two modes on one screen (trend / breakdown), every cell drills
+// through to the filtered traffic view, and projections always carry their
+// basis.
 
 const api = dataMode === 'api'
 const DAY = 86_400_000
 
-/** A cap in whole dollars, or with cents when it has them. */
-const capMoney = (usd: number) => money(usd, Number.isInteger(usd) ? 0 : 2)
-
-/** A UTC day, as the month and budget periods are UTC. */
+/** A UTC day, as the month is UTC. */
 function utcDate(ms: number) {
   return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
@@ -69,8 +63,9 @@ function DimSelect({ value, onChange, label }: { value: Dim; onChange: (d: Dim) 
   )
 }
 
+/** Traffic has no provider filter: receipts don't carry one. */
 function trafficHref(dim: Dim, r: SpendRow) {
-  return r.noDrill ? null : `/traffic?${new URLSearchParams({ [dim]: r.id }).toString()}`
+  return r.noDrill || dim === 'provider' ? null : `/traffic?${new URLSearchParams({ [dim]: r.id }).toString()}`
 }
 
 function pctChange(now: number, prev: number) {
@@ -91,7 +86,6 @@ export function SpendPage() {
 
   const initial = useMemo(() => (api ? emptyView(range, dim) : mockSpendView(range, dim)), [range, dim])
   const { data: view, loaded } = useLive<SpendView>(api ? `/spend?range=${range}&by=${dim}` : null, initial, 60_000)
-  const liveBudgets = useLive<Budget[]>(api ? '/budgets' : null, budgets, 60_000)
   const { period } = view
   const windowTotal = view.rows.reduce((a, r) => a + r.spendUsd, 0)
   const prevTotal = view.rows.reduce((a, r) => a + r.prevSpendUsd, 0)
@@ -164,7 +158,7 @@ export function SpendPage() {
                 <>
                   Month to date plus the trailing {period.trailingDays < 7 ? `${period.trailingDays}-day` : '7-day'} average of{' '}
                   <Money value={period.trailingDailyUsd} className="text-foreground" />
-                  /day × {period.remainingDays.toFixed(1)} days remaining in the UTC month. Assumes current prices and no budget enforcement.
+                  /day × {period.remainingDays.toFixed(1)} days remaining in the UTC month. Assumes current prices.
                   {!!period.unpriced && ' Requests with no price add nothing to it.'}
                 </>
               ) : (
@@ -187,32 +181,10 @@ export function SpendPage() {
           </div>
 
           <TabsPanel value="trend" className="flex flex-col gap-4">
-            {seedSpendSurge && (
-              <Alert variant="warning">
-                <TrendingUp />
-                <AlertTitle>
-                  {seedSpendSurge.team} spend is up {seedSpendSurge.ratio}× since {seedSpendSurge.since}.
-                </AlertTitle>
-                <AlertDescription>
-                  <p>
-                    Almost all of it is <span className="font-mono">{seedSpendSurge.key}</span> on <span className="font-mono">{seedSpendSurge.model}</span>.
-                    The support budget crossed its cap and is throttling.
-                  </p>
-                </AlertDescription>
-                <AlertAction>
-                  <Button size="sm" variant="outline" render={<Link to={`/traffic?key=${seedSpendSurge.key}&model=${seedSpendSurge.model}`} />}>
-                    Open receipts <ArrowRight />
-                  </Button>
-                </AlertAction>
-              </Alert>
-            )}
-            {loaded ? <TrendChart view={view} dim={dim} surge={!!seedSpendSurge} /> : <Skeleton shape="block" className="h-[252px]" />}
+            {loaded ? <TrendChart view={view} dim={dim} /> : <Skeleton shape="block" className="h-[252px]" />}
             {loaded && !!view.trend.unpriced && (
               <p className="text-xs text-muted-foreground">
-                {unpricedNote(view.trend.unpriced, 'these bars')}.{' '}
-                <Link to="/models?tab=pricing" className="underline underline-offset-4">
-                  Set prices
-                </Link>
+                {unpricedNote(view.trend.unpriced, 'these bars')}.
               </p>
             )}
             {view.trend.bucketMs === DAY && (range === '15m' || range === '1h' || range === '6h' || range === '24h') && (
@@ -237,51 +209,21 @@ export function SpendPage() {
               />
             ) : (
               <p className="py-8 text-center text-sm text-muted-foreground">
-                No spend in {rangeLabel(range)}.{' '}
-                <Link to="/onboarding" className="text-foreground underline">
-                  Point an app at the gateway →
-                </Link>
+                No spend in {rangeLabel(range)}.
               </p>
             )}
           </TabsPanel>
         </Tabs>
       </Section>
-
-      <Section
-        id="budgets"
-        title="Budgets"
-        description={
-          loaded
-            ? `Monthly caps, UTC. Period ${utcDate(period.periodStart)} – ${utcDate(lastDay)}, resets in ${Math.ceil(period.remainingDays)} days.`
-            : 'Monthly caps, UTC.'
-        }
-      >
-        {liveBudgets.loaded ? <BudgetTable budgets={liveBudgets.data} remainingDays={period.remainingDays} /> : <Skeleton shape="block" className="h-[240px]" />}
-      </Section>
-
-      <Section
-        id="savings"
-        title="Savings opportunities"
-        description={
-          api
-            ? 'Requests a cheaper model in the same family would plausibly have served, and what they’d have cost on it.'
-            : 'Requests where a cheaper model in the same family would plausibly have served, based on output length and task shape.'
-        }
-      >
-        {api ? <LiveSavings /> : seedSavings && <Savings opportunities={seedSavings} />}
-      </Section>
     </div>
   )
 }
 
-/** Under a total that leaves unpriced requests out: how many, and where to price them. */
+/** Under a total that leaves unpriced requests out: how many. */
 function UnpricedNote({ n }: { n: number }) {
   return (
     <dd className="mt-0.5 text-xs text-muted-foreground">
-      {unpricedNote(n)}.{' '}
-      <Link to="/models?tab=pricing" className="underline underline-offset-4">
-        Set prices
-      </Link>
+      {unpricedNote(n)}.
     </dd>
   )
 }
@@ -295,7 +237,7 @@ function costPerRequest(r: SpendRow) {
 
 const palette = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)', 'var(--series-5)']
 
-function TrendChart({ view, dim, surge }: { view: SpendView; dim: Dim; surge: boolean }) {
+function TrendChart({ view, dim }: { view: SpendView; dim: Dim }) {
   const navigate = useNavigate()
   const { trend } = view
   const daily = trend.bucketMs === DAY
@@ -332,7 +274,6 @@ function TrendChart({ view, dim, surge }: { view: SpendView; dim: Dim; surge: bo
       valueFormat={(v) => money(v)}
       caption={`${grain} spend stacked by ${dim}, last ${n} ${daily ? 'days (UTC)' : 'buckets'}`}
       xLabel={daily ? 'Day (UTC)' : 'Time'}
-      highlightFrom={surge && (dim === 'team' || dim === 'key') ? n - 6 : undefined}
       onBarClick={(x) => {
         const t = byLabel.get(x)
         if (t === undefined) return
@@ -476,163 +417,5 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
         </TableRow>
       </TableFooter>
     </Table>
-  )
-}
-
-// ---- budgets -------------------------------------------------------------
-
-/**
- * What the budget does at its cap, in words. Api mode says only what
- * the gateway does: block returns 429; throttle holds each covered key to a
- * few requests a minute and answers the rest 429 with Retry-After; warn
- * admits the request and records the budget step in its receipt.
- */
-function enforcement(b: Budget) {
-  const pct = b.currentUsd / b.capUsd
-  const cap = capMoney(b.capUsd)
-  const over = b.currentUsd >= b.capUsd
-  if (api) {
-    if (over) {
-      const what =
-        b.onExceed === 'block'
-          ? 'Blocking new requests.'
-          : b.onExceed === 'throttle'
-            ? `Throttling: each key gets ${throttleRate(b)} requests a minute; more get 429 budget_throttled with Retry-After.`
-            : 'Warn only: requests are admitted and their receipts record the budget over cap.'
-      return {
-        tone: b.onExceed === 'block' ? ('blocked' as const) : ('degraded' as const),
-        chip: b.onExceed === 'block' ? 'Blocking' : b.onExceed === 'throttle' ? 'Throttling' : 'Over cap',
-        words: `Over cap by ${money(b.currentUsd - b.capUsd)}. ${what}`,
-      }
-    }
-    const action =
-      b.onExceed === 'block'
-        ? `Blocks new requests at ${cap}`
-        : b.onExceed === 'throttle'
-          ? `Throttles at ${cap}: each key then gets ${throttleRate(b)} requests a minute`
-          : `Marks requests over ${cap} in their receipts, no enforcement`
-    const risk = b.projectedUsd > b.capUsd ? ' Projected to cross before period end.' : ''
-    return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
-  }
-  if (b.currentUsd > b.capUsd) {
-    const since = new Date(Date.now() - 2.6 * DAY)
-    const verb = b.onExceed === 'block' ? 'Blocking' : b.onExceed === 'throttle' ? 'Throttling' : 'Warning owners about'
-    return {
-      tone: b.onExceed === 'warn' ? ('degraded' as const) : ('blocked' as const),
-      chip: b.onExceed === 'block' ? 'Blocking' : b.onExceed === 'throttle' ? 'Throttling' : 'Over cap',
-      words: `Over cap by ${money(b.currentUsd - b.capUsd)}. ${verb} new requests since ${utcDate(since.getTime())}, ${since.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`,
-    }
-  }
-  const action =
-    b.onExceed === 'block'
-      ? `Blocks new requests at ${cap}`
-      : b.onExceed === 'throttle'
-        ? `Throttles to 10 requests/min at ${cap}`
-        : `Warns owners at ${cap} — no enforcement`
-  const risk = b.projectedUsd > b.capUsd ? ' Projected to cross before period end.' : ''
-  return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
-}
-
-function BudgetTable({ budgets, remainingDays }: { budgets: Budget[]; remainingDays: number }) {
-  if (!budgets.length) return <p className="py-6 text-center text-sm text-muted-foreground">No budgets set.</p>
-  return (
-    <Table aria-label="Budgets">
-      <TableHeader>
-        <TableRow>
-          <TableHead>Scope</TableHead>
-          <TableHead className="text-right">Spent</TableHead>
-          <TableHead className="text-right">Cap</TableHead>
-          <TableHead className="w-56">Consumption</TableHead>
-          <TableHead>Enforcement</TableHead>
-          <TableHead className="text-right">Projected</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {budgets.map((b) => {
-          const e = enforcement(b)
-          const pct = (b.currentUsd / b.capUsd) * 100
-          const daysToCap = b.trailingDailyUsd > 0 ? (b.capUsd - b.currentUsd) / b.trailingDailyUsd : Infinity
-          const crossDay = b.currentUsd < b.capUsd && daysToCap < remainingDays ? Date.now() + daysToCap * DAY : null
-          return (
-            <TableRow key={b.id}>
-              <TableCell className="py-2">
-                {/* Traffic filters keys by name, teams and projects by id. */}
-                <Link
-                  to={`/traffic?${b.scopeType}=${encodeURIComponent(b.scopeType === 'key' ? budgetLabel(b) : b.scope)}`}
-                  className="font-mono text-[0.8125rem] hover:underline"
-                >
-                  {budgetLabel(b)}
-                </Link>
-                <div className="text-xs text-muted-foreground">
-                  {b.scopeType === 'project' ? ['project', projects.find((p) => p.id === b.scope)?.team].filter(Boolean).join(' · ') : b.scopeType} · monthly
-                </div>
-              </TableCell>
-              <TableCell className="py-2 text-right">
-                <Money value={b.currentUsd} />
-                <div className="num font-mono text-xs text-muted-foreground">{pct.toFixed(0)}%</div>
-                {!!b.unpricedRequests && (
-                  <div className="text-xs text-muted-foreground" title={`${unpricedNote(b.unpricedRequests, 'what this budget has spent')}, so they don't count toward its cap.`}>
-                    + {int(b.unpricedRequests)} no price
-                  </div>
-                )}
-              </TableCell>
-              <TableCell className="py-2 text-right">
-                <Money value={b.capUsd} />
-              </TableCell>
-              <TableCell className="py-2">
-                <Meter value={b.currentUsd} cap={b.capUsd} projected={b.projectedUsd} />
-                <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-                  <span>solid: spent · dashed: projected</span>
-                  <span>| cap</span>
-                </div>
-              </TableCell>
-              <TableCell className="max-w-80 py-2 text-sm whitespace-normal">
-                {e.tone === 'neutral' ? (
-                  <span className="text-muted-foreground-strong">{e.words}</span>
-                ) : (
-                  <span className="flex flex-col items-start gap-1">
-                    <StateChip tone={e.tone}>{e.chip}</StateChip>
-                    <span className="text-muted-foreground-strong">{e.words}</span>
-                  </span>
-                )}
-              </TableCell>
-              <TableCell className="py-2 text-right">
-                <Money value={b.projectedUsd} className={cn(b.projectedUsd > b.capUsd && 'text-v-degraded-fg')} />
-                <div className="text-xs text-muted-foreground" title="Month to date plus the trailing 7-day average × days remaining">
-                  {crossDay ? `crosses cap ~${utcDate(crossDay)}` : `7-day avg ${money(b.trailingDailyUsd)}/day`}
-                </div>
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
-  )
-}
-
-// ---- savings (mock mode only) --------------------------------------------
-
-function Savings({ opportunities }: { opportunities: SavingsOpportunity[] }) {
-  return (
-    <ul className="divide-y divide-border rounded-md border border-border bg-card">
-      {opportunities.map((o) => (
-        <li key={o.id} className="flex flex-wrap items-start justify-between gap-4 px-4 py-3">
-          <div className="min-w-0 max-w-3xl">
-            <div className="text-base">
-              <Money value={o.monthly} precision="whole" className="font-semibold" />
-              /mo if {o.before}
-              <span className="font-mono">{o.subject}</span>
-              {o.after} moved to <span className="font-mono">{o.target}</span>
-            </div>
-            <p className="mt-0.5 text-sm text-muted-foreground">{o.basis}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" size="sm" render={<Link to={o.href} />}>
-              View {int(o.receipts)} receipts
-            </Button>
-          </div>
-        </li>
-      ))}
-    </ul>
   )
 }

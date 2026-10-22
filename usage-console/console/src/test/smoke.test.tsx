@@ -46,7 +46,7 @@ describe('routes render', () => {
     window.history.pushState({}, '', `/traffic?receipt=${r.id}`)
     render(<App />)
     await act(async () => {})
-    expect(document.body.textContent).toContain('Decision trace')
+    expect(document.body.textContent).toContain('Usage and cost')
     expect(document.body.textContent).toContain(r.traceId)
   })
 

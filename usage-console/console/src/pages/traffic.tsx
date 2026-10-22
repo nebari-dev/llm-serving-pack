@@ -17,12 +17,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toast'
-import { backends, dataMode, keys, type LiveRoute, liveRoutes, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
+import { keys, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
 import { type Dim, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
-import { useLive } from '@/state/live'
 
 // Traffic: a dense virtualized table over a live stream.
 
@@ -40,17 +39,6 @@ const dims: { dim: Dim; label: string; values: { value: string; label: string }[
     dim: 'verdict',
     label: 'Verdict',
     values: (Object.keys(verdictMeta) as Verdict[]).map((v) => ({ value: v, label: verdictMeta[v].label })),
-  },
-  {
-    dim: 'provider',
-    label: 'Provider',
-    values: [...new Set(backends.map((b) => b.provider))].sort().map((p) => ({ value: p, label: p })),
-  },
-  { dim: 'backend', label: 'Backend', values: backends.map((b) => ({ value: b.name, label: b.name })) },
-  {
-    dim: 'reason',
-    label: 'Route reason',
-    values: ['explicit', 'alias', 'policy', 'fallback'].map((p) => ({ value: p, label: p })),
   },
 ]
 const primaryDims: Dim[] = ['key', 'team', 'model', 'verdict']
@@ -133,7 +121,6 @@ export function TrafficPage() {
   const until = params.get('until') ? Number(params.get('until')) : null
   const window_ = useWindow(range, since, day, until)
   const feed = useTrafficFeed(filters, window_)
-  const capturing = useLive<LiveRoute[]>(dataMode === 'api' ? '/routes' : null, liveRoutes, 60_000).data.filter((r) => r.captureContent)
   const rows = feed.rows
 
   const frozen = !live || hovering || focusWithin
@@ -304,7 +291,7 @@ export function TrafficPage() {
             ) : (
               <span
                 className="num font-mono"
-                title={`Project, model, provider and route reason filters can't be counted from the 5-minute aggregate, so this is what has loaded so far.${feed.wasSampled ? ' Live rows were sampled, so it is less than what happened.' : ''}`}
+                title={`Filtered requests can't be counted, so this is what has loaded so far.${feed.wasSampled ? ' Live rows were sampled, so it is less than what happened.' : ''}`}
               >
                 {rows.length.toLocaleString()} loaded
               </span>
@@ -312,15 +299,6 @@ export function TrafficPage() {
           </span>
         </div>
 
-        {/* Content capture on gets a persistent marker wherever its route's traffic appears. */}
-        {capturing.length > 0 && (
-          <div role="status" aria-label="Content capture" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
-            <span className="font-medium">Content capture on</span>
-            <span className="text-foreground/80">
-              for {capturing.map((r) => r.name).join(', ')}: those requests’ prompts and responses are kept, masked, for 30 days.
-            </span>
-          </div>
-        )}
         {/* Backpressure: never silently drop. Only the live rows are sampled; counts come from the database. */}
         {feed.sampling ? (
           <div role="status" aria-label="Stream sampling" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
@@ -383,15 +361,11 @@ export function TrafficPage() {
 
         {feed.loaded && visible.length === 0 ? (
           <EmptyState
-            title={hasFilters ? 'No requests match these filters in this window.' : `No traffic ${rangeLabel(range)}. Point an app at the gateway →`}
+            title={hasFilters ? 'No requests match these filters in this window.' : `No traffic ${rangeLabel(range)}.`}
             action={
-              hasFilters ? (
+              hasFilters && (
                 <Button variant="outline" size="sm" onClick={clearAll}>
                   Clear filters
-                </Button>
-              ) : (
-                <Button size="sm" render={<a href="/onboarding" />}>
-                  Connect an app
                 </Button>
               )
             }
@@ -626,12 +600,7 @@ const TrafficRow = memo(function TrafficRow({
             return (
               <td key={c} className={cn(cell, 'font-mono text-xs')}>
                 {r.resolvedModel}
-                {r.fallbackFrom && (
-                  <span className="ml-1 text-v-degraded-fg" title={`Fell back from ${r.fallbackFrom}`}>
-                    ↓<span className="sr-only"> fell back from {r.fallbackFrom}</span>
-                  </span>
-                )}
-                {r.requestedModel !== r.resolvedModel && !r.fallbackFrom && (
+                {r.requestedModel !== r.resolvedModel && (
                   <span className="ml-1 text-muted-foreground" title={`Requested ${r.requestedModel}`}>
                     ← {r.requestedModel}
                   </span>
@@ -667,13 +636,7 @@ const TrafficRow = memo(function TrafficRow({
           case 'ms':
             return (
               <td key={c} className={cn(cell, 'text-right text-xs')}>
-                {r.inFlight ? (
-                  <span className="text-muted-foreground">
-                    ttft <Duration ms={r.ttftMs ?? 0} unknown={r.ttftMs == null} />
-                  </span>
-                ) : (
-                  <Duration ms={r.durationMs} />
-                )}
+                <Duration ms={r.durationMs} unknown={r.inFlight} />
               </td>
             )
           case 'status':

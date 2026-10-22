@@ -1,36 +1,33 @@
-import { ArrowRight, GitBranch, MonitorCog } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { ArrowRight } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { StackedArea } from '@/components/gw/charts'
-import { Delta, Money } from '@/components/gw/numbers'
+import { Delta } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
-import { StateChip, toneFill, toneText } from '@/components/gw/verdict'
+import { toneFill } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { type ActivityView, backends, budgetLabel, budgets, type Change, changes, dataMode, policies, type SeriesPoint, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
-import { age, ago, clock, int, money, unpricedNote } from '@/lib/format'
+import { dataMode, type SeriesPoint, seedSummary, session, type Summary, trafficSeries } from '@/data/catalog'
+import { ago, clock, int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-state'
-import { useDegradations } from '@/state/degradations'
 import { useLive, useNow } from '@/state/live'
 
 // Overview: not a tile grid. A single vertical narrative:
-// status strip → traffic → three numbers → what changed → attention list.
+// status strip → traffic → two numbers.
 
 // Two panels on one time axis (small multiples, one y-scale each). Allowed is
-// ~85% of traffic, so stacking it with the rest flattens blocked and redacted
-// into hairlines, and they should be visible here.
+// ~85% of traffic, so stacking it with the rest flattens the others into
+// hairlines, and they should be visible here.
 // Volume is drawn quiet — "green is the absence of information" — and the
 // non-allowed verdicts get their own scale.
 const volumeSeries = [{ key: 'total', label: 'Requests', color: 'var(--muted-foreground-strong)' }]
 
-// Stack order is part of the palette: validate_palette.js checks adjacent
-// pairs, and yellow↔red fails as neighbors. This order passes in both themes.
-// Throttled shares truncated's degraded hue (there are five state colors),
+// Stack order is part of the palette: adjacent pairs were checked for
+// contrast in both themes.
+// Throttled shares truncated's degraded hue (there are three state colors),
 // lightened so the two read apart in the stack.
 const verdictSeries = [
   { key: 'throttled', label: 'Throttled', color: `color-mix(in oklch, ${toneFill.degraded} 50%, var(--canvas))` },
-  { key: 'redacted', label: 'Redacted', color: toneFill.redacted },
   { key: 'truncated', label: 'Truncated', color: toneFill.degraded },
-  { key: 'rerouted', label: 'Rerouted', color: toneFill.rerouted },
   { key: 'blocked', label: 'Blocked', color: toneFill.blocked },
 ]
 
@@ -54,30 +51,12 @@ function perBucket(series: SeriesPoint[]) {
 
 export function OverviewPage() {
   const { range } = useApp()
-  const navigate = useNavigate()
   const { series, summary } = useOverviewData(range)
-  // Api mode's effects are the ones GET /activity computes; a change older
-  // than its week has none.
-  const activity = useLive<ActivityView | null>(dataMode === 'api' ? '/activity?range=7d' : null, null, 60_000).data
-  const effectOf = (c: Change): Pick<Change, 'effect' | 'effectTone'> => {
-    if (dataMode !== 'api') return c
-    const a = activity?.changes.find((x) => x.id === c.id)
-    return { effect: a?.effect, effectTone: a?.effectTone }
-  }
   const multiDay = series.length > 1 && series[series.length - 1].t - series[0].t > 86_400_000
   const xFormat = (t: number) => (multiDay ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : clock(t).slice(0, 5))
-  // Changes inside the charted window; the latest one is labeled.
-  const windowStart = series[0]?.t ?? 0
-  // Exports are recorded as changes but change nothing.
-  const configChanges = changes.filter((c) => c.targetKind !== 'Export')
-  const inWindow = configChanges.filter((c) => c.ts >= windowStart)
-  const annotations = inWindow.map((c, i) => ({ t: c.ts, label: i === 0 ? c.target : '' }))
   const { current, previous } = summary
   const span = rangeLabel(range).replace('last ', '')
   const since = `vs previous ${span}`
-  const hotRule = policies
-    .filter((r) => r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
-    .sort((a, b) => b.fired24h / b.baseline7d - a.fired24h / a.baseline7d)[0]
   const delta = (now: number, before: number, goodWhen: 'up' | 'down') => {
     const p = pctChange(now, before)
     return p === null ? null : <Delta pct={p} goodWhen={goodWhen} />
@@ -95,13 +74,13 @@ export function OverviewPage() {
         }
       />
 
-      {/* 1. Status strip — green is the absence of information. */}
+      {/* 1. Status strip: green is the absence of information. */}
       <StatusStrip />
 
       {/* 2. Traffic with verdict composition. */}
       <Section
         title="Traffic"
-        description={`Requests ${perBucket(series)}, and the ones Warden did not simply allow, on their own scale.`}
+        description={`Requests ${perBucket(series)}, and the ones not simply allowed, on their own scale.`}
         actions={
           <Button variant="ghost" size="sm" render={<Link to="/traffic" />}>
             Open traffic <ArrowRight />
@@ -114,24 +93,22 @@ export function OverviewPage() {
           syncId="overview-traffic"
           height={140}
           hideXAxis
-          data={series.map((p) => ({ t: p.t, values: { total: p.allowed + p.redacted + p.rerouted + p.truncated + p.blocked + p.throttled } }))}
+          data={series.map((p) => ({ t: p.t, values: { total: p.allowed + p.truncated + p.blocked + p.throttled } }))}
           xFormat={xFormat}
-          annotations={annotations}
         />
         <h3 className="mt-5 mb-1 text-sm font-medium">Not allowed</h3>
         <StackedArea
-          caption={`Throttled, redacted, truncated, rerouted, and blocked requests ${perBucket(series)}`}
+          caption={`Throttled, truncated and blocked requests ${perBucket(series)}`}
           series={verdictSeries}
           syncId="overview-traffic"
           height={150}
-          data={series.map((p) => ({ t: p.t, values: { throttled: p.throttled, redacted: p.redacted, truncated: p.truncated, rerouted: p.rerouted, blocked: p.blocked } }))}
+          data={series.map((p) => ({ t: p.t, values: { throttled: p.throttled, truncated: p.truncated, blocked: p.blocked } }))}
           xFormat={xFormat}
-          annotations={annotations.map((a) => ({ ...a, label: '' }))}
         />
       </Section>
 
-      {/* 3. Three numbers with trend, each a link carrying the time range. */}
-      <div className="grid grid-cols-1 border-b border-border sm:grid-cols-3">
+      {/* 3. Two numbers with trend, each a link carrying the time range. */}
+      <div className="grid grid-cols-1 border-b border-border sm:grid-cols-2">
         <BigNumber to="/traffic" label="Requests" value={int(current.requests)} delta={delta(current.requests, previous.requests, 'up')} note={none(previous.requests)} />
         <BigNumber
           to="/spend"
@@ -147,138 +124,24 @@ export function OverviewPage() {
                 : none(previous.spendUsd)
           }
         />
-        <BigNumber
-          to="/traffic?verdict=blocked&verdict=redacted"
-          label="Blocked + redacted"
-          value={int(current.blocked + current.redacted)}
-          delta={delta(current.blocked + current.redacted, previous.blocked + previous.redacted, 'down')}
-          note={
-            hotRule && range === '24h'
-              ? `${hotRule.name} fired ${Math.round(hotRule.fired24h / hotRule.baseline7d)}× its baseline`
-              : none(previous.blocked + previous.redacted)
-          }
-        />
       </div>
-
-      {/* 4. What changed — config changes joined to their traffic effect. */}
-      <Section
-        title="What changed"
-        description="Config changes and what they did to traffic."
-        actions={
-          <Button variant="ghost" size="sm" render={<Link to="/activity" />}>
-            Full activity <ArrowRight />
-          </Button>
-        }
-      >
-        {/* The three latest, as equal rows, each joined to its effect. */}
-        {!configChanges[0] && <p className="text-sm text-muted-foreground">No config changes yet.</p>}
-        <ol aria-label="Recent config changes" className="divide-y divide-border border-y border-border empty:hidden">
-          {configChanges.slice(0, 3).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
-            <li key={c.id} className="grid grid-cols-[5rem_1fr_auto] items-baseline gap-4 py-2.5 text-sm">
-              <span className="num font-mono text-xs text-muted-foreground">{clock(c.ts).slice(0, 5)}</span>
-              <div className="min-w-0">
-                <span className="inline-flex items-center gap-1.5">
-                  {c.source === 'git' ? <GitBranch className="size-3.5 text-muted-foreground" aria-label="from Git" /> : <MonitorCog className="size-3.5 text-muted-foreground" aria-label="from console" />}
-                  <span className="font-medium">{c.action}</span>
-                  <span className="font-mono text-[0.8125rem]">{c.target}</span>
-                </span>
-                <span className="text-muted-foreground"> · {c.actor}</span>
-                {c.effect && (
-                  <div
-                    className={cn(
-                      'mt-0.5 text-[0.8125rem]',
-                      c.effectTone === 'good' ? toneText.allowed : c.effectTone === 'bad' ? toneText.blocked : 'text-muted-foreground-strong',
-                    )}
-                  >
-                    {c.effect}
-                  </div>
-                )}
-              </div>
-              <Link to={`/traffic?since=${Math.round(c.ts)}`} className="text-xs whitespace-nowrap text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
-                Receipts after →
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </Section>
-
-      {/* 5. Attention list — each row has one action. */}
-      <Section title="Needs attention" description="Budgets over 80%, anomalous spend, models with no price, rules above baseline, failing backends.">
-        <AttentionList onGo={navigate} summary={summary} />
-      </Section>
     </div>
   )
 }
 
-/** GET /gateway/overhead: the gateway's own time per request. */
-type GatewayOverhead = { p50Ms: number | null; p95Ms: number | null; samples: number; windowMinutes: number; goalMs: number }
-
 function StatusStrip() {
   const now = useNow()
   const receipts = useReceipts()
-  const warden = useLive(dataMode === 'api' ? '/session' : null, session, 15_000).data.warden
-  const overhead = useLive<GatewayOverhead | null>(dataMode === 'api' ? '/gateway/overhead' : null, null, 30_000).data
-  const overGoal = overhead?.p50Ms != null && overhead.p50Ms > overhead.goalMs
-  // A backend is called out when it's down or failing now. In api mode that's
-  // observed from receipts; idle backends had no requests to judge by.
-  const live = useLive(dataMode === 'api' ? '/backends' : null, backends, 30_000).data
-  const degradedBackends = live.filter((b) => b.health === 'down' || b.health === 'degraded' || b.sync === 'failed' || b.errorRate >= 5)
-  const idle = live.filter((b) => b.health === 'idle' && !degradedBackends.includes(b)).length
-  const failOpen = policies.filter((r) => r.failMode === 'open' && r.mode !== 'draft' && r.mode !== 'disabled')
   const last = receipts.reduce((m, r) => Math.max(m, r.ts), 0)
   const quiet = !last || now - last > 5 * 60_000
   return (
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border bg-header px-6 py-2.5 text-sm" aria-label="System status">
       <span className="inline-flex items-center gap-2">
-        <span className={cn('size-2 rounded-full', quiet || overGoal ? 'bg-v-degraded-bar' : 'bg-v-allowed-bar')} aria-hidden="true" />
+        <span className={cn('size-2 rounded-full', quiet ? 'bg-v-degraded-bar' : 'bg-v-allowed-bar')} aria-hidden="true" />
         Gateway{' '}
         <span className="text-muted-foreground">
-          {dataMode === 'api' ? (last ? `last receipt ${ago(Math.min(last, now), now)}` : 'no receipts yet') : 'nominal · p50 overhead 2.1ms'}
-          {overhead?.p50Ms != null && (
-            <span
-              className={cn(overGoal && 'text-v-degraded-fg')}
-              title={`The gateway's own time per request (key check, Warden, Agent Router) over the last ${overhead.windowMinutes} minutes: p95 ${overhead.p95Ms}ms across ${overhead.samples.toLocaleString('en-US')} requests. Goal: ${overhead.goalMs}ms p50.`}
-            >
-              {` · p50 overhead ${overhead.p50Ms}ms`}
-              {overGoal && ` (goal ${overhead.goalMs}ms)`}
-            </span>
-          )}
+          {dataMode === 'api' ? (last ? `last receipt ${ago(Math.min(last, now), now)}` : 'no receipts yet') : 'nominal'}
         </span>
-      </span>
-      <span className="inline-flex flex-wrap items-center gap-2">
-        Providers
-        {degradedBackends.map((b) => (
-          <StateChip key={b.name} tone={b.health === 'down' ? 'blocked' : 'degraded'}>
-            <span className="font-mono">{b.name}</span>{' '}
-            {b.health === 'down' ? (dataMode === 'api' ? 'down, every request failing' : 'down, not routed') : `${b.errorRate}% errors, last hour`}
-          </StateChip>
-        ))}
-        <span className="text-muted-foreground">
-          {live.length - degradedBackends.length - idle} others nominal{idle > 0 && ` · ${idle} idle`}
-        </span>
-      </span>
-      <span className="inline-flex items-center gap-2">
-        Warden
-        {!warden ? (
-          <span className="text-muted-foreground">not in this request path</span>
-        ) : !warden.connected ? (
-          <StateChip tone="blocked">unreachable</StateChip>
-        ) : warden.passthrough ? (
-          <StateChip tone="blocked">kill switch on</StateChip>
-        ) : (warden.snapshotAgeSeconds ?? 0) > 60 ? (
-          <StateChip tone="degraded">cache {age(warden.snapshotAgeSeconds ?? 0)} old</StateChip>
-        ) : (
-          <span className="text-muted-foreground">cache {age(warden.snapshotAgeSeconds ?? 0)} old</span>
-        )}
-      </span>
-      <span className="inline-flex items-center gap-2">
-        Fail modes
-        <span className="text-muted-foreground">{policies.length - failOpen.length} fail-closed</span>
-        {failOpen.map((r) => (
-          <StateChip key={r.id} tone="degraded">
-            <span className="font-mono">{r.name}</span> fail-open
-          </StateChip>
-        ))}
       </span>
     </div>
   )
@@ -293,93 +156,5 @@ function BigNumber({ to, label, value, delta, note }: { to: string; label: strin
         {delta} {note}
       </span>
     </Link>
-  )
-}
-
-type Attention = { id: string; tone: 'blocked' | 'degraded'; what: React.ReactNode; detail: string; action: string; to: string }
-
-function AttentionList({ onGo, summary }: { onGo: (to: string) => void; summary: Summary }) {
-  const degradations = useDegradations()
-  const over = budgets.filter((b) => b.currentUsd / b.capUsd >= 0.8).sort((a, b) => b.currentUsd / b.capUsd - a.currentUsd / a.capUsd)
-  const items: Attention[] = [
-    ...over.map((b) => {
-      const pct = Math.round((b.currentUsd / b.capUsd) * 100)
-      const exceeded = pct >= 100
-      return {
-        id: b.id,
-        tone: exceeded ? ('blocked' as const) : ('degraded' as const),
-        what: (
-          <>
-            Budget <span className="font-mono">{budgetLabel(b)}</span> at {pct}% of <Money value={b.capUsd} precision="whole" />
-          </>
-        ),
-        detail:
-          (exceeded
-            ? `${b.onExceed === 'throttle' ? 'Throttling' : b.onExceed === 'block' ? 'Blocking' : 'Warning on'} new requests since the cap was crossed. Projected ${money(b.projectedUsd, 0)} by period end.`
-            : `Projected ${money(b.projectedUsd, 0)} by period end; ${b.onExceed === 'block' ? 'blocks new requests' : b.onExceed === 'throttle' ? 'throttles' : 'warns'} at ${money(b.capUsd, 0)}.`) +
-          (b.unpricedRequests ? ` ${unpricedNote(b.unpricedRequests, 'what it has spent')}.` : ''),
-        action: exceeded ? 'Review budget' : 'Adjust cap',
-        to: '/spend',
-      }
-    }),
-    ...summary.keyAnomalies.map((a) => ({
-      id: `anom-${a.keyId}`,
-      tone: 'degraded' as const,
-      what: (
-        <>
-          Key <span className="font-mono">{a.keyName}</span> spend {a.ratio.toFixed(1)}× its 7-day baseline
-        </>
-      ),
-      detail: `${money(a.spendUsd)} in the last 24 hours against a ${money(a.baselineUsd)} daily average. ${Math.round(a.topModelShare * 100)}% of it on ${a.topModel}.`,
-      action: 'Open key',
-      to: `/keys?key=${a.keyId}`,
-    })),
-    // Api mode: requests with no price aren't in spend or budgets until their pair has one.
-    ...(summary.unpricedPairs ?? []).map((p) => ({
-      id: `unpriced-${p.model}@${p.backend}`,
-      tone: 'degraded' as const,
-      what: (
-        <>
-          <span className="font-mono">{p.model}</span> on <span className="font-mono">{p.backend}</span> has no price
-        </>
-      ),
-      detail: `${unpricedNote(p.requests, 'spend or budgets')}, the first ${ago(p.since)}. They're costed once it has a price.`,
-      action: 'Set a price',
-      to: '/models?tab=pricing',
-    })),
-    ...policies
-      .filter((r) => r.mode !== 'draft' && r.mode !== 'disabled' && r.baseline7d > 0 && r.fired24h >= 10 && r.fired24h >= 2 * r.baseline7d)
-      .map((r) => ({
-        id: `rule-${r.id}`,
-        tone: 'degraded' as const,
-        what: (
-          <>
-            {dataMode === 'api' ? 'Policy' : 'Rule'} <span className="font-mono">{r.name}</span> fired {int(r.fired24h)} times, baseline {int(r.baseline7d)}
-          </>
-        ),
-        detail: `In the last 24 hours, against a daily average of ${int(r.baseline7d)} over the week before.`,
-        action: dataMode === 'api' ? 'Open policy' : 'Open rule',
-        to: `/guardrails?rule=${r.id}`,
-      })),
-    ...degradations
-      .filter((d) => d.kind === 'backend_errors')
-      .map((d) => ({ id: d.kind + d.title, tone: 'degraded' as const, what: <>{d.title}</>, detail: d.detail, action: d.action, to: d.to })),
-  ]
-  if (items.length === 0) return <p className="text-sm text-muted-foreground">Nothing needs attention.</p>
-  return (
-    <ul className="divide-y divide-border border-y border-border">
-      {items.map((i) => (
-        <li key={i.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2.5">
-          <span className={cn('h-8 w-1 shrink-0 rounded-full', i.tone === 'blocked' ? 'bg-v-blocked-bar' : 'bg-v-degraded-bar')} aria-hidden="true" />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">{i.what}</div>
-            <div className="text-[0.8125rem] text-muted-foreground">{i.detail}</div>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => onGo(i.to)}>
-            {i.action}
-          </Button>
-        </li>
-      ))}
-    </ul>
   )
 }

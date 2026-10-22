@@ -32,13 +32,11 @@ const groups = [
   },
 ]
 
-// Mock mode names the mockup's versions; against the control plane, the builds
-// actually running (Warden only when the control plane knows where it is).
+// Mock mode names the mockup's version; against openmeter-api, the builds
+// actually running.
 function versions() {
-  if (dataMode !== 'api') return 'console v0.1 · warden 0.4.2'
-  const w = session.warden
-  const warden = !w ? '' : w.connected ? ` · warden ${w.version ?? '?'}` : ' · warden unreachable'
-  return `console ${__CONSOLE_VERSION__} · control plane ${session.versions.controlPlane}${warden}`
+  if (dataMode !== 'api') return 'console v0.1'
+  return `console ${__CONSOLE_VERSION__} · control plane ${session.versions.controlPlane}`
 }
 
 export function AppSidebar() {

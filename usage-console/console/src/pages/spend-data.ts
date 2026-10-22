@@ -5,6 +5,7 @@
 // totals.
 
 import { dataMode, keys, modelById, now, seedRates, type SpendDim, type SpendView, spendSeries, teams } from '@/data/catalog'
+import { keyModels } from '@/data/mock'
 import type { TimeRange } from '@/state/app-state'
 
 export type Dim = SpendDim
@@ -70,12 +71,12 @@ const modelWeight: Record<string, Record<string, number>> = {
 const cells: Cell[] = (() => {
   const out: Cell[] = []
   for (const t of teams) {
-    const teamKeys = keys.filter((k) => k.team === t.id && k.status !== 'revoked')
+    const teamKeys = keys.filter((k) => k.team === t.id)
     const totalReq = teamKeys.reduce((a, k) => a + k.requests24h, 0) || 1
     for (const k of teamKeys) {
       const kShare = k.requests24h / totalReq
       const weights = modelWeight[t.id] ?? {}
-      const allowed = k.allowedModels.filter((m) => weights[m])
+      const allowed = (keyModels[k.id] ?? []).filter((m) => weights[m])
       const wSum = allowed.reduce((a, m) => a + weights[m], 0) || 1
       for (const m of allowed) {
         out.push({
@@ -252,8 +253,4 @@ export function mockSpendView(range: TimeRange, dim: Dim): SpendView {
 export function keySpend24h(keyId: string) {
   const day = spendSeries[spendSeries.length - 1].byTeam
   return cells.filter((c) => c.keyId === keyId).reduce((a, c) => a + (day[c.team] ?? 0) * c.share, 0)
-}
-
-export function fmtDate(d: Date) {
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }

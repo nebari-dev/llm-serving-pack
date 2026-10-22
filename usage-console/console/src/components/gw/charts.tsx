@@ -7,8 +7,6 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ReferenceArea,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -196,7 +194,6 @@ export function StackedArea({
   xFormat,
   valueFormat = (n) => n.toLocaleString('en-US'),
   caption,
-  annotations = [],
   syncId,
   hideXAxis = false,
 }: {
@@ -206,7 +203,6 @@ export function StackedArea({
   xFormat: (t: number) => string
   valueFormat?: (n: number) => string
   caption: string
-  annotations?: { t: number; label: string }[]
   /** Panels sharing a syncId move their crosshairs together (small multiples on one time axis). */
   syncId?: string
   hideXAxis?: boolean
@@ -258,29 +254,6 @@ export function StackedArea({
                   isAnimationActive={false}
                 />
               ))}
-              {annotations.map((a) => (
-                <ReferenceLine
-                  key={a.t}
-                  x={a.t}
-                  stroke="var(--foreground)"
-                  strokeWidth={1}
-                  label={(p: { viewBox?: { x?: number; y?: number } }) => {
-                    const nearRight = (a.t - t0) / (t1 - t0 || 1) > 0.6
-                    return (
-                      <text
-                        x={(p.viewBox?.x ?? 0) + (nearRight ? -6 : 6)}
-                        y={(p.viewBox?.y ?? 0) + 11}
-                        textAnchor={nearRight ? 'end' : 'start'}
-                        fill="var(--foreground)"
-                        fontSize={11}
-                        fontFamily={MONO}
-                      >
-                        {a.label}
-                      </text>
-                    )
-                  }}
-                />
-              ))}
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -301,7 +274,6 @@ export function StackedBars({
   valueFormat,
   caption,
   onBarClick,
-  highlightFrom,
   xLabel = 'Day',
 }: {
   data: { x: string; values: Record<string, number> }[]
@@ -310,7 +282,6 @@ export function StackedBars({
   valueFormat: (n: number) => string
   caption: string
   onBarClick?: (x: string) => void
-  highlightFrom?: number
   /** Heading of the table equivalent's first column. */
   xLabel?: string
 }) {
@@ -338,9 +309,6 @@ export function StackedBars({
               style={{ cursor: onBarClick ? 'pointer' : undefined }}
             >
               <CartesianGrid vertical={false} {...grid} />
-              {highlightFrom !== undefined && data[highlightFrom] && (
-                <ReferenceArea x1={data[highlightFrom].x} x2={data[data.length - 1].x} fill="var(--v-degraded-bg)" fillOpacity={1} ifOverflow="extendDomain" />
-              )}
               <XAxis dataKey="x" tick={tick} tickLine={false} axisLine={{ stroke: 'var(--border-strong)' }} minTickGap={32} />
               <YAxis tick={tick} tickLine={false} axisLine={false} width={56} ticks={yTicks} domain={[0, yTicks[yTicks.length - 1]]} tickFormatter={(n: number) => `$${compact(n)}`} />
               <Tooltip
@@ -415,25 +383,6 @@ export function Sparkline({
           activeDot={false}
         />
       </LineChart>
-    </div>
-  )
-}
-
-/** Horizontal meter with explicit cap marker; never the only carrier of meaning. */
-export function Meter({ value, cap, projected, className }: { value: number; cap: number; projected?: number; className?: string }) {
-  const scale = Math.max(cap, value, projected ?? 0) * 1.05
-  const over = value > cap
-  const warn = value / cap >= 0.8
-  return (
-    <div className={cn('relative h-2 w-full rounded-full bg-muted', className)} aria-hidden="true">
-      {projected !== undefined && (
-        <div className="absolute inset-y-0 left-0 rounded-full border border-dashed border-border-strong" style={{ width: `${(projected / scale) * 100}%` }} />
-      )}
-      <div
-        className={cn('absolute inset-y-0 left-0 rounded-full', over ? 'bg-v-blocked-bar' : warn ? 'bg-v-degraded-bar' : 'bg-foreground/60')}
-        style={{ width: `${(Math.min(value, scale) / scale) * 100}%` }}
-      />
-      <div className="absolute -inset-y-1 w-0.5 bg-foreground" style={{ left: `${(cap / scale) * 100}%` }} />
     </div>
   )
 }

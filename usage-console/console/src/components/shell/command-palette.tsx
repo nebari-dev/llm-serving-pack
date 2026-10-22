@@ -69,7 +69,7 @@ export function CommandPalette() {
               run(results[active])
             }
           }}
-          placeholder="Jump to a key, model, rule — or paste a trace ID"
+          placeholder="Jump to a key or model, or paste a trace ID"
           className="h-12 w-full border-b border-border bg-transparent px-4 text-sm outline-none placeholder:text-muted-foreground"
           role="combobox"
           aria-expanded="true"

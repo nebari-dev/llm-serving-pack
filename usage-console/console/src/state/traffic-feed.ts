@@ -9,7 +9,7 @@ import { receiptStream, type StreamSampling } from './app-state'
 // when it can be counted exactly. In mock mode it filters the
 // simulated stream in the browser, as before.
 
-export type Dim = 'key' | 'team' | 'project' | 'model' | 'verdict' | 'provider' | 'backend' | 'reason'
+export type Dim = 'key' | 'team' | 'project' | 'model' | 'verdict'
 export type Filters = Record<Dim, string[]>
 
 export interface TrafficWindow {
@@ -52,9 +52,6 @@ function matches(r: Receipt, f: Filters, w: TrafficWindow) {
   if (f.team.length && !f.team.includes(r.team)) return false
   if (f.model.length && !f.model.includes(r.resolvedModel) && !f.model.includes(r.requestedModel)) return false
   if (f.verdict.length && !f.verdict.includes(r.verdict)) return false
-  if (f.provider.length && !f.provider.includes(r.provider)) return false
-  if (f.backend.length && !f.backend.includes(r.backend)) return false
-  if (f.reason.length && !f.reason.includes(r.routeReason)) return false
   return true
 }
 

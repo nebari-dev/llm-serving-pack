@@ -6,7 +6,6 @@ import { useApp } from '@/state/app-state'
 import { AppHeader } from './app-header'
 import { AppSidebar } from './app-sidebar'
 import { CommandPalette } from './command-palette'
-import { DegradationBanner } from './degradation-banner'
 
 export function AppLayout() {
   const { density } = useApp()
@@ -17,7 +16,6 @@ export function AppLayout() {
         <div className="flex min-h-0 flex-1">
           <AppSidebar />
           <main className="relative flex min-w-0 flex-1 flex-col overflow-y-auto" id="main">
-            <DegradationBanner />
             <Outlet />
           </main>
         </div>

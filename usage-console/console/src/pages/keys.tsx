@@ -1,36 +1,26 @@
-import { ArrowLeft, Ban, TriangleAlert } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Meter, Sparkline } from '@/components/gw/charts'
+import { Sparkline } from '@/components/gw/charts'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { EmptyState, PageHeader, Section } from '@/components/gw/page'
-import { StateChip, VerdictBadge } from '@/components/gw/verdict'
+import { VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, dataMode, fromWire, keys as seedKeys, teams } from '@/data/catalog'
 import { clock, int, unpricedNote } from '@/lib/format'
-import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
 import { useLive } from '@/state/live'
-import { fmtDate, keySpend24h } from './spend-data'
+import { keySpend24h } from './spend-data'
 
 // Keys. List → key detail (?key=<id>), each key a miniature dashboard.
 
-function expiryInfo(k: ApiKey) {
-  if (k.expiresAt === null) return { label: 'Never', tone: 'degraded' as const, note: 'No expiry' }
-  const days = Math.ceil((new Date(k.expiresAt).getTime() - Date.now()) / 86_400_000)
-  const date = fmtDate(new Date(k.expiresAt))
-  if (days < 0) return { label: date, tone: 'neutral' as const, note: 'Expired' }
-  if (days <= 14) return { label: date, tone: 'degraded' as const, note: `Expires in ${days} day${days === 1 ? '' : 's'}` }
-  return { label: date, tone: null, note: `in ${days} days` }
-}
-
-const spend24h = (k: ApiKey) => (k.status === 'revoked' ? 0 : (k.spend24hUsd ?? keySpend24h(k.id)))
+const spend24h = (k: ApiKey) => k.spend24hUsd ?? keySpend24h(k.id)
 
 /** 24h spend as a cell shows it: no price, not $0, when it's all requests with no price (api mode). */
 function Spend24h({ k, className }: { k: ApiKey; className?: string }) {
   const spend = spend24h(k)
-  const unpriced = k.status === 'revoked' ? 0 : (k.unpriced24h ?? 0)
+  const unpriced = k.unpriced24h ?? 0
   return (
     <>
       <Money value={unpriced && !spend ? null : spend} className={className} />
@@ -41,11 +31,6 @@ function Spend24h({ k, className }: { k: ApiKey; className?: string }) {
       )}
     </>
   )
-}
-
-function StatusCell({ k }: { k: ApiKey }) {
-  if (k.status === 'revoked') return <StateChip tone="blocked" icon={<Ban className="size-3" aria-hidden="true" />}>Revoked</StateChip>
-  return <span className="text-xs text-muted-foreground">Active</span>
 }
 
 export function KeysPage() {
@@ -88,47 +73,31 @@ export function KeysPage() {
     )
   }
 
-  const active = list.filter((k) => k.status !== 'revoked')
-  const attention = active.filter((k) => {
-    const e = expiryInfo(k)
-    return e.tone === 'degraded'
-  }).length
-
   return (
     <div className="flex flex-col">
       <PageHeader
         title="Keys"
-        description="Gateway keys that apps use instead of provider credentials. Each key is scoped to a team and project and an allow-list of models and regions. Budgets on its team, project or the key itself apply to it."
+        description="Gateway keys that apps use instead of provider credentials, with each key's team, project and owner."
       />
-      <Section
-        title={`${active.length} active keys`}
-        description={attention ? `${attention} need attention: expiring within 14 days or set to never expire.` : undefined}
-      >
+      <Section title={`${list.length} keys`}>
         <Table aria-label="Gateway keys">
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead>Team / project</TableHead>
-              <TableHead className="text-right">Models</TableHead>
-              <TableHead>Budget</TableHead>
-              <TableHead>Expires</TableHead>
               <TableHead>Last used</TableHead>
               <TableHead className="text-right">Requests 24h</TableHead>
               <TableHead className="text-right">Spend 24h</TableHead>
-              <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {list.map((k) => {
-              const e = expiryInfo(k)
-              const budget = governingBudget(k)
-              const revoked = k.status === 'revoked'
               return (
-                <TableRow key={k.id} className={cn('cursor-pointer', revoked && 'text-muted-foreground')} onClick={() => openKey(k.id)}>
+                <TableRow key={k.id} className="cursor-pointer" onClick={() => openKey(k.id)}>
                   <TableCell className="h-11 py-1.5">
                     <button
                       type="button"
-                      className={cn('font-mono text-[0.8125rem] font-medium hover:underline', revoked && 'line-through')}
+                      className="font-mono text-[0.8125rem] font-medium hover:underline"
                       onClick={(ev) => {
                         ev.stopPropagation()
                         openKey(k.id)
@@ -143,39 +112,10 @@ export function KeysPage() {
                     <span className="text-muted-foreground"> / </span>
                     <span className="text-xs">{k.project}</span>
                   </TableCell>
-                  <TableCell className="num py-1.5 text-right font-mono" title={k.allowedModels.join(', ')}>
-                    {k.allowedModels.length}
-                  </TableCell>
-                  <TableCell className="py-1.5 text-sm">
-                    {budget ? (
-                      <span className="font-mono text-xs">
-                        {budgetLabel(budget)}
-                        {budget.currentUsd > budget.capUsd && <span className="ml-1.5 font-sans text-v-blocked-fg">over cap</span>}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">None</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="py-1.5">
-                    {revoked ? (
-                      <span className="text-xs">—</span>
-                    ) : e.tone === 'degraded' ? (
-                      <StateChip tone="degraded" icon={<TriangleAlert className="size-3" aria-hidden="true" />}>
-                        {e.note === 'No expiry' ? 'Never expires' : `${e.label} · ${e.note.toLowerCase()}`}
-                      </StateChip>
-                    ) : (
-                      <span className="text-sm">
-                        {e.label} <span className="text-xs text-muted-foreground">{e.note}</span>
-                      </span>
-                    )}
-                  </TableCell>
                   <TableCell className="py-1.5 text-sm whitespace-nowrap">{k.lastUsed}</TableCell>
                   <TableCell className="num py-1.5 text-right font-mono">{int(k.requests24h)}</TableCell>
                   <TableCell className="py-1.5 text-right">
                     <Spend24h k={k} />
-                  </TableCell>
-                  <TableCell className="py-1.5">
-                    <StatusCell k={k} />
                   </TableCell>
                 </TableRow>
               )
@@ -189,34 +129,10 @@ export function KeysPage() {
 
 // ---- detail --------------------------------------------------------------
 
-/**
- * What the key's budget does at its cap. Api mode says only what the gateway
- * does, as on Spend: block returns 429, throttle holds the key to a few
- * requests a minute, warn admits and marks.
- */
-function budgetWords(b: (typeof budgets)[number]) {
-  const over = b.currentUsd > b.capUsd
-  const cap = `$${int(b.capUsd)}`
-  if (dataMode === 'api') {
-    if (over)
-      return b.onExceed === 'block'
-        ? 'Over cap · blocking new requests'
-        : b.onExceed === 'throttle'
-          ? `Over cap · throttled to ${throttleRate(b)} requests a minute (429, retry later)`
-          : 'Over cap · requests admitted and marked'
-    return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles to ${throttleRate(b)} requests a minute at ${cap}` : `Marks requests over ${cap}`
-  }
-  if (over) return `Over cap · ${b.onExceed === 'throttle' ? 'throttling' : b.onExceed === 'block' ? 'blocking' : 'warning'} new requests`
-  return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Warns at ${cap}`
-}
-
 function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
   const { openReceipt } = useApp()
   const all = useReceipts()
   const receipts = useMemo(() => all.filter((r) => r.keyId === k.id), [all, k.id])
-  const budget = governingBudget(k)
-  const e = expiryInfo(k)
-  const revoked = k.status === 'revoked'
 
   const topModels = useMemo(() => {
     const m = new Map<string, { model: string; n: number; tokens: number; cost: number; unpriced: number; ms: number[] }>()
@@ -248,7 +164,6 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
             <span>
               {teams.find((t) => t.id === k.team)?.name} / <span className="font-mono">{k.project}</span>
             </span>
-            <StatusCell k={k} />
             <span>
               Owner <span className="font-mono">{k.owner}</span>
             </span>
@@ -260,12 +175,12 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
           </Button>
         }
       >
-        <dl className="grid grid-cols-2 gap-y-3 border-t border-border pt-3 md:grid-cols-5 md:divide-x md:divide-border">
+        <dl className="grid grid-cols-2 gap-y-3 border-t border-border pt-3 md:grid-cols-3 md:divide-x md:divide-border">
           <div className="pr-4">
             <dt className="text-xs text-muted-foreground">Requests, last 24h</dt>
             <dd className="flex items-center gap-3">
               <span className="num font-mono text-xl font-semibold">{int(k.requests24h)}</span>
-              {!revoked && <Sparkline values={k.hourly24h} label={`Hourly requests for ${k.name}, last 24 hours`} />}
+              <Sparkline values={k.hourly24h} label={`Hourly requests for ${k.name}, last 24 hours`} />
             </dd>
           </div>
           <div className="md:px-4">
@@ -274,34 +189,9 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
               <Spend24h k={k} className="text-xl font-semibold" />
             </dd>
           </div>
-          <div className="md:px-4">
+          <div className="md:pl-4">
             <dt className="text-xs text-muted-foreground">Last used</dt>
             <dd className="text-xl font-semibold">{k.lastUsed}</dd>
-          </div>
-          <div className="md:px-4">
-            <dt className="text-xs text-muted-foreground">Expires</dt>
-            <dd className={cn('text-xl font-semibold', e.tone === 'degraded' && 'text-v-degraded-fg')}>{e.label}</dd>
-            <dd className="text-xs text-muted-foreground">{e.note !== 'No expiry' ? e.note : dataMode === 'api' ? 'Set to never expire' : 'Set to never expire — rotation reminders every 90 days'}</dd>
-          </div>
-          <div className="md:pl-4">
-            <dt className="text-xs text-muted-foreground">Budget</dt>
-            {budget ? (
-              <dd className="flex flex-col gap-1.5 pt-1">
-                <span className="text-sm">
-                  <Money value={budget.currentUsd} /> of <Money value={budget.capUsd} precision="whole" />{' '}
-                  <span className="font-mono text-xs text-muted-foreground">{budgetLabel(budget)}</span>
-                </span>
-                {!!budget.unpricedRequests && (
-                  <span className="text-xs text-muted-foreground">{unpricedNote(budget.unpricedRequests, 'what it has spent')}</span>
-                )}
-                <Meter value={budget.currentUsd} cap={budget.capUsd} projected={budget.projectedUsd} />
-                <Link to="/spend#budgets" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-                  {budgetWords(budget)}
-                </Link>
-              </dd>
-            ) : (
-              <dd className="pt-1 text-sm text-muted-foreground">No budget covers this key</dd>
-            )}
           </div>
         </dl>
       </PageHeader>
@@ -350,20 +240,11 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
             </TableBody>
           </Table>
         ) : (
-          <EmptyState
-            title={revoked ? 'This key is revoked and receives no traffic.' : 'No requests on this key yet.'}
-            action={
-              !revoked && (
-                <Button variant="outline" render={<Link to="/onboarding" />}>
-                  Point an app at the gateway →
-                </Button>
-              )
-            }
-          />
+          <EmptyState title="No requests on this key yet." />
         )}
       </Section>
 
-      <Section title="Recent blocks" description="Requests the gateway stopped, throttled or cut short for this key. Open one to see which rule or budget, and what to change.">
+      <Section title="Recent blocks" description="Requests the gateway refused, throttled or cut short for this key. Open one to see why.">
         {blocks.length ? (
           <ul className="divide-y divide-border rounded-md border border-border bg-card">
             {blocks.map((r) => (
@@ -377,11 +258,7 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
                   <span className="num font-mono text-xs">{clock(r.ts)}</span>
                   <span className="font-mono text-xs">{r.requestedModel}</span>
                   <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                    {r.verdict === 'blocked'
-                      ? (r.rules.find((x) => x.matched)?.name ?? r.errorCode)
-                      : r.verdict === 'throttled'
-                        ? 'throttled by a budget over its cap · retry later'
-                        : 'stream cut by inbound inspection'}
+                    {r.verdict === 'blocked' ? r.errorCode : r.verdict === 'throttled' ? 'throttled · retry later' : 'cut short, no token counts'}
                   </span>
                   <span className="text-xs text-muted-foreground">Open receipt →</span>
                 </button>
@@ -393,30 +270,6 @@ function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
         )}
       </Section>
 
-      <Section title="Access">
-        <dl className="grid max-w-3xl grid-cols-[10rem_1fr] gap-x-4 gap-y-2 text-sm">
-          <dt className="text-muted-foreground">Allowed models</dt>
-          <dd className="flex flex-wrap gap-1.5">
-            {k.allowedModels.map((m) => (
-              <span key={m} className="rounded-sm border border-border bg-muted px-1.5 font-mono text-xs leading-5">
-                {m}
-              </span>
-            ))}
-          </dd>
-          <dt className="text-muted-foreground">Allowed regions</dt>
-          <dd className="flex flex-wrap gap-1.5">
-            {k.allowedRegions.map((r) => (
-              <span key={r} className="rounded-sm border border-border bg-muted px-1.5 font-mono text-xs leading-5">
-                {r}
-              </span>
-            ))}
-          </dd>
-          <dt className="text-muted-foreground">Requests outside these</dt>
-          <dd className="text-muted-foreground-strong">
-            Rejected before the upstream call with <span className="font-mono">403 model_not_allowed</span> or <span className="font-mono">403 region_not_permitted</span>.
-          </dd>
-        </dl>
-      </Section>
     </div>
   )
 }
