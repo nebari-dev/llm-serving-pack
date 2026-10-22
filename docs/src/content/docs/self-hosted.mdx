@@ -86,7 +86,7 @@ The ConfigMap must hold the CA under the `ca.crt` key or as its only key. A
 trust-manager Bundle target that already projects your organization's CAs into
 the namespace qualifies; reference it by name instead. The bundle **replaces**
 the public roots for this provider only, and Envoy Gateway watches the
-ConfigMap, so renewing the CA takes effect without a restart. Skip the
+ConfigMap, so valid CA updates take effect without a restart. Skip the
 ConfigMap and `spec.provider.tls` if a public CA issued the certificate.
 
 An existing cluster needs the pack release that adds `spec.provider.tls` to the
@@ -117,7 +117,13 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
 
 The PassthroughModel reports `Ready` once its resources are applied, which does
 not mean the server is reachable. The `BackendTLSPolicy` status reports a
-missing or empty CA ConfigMap. Handshake failures appear only on requests; see
+missing or empty CA ConfigMap, but `Accepted=True` does not prove Envoy loaded
+the certificate bundle. Malformed PEM can be accepted by the policy while
+Envoy rejects the update and continues using its previous valid trust bundle.
+After rotating a CA, check the Envoy proxy logs for rejected updates and test
+a request against the server presenting its new certificate. A successful
+request against the old certificate alone does not prove rotation succeeded.
+For log commands and handshake failures, see
 [Troubleshooting](/troubleshooting/#external-provider-passthroughmodel-not-working).
 
 ## Example: llama.cpp on a Mac Studio
@@ -139,12 +145,12 @@ llama-server -hf <hf-user>/<model>-GGUF:Q4_K_M \
   --ssl-cert-file macstudio.crt \
   --ssl-key-file macstudio.key \
   --api-key-file api-key \
-  --no-webui
+  --no-ui
 ```
 
 - `--alias` sets the model id; it matches `declared` in the manifest.
 - `--api-key-file` makes every endpoint except `/health` require the key.
-- `--no-webui` turns off the built-in chat page, whose assets do not require
+- `--no-ui` turns off the built-in chat page, whose assets do not require
   the key.
 
 For an always-on service:

@@ -322,6 +322,15 @@ openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>
 
 The certificate must list `spec.provider.hostname` in its subject alternative names and chain to a CA in the ConfigMap.
 
+**A CA bundle update does not take effect, even though the policy is accepted.** `Accepted=True` and `ResolvedRefs=True` on the `BackendTLSPolicy` do not prove Envoy loaded the CA certificates. With Envoy Gateway 1.8.1, malformed PEM can pass those checks while Envoy rejects the TLS configuration with `Failed to load trusted CA certificates from <inline>`:
+
+```bash
+kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+  | grep -E 'Failed to load trusted CA certificates|CERTIFICATE_VERIFY_FAILED|Secret is not supplied by SDS'
+```
+
+If the bundle previously worked, Envoy can retain its last valid trust configuration, so requests may still succeed after an invalid update. A newly referenced invalid bundle can instead fail requests with HTTP 503. Correct the PEM in the ConfigMap, check for new rejected-update messages, and verify a request against the server presenting the new certificate. Valid ConfigMap updates are picked up without restarting Envoy.
+
 **PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
 ```bash
