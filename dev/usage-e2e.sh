@@ -60,8 +60,10 @@ kind load docker-image usage-console:dev --name "$CLUSTER_NAME" >/dev/null
 make deploy >/dev/null
 make deploy-keycloak >/dev/null
 make deploy-cnpg >/dev/null
-# Internal endpoints validate tokens from the in-cluster dev Keycloak.
-$KUBECTL -n "$NS" set env deploy/llm-operator LLM_OIDC_ISSUER_URL="$KC_URL/realms/nebari" >/dev/null
+# Internal endpoints validate tokens from the in-cluster dev Keycloak. Routes
+# record token usage only with metering on, as a chart install with usage.enabled.
+$KUBECTL -n "$NS" set env deploy/llm-operator LLM_OIDC_ISSUER_URL="$KC_URL/realms/nebari" \
+  LLM_USAGE_METERING_ENABLED=true >/dev/null
 
 step "making sure alice (team-a) and bob (team-b) exist in the dev realm"
 ./demo-users.sh

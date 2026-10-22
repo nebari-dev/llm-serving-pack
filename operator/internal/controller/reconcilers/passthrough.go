@@ -97,6 +97,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.ExternalGatewayNS,
 			ExternalHTTPSListenerName,
 			SharedExternalHostname(cfg.BaseDomain),
+			cfg.UsageMeteringEnabled,
 		)
 		result.ExternalSecurityPolicy = buildAPIKeyAuthSecurityPolicy(
 			ModelAuthPolicyName(pm.Name, "external"),
@@ -117,6 +118,7 @@ func BuildPassthroughResources(pm *llmv1alpha1.PassthroughModel, cfg *config.Ope
 			cfg.InternalGatewayNS,
 			InternalHTTPSListenerName,
 			SharedInternalHostname(cfg.BaseDomain),
+			cfg.UsageMeteringEnabled,
 		)
 		result.InternalSecurityPolicy = buildJWTSecurityPolicy(
 			ModelAuthPolicyName(pm.Name, "internal"),
@@ -261,6 +263,7 @@ func buildPassthroughRoute(
 	gatewayName, gatewayNS string,
 	listenerSectionName string,
 	hostname string,
+	meteringEnabled bool,
 ) *unstructured.Unstructured {
 	hostHeader := map[string]interface{}{
 		"type":  "Exact",
@@ -315,7 +318,7 @@ func buildPassthroughRoute(
 				"namespace": pm.Namespace,
 				"labels":    labelsToInterface(labels),
 			},
-			"spec": map[string]interface{}{
+			"spec": recordTokenUsage(map[string]interface{}{
 				"hostnames": []interface{}{hostname},
 				"parentRefs": []interface{}{
 					map[string]interface{}{
@@ -324,9 +327,8 @@ func buildPassthroughRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
-				"llmRequestCosts": tokenUsageCosts(),
-				"rules":           rules,
-			},
+				"rules": rules,
+			}, meteringEnabled),
 		},
 	}
 }

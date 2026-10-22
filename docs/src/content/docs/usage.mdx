@@ -15,9 +15,12 @@ It is off by default.
 
 ## How a request becomes usage in OpenMeter
 
-1. The operator asks the Envoy AI Gateway to count tokens on every route it
-   generates (`llmRequestCosts`). The gateway stores the counts with the
-   request once the response has finished.
+1. With `usage.enabled`, the operator asks the Envoy AI Gateway to count
+   tokens on every route it generates (`llmRequestCosts`). The gateway stores
+   the counts with the request once the response has finished. This also
+   makes the gateway add `stream_options.include_usage` to streamed chat
+   completions, so each stream ends with one extra usage chunk; with
+   `usage.enabled` off, routes ask for no counts and streams are unchanged.
 2. The gateway writes one access-log entry per model request (the caller, the
    model, the token counts, the status) and sends it over OTLP to the pack's
    usage collector. You add this entry to your `EnvoyProxy` resource (below).

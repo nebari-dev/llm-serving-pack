@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 )
 
 // capturedTokenCosts returns the token counts a route asks the Envoy AI
@@ -50,8 +52,14 @@ func assertCapturesTokenUsage(t *testing.T, name string, route *unstructured.Uns
 	}
 }
 
+// meteringConfig returns cfg with usage metering switched on.
+func meteringConfig(cfg *config.OperatorConfig) *config.OperatorConfig {
+	cfg.UsageMeteringEnabled = true
+	return cfg
+}
+
 func TestServedModelRoutesCaptureTokenUsage(t *testing.T) {
-	res, err := BuildRoutingResources(defaultRoutingModel(), defaultRoutingConfig())
+	res, err := BuildRoutingResources(defaultRoutingModel(), meteringConfig(defaultRoutingConfig()))
 	if err != nil {
 		t.Fatalf("BuildRoutingResources: %v", err)
 	}
@@ -60,12 +68,39 @@ func TestServedModelRoutesCaptureTokenUsage(t *testing.T) {
 }
 
 func TestPassthroughRoutesCaptureTokenUsage(t *testing.T) {
-	res, err := BuildPassthroughResources(testPassthroughModel(), testPassthroughConfig(), nil, nil)
+	res, err := BuildPassthroughResources(testPassthroughModel(), meteringConfig(testPassthroughConfig()), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources: %v", err)
 	}
 	assertCapturesTokenUsage(t, "external", res.ExternalRoute)
 	assertCapturesTokenUsage(t, "internal", res.InternalRoute)
+}
+
+// Declaring token costs makes the gateway add stream_options.include_usage to
+// streamed chat completions, so clients get an extra usage chunk. With
+// metering off, routes must not declare any.
+func TestRoutesDoNotCaptureTokenUsageWhenMeteringIsOff(t *testing.T) {
+	served, err := BuildRoutingResources(defaultRoutingModel(), defaultRoutingConfig())
+	if err != nil {
+		t.Fatalf("BuildRoutingResources: %v", err)
+	}
+	passthrough, err := BuildPassthroughResources(testPassthroughModel(), testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources: %v", err)
+	}
+	for name, route := range map[string]*unstructured.Unstructured{
+		"served external":      served.ExternalRoute,
+		"served internal":      served.InternalRoute,
+		"passthrough external": passthrough.ExternalRoute,
+		"passthrough internal": passthrough.InternalRoute,
+	} {
+		if route == nil {
+			t.Fatalf("%s: expected route to be non-nil", name)
+		}
+		if _, found, _ := unstructured.NestedFieldNoCopy(route.Object, "spec", "llmRequestCosts"); found {
+			t.Errorf("%s route declares llmRequestCosts with usage metering off", name)
+		}
+	}
 }
 
 // jwtClaimHeaders returns the header -> JWT claim mapping an internal

@@ -79,6 +79,11 @@ type OperatorConfig struct {
 	// false the operator still creates the shared Certificate but leaves
 	// listener management to the cluster admin (runbook). Default true.
 	ManageSharedListeners bool // LLM_MANAGE_SHARED_LISTENERS (default: "true")
+	// UsageMeteringEnabled makes generated routes record token usage for the
+	// usage collector and forward the caller's OIDC subject upstream. Off by
+	// default: recording token usage also makes the gateway add a usage chunk
+	// to every streamed chat completion.
+	UsageMeteringEnabled bool // LLM_USAGE_METERING_ENABLED (default: "false")
 }
 
 // getEnvOrDefault returns the value of the environment variable named by key,
@@ -137,6 +142,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-production"),
 		TLSSecretName:           os.Getenv("LLM_TLS_SECRET_NAME"),
 		ManageSharedListeners:   getEnvBool("LLM_MANAGE_SHARED_LISTENERS", true),
+		UsageMeteringEnabled:    getEnvBool("LLM_USAGE_METERING_ENABLED", false),
 	}
 
 	if len(missing) > 0 {

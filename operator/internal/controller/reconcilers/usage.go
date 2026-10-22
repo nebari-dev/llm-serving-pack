@@ -1,7 +1,16 @@
 package reconcilers
 
-// tokenUsageCosts returns the llmRequestCosts every generated AIGatewayRoute
-// carries. They make the Envoy AI Gateway store each request's token counts in
+// recordTokenUsage adds the llmRequestCosts below to an AIGatewayRoute spec
+// when usage metering is on, and leaves the spec untouched when it is off.
+func recordTokenUsage(spec map[string]interface{}, meteringEnabled bool) map[string]interface{} {
+	if meteringEnabled {
+		spec["llmRequestCosts"] = tokenUsageCosts()
+	}
+	return spec
+}
+
+// tokenUsageCosts returns the llmRequestCosts a generated AIGatewayRoute
+// carries when usage metering is on. They make the Envoy AI Gateway store each request's token counts in
 // Envoy dynamic metadata (namespace io.envoy.ai_gateway) under the keys below,
 // where the gateway access log can read them, e.g.
 // %DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%.

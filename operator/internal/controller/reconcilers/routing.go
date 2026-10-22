@@ -72,6 +72,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			model.Name,
 			model.Spec.Model.Name,
 			requestTimeout,
+			cfg.UsageMeteringEnabled,
 		)
 	}
 
@@ -87,6 +88,7 @@ func BuildRoutingResources(model *llmv1alpha1.LLMModel, cfg *config.OperatorConf
 			model.Name,
 			model.Spec.Model.Name,
 			requestTimeout,
+			cfg.UsageMeteringEnabled,
 		)
 	}
 
@@ -102,6 +104,7 @@ func buildAIGatewayRoute(
 	poolName string,
 	modelName string,
 	requestTimeout string,
+	meteringEnabled bool,
 ) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -112,7 +115,7 @@ func buildAIGatewayRoute(
 				"namespace": namespace,
 				"labels":    labelsToInterface(labels),
 			},
-			"spec": map[string]interface{}{
+			"spec": recordTokenUsage(map[string]interface{}{
 				"hostnames": []interface{}{hostname},
 				// sectionName scopes this HTTPRoute attachment to a single
 				// named listener on the parent Gateway. Required because the
@@ -132,7 +135,6 @@ func buildAIGatewayRoute(
 						"sectionName": listenerSectionName,
 					},
 				},
-				"llmRequestCosts": tokenUsageCosts(),
 				"rules": []interface{}{
 					map[string]interface{}{
 						// Match on the `x-ai-eg-model` header for per-model dispatch on the
@@ -172,7 +174,7 @@ func buildAIGatewayRoute(
 						},
 					},
 				},
-			},
+			}, meteringEnabled),
 		},
 	}
 }
