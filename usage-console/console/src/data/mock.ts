@@ -224,138 +224,8 @@ export const models: MockModel[] = [
 
 export const modelById: Record<string, MockModel> = Object.fromEntries(models.map((m) => [m.id, m]))
 
-/** Not in the catalog schema yet (§3 New systems: modalities and deprecation dates). */
-export const modelModalities: Record<string, string[]> = {
-  'gpt-5-mini': ['text', 'image'],
-  'gpt-5.5': ['text', 'image', 'audio'],
-  'claude-sonnet-5': ['text', 'image'],
-  'claude-opus-4-1': ['text', 'image'],
-  'claude-haiku-4-5': ['text', 'image'],
-  'llama-3.3-70b': ['text'],
-}
-
-export const modelDeprecations: Record<string, string> = { 'claude-opus-4-1': '2026-12-31' }
-
-/**
- * GET /aliases: a model_aliases row and the requests that resolved through it
- * over the rolling 24h. The control plane has no conditions, provenance or
- * notes yet; only the mockup sets them.
- */
-export interface AliasView {
-  alias: string
-  target: string
-  requests24h: number
-  conditions?: string
-  provenance?: Provenance
-  note?: string
-  /** Api mode: who last created or retargeted it, and when (epoch ms), from the audit log. */
-  changedBy?: string
-  changedAt?: number
-}
-
-export const aliases: AliasView[] = [
-  { alias: 'default', target: 'claude-sonnet-5', provenance: 'console', requests24h: 31_204, note: 'Switched from gpt-5.5 at 14:02 by priya@acme.dev' },
-  { alias: 'summarize-*', target: 'gpt-5-mini', conditions: 'input tokens < 64k', provenance: 'console', requests24h: 4_120 },
-  { alias: 'summarize-*', target: 'llama-3.3-70b', conditions: 'header x-data-region = eu', provenance: 'git', requests24h: 612 },
-  { alias: 'reasoning', target: 'gpt-5.5', conditions: 'key.team in [research, agents]', provenance: 'console', requests24h: 2_880 },
-  { alias: 'fast', target: 'claude-haiku-4-5', provenance: 'console', requests24h: 9_411 },
-]
-
-/** Mock only: a rate that differs from the model's previous price. */
-export interface MockPriceChange {
-  model: string
-  field: string
-  from: number
-  to: number
-  /** YYYY-MM-DD */
-  effective: string
-  /** Who or what made the change. */
-  by?: string
-}
-
-/** Mock only: the fixtures' pricing, one price per model. */
-export interface MockPricingView {
-  effectiveFrom: Record<string, string>
-  changes: MockPriceChange[]
-  source?: Record<string, string>
-}
-
 export type RateName = 'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning'
 export type PriceSource = 'seed' | 'litellm' | 'manual'
-
-/** A (model, backend)'s price in effect now. A missing rate has no price. */
-export interface PairPrice {
-  model: string
-  backend: string
-  litellmKey?: string
-  /** YYYY-MM-DD the row in effect started; absent with no price. */
-  effectiveFrom?: string
-  rates: Partial<Record<RateName, { perM: number; source: PriceSource }>>
-  priced: boolean
-  /** The last value LiteLLM gave each rate: what an override goes back to following. */
-  litellm?: Partial<Record<RateName, number>>
-  etag: string
-}
-
-/** One rate moving between consecutive rows of a pair; null where there was no price. */
-export interface PriceChange {
-  model: string
-  backend: string
-  field: string
-  from: number | null
-  to: number | null
-  /** Where the new rate came from; absent when it ended. */
-  source?: PriceSource
-  /** YYYY-MM-DD */
-  effective: string
-  effectiveAt: number
-  scheduled: boolean
-}
-
-/** A LiteLLM move on an overridden rate, waiting to be accepted or dismissed. */
-export interface PriceProposal {
-  id: number
-  model: string
-  backend: string
-  rate: RateName
-  current: number
-  proposed: number
-  litellmKey: string
-  createdAt: number
-}
-
-/** GET /pricing (api mode). */
-export interface PricingView {
-  prices: PairPrice[]
-  changes: PriceChange[]
-  proposals: PriceProposal[]
-  sync: {
-    source: string
-    lastRunAt: number
-    lastOkAt: number
-    error?: string
-    applied: number
-    proposed: number
-    retired: number
-    nextRunAt: number
-  }
-}
-
-export const pricing: MockPricingView = {
-  effectiveFrom: {
-    'gpt-5-mini': '2026-08-14',
-    'gpt-5.5': '2026-06-02',
-    'claude-sonnet-5': '2026-09-01',
-    'claude-opus-4-1': '2025-08-05',
-    'claude-haiku-4-5': '2025-10-15',
-    'llama-3.3-70b': '2026-01-01',
-  },
-  changes: [
-    { model: 'claude-sonnet-5', field: 'Output', from: 18.0, to: 15.0, effective: '2026-09-01', by: 'catalog sync (Anthropic list price)' },
-    { model: 'gpt-5-mini', field: 'Cached input', from: 0.05, to: 0.025, effective: '2026-08-14', by: 'catalog sync (OpenAI list price)' },
-  ],
-  source: Object.fromEntries(models.map((m) => [m.id, m.provider === 'Self-hosted' ? 'Internal chargeback rate' : `${m.provider} list price`])),
-}
 
 export interface Backend {
   name: string
@@ -404,23 +274,6 @@ export interface BackendEndpoint {
   /** The endpoint as a base URL, ${VAR:-default}s at their defaults. */
   baseUrl?: string
 }
-
-export interface Route {
-  name: string
-  match: string
-  targets: { model: string; backend: string; weight: number }[]
-  fallback: string[]
-  provenance: Provenance
-  sync: SyncState
-  captureContent?: boolean
-}
-
-export const routes: Route[] = [
-  { name: 'default', match: 'model = *', targets: [{ model: 'claude-sonnet-5', backend: 'anthropic-prod', weight: 100 }], fallback: ['bedrock-eu', 'openai-prod'], provenance: 'console', sync: 'synced' },
-  { name: 'cheap-summarize', match: 'model = summarize-*', targets: [{ model: 'gpt-5-mini', backend: 'openai-prod', weight: 100 }], fallback: ['vllm-internal'], provenance: 'console', sync: 'synced' },
-  { name: 'eu-private', match: 'header x-data-region = eu', targets: [{ model: 'llama-3.3-70b', backend: 'vllm-internal', weight: 80 }, { model: 'claude-haiku-4-5', backend: 'bedrock-eu', weight: 20 }], fallback: [], provenance: 'git', sync: 'drift', captureContent: true },
-  { name: 'research-frontier', match: 'key.team = research', targets: [{ model: 'claude-opus-4-1', backend: 'anthropic-prod', weight: 100 }], fallback: ['openai-prod'], provenance: 'console', sync: 'applying' },
-]
 
 type SeedKey = Omit<ApiKey, 'hourly24h' | 'projectId' | 'owner'>
 
@@ -571,16 +424,6 @@ export const rules: PolicyRule[] = [
     then: [{ action: 'route to', detail: 'gpt-5-mini' }],
     fired24h: 312, baseline7d: 290,
   },
-]
-
-export const detectors = [
-  { id: 'email', name: 'Email address', kind: 'Built-in · regex', threshold: 0.99, hits24h: 842, fp: 3 },
-  { id: 'ssn', name: 'US SSN', kind: 'Built-in · regex + checksum', threshold: 0.95, hits24h: 61, fp: 0 },
-  { id: 'person', name: 'Person name', kind: 'Built-in · NER', threshold: 0.82, hits24h: 2_310, fp: 41 },
-  { id: 'card', name: 'Credit card', kind: 'Built-in · Luhn', threshold: 1.0, hits24h: 22, fp: 1 },
-  { id: 'secret', name: 'API secret', kind: 'Built-in · entropy', threshold: 0.9, hits24h: 88, fp: 12 },
-  { id: 'src', name: 'Source code', kind: 'Built-in · classifier', threshold: 0.75, hits24h: 31, fp: 6 },
-  { id: 'acct', name: 'Acme account ID', kind: 'Custom · regex  ACME-\\d{8}', threshold: 1.0, hits24h: 407, fp: 0 },
 ]
 
 // ---- receipts -----------------------------------------------------------
@@ -1125,36 +968,6 @@ export const summary: Summary = {
   keyAnomalies: [{ keyId: 'k1', keyName: 'support-bot', spendUsd: 1_404, baselineUsd: 484, ratio: 2.9, topModel: 'claude-sonnet-5', topModelShare: 0.71 }],
 }
 
-// Traffic either side of a change (GET /changes/{id}/impact).
-export interface Impact {
-  requests: number
-  p50Ms: number
-  /** Over successful requests with a price; null when none had one (api mode). */
-  costPerRequestUsd: number | null
-  /** Api mode: successful requests with no price, left out of costPerRequestUsd. */
-  unpriced?: number
-  errorRate: number
-  blockedRedactedShare: number
-}
-
-export interface ChangeImpact {
-  changeId: string
-  ts: number
-  windowMinutes: number
-  before: Impact
-  after: Impact
-}
-
-export const changeImpacts: Record<string, ChangeImpact> = {
-  c1: {
-    changeId: 'c1',
-    ts: NOW - 42 * 60_000,
-    windowMinutes: 40,
-    before: { requests: 1_968, p50Ms: 1_320, costPerRequestUsd: 0.0341, errorRate: 0.006, blockedRedactedShare: 0.104 },
-    after: { requests: 1_944, p50Ms: 980, costPerRequestUsd: 0.0211, errorRate: 0.007, blockedRedactedShare: 0.106 },
-  },
-}
-
 // ---- Activity (§7.5.9) ------------------------------------------------------
 // GET /activity joins each change to receipts_5m either side of it and lists
 // traffic events. Mock mode keeps the mockup's hand-written readouts.
@@ -1200,72 +1013,3 @@ export interface ActivityView {
   events: TrafficEvent[]
 }
 
-export type ActivityMetric = 'total' | 'blocked' | 'rerouted'
-
-/** Mock-mode per-change readouts, keyed by change id. */
-export const activityReadouts: Record<string, { metric: string; before: string; after: string; series: ActivityMetric; resource: string }> = {
-  c1: { metric: 'p50 latency, route default', before: '1,240ms', after: '900ms', series: 'total', resource: '/routing' },
-  c2: { metric: 'p95 latency, eu-private', before: '1,180ms', after: '1,790ms', series: 'rerouted', resource: '/routing' },
-  c3: { metric: 'blocked share of requests', before: '1.2%', after: '8.9%', series: 'blocked', resource: '/guardrails?rule=r3' },
-  c4: { metric: 'throttled requests, agents', before: '312/h', after: '0/h', series: 'total', resource: '/spend' },
-  c5: { metric: 'traffic on new secret', before: '0%', after: '61%', series: 'total', resource: '/keys?key=k4' },
-  c6: { metric: 'would-redact (monitor)', before: '—', after: '22 / 24h', series: 'total', resource: '/guardrails?rule=r4' },
-}
-
-const hhmm = (ts: number) => new Date(ts).toTimeString().slice(0, 5)
-
-export const activityEvents: TrafficEvent[] = [
-  { id: 't1', ts: NOW - 70 * 60_000, kind: 'backend_failing', title: 'anthropic-prod failover began', detail: '8% of Claude traffic moved to bedrock-eu after 529 overloaded responses', tone: 'degraded', to: '/traffic?backend=bedrock-eu&reason=fallback' },
-  { id: 't2', ts: NOW - 4.5 * 3_600_000, kind: 'blocks_spike', title: `Blocks spiked to 9% at ${hhmm(NOW - 4.5 * 3_600_000)}`, detail: '82 of 96 blocks from support-bot, all on block-src', tone: 'blocked', to: '/traffic?verdict=blocked' },
-  { id: 't3', ts: NOW - 3 * 3_600_000, kind: 'blocks_baseline', title: 'Blocks back under baseline', detail: 'block-src hits dropped to 14/h after support changed its prompt template', tone: 'allowed', to: '/traffic?verdict=blocked' },
-  { id: 't4', ts: NOW - 14 * 3_600_000, kind: 'budget_cap', title: 'Budget "support" crossed its cap', detail: '$12,000 reached; throttle policy engaged', tone: 'degraded', to: '/spend' },
-]
-
-// Settings (§7.4). Provider credentials, members and integrations have no
-// control-plane backend yet; api mode says so instead of showing these.
-export const providerKeys = [
-  { backend: 'openai-prod', provider: 'OpenAI', auth: 'API key', prefix: 'sk-proj-…Q7f', lastTested: '2026-09-02', rotateBy: '2026-12-01', oidc: false },
-  { backend: 'anthropic-prod', provider: 'Anthropic', auth: 'API key', prefix: 'sk-ant-…m2Xa', lastTested: '2026-06-11', rotateBy: '2026-09-11', oidc: false },
-  { backend: 'bedrock-eu', provider: 'Bedrock', auth: 'Cloud OIDC (short-lived)', prefix: 'role/gw-bedrock-eu', lastTested: 'on every request', rotateBy: null, oidc: true },
-  { backend: 'azure-openai-eu', provider: 'Azure', auth: 'Workload identity', prefix: 'mi-gw-azure-eu', lastTested: 'failing', rotateBy: null, oidc: true },
-  { backend: 'vllm-internal', provider: 'Self-hosted', auth: 'mTLS (cert-manager)', prefix: 'CN=gw-vllm', lastTested: '2026-09-20', rotateBy: '2026-11-20', oidc: true },
-]
-
-/** GET /members: who has used the console, with the roles their last sign-in's Keycloak groups gave them. */
-export interface Member {
-  email: string
-  name: string
-  roles: string[]
-  firstSeenAt: number
-  lastSeenAt: number
-}
-
-export const members: Member[] = [
-  { name: 'Priya Shah', email: 'priya@acme.dev', roles: ['admin'], firstSeenAt: NOW - 90 * 86_400_000, lastSeenAt: NOW },
-  { name: 'Dana Okafor', email: 'dana@acme.dev', roles: ['finance'], firstSeenAt: NOW - 60 * 86_400_000, lastSeenAt: NOW - 2 * 3_600_000 },
-  { name: 'Marco Rossi', email: 'marco@acme.dev', roles: ['security'], firstSeenAt: NOW - 80 * 86_400_000, lastSeenAt: NOW - 5 * 3_600_000 },
-  { name: 'Lee Tran', email: 'lee@acme.dev', roles: ['owner'], firstSeenAt: NOW - 120 * 86_400_000, lastSeenAt: NOW - 3 * 86_400_000 },
-  { name: 'Sam Patel', email: 'sam@acme.dev', roles: ['editor'], firstSeenAt: NOW - 30 * 86_400_000, lastSeenAt: NOW - 86_400_000 },
-  { name: 'ci-gitops', email: 'ci-gitops (service account)', roles: ['viewer'], firstSeenAt: NOW - 30 * 86_400_000, lastSeenAt: NOW - 12 * 60_000 },
-]
-
-export const integrations = [
-  { name: 'OTel collector', detail: 'otel-collector.nebari-gateway:4317 · 412 receipts/s · lag 0.8s', ok: true },
-  { name: 'Argo CD', detail: 'Watching github.com/acme/platform-gitops · 2 backends, 1 route, 1 alias declarative', ok: true },
-  { name: 'Keycloak OIDC', detail: 'realm acme · client nebari-gateway-console · groups → roles mapped', ok: true },
-]
-
-/** GET /retention: the receipts database's retention jobs. */
-export interface RetentionView {
-  hotDays: number | null
-  compressAfterDays: number | null
-  aggregates: { name: string; dropAfterDays: number | null }[]
-  oldestReceiptAt: number | null
-}
-
-export const retention: RetentionView = {
-  hotDays: 30,
-  compressAfterDays: 7,
-  aggregates: [{ name: 'receipts_daily', dropAfterDays: 7 * 365 }],
-  oldestReceiptAt: now() - 30 * 86_400_000,
-}

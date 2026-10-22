@@ -7,12 +7,11 @@
 // or at import time after hydrate(), see the fetched values.
 import { ago } from '@/lib/format'
 import * as mock from './mock'
-import type { ApiKey, Backend, Budget, BudgetKey, Change, Degradation, Model, PairPrice, PolicyRule, PricingView, Project, RateName, Receipt, Route, SeriesPoint, SpendPoint, Session, Summary, ChangeImpact, Team } from './mock'
+import type { ApiKey, Backend, Budget, BudgetKey, Change, Degradation, Model, PolicyRule, Project, Receipt, SeriesPoint, SpendPoint, Session, Summary, Team } from './mock'
 
-// ---- routing (api mode, §4.4) ----------------------------------------------
+// ---- routes (api mode, §4.4) -----------------------------------------------
 // Routes are desired state in the control plane; each compiles to one rule of
-// the gateway's AIGatewayRoute. GET /routing diffs the compiled config against
-// what the gateway runs, and POST /routing/apply puts it in front of it.
+// the gateway's AIGatewayRoute. Traffic reads them for content capture.
 
 export interface RouteTarget {
   backend: string
@@ -37,66 +36,16 @@ export interface LiveRoute {
   yaml: string
 }
 
-export interface RoutingChange {
-  kind: string
-  name: string
-  /** "key replaced": a provider key set since the last apply; the diff is its version, never the key. */
-  change: 'added' | 'changed' | 'removed' | 'key replaced'
-  /** The resource's YAML, each line prefixed "+", "-" or " ". */
-  diff: string
-}
-
-export interface RoutingPlan {
-  /** Where an apply goes, in the applier's words. */
-  target: string
-  canApply: boolean
-  reason?: string
-  /** Names this plan (desired and running); apply sends it as If-Match. */
-  etag: string
-  changes: RoutingChange[]
-  /** The desired routing as YAML, for Export. */
-  yaml: string
-  lastApply?: { at: number; actor: string; ok: boolean; error?: string; changes: Omit<RoutingChange, 'diff'>[] }
-}
-
-/** A provider's GET …/models with its key: the models, or the refusal in the provider's words. */
-export interface ConnectionTest {
-  ok: boolean
-  /** The provider's HTTP status; absent when it didn't answer. */
-  status?: number
-  models: string[]
-  error?: string
-  ms: number
-  at: number
-}
-
-/** A backend after a write, with the connection test the write ran. */
-export interface BackendResult {
-  backend: Backend
-  test?: ConnectionTest
-  /** What didn't happen linking models to LiteLLM on create; absent when they're linked and priced. */
-  pricing?: string
-}
-
 export type * from './mock'
 
 export const dataMode: 'api' | 'mock' = import.meta.env.VITE_DATA === 'api' ? 'api' : 'mock'
 
-/** VITE_HIDE_PAGES ("/routing,/guardrails"): pages a deployment has no backend for, left out of the sidebar and sent to Overview. */
-export function parseHiddenPages(v: string | undefined): Set<string> {
-  return new Set((v ?? '').split(',').map((p) => p.trim()).filter(Boolean))
-}
-export const hiddenPages = parseHiddenPages(import.meta.env.VITE_HIDE_PAGES)
 export const API_BASE = '/api/v1/demo'
-
-export type Detector = (typeof mock.detectors)[number]
 
 export let teams: Team[] = mock.teams
 export let models: Model[] = mock.models
 export let modelById: Record<string, Model> = mock.modelById
 export let backends: Backend[] = mock.backends
-/** Mock-mode routes; api mode's are liveRoutes, in the reconciler's shape. */
-export const routes: Route[] = mock.routes
 export let liveRoutes: LiveRoute[] = []
 export let keys: ApiKey[] = mock.keys
 export let keyById: Record<string, ApiKey> = mock.keyById
@@ -109,12 +58,8 @@ export const throttleRate = mock.throttleRate
 export const THROTTLE_PER_MINUTE = mock.THROTTLE_PER_MINUTE
 /** Every team's projects, keys or not. Forms re-read GET /projects when they open. */
 export let projects: Project[] = mock.projects
-/** Policies in order (GET /policies), for Overview and the command palette. Mock mode shows each fixture rule as a policy. */
+/** Policies in order (GET /policies), for Overview. Mock mode shows each fixture rule as a policy. */
 export let policies: PolicySummary[] = mock.rules
-/** Mock-mode Guardrails fixtures: rules as the mockup shows them. */
-export const ruleFixtures: PolicyRule[] = mock.rules
-/** Mock-mode Detectors fixtures; api mode reads GET /detectors on the tab. */
-export const detectors: Detector[] = mock.detectors
 export let seedReceipts: Receipt[] = mock.seedReceipts
 export let trafficSeries: SeriesPoint[] = mock.trafficSeries
 export let spendSeries: SpendPoint[] = mock.spendSeries
@@ -128,24 +73,10 @@ export let session: Session = mock.session
 /** Mock-mode Spend callouts. Api mode has no surge rule, and reads savings from GET /spend/savings. */
 export const seedSpendSurge = dataMode === 'api' ? null : mock.spendSurge
 export const seedSavings = dataMode === 'api' ? null : mock.savings
-/** Mock-mode fixtures for GET /summary and GET /changes/{id}/impact. */
+/** Mock-mode fixture for GET /summary. */
 export const seedSummary: Summary = mock.summary
-export const seedChangeImpacts: Record<string, ChangeImpact> = dataMode === 'api' ? {} : mock.changeImpacts
-/** Mock-mode Activity readouts and traffic events; api mode reads GET /activity. */
-export const seedActivityReadouts: typeof mock.activityReadouts = dataMode === 'api' ? {} : mock.activityReadouts
-/** Settings fixtures; api mode has no backend for these yet. */
-export const seedProviderKeys = dataMode === 'api' ? [] : mock.providerKeys
-export const seedMembers: mock.Member[] = dataMode === 'api' ? [] : mock.members
-export const seedIntegrations = dataMode === 'api' ? [] : mock.integrations
-export const seedRetention: mock.RetentionView | null = dataMode === 'api' ? null : mock.retention
-export const seedActivityEvents: mock.TrafficEvent[] = dataMode === 'api' ? [] : mock.activityEvents
-/** Models fixtures. Api mode reads GET /aliases and GET /pricing; the catalog has no modalities or deprecation dates yet. */
-export const seedAliases: mock.AliasView[] = dataMode === 'api' ? [] : mock.aliases
-export const seedPricing: mock.MockPricingView | null = dataMode === 'api' ? null : mock.pricing
 /** Mock only: the fixtures' one price per model. Api mode prices per (model, backend) on /pricing. */
 export const seedRates: Record<string, mock.MockModel> | null = dataMode === 'api' ? null : mock.modelById
-export const seedModalities: Record<string, string[]> | null = dataMode === 'api' ? null : mock.modelModalities
-export const seedDeprecations: Record<string, string> | null = dataMode === 'api' ? null : mock.modelDeprecations
 
 export class ApiError extends Error {
   readonly status: number
@@ -565,238 +496,12 @@ export async function updateBudget(b: Budget, edit: BudgetEdit): Promise<Budget>
   return next
 }
 
-// Price writes (api mode only; mock mode has no price editing). Each returns
-// the pricing view after the write.
-
-/** Sets rates on a pair: a number overrides it, null follows LiteLLM again. */
-export const setPairPrice = (p: PairPrice, rates: Partial<Record<RateName, number | null>>, effectiveFrom?: string) =>
-  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}`, {
-    method: 'POST',
-    body: JSON.stringify({ rates, effectiveFrom }),
-    headers: { 'If-Match': p.etag },
-  })
-
-/** Ends a pair's price now: new requests have no price, earlier ones keep theirs. */
-export const removePairPrice = (p: PairPrice) =>
-  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}`, { method: 'DELETE', headers: { 'If-Match': p.etag } })
-export const cancelPairPrice = (c: { model: string; backend: string; effectiveAt: number }) =>
-  api<PricingView>(`/pricing/${encodeURIComponent(c.model)}/${encodeURIComponent(c.backend)}/${c.effectiveAt}`, { method: 'DELETE' })
-
-export const setPriceSource = (p: { model: string; backend: string }, litellmKey: string) =>
-  api<PricingView>(`/pricing/${encodeURIComponent(p.model)}/${encodeURIComponent(p.backend)}/source`, { method: 'PUT', body: JSON.stringify({ litellmKey }) })
-
-export const syncPrices = () => api<PricingView>('/pricing/sync', { method: 'POST' })
-
-export const decidePriceProposal = (id: number, decision: 'accept' | 'dismiss') => api<PricingView>(`/pricing/proposals/${id}/${decision}`, { method: 'POST' })
-
 export async function deleteBudget(b: Budget): Promise<void> {
   if (dataMode === 'api') await api(`/budgets/${b.id}`, { method: 'DELETE', headers: { 'If-Match': b.etag ?? '' } })
   budgets = budgets.filter((x) => x.id !== b.id)
 }
 
 // ---- policies --------------------------------------------------------------
-// Api mode only: a policy is an ordered list of rules with one mode and one
-// fail mode (§5.2). The Guardrails page saves a policy's draft, publishes it
-// as a version and rolls it back through the control plane. Mock mode keeps
-// the page's own state.
 
-/** What Overview and the palette read of a policy. Mock fixtures (one rule each) fit it too. */
+/** What Overview reads of a policy. Mock fixtures (one rule each) fit it too. */
 export type PolicySummary = Pick<PolicyRule, 'id' | 'ordinal' | 'name' | 'description' | 'mode' | 'failMode' | 'version' | 'fired24h' | 'baseline7d'>
-/** One rule of a policy: conditions that must all hold, and its actions (§5.3). A new rule has no id until saved. */
-export interface PolicyRuleContent {
-  id?: string
-  name: string
-  when: PolicyRule['when']
-  then: PolicyRule['then']
-}
-/** What an author writes; mode and version come from publishing. */
-export interface PolicyContent {
-  name: string
-  description: string
-  failMode: 'open' | 'closed'
-  rules: PolicyRuleContent[]
-}
-/**
- * A policy as GET /policies shows it: the live version (its rules in order),
- * any saved draft, the ETag covering both, and the reroute conflicts of what's
- * being authored (§5.3: the last reroute wins).
- */
-export type PolicyView = PolicySummary & {
-  rules: (PolicyRuleContent & { id: string })[]
-  draft: (PolicyContent & { updatedAt: number; updatedBy: string }) | null
-  etag: string
-  warnings: string[]
-}
-/**
- * An engine detector (GET /detectors): how it matches, the rules of live policies using it, its last 24h from receipts,
- * and reviewers' verdicts on its hits from the last 30 days. A custom entity carries its registry row.
- */
-export interface DetectorView {
-  entity: string
-  kind: string
-  pattern: string
-  placeholder: string
-  custom: boolean
-  usedBy: { rule: string; policy: string; version: number; mode: PolicyRule['mode']; action: string }[]
-  redactedRequests24h: number
-  redactedMatches24h: number
-  blocked24h: number
-  falsePositives30d: number
-  confirmed30d: number
-  customEntity?: CustomEntity
-}
-/** A security user's own entity type (§5.3 registry): a regex Warden runs like a built-in, and examples it must and mustn't match. */
-export interface CustomEntity {
-  id: string
-  name: string
-  pattern: string
-  label: string
-  mustMatch: string[]
-  mustNotMatch: string[]
-  updatedAt: number
-  updatedBy: string
-  etag: string
-}
-export type EntityInput = Pick<CustomEntity, 'name' | 'pattern' | 'label' | 'mustMatch' | 'mustNotMatch'>
-/** A dry run of an entity (POST /entities?dryRun=true): it would save, and what it finds in the sample. */
-export interface EntityCheck {
-  entity: CustomEntity
-  matches: string[]
-  redacted: string
-}
-/** A reviewer's call on one detector hit. */
-export interface DetectorVerdict {
-  receiptId: string
-  entity: string
-  verdict: 'false_positive' | 'confirmed'
-  by: string
-  at: number
-}
-/** One entity a receipt recorded as redacted or blocked (GET /detectors/hits), for review. Receipts keep hashes, not text. */
-export interface DetectorHit {
-  receiptId: string
-  ts: number
-  entity: string
-  action: 'redacted' | 'blocked'
-  count: number
-  rules: string[]
-  keyName: string
-  team: string
-  model: string
-  contentCaptured: boolean
-  verdict: DetectorVerdict | null
-  etag: string
-}
-
-/** Tries an entity on the server (same RE2 engine and checks as a save) against `sample`, saving nothing. */
-export const checkEntity = (input: EntityInput, sample: string, existing?: CustomEntity) =>
-  existing
-    ? api<EntityCheck>(`/entities/${existing.id}?dryRun=true`, { method: 'PUT', body: JSON.stringify({ ...input, sample }) })
-    : api<EntityCheck>('/entities?dryRun=true', { method: 'POST', body: JSON.stringify({ ...input, sample }) })
-/** Adds a custom entity; Warden reloads, and rules can name it. Audited. */
-export const createEntity = (input: EntityInput) => api<CustomEntity>('/entities', { method: 'POST', body: JSON.stringify(input) })
-/** Changes an entity's pattern, label or examples, as the caller last saw it (If-Match). Its name can't change. */
-export const updateEntity = (e: CustomEntity, input: EntityInput) =>
-  api<CustomEntity>(`/entities/${e.id}`, { method: 'PUT', body: JSON.stringify(input), headers: { 'If-Match': e.etag } })
-/** Deletes an entity no rule names (409 says which rules do). */
-export const deleteEntity = (e: CustomEntity) => api(`/entities/${e.id}`, { method: 'DELETE', headers: { 'If-Match': e.etag } })
-/** Records a verdict on a hit, as the caller saw its review state (If-Match). Audited. */
-export const setVerdict = (h: DetectorHit, verdict: DetectorVerdict['verdict']) =>
-  api<DetectorHit>('/detectors/hits/verdict', { method: 'POST', body: JSON.stringify({ receiptId: h.receiptId, entity: h.entity, verdict }), headers: { 'If-Match': h.etag } })
-/** What a rule may name (GET /rules/vocabulary): exactly what the server's validation accepts. */
-export interface RuleVocabulary {
-  entities: string[]
-  fields: string[]
-  targets: string[]
-}
-export interface PolicyVersion extends PolicyContent {
-  version: number
-  mode: PolicyRule['mode']
-  publishedAt: number | null
-  publishedBy: string | null
-}
-export type PublishMode = 'monitor' | 'enforce' | 'disabled'
-/** What a publish would leave live (§6 dryRun), with its reroute conflicts and its replay over the last hour (§7.5.7). */
-export interface PolicyPublishPlan {
-  policy: PolicySummary & { rules: PolicyRuleContent[] }
-  changes: { field: string; from: unknown; to: unknown }[]
-  warnings: string[]
-  replay: ReplayView
-}
-
-/** The change on one kind of replayed request: exact (captured content) or metadata only. */
-export interface ReplayPart {
-  requests: number
-  changed: number
-  newlyBlocked: number
-  noLongerBlocked: number
-  newlyRedacted: number
-  noLongerRedacted: number
-  newlyRerouted: number
-  noLongerRerouted: number
-}
-export type ReplayWindow = '1h' | '24h' | '7d' | '30d'
-/**
- * A policy's draft replayed over recorded requests against the policies as
- * they are (§7.5.7), with Warden's evaluator. Exact where the request's route
- * captured content; otherwise only rules that don't read the prompt ran.
- */
-export interface ReplayView {
-  window: ReplayWindow
-  since: number
-  until: number
-  total: number
-  exact: ReplayPart
-  metadata: ReplayPart
-  /** Rules that read the prompt, so didn't run on metadata-only requests. */
-  skippedRules: string[]
-  /** Requests the draft changes, newest first (at most 50). */
-  affected: { id: string; ts: number; team: string; key: string; model: string; kind: 'exact' | 'metadata'; from: string; to: string }[]
-  /** The window held more than `limit` requests; the newest were replayed. */
-  limited: boolean
-  limit: number
-  replayed: 'unsaved' | 'draft' | 'live'
-  /** Routes capturing content now. */
-  captureRoutes: string[]
-  ms: number
-}
-
-const json = (method: string, body?: unknown, etag?: string): RequestInit => ({
-  method,
-  body: body === undefined ? undefined : JSON.stringify(body),
-  headers: etag ? { 'If-Match': etag } : {},
-})
-
-/** Keeps the catalog's policies (read by Overview) in step with a fresh GET /policies. */
-export function syncPolicies(list: PolicyView[]) {
-  policies = list
-}
-
-export const createPolicy = (c: PolicyContent) => api<PolicyView>('/policies', json('POST', c))
-/** Policy order decides outcomes: `from` is the order the caller saw (a 409 if it moved), `to` the one they want. */
-export const reorderPolicies = (from: string[], to: string[]) => api<PolicyView[]>('/policies/order', json('PUT', { from, to }))
-/** Saves over `p` as the caller last saw it; a 409 ApiError carries the policy as it is now. */
-export const savePolicyDraft = (p: PolicyView, c: PolicyContent) => api<PolicyView>(`/policies/${p.id}/draft`, json('PUT', c, p.etag))
-export const discardPolicyDraft = (p: PolicyView) => api<PolicyView>(`/policies/${p.id}/draft`, json('DELETE', undefined, p.etag))
-export const planPublish = (p: PolicyView, mode: PublishMode) => api<PolicyPublishPlan>(`/policies/${p.id}/publish?dryRun=true`, json('POST', { mode }, p.etag))
-export const publishPolicy = (p: PolicyView, mode: PublishMode) => api<PolicyView>(`/policies/${p.id}/publish`, json('POST', { mode }, p.etag))
-export const rollbackPolicy = (p: PolicyView, version: number) => api<PolicyView>(`/policies/${p.id}/rollback`, json('POST', { version }, p.etag))
-export const deletePolicy = (p: PolicyView) => api<{ id: string }>(`/policies/${p.id}`, json('DELETE', undefined, p.etag))
-/** A model's LiteLLM entry for a provider, offered when adding the provider; `litellmKey` is "" when there's none. */
-export interface LiteLLMMatch {
-  model: string
-  litellmKey: string
-  /** Per 1M tokens, by rate (input, cachedInput, cacheWrite, output, reasoning). */
-  rates?: Partial<Record<'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning', number>>
-  context?: number
-  modalities?: string[]
-}
-export const liteLLMMatch = (provider: string, models: string[]) =>
-  api<LiteLLMMatch[]>(`/pricing/litellm/match?provider=${encodeURIComponent(provider)}&models=${encodeURIComponent(models.join(','))}`)
-
-/** Replays `c` (the builder's rules, saved or not) in place of policy `id` over the window. Writes nothing. */
-export const replayPolicy = (id: string, c: PolicyContent, window: ReplayWindow) => api<ReplayView>(`/policies/${id}/replay?window=${window}`, json('POST', c))
-/** §9.2: turns a route's content capture on or off, at once (no apply). An elevated role's action, audited. */
-export const setRouteCapture = (r: LiveRoute, on: boolean) =>
-  api<LiveRoute>(`/routes/${encodeURIComponent(r.name)}/capture`, json('PUT', { captureContent: on }, r.etag))
-

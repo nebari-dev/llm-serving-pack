@@ -40,7 +40,7 @@ const choose = (option: HTMLElement) => {
   fireEvent.click(option)
 }
 
-const routes = ['/', '/traffic', '/spend', '/models', '/routing', '/guardrails', '/keys', '/keys?key=k1', '/activity', '/settings', '/onboarding', '/guardrails?rule=r3', '/routing?tab=backends']
+const routes = ['/', '/traffic', '/spend', '/keys', '/keys?key=k1']
 
 describe('routes render', () => {
   for (const route of routes) {
@@ -63,6 +63,15 @@ describe('routes render', () => {
     await act(async () => {})
     expect(document.body.textContent).toContain('Decision trace')
     expect(document.body.textContent).toContain(r.traceId)
+  })
+
+  // Overview, Spend and Keys still link to pages this console doesn't have.
+  it('sends a path with no page to Overview', async () => {
+    window.history.pushState({}, '', '/activity')
+    const { container } = render(<App />)
+    await act(async () => {})
+    expect(window.location.pathname).toBe('/')
+    expect(container.querySelector('h1')?.textContent).toBe('Overview')
   })
 })
 

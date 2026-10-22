@@ -1,4 +1,4 @@
-import type { PriceChange, SpendView } from '@/data/catalog'
+import type { SpendView } from '@/data/catalog'
 
 type Cell = string | number | boolean | null | undefined
 
@@ -11,14 +11,6 @@ export function toCsv(rows: Cell[][]): string {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
   return rows.map((r) => r.map(cell).join(',')).join('\n') + '\n'
-}
-
-/** Pricing's change history, one row per rate change; an empty price is "no price". */
-export function priceChangesCsv(changes: PriceChange[]): string {
-  return toCsv([
-    ['model', 'backend', 'rate', 'from_usd_per_1m', 'to_usd_per_1m', 'source', 'effective', 'scheduled'],
-    ...changes.map((c) => [c.model, c.backend, c.field, c.from, c.to, c.source, c.effective, c.scheduled]),
-  ])
 }
 
 /**
