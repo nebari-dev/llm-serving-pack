@@ -49,7 +49,7 @@ identity, access groups, and key revocation are enforced at the gateway.
   the server; avoid a zone that your cluster DNS answers with the gateway
   address.
 - **A TLS certificate for that name**, issued by a public CA or by a CA you
-  give the cluster, signed with SHA-256 or stronger.
+  give the cluster (SHA-256 or stronger recommended).
 - **An OpenAI-compatible API that requires an API key**, sent as
   `Authorization: Bearer <key>`, and answering to a fixed model id.
 

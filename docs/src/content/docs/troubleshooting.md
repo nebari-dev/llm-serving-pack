@@ -298,7 +298,15 @@ kubectl -n envoy-gateway-system get sa \
 
 The `<name>-api-keys` Secret is the key-manager's user API-key store, not an upstream credential; a 401 issued by the gateway itself points at the user's minted key, not the AWS identity.
 
-**Upstream TLS verification fails (HTTP 503, `CERTIFICATE_VERIFY_FAILED`).** The gateway reached the provider but did not trust its certificate. By default it accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status first:
+**Upstream connection fails (HTTP 503, `upstream connect error or disconnect/reset before headers`).** A 503 alone does not establish a certificate problem. Envoy hides the detailed transport failure from the response body by default. Check the Envoy proxy access logs for `CERTIFICATE_VERIFY_FAILED` in the response-code details to confirm a TLS certificate verification failure:
+
+```bash
+kubectl -n envoy-gateway-system get pods
+kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+  | grep CERTIFICATE_VERIFY_FAILED
+```
+
+By default the gateway accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status:
 
 ```bash
 kubectl -n nebari-llm-serving-system get backendtlspolicy <name>-backend-tls \
@@ -312,7 +320,7 @@ openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>
   | openssl x509 -noout -text | grep -E 'Issuer:|Subject:|DNS:|Signature Algorithm'
 ```
 
-The certificate must list `spec.provider.hostname` in its subject alternative names, chain to a CA in the ConfigMap, and carry a SHA-256 (or stronger) signature.
+The certificate must list `spec.provider.hostname` in its subject alternative names and chain to a CA in the ConfigMap.
 
 **PassthroughModel stuck with `GatewayCRDUnavailable`.** The Envoy AI Gateway CRDs are not installed; the operator requeues every 15 seconds rather than failing outright. `ApplyFailed` means the CRDs exist but the write itself failed. Check the CR and the CRDs:
 
