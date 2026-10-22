@@ -44,7 +44,7 @@ type Creator struct {
 
 // CreateKeyResult is returned when a new key is created.
 type CreateKeyResult struct {
-	ClientID string // e.g., "user-chuck-phi4-mini-<32-hex-sha256>-1" (user, model, pair hash, sequence)
+	ClientID string // e.g., "user-chuck-phi4-mini-<32-hex-sha256>-<16-hex-random>" (user, model, pair hash, random part)
 	APIKey   string // e.g., "sk-abc123..." - only returned once at creation time
 }
 
@@ -167,6 +167,15 @@ func configMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
 }
 
+// randomHex returns n random bytes, hex-encoded.
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating random bytes: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // generateAPIKey generates a new API key with sk- prefix and 32 random base64url characters.
 func generateAPIKey() (string, error) {
 	// 24 random bytes => 32 base64url characters (no padding)
@@ -248,27 +257,27 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName string, creator C
 	// preserves the raw username for ownership checks.
 	safeUsername := sanitizeUsernameForKey(username)
 	safeModel := sanitizeUsernameForKey(modelName)
+
+	// The last part is random, never a sequence number. Usage records and
+	// OpenMeter customers name a key by its client ID long after the key is
+	// revoked, so a client ID must never be issued twice: a reissued ID would
+	// bill the new key's usage to whoever held the old one, and a sequence
+	// counted from the live keys reissues a revoked key's number. 64 random
+	// bits make a repeat practically impossible; the loop still refuses one
+	// that names a live key, so a live credential is never overwritten.
 	userPrefix := fmt.Sprintf("user-%s-%s-%s-", safeUsername, safeModel, shortHash(username, modelName))
-	count := 0
-	for k := range secret.Data {
-		if strings.HasPrefix(k, userPrefix) {
-			count++
-		}
-	}
-	// Probe upward from count+1 until the clientID is unused. Revocation
-	// leaves gaps in the sequence, so a bare count can land on a still-live
-	// key (keys {1,2,3}, revoke #2, count=2 -> "-3") and would silently
-	// overwrite that credential in both the Secret and the ConfigMap.
-	sequence := count + 1
-	clientID := fmt.Sprintf("%s%d", userPrefix, sequence)
+	var clientID string
 	for {
+		suffix, err := randomHex(8)
+		if err != nil {
+			return nil, fmt.Errorf("generating client ID: %w", err)
+		}
+		clientID = userPrefix + suffix
 		_, inSecret := secret.Data[clientID]
 		_, inCM := cm.Data[clientID]
 		if !inSecret && !inCM {
 			break
 		}
-		sequence++
-		clientID = fmt.Sprintf("%s%d", userPrefix, sequence)
 	}
 
 	apiKey, err := generateAPIKey()
