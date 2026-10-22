@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
 )
 
 // streamLimit is how many of the newest receipts each poll compares.
@@ -28,7 +30,7 @@ func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	ctx := r.Context()
-	sent := map[string]string{}
+	var sent streamed
 	first := true
 	poll := time.NewTicker(s.poll())
 	defer poll.Stop()
@@ -39,15 +41,11 @@ func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request) {
 		if err != nil && ctx.Err() == nil {
 			slog.Error("stream: read receipts", "err", err)
 		}
-		// Oldest first, so the console sees them in order.
-		for i := len(rs) - 1; i >= 0; i-- {
-			b, _ := json.Marshal(rs[i])
-			if sent[rs[i].ID] == string(b) {
-				continue
-			}
-			sent[rs[i].ID] = string(b)
-			if !first {
-				fmt.Fprintf(w, "event: receipt\nid: %s\ndata: %s\n\n", rs[i].ID, b)
+		if err == nil {
+			for _, c := range sent.update(rs) {
+				if !first {
+					fmt.Fprintf(w, "event: receipt\nid: %s\ndata: %s\n\n", c.id, c.data)
+				}
 			}
 		}
 		if first {
@@ -65,6 +63,34 @@ func (s *Server) streamTraffic(w http.ResponseWriter, r *http.Request) {
 		case <-poll.C:
 		}
 	}
+}
+
+// streamed is what one stream has sent: each receipt's JSON by ID, for the
+// receipts of the latest read only. A receipt that has left the newest
+// streamLimit is never read again, so it is forgotten; the stream's memory
+// stays at one read however long it is open.
+type streamed struct{ sent map[string]string }
+
+type streamChange struct {
+	id   string
+	data []byte
+}
+
+// update takes the newest receipts (newest first) and returns those that are
+// new or changed since they were sent, oldest first, so the console sees
+// them in order.
+func (s *streamed) update(rs []model.Receipt) []streamChange {
+	next := make(map[string]string, len(rs))
+	var out []streamChange
+	for i := len(rs) - 1; i >= 0; i-- {
+		b, _ := json.Marshal(rs[i])
+		next[rs[i].ID] = string(b)
+		if s.sent[rs[i].ID] != string(b) {
+			out = append(out, streamChange{rs[i].ID, b})
+		}
+	}
+	s.sent = next
+	return out
 }
 
 func (s *Server) poll() time.Duration {
