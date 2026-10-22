@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import starlight from '@astrojs/starlight';
 import { nebari } from '@nebari/starlight';
 import rehypeMermaid from 'rehype-mermaid';
-import remarkBaseLinks from './src/plugins/remark-base-links';
+import remarkBaseLinks, { prefixUrl } from './src/plugins/remark-base-links';
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
@@ -12,7 +12,8 @@ export default defineConfig({
   site: process.env.SITE,
   // Old page slugs, kept so published links keep working.
   redirects: {
-    '/gateway-upgrades': `${(process.env.BASE || '/').replace(/\/$/, '')}/upgrading/`,
+    // Astro writes the redirect meta refresh without the base; prefix it here.
+    '/gateway-upgrades': prefixUrl('/upgrading/', process.env.BASE || '/'),
   },
   integrations: [
     starlight({

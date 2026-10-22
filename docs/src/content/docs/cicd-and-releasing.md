@@ -121,7 +121,7 @@ Image tags are not derived from `appVersion`, and they are not hand-edited in th
 
 Cutting a release is one action: open a pull request that bumps `version` in `charts/nebari-llm-serving/Chart.yaml`, and merge it. Everything else is automatic - no git tag to push by hand, no editing image tags, no release step that happens outside a PR merged to `main`.
 
-If upgrading to the release takes more than the [routine steps](/upgrading/#routine-upgrade), add an entry for it under [Release-specific steps](/upgrading/#release-specific-steps) in the same pull request.
+If a change requires more than the [routine upgrade steps](/upgrading/#routine-upgrade), add an entry under [Release-specific steps](/upgrading/#release-specific-steps) in the pull request that introduces the change. The release pull request should confirm that all required entries are present.
 
 **What happens when that PR merges:**
 
@@ -161,6 +161,8 @@ helm install nebari-llm-serving nebari/nebari-llm-serving --version <version> \
 ```
 
 Replace `<version>` with a released version (the newest is on the repository's Releases page). Both forms install the same packaged chart with the same pinned image shas (see [Releasing](#releasing) above); `my-values.yaml` should set at least `platform.baseDomain` and the other required values covered in [Configuration](/configuration/).
+
+For later upgrades, follow the [routine upgrade steps](/upgrading/#routine-upgrade): `helm upgrade` does not update the chart's CRDs.
 
 ## Known Gaps
 

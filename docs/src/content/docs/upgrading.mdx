@@ -11,12 +11,25 @@ read every entry between your current version and the target before you start.
 
 ## Routine upgrade
 
+Read the [release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
+for every version between your current version and the target first. Confirm
+the target chart is available before changing the Application:
+
+```bash
+helm show chart oci://quay.io/nebari/charts/nebari-llm-serving --version <version>
+```
+
+A GitHub Release can appear before its chart is published. Pointing ArgoCD at
+an unavailable version reports `Sync: Unknown` with a `ComparisonError`, even
+while health still shows `Healthy`. Wait for chart publication before proceeding;
+see the [release publication caveat in the README](https://github.com/nebari-dev/llm-serving-pack#releasing).
+
 Bump `targetRevision` in the pack's ArgoCD Application
 ([Installation section 8.1](/installation/#81-add-the-argocd-application)) to
-the new chart version and push. With `automated` sync on, ArgoCD rolls it out;
-otherwise sync it by hand. Read the
-[release notes](https://github.com/nebari-dev/llm-serving-pack/releases) for
-every version in between first.
+the new chart version, push, and re-apply the Application with `kubectl apply -f`
+(or let your app-of-apps sync it). Pushing alone does not update an Application
+that was installed manually. With `automated` sync on, ArgoCD then rolls it out;
+otherwise sync it by hand.
 
 **CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
 its `crds/` directory. ArgoCD applies them on every sync, so they move
@@ -27,15 +40,21 @@ CRDs from the target release before upgrading:
 
 ```bash
 helm pull oci://quay.io/nebari/charts/nebari-llm-serving --version <version> --untar
-kubectl apply --server-side -f nebari-llm-serving/crds/
+kubectl apply --server-side --force-conflicts -f nebari-llm-serving/crds/
 kubectl wait --for=condition=Established --timeout=60s \
   crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
 helm upgrade nebari-llm-serving oci://quay.io/nebari/charts/nebari-llm-serving \
   --version <version> -n nebari-llm-serving-system -f <your-values>.yaml
 ```
 
-If another tool owns the CRDs, update them through that tool instead, and
-resolve field-ownership conflicts rather than forcing them.
+For a plain Helm install, `--force-conflicts` transfers ownership of the CRD
+schema fields from Helm to `kubectl`: Helm owns them from the initial install
+but does not update them during upgrades. If a separate tool manages the CRDs
+(such as a GitOps repository or platform CRD pipeline), update them through
+that tool instead of forcing ownership away from it.
+
+Stop if the CRD apply fails. An old CRD can still report `Established`, and
+`helm upgrade` can succeed while leaving its schema unchanged.
 
 If the CRDs lag behind the chart, the API server keeps validating against
 the old schema: fields the release added are rejected or dropped, so those
