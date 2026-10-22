@@ -87,7 +87,7 @@ function getDrawerSide(swipeDirection: DrawerSwipeDirection): DrawerSide {
  * Reads the resolved configuration of the nearest {@link Drawer}. `Drawer`
  * normalizes `side` and `swipeDirection` into each other and derives
  * `showSwipeHandle` from the result, so these settled values exist only on the
- * context — use it to author a custom part that adapts to the edge the drawer
+ * context: use it to author a custom part that adapts to the edge the drawer
  * opens from. Pass the calling component's name so a missing root reports which
  * part failed; the context has no default value, so a call outside
  * {@link Drawer} throws rather than assuming a side.

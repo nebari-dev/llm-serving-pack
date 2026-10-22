@@ -21,7 +21,7 @@ interface UseThemePreferenceOptions {
    * `localStorage` key the preference persists under. Keep an app's existing
    * key so users don't lose their saved preference.
    *
-   * Pass a stable value — changing it mid-session re-reads the preference
+   * Pass a stable value: changing it mid-session re-reads the preference
    * from (and redirects writes to) the new key.
    *
    * @default 'nebari:themeMode'
@@ -32,7 +32,7 @@ interface UseThemePreferenceOptions {
 interface UseThemePreferenceResult {
   /** The persisted preference: `'light'`, `'dark'`, or `'system'`. */
   themeMode: ThemeMode;
-  /** The resolved appearance — in `'system'` mode this follows the OS. */
+  /** The resolved appearance; in `'system'` mode this follows the OS. */
   isDarkMode: boolean;
   /** Update (and persist) the preference. */
   setThemeMode: (mode: ThemeMode) => void;
@@ -41,7 +41,7 @@ interface UseThemePreferenceResult {
 // The preference lives outside React (localStorage plus the listener set
 // below) and is read through `useSyncExternalStore`, so the server render and
 // the hydration render both see the same defaults (`'system'`, light) while
-// client renders see the real stored/OS values — no hydration mismatch.
+// client renders see the real stored/OS values, with no hydration mismatch.
 const themeModeListeners = new Set<() => void>();
 
 // Session fallback for when `localStorage` throws (private browsing, disabled
@@ -67,10 +67,10 @@ function readStoredMode(storageKey: string): ThemeMode {
 function writeStoredMode(storageKey: string, mode: ThemeMode): void {
   try {
     window.localStorage.setItem(storageKey, mode);
-    // Storage is the source of truth again — drop any stale fallback.
+    // Storage is the source of truth again: drop any stale fallback.
     inMemoryThemeModes.delete(storageKey);
   } catch {
-    // Storage unavailable — the in-memory copy carries the session.
+    // Storage unavailable: the in-memory copy carries the session.
     inMemoryThemeModes.set(storageKey, mode);
   }
   for (const listener of themeModeListeners) {
@@ -115,10 +115,10 @@ function serverPrefersDark(): boolean {
  *
  * SSR-safe: the server render and the hydration render both resolve to
  * `'system'` / light, then the real stored/OS values apply immediately after
- * hydration — pair with `themeBootstrapScript` so the pre-paint class already
+ * hydration; pair with `themeBootstrapScript` so the pre-paint class already
  * matches and there is no flash.
  *
- * Mount it exactly once (directly or via `ThemeProvider`) — multiple instances
+ * Mount it exactly once (directly or via `ThemeProvider`): multiple instances
  * would compete over the `<html>` class.
  */
 function useThemePreference(
@@ -170,7 +170,7 @@ function themeBootstrapScript(
   storageKey: string = DEFAULT_THEME_STORAGE_KEY,
 ): string {
   // Each browser API gets its own try so one failing (storage disabled,
-  // matchMedia missing) doesn't stop the others — mirroring how the hook
+  // matchMedia missing) doesn't stop the others, mirroring how the hook
   // guards them independently.
   return [
     '(function () {',

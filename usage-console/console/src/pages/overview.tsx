@@ -17,7 +17,7 @@ import { useLive, useNow } from '@/state/live'
 // Two panels on one time axis (small multiples, one y-scale each). Allowed is
 // ~85% of traffic, so stacking it with the rest flattens the others into
 // hairlines, and they should be visible here.
-// Volume is drawn quiet — "green is the absence of information" — and the
+// Volume is drawn quiet ("green is the absence of information") and the
 // non-allowed verdicts get their own scale.
 const volumeSeries = [{ key: 'total', label: 'Requests', color: 'var(--muted-foreground-strong)' }]
 

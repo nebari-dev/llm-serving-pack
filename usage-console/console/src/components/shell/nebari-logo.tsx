@@ -3,8 +3,8 @@ import lockupWhite from '@/assets/brand/Nebari-Logo-Horizontal-Lockup-White-text
 import { useTheme } from '@/hooks/theme-provider'
 
 // The two brand lockups are framed differently: the dark-text file ships with
-// a wide transparent margin (viewBox 1189.2 × 642.9, artwork at x 269–879,
-// y 241–395), while the white-text file is already cropped to its artwork
+// a wide transparent margin (viewBox 1189.2 × 642.9, artwork at x 269 to 879,
+// y 241 to 395), while the white-text file is already cropped to its artwork
 // (viewBox 610.45 × 153.43). The assets are CC BY-NC-ND, so rather than edit
 // them we crop in CSS using each file's own geometry and size by the artwork.
 const assets = {

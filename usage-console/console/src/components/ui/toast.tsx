@@ -91,7 +91,7 @@ interface ToastA11yOptions {
  *   assigned when the caller named a `type`, so a partial `update` that says
  *   nothing about the type cannot reassign the item's priority.
  * - a toast carrying an action never auto-dismisses, so the action cannot
- *   disappear before it is used (WCAG 2.2.1). This one is not a default —
+ *   disappear before it is used (WCAG 2.2.1). This one is not a default:
  *   it overrides an explicit `timeout` rather than deferring to it. A toast is
  *   either a notification, which may time out, or a prompt to act, which waits.
  *   A caller who wants the timer keeps the action out of the toast.
@@ -196,8 +196,8 @@ const toast = createToastManager<ToastData>();
 
 /**
  * Class list for a toast root. Base UI publishes the geometry of the stack as
- * CSS custom properties on each root — `--toast-index` (0 is frontmost),
- * `--toast-height`, `--toast-offset-y`, and `--toast-swipe-movement-{x,y}` —
+ * CSS custom properties on each root: `--toast-index` (0 is frontmost),
+ * `--toast-height`, `--toast-offset-y`, and `--toast-swipe-movement-{x,y}`;
  * and this list turns them into the Figma stack:
  *
  * - `--gap` / `--peek` are the expanded spacing and the collapsed sliver of
@@ -280,8 +280,8 @@ function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
  * dismissal; Nebari supplies the neutral Figma surface and tokenized motion.
  * A root is normally rendered for you by {@link Toaster}; render it directly
  * only when composing a custom renderer around {@link useToastManager}.
- * Without a `toast` item there is nothing to render, so — like `Dialog` and
- * `Tooltip` — it falls back to a hidden placeholder rather than an empty
+ * Without a `toast` item there is nothing to render, so (like `Dialog` and
+ * `Tooltip`) it falls back to a hidden placeholder rather than an empty
  * surface, which also keeps the registry's SSR probe safe.
  *
  * The surface is not a focus stop; see {@link Toaster} for the keyboard model.
@@ -309,7 +309,7 @@ function Toast({
       aria-busy={variant === 'loading' || undefined}
       className={cn(toastRootClassName, className)}
       // Base UI makes every toast root tabbable by default, which is a stop on
-      // a surface that does nothing when activated — and a second stop ahead of
+      // a surface that does nothing when activated, and a second stop ahead of
       // the action on a toast that carries one. Nothing is lost by dropping it:
       // the surface keeps its `dialog` role and name for a screen reader's
       // virtual cursor, and Base UI's `F6` entry focuses it programmatically,
@@ -367,7 +367,7 @@ function ToastDescription({
  * Base UI treats an action as a button, so composing one into a link takes
  * three parts. Without `nativeButton={false}` it warns and keeps applying
  * native button semantics to an element that has none; with it, it applies
- * `role="button"` instead — and the render element's own `role` is what wins
+ * `role="button"` instead, and the render element's own `role` is what wins
  * that back. Omit either and the anchor stops being a link.
  *
  * ```tsx
@@ -390,7 +390,7 @@ function ToastAction({
       data-slot="toast-action"
       render={render}
       // `Button` offsets its focus ring in `background`, which is the page
-      // colour, not this surface — on a `popover` toast that paints a visibly
+      // colour, not this surface: on a `popover` toast that paints a visibly
       // different band between the button's border and its ring, reading as a
       // second border. Re-point it at the surface the button actually sits on,
       // the way `Sidebar` does for its own.
@@ -421,7 +421,7 @@ function ToastClose({
       data-slot="toast-close"
       aria-label={ariaLabel}
       render={render}
-      // Offset the focus ring in the toast's own surface, not the page's — see
+      // Offset the focus ring in the toast's own surface, not the page's; see
       // {@link ToastAction}.
       className={cn(
         "relative shrink-0 text-foreground after:absolute after:-inset-2 after:content-[''] focus-visible:ring-offset-popover",
@@ -440,7 +440,7 @@ interface ToastIconProps {
   className?: string;
   /**
    * Visual status represented by the icon. Any value outside {@link ToastType}
-   * — including the `undefined` a manager item carries when no type was set —
+   * (including the `undefined` a manager item carries when no type was set)
    * falls back to the neutral `default` treatment.
    */
   type?: string;
@@ -530,25 +530,25 @@ function ToastList() {
  *   standing regions rather than one that retags itself per toast: a screen
  *   reader reads a live region's configuration when the region is registered,
  *   so swapping `aria-live` on the viewport would not take effect for the toast
- *   that triggered the swap — and one viewport can hold a `warning` and an
+ *   that triggered the swap, and one viewport can hold a `warning` and an
  *   `info` at the same time, which leaves nothing to swap to. For the same
  *   reason it is a named `region` with `aria-atomic="false"` rather than a
  *   `role="status"`: it stays a navigable landmark, and only the toast that
  *   just arrived is read out instead of the whole stack on every add.
  * - **Keyboard.** `F6` from anywhere moves focus onto the viewport and pauses
- *   the timers. `Tab` from there enters the frontmost toast — Base UI's focus
+ *   the timers. `Tab` from there enters the frontmost toast (Base UI's focus
  *   guard puts focus on the surface itself, so the title and description are
- *   announced as one dialog — then reaches its action and close control in DOM
+ *   announced as one dialog), then reaches its action and close control in DOM
  *   order. That surface is deliberately not in the sequential tab order, so it
  *   is never a stop ahead of the action for someone tabbing through the page;
  *   `F6` is the way in. `Escape` is handled per toast, so it dismisses
- *   whichever one holds focus — the keyboard equivalent of swipe-to-dismiss —
+ *   whichever one holds focus (the keyboard equivalent of swipe-to-dismiss),
  *   and does nothing while focus is still on the viewport itself. `Shift+Tab`
  *   off the viewport restores focus to where it was and resumes the timers.
  * - **Timers.** Auto-dismiss pauses while the viewport is hovered, holds a
  *   focus-visible element, or the window is blurred, and on touch pointer-down;
  *   it resumes on leave or blur. A `loading` toast never auto-dismisses, and
- *   neither does one carrying an action — whatever `timeout` it was given.
+ *   neither does one carrying an action, whatever `timeout` it was given.
  */
 function Toaster({
   children,

@@ -12,7 +12,7 @@ const base = 'num font-mono whitespace-nowrap'
 function Unknown({ className, label }: { className?: string; label: string }) {
   return (
     <span className={cn(base, 'text-muted-foreground', className)} aria-label={label}>
-      —
+      -
     </span>
   )
 }

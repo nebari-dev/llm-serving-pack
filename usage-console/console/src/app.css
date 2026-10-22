@@ -27,8 +27,8 @@
   --v-degraded-bar: var(--yellow-400);
 
   /*
-   * Categorical chart series — nebari's --chart-1..5 order, re-stepped where
-   * the dataviz validator required it (dark steps must sit in L 0.48–0.67).
+   * Categorical chart series: nebari's --chart-1..5 order, re-stepped where
+   * the dataviz validator required it (dark steps must sit in L 0.48 to 0.67).
    * Checked with validate_palette.js against #ffffff / #1a1a1c. Known limit:
    * nebari's teal ramp never reaches the 0.10 chroma floor (500 is 0.093),
    * so series identity also rides on the legend, gaps, and table view.

@@ -3,12 +3,12 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Nebari color system — mirrored 1:1 from the Figma variables library.
+ * Nebari color system, mirrored 1:1 from the Figma variables library.
  *
- *   1. Primitives  — the raw oklch ramps (magenta, teal, yellow, neutral, …),
+ *   1. Primitives: the raw oklch ramps (magenta, teal, yellow, neutral, …),
  *      named to match Figma, with the source hex recorded for auditability.
  *      These are theme-independent and are NOT exposed as Tailwind utilities.
- *   2. Semantic     — role-based tokens (`--background`, `--primary`, …) that
+ *   2. Semantic: role-based tokens (`--background`, `--primary`, …) that
  *      switch with light/dark, following Figma's Light/Dark collections. These
  *      are what components consume. Each value is the resolved oklch of a
  *      primitive, named in the trailing comment.
@@ -18,7 +18,7 @@
  * `@theme inline` that also holds the motion tokens and `@keyframes`), so
  * re-applying the theme to a stylesheet in this shape is a no-op apart from
  * whitespace. That is also why the semantic values are literals rather than
- * `var(--primitive)` references — the CLI can only ship literal values, and
+ * `var(--primitive)` references: the CLI can only ship literal values, and
  * would rewrite references on every apply. `tests/theme.test.ts` derives the
  * `theme` item in `registry.json` from this file and fails if the two drift;
  * run `bun run sync:theme` after editing this file to regenerate the item.
@@ -150,7 +150,7 @@
   --foundation-white: oklch(100% 0 0); /* #ffffff */
 
   /*
-   * Semantic tokens — Light (Figma "Light" collection). secondary/accent have
+   * Semantic tokens: Light (Figma "Light" collection). secondary/accent have
    * no Figma equivalent (Nebari uses a single magenta brand color), so they
    * map to the neutral ramp.
    */
@@ -161,47 +161,47 @@
    *   canvas → header → card / popover → muted.
    * `--background` is Figma's background/default, which is DEPRECATED: its
    * light value is identical to the header layer, which made headers invisible
-   * on pages painted with it. It is kept so existing consumers do not shift —
+   * on pages painted with it. It is kept so existing consumers do not shift;
    * migrate uses to canvas, header, card, or muted.
    */
   --background: oklch(97.91% 0 0); /* zinc-50 */
   --foreground: oklch(26.94% 0.0037 286.15); /* zinc-950 */
   --scrim: rgba(0, 0, 0, 0.5);
 
-  /* Layer 0 — PAGE. The app body. Use on every page root. Nothing sits below. */
+  /* Layer 0: PAGE. The app body. Use on every page root. Nothing sits below. */
   --canvas: oklch(100% 0 0); /* white */
   --canvas-foreground: oklch(26.94% 0.0037 286.15); /* zinc-950 */
 
-  /* Layer 1 — CHROME. App furniture framing the page: top bar / MenuBar,
+  /* Layer 1: CHROME. App furniture framing the page: top bar / MenuBar,
    * sidebar, toolbars, table head, sticky footer. Sits directly on canvas. */
   --header: oklch(97.91% 0 0); /* zinc-50 */
   --header-foreground: oklch(26.94% 0.0037 286.15); /* zinc-950 */
 
-  /* Layer 2 — RAISED. Cards, panels, dialogs, sheets. In light mode this is
+  /* Layer 2: RAISED. Cards, panels, dialogs, sheets. In light mode this is
    * separated from canvas by border/default, NOT by fill. */
   --card: oklch(100% 0 0); /* white */
   --card-foreground: oklch(26.94% 0.0037 286.15); /* zinc-950 */
 
-  /* Layer 2 — RAISED, FLOATING. Popovers, dropdowns, tooltips, comboboxes.
+  /* Layer 2: RAISED, FLOATING. Popovers, dropdowns, tooltips, comboboxes.
    * Same fill as card; differentiated by elevation shadow, not colour. */
   --popover: oklch(100% 0 0); /* white */
   --popover-foreground: oklch(26.94% 0.0037 286.15); /* zinc-950 */
 
   --primary: oklch(55.06% 0.1886 311.45); /* primary-magenta-600 */
   --primary-foreground: oklch(100% 0 0); /* white */
-  /* Figma color/background/primary-hover — hover/pressed fill. */
+  /* Figma color/background/primary-hover: hover/pressed fill. */
   --primary-hover: oklch(47.01% 0.1577 311.26); /* primary-magenta-700 */
 
   --secondary: oklch(95.04% 0.0042 236.50); /* neutral-100 */
   --secondary-foreground: oklch(32.95% 0.0209 254.12); /* neutral-900 */
 
-  /* Layer 3 — RECESSED. Only INSIDE a card or chrome: input fills, table zebra
+  /* Layer 3: RECESSED. Only INSIDE a card or chrome: input fills, table zebra
    * rows, progress/slider tracks, disabled states. In dark mode recesses lift,
    * they do not dig. Muted text on this surface must use
    * `--muted-foreground-strong`, not `--muted-foreground`. */
   --muted: oklch(94.94% 0.0013 286.37); /* zinc-100 */
   --muted-foreground: oklch(54.86% 0.0154 285.88); /* zinc-600 */
-  /* Figma color/foreground/muted-strong — pressed interactive text, and any
+  /* Figma color/foreground/muted-strong: pressed interactive text, and any
    * muted text sitting on `--muted`. */
   --muted-foreground-strong: oklch(47.01% 0.0112 285.96); /* zinc-700 */
 
@@ -224,7 +224,7 @@
 
   --border: oklch(78.06% 0.0056 286.27); /* zinc-300 */
   --input: oklch(69.88% 0.0130 286.06); /* zinc-400 */
-  /* Figma color/border/strong — a stronger, more visible border than the
+  /* Figma color/border/strong: a stronger, more visible border than the
    * default (used by the Badge outline variant). */
   --border-strong: oklch(61.96% 0.0134 286.00); /* zinc-500 */
   --ring: oklch(61.98% 0.2159 311.67); /* primary-magenta-500 */
@@ -245,7 +245,7 @@
   --sidebar-ring: oklch(61.98% 0.2159 311.67); /* primary-magenta-500 */
 }
 
-/* Semantic tokens — Dark (Figma "Dark" collection). */
+/* Semantic tokens: Dark (Figma "Dark" collection). */
 .dark {
   --background: oklch(26.94% 0.0037 286.15); /* zinc-950 */
   --foreground: oklch(97.91% 0 0); /* zinc-50 */

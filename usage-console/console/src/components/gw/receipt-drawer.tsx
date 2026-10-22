@@ -118,7 +118,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
               {r.status}
             </span>
           )}
-          {r.inFlight && <span className="text-xs text-muted-foreground">Streaming — usage arrives at end of stream</span>}
+          {r.inFlight && <span className="text-xs text-muted-foreground">Streaming: usage arrives at end of stream</span>}
         </div>
         <DrawerTitle className="font-mono text-lg">
           {r.requestedModel}
@@ -200,7 +200,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
                 ? `${r.verdict === 'throttled' ? 'Throttled' : 'Blocked'} before the upstream call: nothing was billed.`
                 : r.inFlight
                   ? 'Priced when the stream ends and usage arrives.'
-                  : "Priced at OpenMeter's prices in effect now."}
+                  : "Priced at OpenMeter's prices in effect now, not the price when the request ran: OpenMeter keeps no price history."}
           </p>
         </Sub>
 

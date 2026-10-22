@@ -61,7 +61,7 @@ export function AppHeader() {
       <NavigationMenu className="h-14 justify-between border-border bg-header pl-4 text-header-foreground">
         <div className="flex min-w-0 items-center gap-3">
           <SidebarTrigger className="hover:bg-header-action-hover" />
-          <MenuBarBrand href="/" aria-label="Nebari Gateway — go to overview" className="gap-3 text-lg font-semibold">
+          <MenuBarBrand href="/" aria-label="Nebari Gateway: go to overview" className="gap-3 text-lg font-semibold">
             <NebariLogo height={32} />
             <span className="h-6 w-px bg-border-strong" aria-hidden="true" />
             <span>Gateway</span>

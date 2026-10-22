@@ -122,10 +122,10 @@ function SelectLabel({
 }
 
 /**
- * Selectable option row (28px), styled like `ComboboxItem` — Figma shares the
+ * Selectable option row (28px), styled like `ComboboxItem`; Figma shares the
  * "Select Menu / Item" row between the two. Highlight uses `bg-muted`; a
  * trailing check marks the selected value. Disabled items are announced, stay
- * reachable by keyboard, and cannot be selected — they never get the highlight
+ * reachable by keyboard, and cannot be selected: they never get the highlight
  * treatment from either pointer or keyboard.
  */
 function SelectItem({

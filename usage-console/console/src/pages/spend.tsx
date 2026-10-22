@@ -384,7 +384,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
                 </div>
               </TableCell>
               <TableCell className="h-10 py-1.5 text-right">
-                {d !== null ? <Delta pct={d} goodWhen="down" /> : <span className="text-xs text-muted-foreground">{r.spendUsd > 0 ? 'new' : '—'}</span>}
+                {d !== null ? <Delta pct={d} goodWhen="down" /> : <span className="text-xs text-muted-foreground">{r.spendUsd > 0 ? 'new' : '-'}</span>}
               </TableCell>
               <TableCell className="num h-10 py-1.5 text-right font-mono">{int(r.requests)}</TableCell>
               <TableCell className="h-10 py-1.5 text-right">

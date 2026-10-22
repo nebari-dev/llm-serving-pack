@@ -102,7 +102,7 @@ function ChartFrame({
   return (
     <figure className="flex flex-col gap-2">
       <div className="flex min-h-4 items-center justify-between gap-4">
-        {/* A single series needs no legend — the section title names it. */}
+        {/* A single series needs no legend: the section title names it. */}
         {series.length > 1 ? <Legend series={series} /> : <span />}
         <button
           type="button"

@@ -220,7 +220,7 @@ export function TrafficPage() {
           </div>
         </div>
 
-        {/* Filter bar — filters are the query and serialize to the URL. */}
+        {/* Filter bar: filters are the query and serialize to the URL. */}
         <div className="flex flex-wrap items-center gap-2" role="toolbar" aria-label="Traffic filters">
           <button
             type="button"
