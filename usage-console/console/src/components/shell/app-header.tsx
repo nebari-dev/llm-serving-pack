@@ -45,8 +45,8 @@ function initials(a: Session['actor']) {
 }
 
 /**
- * The environment the header shows, and whether it's production (§7.4: it
- * must be unmistakable). Against a control plane it's the one it serves;
+ * The environment the header shows, and whether it's production (it must
+ * be unmistakable). Against a control plane it's the one it serves;
  * only the mockup has a switcher.
  */
 export function envDisplay(mode: 'api' | 'mock', served: string, mockEnv: Env): { label: string; production: boolean } {
@@ -66,7 +66,7 @@ export function AppHeader() {
 
   return (
     <div className="relative">
-      {/* Environment accent (§7.4): production vs staging must be unmistakable. */}
+      {/* Environment accent: production vs staging must be unmistakable. */}
       <div
         className={cn('h-1 w-full', production ? 'bg-env-production' : 'bg-[repeating-linear-gradient(135deg,var(--env-staging)_0_8px,transparent_8px_16px)]')}
         aria-hidden="true"
@@ -151,7 +151,7 @@ export function AppHeader() {
             <Kbd>⌘K</Kbd>
           </Button>
 
-          {/* One time range control, shared across surfaces (§7.4). */}
+          {/* One time range control, shared across pages. */}
           <DropdownMenu modal={false}>
             <DropdownMenuTrigger variant="ghost" className={cn('gap-1.5', headerAction)} aria-label="Time range">
               <Clock className="size-4" />
@@ -161,7 +161,7 @@ export function AppHeader() {
             <DropdownMenuPortal>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuGroup>
-                  <DropdownMenuGroupLabel className="text-xs tracking-normal normal-case">Shared by Overview, Traffic, Spend, Activity</DropdownMenuGroupLabel>
+                  <DropdownMenuGroupLabel className="text-xs tracking-normal normal-case">Shared by Overview, Traffic and Spend</DropdownMenuGroupLabel>
                   {timeRanges.map((t) => (
                     <DropdownMenuItem key={t.value} onClick={() => setRange(t.value)} className="justify-between">
                       {t.label}
@@ -217,7 +217,7 @@ export function AppHeader() {
                   <p className="text-sm font-medium text-foreground">{actor.name ?? actor.email}</p>
                   {actor.name && <p className="text-xs text-muted-foreground">{actor.email}</p>}
                   <p className="text-xs text-muted-foreground">
-                    {actor.roles.length ? `Role${actor.roles.length > 1 ? 's' : ''}: ${actor.roles.join(', ')}` : 'No Stargate role'}
+                    {actor.roles.length ? `Role${actor.roles.length > 1 ? 's' : ''}: ${actor.roles.join(', ')}` : 'No role'}
                   </p>
                   {devMode && <p className="mt-1 text-xs text-muted-foreground">Dev mode · no sign-in ({actor.email} is {actor.roles.join(', ') || 'no role'})</p>}
                 </div>

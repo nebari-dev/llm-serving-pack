@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-// Page scaffolding. §7.2 "Structure": borders and rules encode grouping —
-// no card-per-section layout. Sections are separated by a rule, not boxed.
+// Page scaffolding. Borders and rules encode grouping, with no
+// card-per-section layout. Sections are separated by a rule, not boxed.
 
 export function PageHeader({
   title,

@@ -1,9 +1,9 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { API_BASE, api, dataMode, type Receipt, seedReceipts, session } from '@/data/catalog'
+import { API_BASE, dataMode, type Receipt, seedReceipts, session } from '@/data/catalog'
 import { makeReceipt } from '@/data/mock'
 
-// Global console state (§7.4): one time range shared across surfaces, the
+// Global console state: one time range shared across surfaces, the
 // tenant/environment, density, and the live receipt stream.
 
 export type TimeRange = '15m' | '1h' | '6h' | '24h' | '7d' | '30d'
@@ -46,13 +46,13 @@ function usePersisted<T extends string>(key: string, initial: T): [T, (v: T) => 
 type Listener = () => void
 
 /** What a narrowed stream hands back: see ReceiptStream.tail. */
-export interface Tailer {
+interface Tailer {
   onReceipts: (batch: Receipt[]) => void
   onDropped: (count: number) => void
 }
 
 /**
- * The stream's "sampling" event (§7.5.3 backpressure): above the server's
+ * The stream's "sampling" event (backpressure): above the server's
  * threshold of matching requests a second, it sends 1 in `oneIn` of them.
  * Null while it sends everything.
  */
@@ -66,7 +66,6 @@ class ReceiptStream {
   private rows: Receipt[] = seedReceipts
   private listeners = new Set<Listener>()
   private started = false
-  private pending = new Set<string>()
   byId = new Map<string, Receipt>(seedReceipts.map((r) => [r.id, r]))
 
   subscribe = (l: Listener) => {
@@ -108,15 +107,15 @@ class ReceiptStream {
     for (const l of this.listeners) l()
   }
 
-  // Live receipts from the control plane (§6 /stream/traffic). The same id
+  // Live receipts from GET /stream/traffic. The same id
   // arrives twice for streamed requests: in flight, then settled. EventSource
   // reconnects on its own after a drop.
-  // Applied in batches, so a burst costs one render per flush (§10).
+  // Applied in batches, so a burst costs one render per flush.
   //
   // A tab holds one connection. Browsers allow six per host over HTTP/1.1,
   // and one stream per surface used them up across a few tabs, so every
   // later request hung. While Traffic is open it narrows this stream to its
-  // filters (the server still filters, §6) and takes each batch through tail().
+  // filters (the server still filters) and takes each batch through tail().
   private es: EventSource | undefined
   private query = ''
   private tailer: Tailer | null = null
@@ -181,27 +180,11 @@ class ReceiptStream {
     }
   }
 
-  /** Loads a receipt outside the live window (deep links) into byId. */
-  ensure(id: string) {
-    if (dataMode !== 'api' || this.byId.has(id) || this.pending.has(id)) return
-    this.pending.add(id)
-    api<Receipt>(`/receipts/${encodeURIComponent(id)}`)
-      .then((r) => {
-        this.byId.set(r.id, r)
-        // Not added to the live rows, but subscribers compare snapshots by
-        // identity, so hand out a new array to make readers of byId re-render.
-        this.rows = this.rows.slice()
-        this.emit()
-      })
-      .catch(() => {})
-      .finally(() => this.pending.delete(id))
-  }
-
   /** Keeps a receipt fetched elsewhere (the Traffic list) for the drawer, without re-rendering. */
   remember(r: Receipt) {
     this.byId.delete(r.id)
     this.byId.set(r.id, r)
-    // Oldest first in insertion order; a dropped one is fetched again by ensure().
+    // Oldest first in insertion order.
     if (this.byId.size > 20_000) this.byId.delete(this.byId.keys().next().value!)
   }
 
@@ -211,7 +194,7 @@ class ReceiptStream {
       const r = makeReceipt(Date.now(), Math.random, { inFlight: streaming })
       this.upsert(r)
       if (streaming) {
-        // Tokens arrive last (§13): settle the row in place when the stream ends.
+        // Tokens arrive last: settle the row in place when the stream ends.
         window.setTimeout(() => {
           const cur = this.byId.get(r.id)
           if (cur) this.upsert({ ...cur, inFlight: false })
@@ -250,11 +233,6 @@ export const receiptStream = new ReceiptStream()
 
 export function useReceipts() {
   return useSyncExternalStore(receiptStream.subscribe, receiptStream.getSnapshot)
-}
-
-/** The tab's stream sampling (null: everything is sent). Rows from useReceipts are a sample while it isn't null. */
-export function useStreamSampling() {
-  return useSyncExternalStore(receiptStream.subscribeSampling, receiptStream.getSampling)
 }
 
 // ---- context -------------------------------------------------------------
@@ -298,7 +276,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setParams(next, { replace: true })
   }, [urlRange, setRange, setParams])
 
-  // Receipt drawer is deep-linkable (§7.5.4): ?receipt=<id>
+  // Receipt drawer is deep-linkable: ?receipt=<id>
   const receiptId = params.get('receipt')
   const openReceipt = useCallback(
     (id: string) => {

@@ -1,79 +1,12 @@
-import { ArrowRight, FileText } from 'lucide-react'
-import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Money } from '@/components/gw/numbers'
 import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { toast } from '@/components/ui/toast'
-import { apiFile, type LiveSavingsOpportunity, type SavingsView } from '@/data/catalog'
-import { downloadBlob } from '@/lib/csv'
+import { type LiveSavingsOpportunity, type SavingsView } from '@/data/catalog'
 import { int } from '@/lib/format'
 import { useLive } from '@/state/live'
 
-// Api-mode Spend pieces (§7.5.5): the close report download and the savings
-// analysis, both from the control plane.
-
-/** This UTC month (to date) and the 12 before it, newest first. */
-function closeMonths(now: number) {
-  const d = new Date(now)
-  let y = d.getUTCFullYear()
-  let m = d.getUTCMonth()
-  const out: { value: string; label: string }[] = []
-  for (let i = 0; i < 13; i++) {
-    const label = new Date(Date.UTC(y, m, 1)).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
-    out.push({ value: `${y}-${String(m + 1).padStart(2, '0')}`, label: i === 0 ? `${label} (to date)` : label })
-    if (--m < 0) {
-      m = 11
-      y--
-    }
-  }
-  return out
-}
-
-/** Month picker and download for GET /spend/close-report. Defaults to last month, the one being closed. */
-export function CloseReportControl() {
-  const months = useMemo(() => closeMonths(Date.now()), [])
-  const [month, setMonth] = useState(months[1].value)
-  const [busy, setBusy] = useState(false)
-  const download = async () => {
-    setBusy(true)
-    try {
-      const f = await apiFile(`/spend/close-report?month=${month}`)
-      downloadBlob(f.name, f.blob)
-      toast.add({ title: 'Close report downloaded', description: `${f.name}. The export is recorded on Activity.`, type: 'success' })
-    } catch (e) {
-      toast.add({ title: 'Close report not made', description: e instanceof Error ? e.message : String(e), type: 'error' })
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="flex items-center gap-2">
-      <Select items={months} value={month} onValueChange={(v) => v && setMonth(v as string)}>
-        <SelectTrigger className="w-48" aria-label="Close report month">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {months.map((m) => (
-            <SelectItem key={m.value} value={m.value}>
-              {m.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Button
-        variant="outline"
-        onClick={download}
-        loading={busy}
-        loadingText="Making the report…"
-        title="A PDF of the month's spend by team, project, key and model, budgets against their caps, and the prices behind it. Each download is recorded on Activity."
-      >
-        <FileText /> Download close report
-      </Button>
-    </div>
-  )
-}
+// Api-mode Spend's savings analysis, from GET /spend/savings.
 
 const emptySavings: SavingsView = { from: 0, to: 0, firstAt: 0, days: 0, outputLimit: 0, served: 0, unpriced: 0, rerouted: 0, opportunities: [] }
 
@@ -156,15 +89,6 @@ export function LiveSavings() {
                 <Button variant="ghost" size="sm" render={<Link to={receiptsHref(o)} />}>
                   View receipts
                 </Button>
-                {o.alias && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    render={<Link to={`/models?${new URLSearchParams({ tab: 'aliases', edit: o.alias, target: o.target }).toString()}`} />}
-                  >
-                    Review alias change <ArrowRight />
-                  </Button>
-                )}
               </div>
             </li>
           ))}

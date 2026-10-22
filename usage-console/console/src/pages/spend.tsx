@@ -1,35 +1,35 @@
-import { ArrowRight, Download, FileText, Pencil, Trash2, TrendingUp } from 'lucide-react'
-import { useEffect, useMemo, useReducer, useState } from 'react'
+import { ArrowRight, Download, TrendingUp } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { StackedBars, Meter } from '@/components/gw/charts'
-import { DiffView } from '@/components/gw/diff-view'
 import { Delta, Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { PageHeader, Section } from '@/components/gw/page'
 import { StateChip } from '@/components/gw/verdict'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsIndicator, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toast'
-import { type Budget, budgetLabel, budgets, can, dataMode, syncBudgets, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
+import { type Budget, budgetLabel, budgets, dataMode, throttleRate, projects, type SavingsOpportunity, type SpendRow, type SpendView, seedSavings, seedSpendSurge } from '@/data/catalog'
 import { downloadText, spendCsv } from '@/lib/csv'
 import { int, money, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { rangeLabel, type TimeRange, useApp } from '@/state/app-state'
 import { useLive } from '@/state/live'
-import { BudgetDialog, capMoney, DeleteBudgetDialog } from './budget-dialogs'
 import { type Dim, dims, mockSpendView } from './spend-data'
-import { CloseReportControl, LiveSavings } from './spend-live'
+import { LiveSavings } from './spend-live'
 
-// §7.5.5 Spend and budgets. Two modes on one screen (trend / breakdown),
+// Spend and budgets. Two modes on one screen (trend / breakdown),
 // every cell drills through to the filtered traffic view, budgets state their
 // enforcement in words, and projections always carry their basis.
 
 const api = dataMode === 'api'
 const DAY = 86_400_000
+
+/** A cap in whole dollars, or with cents when it has them. */
+const capMoney = (usd: number) => money(usd, Number.isInteger(usd) ? 0 : 2)
 
 /** A UTC day, as the month and budget periods are UTC. */
 function utcDate(ms: number) {
@@ -92,15 +92,6 @@ export function SpendPage() {
   const initial = useMemo(() => (api ? emptyView(range, dim) : mockSpendView(range, dim)), [range, dim])
   const { data: view, loaded } = useLive<SpendView>(api ? `/spend?range=${range}&by=${dim}` : null, initial, 60_000)
   const liveBudgets = useLive<Budget[]>(api ? '/budgets' : null, budgets, 60_000)
-  // Mock-mode writes edit the catalog's fixtures; this re-renders after one.
-  const [, bumpBudgets] = useReducer((n: number) => n + 1, 0)
-  const budgetList = api ? liveBudgets.data : budgets
-  useEffect(() => {
-    if (api && liveBudgets.loaded) syncBudgets(liveBudgets.data)
-  }, [liveBudgets.data, liveBudgets.loaded])
-  const [editing, setEditing] = useState<Budget | 'new' | null>(null)
-  const [deleting, setDeleting] = useState<Budget | null>(null)
-  const budgetsChanged = () => (api ? liveBudgets.reload() : bumpBudgets())
   const { period } = view
   const windowTotal = view.rows.reduce((a, r) => a + r.spendUsd, 0)
   const prevTotal = view.rows.reduce((a, r) => a + r.prevSpendUsd, 0)
@@ -118,23 +109,9 @@ export function SpendPage() {
           </>
         }
         actions={
-          <>
-            <Button variant="outline" disabled={!loaded || !view.rows.length} onClick={() => downloadCsv(view)}>
-              <Download /> Export CSV
-            </Button>
-            {api ? (
-              <CloseReportControl />
-            ) : (
-              <Button
-                variant="outline"
-                onClick={() =>
-                  toast.add({ title: 'Close report generated', description: `${utcDate(period.periodStart)} – ${utcDate(Date.now())} PDF, prices as billed per receipt`, type: 'success' })
-                }
-              >
-                <FileText /> Export PDF for close
-              </Button>
-            )}
-          </>
+          <Button variant="outline" disabled={!loaded || !view.rows.length} onClick={() => downloadCsv(view)}>
+            <Download /> Export CSV
+          </Button>
         }
       >
         {/* Summary strip: a ledger line, not tiles. */}
@@ -278,19 +255,8 @@ export function SpendPage() {
             ? `Monthly caps, UTC. Period ${utcDate(period.periodStart)} – ${utcDate(lastDay)}, resets in ${Math.ceil(period.remainingDays)} days.`
             : 'Monthly caps, UTC.'
         }
-        actions={
-          <Button variant="outline" disabled={!liveBudgets.loaded || !can('budgets').ok} title={can('budgets').reason} onClick={() => setEditing('new')}>
-            Add budget
-          </Button>
-        }
       >
-        {liveBudgets.loaded ? (
-          <BudgetTable budgets={budgetList} remainingDays={period.remainingDays} onEdit={setEditing} onDelete={setDeleting} />
-        ) : (
-          <Skeleton shape="block" className="h-[240px]" />
-        )}
-        {editing && <BudgetDialog budget={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onSaved={budgetsChanged} />}
-        {deleting && <DeleteBudgetDialog budget={deleting} onClose={() => setDeleting(null)} onDeleted={budgetsChanged} />}
+        {liveBudgets.loaded ? <BudgetTable budgets={liveBudgets.data} remainingDays={period.remainingDays} /> : <Skeleton shape="block" className="h-[240px]" />}
       </Section>
 
       <Section
@@ -298,8 +264,8 @@ export function SpendPage() {
         title="Savings opportunities"
         description={
           api
-            ? 'Requests a cheaper model in the same family would plausibly have served, and what they’d have cost on it. Each is a suggestion you review: an alias change opens on Models and nothing changes until you save it.'
-            : 'Requests where a cheaper model in the same family would plausibly have served, based on output length and task shape. Each one is a draft you review — nothing is applied automatically.'
+            ? 'Requests a cheaper model in the same family would plausibly have served, and what they’d have cost on it.'
+            : 'Requests where a cheaper model in the same family would plausibly have served, based on output length and task shape.'
         }
       >
         {api ? <LiveSavings /> : seedSavings && <Savings opportunities={seedSavings} />}
@@ -516,7 +482,7 @@ function BreakdownTable({ rows, dim, onDrill }: { rows: SpendRow[]; dim: Dim; on
 // ---- budgets -------------------------------------------------------------
 
 /**
- * What the budget does at its cap, in words (§7.5.5). Api mode says only what
+ * What the budget does at its cap, in words. Api mode says only what
  * the gateway does: block returns 429; throttle holds each covered key to a
  * few requests a minute and answers the rest 429 with Retry-After; warn
  * admits the request and records the budget step in its receipt.
@@ -567,17 +533,7 @@ function enforcement(b: Budget) {
   return { tone: pct >= 0.8 ? ('degraded' as const) : ('neutral' as const), chip: 'Over 80%', words: `${action}. ${money(b.capUsd - b.currentUsd)} left.${risk}` }
 }
 
-function BudgetTable({
-  budgets,
-  remainingDays,
-  onEdit,
-  onDelete,
-}: {
-  budgets: Budget[]
-  remainingDays: number
-  onEdit: (b: Budget) => void
-  onDelete: (b: Budget) => void
-}) {
+function BudgetTable({ budgets, remainingDays }: { budgets: Budget[]; remainingDays: number }) {
   if (!budgets.length) return <p className="py-6 text-center text-sm text-muted-foreground">No budgets set.</p>
   return (
     <Table aria-label="Budgets">
@@ -589,9 +545,6 @@ function BudgetTable({
           <TableHead className="w-56">Consumption</TableHead>
           <TableHead>Enforcement</TableHead>
           <TableHead className="text-right">Projected</TableHead>
-          <TableHead className="w-20">
-            <span className="sr-only">Actions</span>
-          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -649,14 +602,6 @@ function BudgetTable({
                   {crossDay ? `crosses cap ~${utcDate(crossDay)}` : `7-day avg ${money(b.trailingDailyUsd)}/day`}
                 </div>
               </TableCell>
-              <TableCell className="py-2 text-right whitespace-nowrap">
-                <Button variant="ghost" size="icon-sm" aria-label={`Edit budget ${budgetLabel(b)}`} title={can('budgets').reason ?? 'Edit cap or action'} disabled={!can('budgets').ok} onClick={() => onEdit(b)}>
-                  <Pencil />
-                </Button>
-                <Button variant="ghost" size="icon-sm" aria-label={`Delete budget ${budgetLabel(b)}`} title={can('budgets').reason ?? 'Delete budget'} disabled={!can('budgets').ok} onClick={() => onDelete(b)}>
-                  <Trash2 />
-                </Button>
-              </TableCell>
             </TableRow>
           )
         })}
@@ -668,61 +613,26 @@ function BudgetTable({
 // ---- savings (mock mode only) --------------------------------------------
 
 function Savings({ opportunities }: { opportunities: SavingsOpportunity[] }) {
-  const [draft, setDraft] = useState<SavingsOpportunity | null>(null)
   return (
-    <>
-      <ul className="divide-y divide-border rounded-md border border-border bg-card">
-        {opportunities.map((o) => (
-          <li key={o.id} className="flex flex-wrap items-start justify-between gap-4 px-4 py-3">
-            <div className="min-w-0 max-w-3xl">
-              <div className="text-base">
-                <Money value={o.monthly} precision="whole" className="font-semibold" />
-                /mo if {o.before}
-                <span className="font-mono">{o.subject}</span>
-                {o.after} moved to <span className="font-mono">{o.target}</span>
-              </div>
-              <p className="mt-0.5 text-sm text-muted-foreground">{o.basis}</p>
+    <ul className="divide-y divide-border rounded-md border border-border bg-card">
+      {opportunities.map((o) => (
+        <li key={o.id} className="flex flex-wrap items-start justify-between gap-4 px-4 py-3">
+          <div className="min-w-0 max-w-3xl">
+            <div className="text-base">
+              <Money value={o.monthly} precision="whole" className="font-semibold" />
+              /mo if {o.before}
+              <span className="font-mono">{o.subject}</span>
+              {o.after} moved to <span className="font-mono">{o.target}</span>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button variant="ghost" size="sm" render={<Link to={o.href} />}>
-                View {int(o.receipts)} receipts
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setDraft(o)}>
-                Draft alias change
-              </Button>
-            </div>
-          </li>
-        ))}
-      </ul>
-      <Dialog open={!!draft} onOpenChange={(o) => !o && setDraft(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Draft alias change</DialogTitle>
-            <DialogDescription>
-              This saves a draft of <span className="font-mono">{draft?.alias}</span>. Nothing changes in the gateway until someone reviews and applies it from
-              Models → Aliases.
-            </DialogDescription>
-          </DialogHeader>
-          {draft && <DiffView diff={draft.diff} title={`ModelAlias/${draft.alias} · draft`} />}
-          <p className="text-xs text-muted-foreground">
-            Estimated saving <Money value={draft?.monthly ?? 0} precision="whole" className="text-foreground" />
-            /mo at current prices and volume.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDraft(null)}>
-              Cancel
+            <p className="mt-0.5 text-sm text-muted-foreground">{o.basis}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="ghost" size="sm" render={<Link to={o.href} />}>
+              View {int(o.receipts)} receipts
             </Button>
-            <Button
-              onClick={() => {
-                toast.add({ title: 'Draft saved', description: `${draft?.alias} is waiting for review. Nothing was applied.`, type: 'success' })
-                setDraft(null)
-              }}
-            >
-              Save as draft
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+          </div>
+        </li>
+      ))}
+    </ul>
   )
 }

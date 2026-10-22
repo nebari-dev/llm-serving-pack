@@ -1,14 +1,14 @@
-import { Ban, Check, EyeOff, Hourglass, Scissors, Shuffle, TriangleAlert } from 'lucide-react'
+import { Ban, Check, EyeOff, Hourglass, Scissors, Shuffle } from 'lucide-react'
 import type { ComponentProps } from 'react'
 import type { Verdict } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
-// §7.7: verdict is never conveyed by color alone — every verdict carries a
+// A verdict is never conveyed by color alone: every verdict carries a
 // glyph and a text label. Truncated shares the degraded hue but has its own
-// glyph and label so it never reads as "blocked" (§4.5 streaming). So does
+// glyph and label so it never reads as "blocked". So does
 // Throttled: a throttle budget's "try again later" (429 with Retry-After).
 
-export type Tone = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'degraded' | 'neutral'
+type Tone = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'degraded' | 'neutral'
 
 export const verdictMeta: Record<Verdict, { label: string; tone: Tone; Icon: typeof Check }> = {
   allowed: { label: 'Allowed', tone: 'allowed', Icon: Check },
@@ -28,7 +28,7 @@ export const toneText: Record<Tone, string> = {
   neutral: 'text-muted-foreground',
 }
 
-export const toneChip: Record<Tone, string> = {
+const toneChip: Record<Tone, string> = {
   allowed: 'bg-v-allowed-bg text-v-allowed-fg border-v-allowed-border',
   redacted: 'bg-v-redacted-bg text-v-redacted-fg border-v-redacted-border',
   rerouted: 'bg-v-rerouted-bg text-v-rerouted-fg border-v-rerouted-border',
@@ -112,8 +112,4 @@ export function StateChip({
       {children}
     </span>
   )
-}
-
-export function DegradedIcon({ className }: { className?: string }) {
-  return <TriangleAlert className={cn('size-4 text-v-degraded-fg', className)} aria-hidden="true" />
 }

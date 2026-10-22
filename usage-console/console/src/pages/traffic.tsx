@@ -1,4 +1,4 @@
-import { Columns3, Download, FileSignature, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
+import { Columns3, Link2, Pause, Play, Plus, RotateCw, Rows3, X } from 'lucide-react'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Duration, Money, TokenCount } from '@/components/gw/numbers'
@@ -17,14 +17,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/components/ui/toast'
-import { ApiError, backends, dataMode, downloadSignedExport, keys, type LiveRoute, liveRoutes, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
+import { backends, dataMode, keys, type LiveRoute, liveRoutes, models, projects, type Receipt, teams, type Verdict } from '@/data/catalog'
 import { clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { type Density, rangeLabel, rangeMs, useApp } from '@/state/app-state'
-import { type Dim, exportQuery, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
+import { type Dim, type Filters, type TrafficWindow, useTrafficFeed } from '@/state/traffic-feed'
 import { useLive } from '@/state/live'
 
-// §7.5.3 Traffic — a dense virtualized table over a live stream.
+// Traffic: a dense virtualized table over a live stream.
 
 const dims: { dim: Dim; label: string; values: { value: string; label: string }[] }[] = [
   { dim: 'key', label: 'Key', values: keys.map((k) => ({ value: k.name, label: k.name })) },
@@ -55,7 +55,7 @@ const dims: { dim: Dim; label: string; values: { value: string; label: string }[
 ]
 const primaryDims: Dim[] = ['key', 'team', 'model', 'verdict']
 
-// Column config (§7.5.3): user-configurable, persisted; time + key are pinned.
+// Column config: user-configurable, persisted; time + key are pinned.
 type ColId = 'team' | 'model' | 'tokens' | 'cost' | 'ms' | 'backend' | 'status'
 const allCols: { id: ColId; label: string; align?: 'right' }[] = [
   { id: 'team', label: 'Team' },
@@ -87,7 +87,7 @@ const edge = (ts: number) => new Date(ts).toLocaleString('en-US', { month: 'shor
 /**
  * The list's window: the shared range, narrowed by ?since= (Overview links)
  * and ?day=MM-DD (Spend's bars, UTC days). It starts on a 5-minute bucket so
- * the count from receipts_5m covers the same span as the list, and it's fixed
+ * the count covers the same span as the list, and it's fixed
  * while the page is open so the list doesn't reload under the reader.
  */
 function useWindow(range: Parameters<typeof rangeMs>[0], sinceParam: number | null, day: string | null, untilParam: number | null): TrafficWindow {
@@ -146,7 +146,7 @@ export function TrafficPage() {
   const visible = useMemo(() => (frozenTop !== null ? rows.filter((r) => r.ts <= frozenTop) : rows), [rows, frozenTop])
   const newCount = frozenTop !== null ? rows.length - visible.length : 0
 
-  // Screen-reader announcements are throttled, and silent while paused (§7.7).
+  // Screen-reader announcements are throttled, and silent while paused.
   const lastTop = useRef(rows[0]?.id)
   const rowsRef = useRef(rows)
   rowsRef.current = rows
@@ -183,47 +183,12 @@ export function TrafficPage() {
     }
   }
   const shareView = () => {
-    // The link carries the range too, so it opens on the same window (§7.4).
+    // The link carries the range too, so it opens on the same window.
     const url = new URL(window.location.href)
     url.searchParams.delete('receipt')
     url.searchParams.set('range', range)
     void navigator.clipboard?.writeText(url.toString())
     toast.add({ title: 'Link to this view copied', description: 'Filters and the time range are part of the link.', type: 'success' })
-  }
-
-  const [exporting, setExporting] = useState(false)
-  // Every matching receipt in the window, from the database: never the sampled live rows.
-  const exportSigned = () => {
-    setExporting(true)
-    downloadSignedExport(`/receipts/export?${exportQuery(filters, window_)}`)
-      .then((ex) =>
-        toast.add({
-          title: `Exported ${ex.count.toLocaleString()} ${ex.count === 1 ? 'receipt' : 'receipts'}, signed`,
-          description: `${ex.filename}: the README inside says how to verify it. The export is recorded in the audit log.`,
-          type: 'success',
-        }),
-      )
-      .catch((e: unknown) =>
-        toast.add({ title: "The receipts couldn't be exported", description: e instanceof ApiError ? e.message : `${String(e)}. Try again.`, type: 'error' }),
-      )
-      .finally(() => setExporting(false))
-  }
-
-  // The same receipts as a spreadsheet to read: not signed, so not evidence; audited the same.
-  const exportCsv = () => {
-    setExporting(true)
-    downloadSignedExport(`/receipts/export.csv?${exportQuery(filters, window_)}`)
-      .then((ex) =>
-        toast.add({
-          title: `Exported ${ex.count.toLocaleString()} ${ex.count === 1 ? 'receipt' : 'receipts'} as CSV`,
-          description: `${ex.filename}: one row per request, for a spreadsheet. The export is recorded in the audit log.`,
-          type: 'success',
-        }),
-      )
-      .catch((e: unknown) =>
-        toast.add({ title: "The receipts couldn't be exported", description: e instanceof ApiError ? e.message : `${String(e)}. Try again.`, type: 'error' }),
-      )
-      .finally(() => setExporting(false))
   }
 
   const activeDims = dims.filter((d) => filters[d.dim].length > 0 || primaryDims.includes(d.dim))
@@ -247,28 +212,6 @@ export function TrafficPage() {
             <Button variant="outline" size="sm" onClick={shareView}>
               <Link2 /> Share this view
             </Button>
-            {dataMode === 'api' && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={exportSigned}
-                disabled={exporting}
-                title="Every receipt matching these filters in this window, as JSON Lines with an Ed25519 signature anyone can verify."
-              >
-                <FileSignature /> {exporting ? 'Exporting…' : 'Export signed'}
-              </Button>
-            )}
-            {dataMode === 'api' && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={exportCsv}
-                disabled={exporting}
-                title="The same receipts as a spreadsheet: one row per request with time, key, team, model, backend, verdict, status, tokens, cost and latency. Not signed."
-              >
-                <Download /> Export CSV
-              </Button>
-            )}
             <DensityPicker density={density} setDensity={setDensity} />
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger variant="outline" className="h-7 px-2.5 text-xs" aria-label="Columns">
@@ -369,7 +312,7 @@ export function TrafficPage() {
           </span>
         </div>
 
-        {/* §7.6: content capture on gets a persistent marker wherever its route's traffic appears. */}
+        {/* Content capture on gets a persistent marker wherever its route's traffic appears. */}
         {capturing.length > 0 && (
           <div role="status" aria-label="Content capture" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
             <span className="font-medium">Content capture on</span>
@@ -378,7 +321,7 @@ export function TrafficPage() {
             </span>
           </div>
         )}
-        {/* §7.5.3 backpressure: never silently drop. Only the live rows are sampled; counts come from the database. */}
+        {/* Backpressure: never silently drop. Only the live rows are sampled; counts come from the database. */}
         {feed.sampling ? (
           <div role="status" aria-label="Stream sampling" className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-v-degraded-border bg-v-degraded-bg px-3 py-1.5 text-sm text-v-degraded-fg">
             <span className="font-medium">
@@ -482,7 +425,7 @@ export function TrafficPage() {
 }
 
 /**
- * The table, rendering only the rows in view (§10: 2,000 rows/min). Rows are
+ * The table, rendering only the rows in view. Rows are
  * one fixed height per density, so the window is arithmetic, and a spacer row
  * above and below stands in for the rest.
  */
@@ -598,7 +541,7 @@ function VirtualTable({
         </thead>
         <tbody>
           {!loaded
-            ? // Skeleton rows at the final row height, so nothing shifts when data lands (§7.6).
+            ? // Skeleton rows at the final row height, so nothing shifts when data lands.
               Array.from({ length: 12 }, (_, i) => (
                 <tr key={i} data-index={i} aria-hidden="true">
                   <td colSpan={cols.length + 4} className="h-(--row-h) border-b border-border px-(--cell-px)">

@@ -1,4 +1,4 @@
-import { ArrowLeft, Ban, Ellipsis, FolderKanban, Plus, RefreshCw, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, Ban, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Meter, Sparkline } from '@/components/gw/charts'
@@ -6,18 +6,15 @@ import { Duration, Money, TokenCount } from '@/components/gw/numbers'
 import { EmptyState, PageHeader, Section } from '@/components/gw/page'
 import { StateChip, VerdictBadge } from '@/components/gw/verdict'
 import { Button } from '@/components/ui/button'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { type ApiKey, type WireKey, budgetLabel, budgets, can, canManageKey, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, projects, revokeKey, teams } from '@/data/catalog'
+import { type ApiKey, type WireKey, budgetLabel, budgets, dataMode, throttleRate, fromWire, governingBudget, keys as seedKeys, teams } from '@/data/catalog'
 import { clock, int, unpricedNote } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useApp, useReceipts } from '@/state/app-state'
-import { useLive, useNow } from '@/state/live'
-import { CreateKeyDialog, RevokeKeyDialog, RotateKeyDialog, RotationStatus, timeLeft } from './keys-dialogs'
-import { ManageProjectsDialog } from './project-dialogs'
+import { useLive } from '@/state/live'
 import { fmtDate, keySpend24h } from './spend-data'
 
-// §7.5.8 Keys. List → key detail (?key=<id>), each key a miniature dashboard.
+// Keys. List → key detail (?key=<id>), each key a miniature dashboard.
 
 function expiryInfo(k: ApiKey) {
   if (k.expiresAt === null) return { label: 'Never', tone: 'degraded' as const, note: 'No expiry' }
@@ -47,29 +44,15 @@ function Spend24h({ k, className }: { k: ApiKey; className?: string }) {
 }
 
 function StatusCell({ k }: { k: ApiKey }) {
-  const now = useNow(60_000)
   if (k.status === 'revoked') return <StateChip tone="blocked" icon={<Ban className="size-3" aria-hidden="true" />}>Revoked</StateChip>
-  if (k.status === 'rotating') {
-    const r = k.rotation
-    const detail = r?.split ? ` · ${Math.round(r.split.newShare * 100)}%` : r?.endsAt ? ` · ${timeLeft(r.endsAt, now)} left` : ''
-    return (
-      <StateChip tone="neutral" className="border-dashed" icon={<RefreshCw className="size-3" aria-hidden="true" />}>
-        Rotating{detail}
-      </StateChip>
-    )
-  }
   return <span className="text-xs text-muted-foreground">Active</span>
 }
 
 export function KeysPage() {
   const [params, setParams] = useSearchParams()
   const [list, setList] = useState<ApiKey[]>(seedKeys)
-  const [creating, setCreating] = useState(false)
-  const [revoking, setRevoking] = useState<ApiKey | null>(null)
-  const [rotating, setRotating] = useState<ApiKey | null>(null)
-  const [managingProjects, setManagingProjects] = useState(false)
-  // Api mode re-reads /keys, which also picks up this page's own writes.
-  const { data: live, reload } = useLive<WireKey[] | null>(dataMode === 'api' ? '/keys' : null, null)
+  // Api mode re-reads /keys.
+  const { data: live } = useLive<WireKey[] | null>(dataMode === 'api' ? '/keys' : null, null)
   useEffect(() => {
     if (live) setList(live.map(fromWire))
   }, [live])
@@ -83,37 +66,11 @@ export function KeysPage() {
     else next.delete('key')
     setParams(next)
   }
-  const update = (id: string, patch: Partial<ApiKey>) => setList((l) => l.map((k) => (k.id === id ? { ...k, ...patch } : k)))
-
-  const dialogs = (
-    <>
-      <CreateKeyDialog open={creating} onOpenChange={setCreating} onCreate={(k) => setList((l) => [k, ...l])} />
-      <RevokeKeyDialog
-        apiKey={revoking}
-        onOpenChange={(o) => !o && setRevoking(null)}
-        onRevoke={async (k) => {
-          update(k.id, await revokeKey(k))
-          setRevoking(null)
-        }}
-      />
-      <RotateKeyDialog apiKey={rotating} onOpenChange={(o) => !o && setRotating(null)} onRotate={(k) => update(k.id, k)} />
-      <ManageProjectsDialog
-        open={managingProjects}
-        onOpenChange={setManagingProjects}
-        onChanged={() => {
-          // A rename shows on its keys at once; api mode re-reads them too.
-          setList((l) => l.map((k) => ({ ...k, project: projects.find((p) => p.id === k.projectId)?.name ?? k.project })))
-          reload()
-        }}
-      />
-    </>
-  )
-
   if (selectedId) {
     return (
       <>
         {selected ? (
-          <KeyDetail k={selected} onBack={() => openKey(null)} onRevoke={() => setRevoking(selected)} onRotate={() => setRotating(selected)} />
+          <KeyDetail k={selected} onBack={() => openKey(null)} />
         ) : (
           <>
             <PageHeader title="Key not found" />
@@ -127,7 +84,6 @@ export function KeysPage() {
             />
           </>
         )}
-        {dialogs}
       </>
     )
   }
@@ -143,16 +99,6 @@ export function KeysPage() {
       <PageHeader
         title="Keys"
         description="Gateway keys that apps use instead of provider credentials. Each key is scoped to a team and project and an allow-list of models and regions. Budgets on its team, project or the key itself apply to it."
-        actions={
-          <>
-            <Button variant="outline" onClick={() => setManagingProjects(true)}>
-              <FolderKanban /> Projects
-            </Button>
-            <Button onClick={() => setCreating(true)} disabled={!can('keys.own').ok} title={can('keys.own').reason}>
-              <Plus /> Create key
-            </Button>
-          </>
-        }
       />
       <Section
         title={`${active.length} active keys`}
@@ -170,9 +116,6 @@ export function KeysPage() {
               <TableHead className="text-right">Requests 24h</TableHead>
               <TableHead className="text-right">Spend 24h</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>
-                <span className="sr-only">Actions</span>
-              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -234,38 +177,12 @@ export function KeysPage() {
                   <TableCell className="py-1.5">
                     <StatusCell k={k} />
                   </TableCell>
-                  <TableCell className="py-1.5" onClick={(ev) => ev.stopPropagation()}>
-                    {!revoked && (
-                      <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger variant="ghost" className="w-8 px-0" aria-label={`Actions for ${k.name}`}>
-                          <Ellipsis />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuPortal>
-                          <DropdownMenuContent align="end" className="min-w-48">
-                            <DropdownMenuItem onClick={() => openKey(k.id)}>View key</DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => setRotating(k)}
-                              disabled={k.status !== 'rotating' && !canManageKey(k).ok}
-                              title={k.status !== 'rotating' ? canManageKey(k).reason : undefined}
-                            >
-                              {k.status === 'rotating' ? 'View rotation' : 'Rotate secret'}
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem variant="destructive" onClick={() => setRevoking(k)} disabled={!canManageKey(k).ok} title={canManageKey(k).reason}>
-                              Revoke key…
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenuPortal>
-                      </DropdownMenu>
-                    )}
-                  </TableCell>
                 </TableRow>
               )
             })}
           </TableBody>
         </Table>
       </Section>
-      {dialogs}
     </div>
   )
 }
@@ -293,14 +210,13 @@ function budgetWords(b: (typeof budgets)[number]) {
   return b.onExceed === 'block' ? `Blocks new requests at ${cap}` : b.onExceed === 'throttle' ? `Throttles at ${cap}` : `Warns at ${cap}`
 }
 
-function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () => void; onRevoke: () => void; onRotate: () => void }) {
+function KeyDetail({ k, onBack }: { k: ApiKey; onBack: () => void }) {
   const { openReceipt } = useApp()
   const all = useReceipts()
   const receipts = useMemo(() => all.filter((r) => r.keyId === k.id), [all, k.id])
   const budget = governingBudget(k)
   const e = expiryInfo(k)
   const revoked = k.status === 'revoked'
-  const manage = canManageKey(k)
 
   const topModels = useMemo(() => {
     const m = new Map<string, { model: string; n: number; tokens: number; cost: number; unpriced: number; ms: number[] }>()
@@ -339,21 +255,9 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
           </span>
         }
         actions={
-          <>
-            <Button variant="ghost" onClick={onBack}>
-              <ArrowLeft /> All keys
-            </Button>
-            {!revoked && (
-              <>
-                <Button variant="outline" onClick={onRotate} disabled={k.status !== 'rotating' && !manage.ok} title={k.status !== 'rotating' ? manage.reason : undefined}>
-                  <RefreshCw /> {k.status === 'rotating' ? 'View rotation' : 'Rotate secret'}
-                </Button>
-                <Button variant="destructive" onClick={onRevoke} disabled={!manage.ok} title={manage.reason}>
-                  <Ban /> Revoke key…
-                </Button>
-              </>
-            )}
-          </>
+          <Button variant="ghost" onClick={onBack}>
+            <ArrowLeft /> All keys
+          </Button>
         }
       >
         <dl className="grid grid-cols-2 gap-y-3 border-t border-border pt-3 md:grid-cols-5 md:divide-x md:divide-border">
@@ -401,12 +305,6 @@ function KeyDetail({ k, onBack, onRevoke, onRotate }: { k: ApiKey; onBack: () =>
           </div>
         </dl>
       </PageHeader>
-
-      {k.status === 'rotating' && (
-        <Section title="Rotation in progress" description="Traffic moves from the old secret to the new one as apps pick it up.">
-          <RotationStatus apiKey={k} className="max-w-2xl" />
-        </Section>
-      )}
 
       <Section
         title="Top models"

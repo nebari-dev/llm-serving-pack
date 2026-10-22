@@ -2,8 +2,7 @@ import { Check, CircleSlash, Hourglass, TriangleAlert, X } from 'lucide-react'
 import type { TraceStep } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 
-// §7.5.4 / §8 DecisionTrace — "the most important component in the product".
-// An ordered vertical sequence: each step shows input, outcome, and its
+// DecisionTrace: the receipt drawer's steps of a request. An ordered vertical sequence: each step shows input, outcome, and its
 // latency contribution, with a proportional bar so the slow step is obvious.
 
 const stateMeta = {

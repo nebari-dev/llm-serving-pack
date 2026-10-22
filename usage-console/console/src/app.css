@@ -3,7 +3,7 @@
  * globals.css is the vendored @nebari/theme and stays untouched; everything
  * here references its primitive ramps so both themes stay in lockstep.
  *
- * Spec §7.2 / §8: five semantic state colors and no others —
+ * Five semantic state colors and no others:
  * allowed, redacted, rerouted, blocked, degraded. Each has a foreground,
  * a soft background, a border tint, and a solid "bar" for the row-edge marker.
  */
@@ -50,7 +50,7 @@
   --series-5: var(--green-500);
   --series-other: var(--zinc-400);
 
-  /* environment accent (§7.4) */
+  /* environment accent */
   --env-production: var(--primary-magenta-600);
   --env-staging: var(--zinc-500);
 
@@ -59,7 +59,7 @@
   --notification-badge: #d00000;
   --sign-out-foreground: #d2161c;
 
-  /* density scale (§7.2): row height + cell padding */
+  /* density scale: row height + cell padding */
   --row-h: 2.75rem;
   --cell-px: 1rem;
 }
@@ -155,7 +155,7 @@
 }
 
 /*
- * The one motion on the traffic surface (§7.2): a new row's background
+ * The one motion on the traffic surface: a new row's background
  * settles from a highlight to transparent. No slide, no fade-in.
  * Under reduced motion the row keeps a static left-edge marker instead
  * (see .row-new in StreamTable).
@@ -179,7 +179,7 @@
   }
 }
 
-/* Printing a receipt (§7.5.4): only the open drawer, unclipped, without its actions. */
+/* Printing a receipt: only the open drawer, unclipped, without its actions. */
 @media print {
   body * {
     visibility: hidden;

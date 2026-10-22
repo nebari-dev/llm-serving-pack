@@ -6,7 +6,7 @@ import { keys, models } from '@/data/catalog'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp } from '@/state/app-state'
 
-// §7.4 CommandPalette (⌘K) with a resolver registry. Pasting a trace ID
+// CommandPalette (⌘K) with a resolver registry. Pasting a trace ID
 // anywhere resolves to its receipt.
 
 type Result = { id: string; label: string; hint: string; icon: typeof KeyRound; run: () => void }

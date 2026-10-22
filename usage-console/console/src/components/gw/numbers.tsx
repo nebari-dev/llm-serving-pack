@@ -1,9 +1,9 @@
 import { cn } from '@/lib/utils'
 import { microMoney, money, tokens } from '@/lib/format'
 
-// §8 Money / TokenCount / Duration: tabular numerals, monospace, consistent
+// Money / TokenCount / Duration: tabular numerals, monospace, consistent
 // precision within a column. Unknown (in-flight) values render as a reserved
-// placeholder so rows never change width when they settle (§7.5.3, §13).
+// placeholder so rows never change width when they settle.
 
 type NumProps = { className?: string; unknown?: boolean }
 
@@ -24,7 +24,7 @@ export function Money({
   unknown,
 }: NumProps & { value: number | null; precision?: 'cents' | 'micro' | 'whole' }) {
   if (unknown) return <Unknown className={className} label="cost pending" />
-  // null is no price (§1 decisions): unknown, never shown as $0.
+  // null is no price: unknown, never shown as $0.
   if (value === null)
     return (
       <span className={cn(base, 'text-muted-foreground', className)} title="No price for this model on this backend yet. It's costed once someone sets one.">

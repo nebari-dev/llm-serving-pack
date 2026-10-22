@@ -16,13 +16,13 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 
-// §8 Sparkline / StackedArea / BarSeries, drawn with Recharts and themed on
+// Sparkline / StackedArea / BarSeries, drawn with Recharts and themed on
 // tokens. Mark specs follow the dataviz method: 2px lines, a light area wash,
 // ≤24px bars with a 4px rounded data-end and a 2px surface gap between stacked
-// segments, solid hairline grid, no animation ("live, but calm", §7.1). Every
-// chart keeps a keyboard-reachable table equivalent (§7.7).
+// segments, solid hairline grid, no animation. Every chart keeps a
+// keyboard-reachable table equivalent.
 
-export interface Series {
+interface Series {
   key: string
   label: string
   color: string
@@ -77,7 +77,7 @@ function ChartTable({
 }
 
 /** Legend swatches mirror the mark: a rect for areas and bars. Text stays in text tokens. */
-export function Legend({ series, className }: { series: Series[]; className?: string }) {
+function Legend({ series, className }: { series: Series[]; className?: string }) {
   return (
     <ul className={cn('flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground-strong', className)}>
       {series.map((s) => (

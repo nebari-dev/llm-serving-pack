@@ -12,19 +12,19 @@ import { rangeLabel, type TimeRange, useApp, useReceipts } from '@/state/app-sta
 import { useDegradations } from '@/state/degradations'
 import { useLive, useNow } from '@/state/live'
 
-// §7.5.2 Overview — not a tile grid. A single vertical narrative:
+// Overview: not a tile grid. A single vertical narrative:
 // status strip → traffic → three numbers → what changed → attention list.
 
 // Two panels on one time axis (small multiples, one y-scale each). Allowed is
 // ~85% of traffic, so stacking it with the rest flattens blocked and redacted
-// into hairlines; the spec wants those visible at this altitude (§7.5.2).
+// into hairlines, and they should be visible here.
 // Volume is drawn quiet — "green is the absence of information" — and the
 // non-allowed verdicts get their own scale.
 const volumeSeries = [{ key: 'total', label: 'Requests', color: 'var(--muted-foreground-strong)' }]
 
 // Stack order is part of the palette: validate_palette.js checks adjacent
 // pairs, and yellow↔red fails as neighbors. This order passes in both themes.
-// Throttled shares truncated's degraded hue (§7.2 keeps five state colors),
+// Throttled shares truncated's degraded hue (there are five state colors),
 // lightened so the two read apart in the stack.
 const verdictSeries = [
   { key: 'throttled', label: 'Throttled', color: `color-mix(in oklch, ${toneFill.degraded} 50%, var(--canvas))` },
@@ -56,8 +56,8 @@ export function OverviewPage() {
   const { range } = useApp()
   const navigate = useNavigate()
   const { series, summary } = useOverviewData(range)
-  // Api mode's effects are the ones Activity computes from the aggregates,
-  // not the audit row's stored text; a change older than its week has none.
+  // Api mode's effects are the ones GET /activity computes; a change older
+  // than its week has none.
   const activity = useLive<ActivityView | null>(dataMode === 'api' ? '/activity?range=7d' : null, null, 60_000).data
   const effectOf = (c: Change): Pick<Change, 'effect' | 'effectTone'> => {
     if (dataMode !== 'api') return c
@@ -68,7 +68,7 @@ export function OverviewPage() {
   const xFormat = (t: number) => (multiDay ? new Date(t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : clock(t).slice(0, 5))
   // Changes inside the charted window; the latest one is labeled.
   const windowStart = series[0]?.t ?? 0
-  // Exports (the close report) are audit rows but change nothing; Activity lists them.
+  // Exports are recorded as changes but change nothing.
   const configChanges = changes.filter((c) => c.targetKind !== 'Export')
   const inWindow = configChanges.filter((c) => c.ts >= windowStart)
   const annotations = inWindow.map((c, i) => ({ t: c.ts, label: i === 0 ? c.target : '' }))
@@ -170,7 +170,7 @@ export function OverviewPage() {
           </Button>
         }
       >
-        {/* The three latest, as equal rows, each joined to its effect (§7.5.2 item 4); Activity has the rest. */}
+        {/* The three latest, as equal rows, each joined to its effect. */}
         {!configChanges[0] && <p className="text-sm text-muted-foreground">No config changes yet.</p>}
         <ol aria-label="Recent config changes" className="divide-y divide-border border-y border-border empty:hidden">
           {configChanges.slice(0, 3).map((row) => ({ ...row, ...effectOf(row) })).map((c) => (
@@ -210,7 +210,7 @@ export function OverviewPage() {
   )
 }
 
-/** GET /gateway/overhead: spec G6, from receipts. */
+/** GET /gateway/overhead: the gateway's own time per request. */
 type GatewayOverhead = { p50Ms: number | null; p95Ms: number | null; samples: number; windowMinutes: number; goalMs: number }
 
 function StatusStrip() {

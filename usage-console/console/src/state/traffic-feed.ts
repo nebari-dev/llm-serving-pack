@@ -3,10 +3,10 @@ import { api, dataMode, keys, type Receipt } from '@/data/catalog'
 import { useLive } from './live'
 import { receiptStream, type StreamSampling } from './app-state'
 
-// The Traffic list (§7.5.3). In api mode the filters are the server query:
+// The Traffic list. In api mode the filters are the server query:
 // GET /receipts pages older rows with ?before=, GET /stream/traffic brings new
 // ones with the same filters, and GET /receipts/count gives the matching total
-// from receipts_5m when the aggregate can answer. In mock mode it filters the
+// when it can be counted exactly. In mock mode it filters the
 // simulated stream in the browser, as before.
 
 export type Dim = 'key' | 'team' | 'project' | 'model' | 'verdict' | 'provider' | 'backend' | 'reason'
@@ -19,7 +19,7 @@ export interface TrafficWindow {
   before: number | null
 }
 
-export interface TrafficFeed {
+interface TrafficFeed {
   rows: Receipt[]
   /** False until the first page for this query arrives. */
   loaded: boolean
@@ -31,7 +31,7 @@ export interface TrafficFeed {
   count: number | null
   /** Receipts the server dropped from this stream because the console fell behind. */
   dropped: number
-  /** The live stream sends 1 in N matching receipts (§7.5.3); null while it sends all of them. */
+  /** The live stream sends 1 in N matching receipts; null while it sends all of them. */
   sampling: StreamSampling | null
   /** The stream was sampled at some point since the list loaded, so the list has gaps until reloaded. */
   wasSampled: boolean
@@ -46,7 +46,7 @@ const MAX_ROWS = 10_000
 function matches(r: Receipt, f: Filters, w: TrafficWindow) {
   if (r.ts < w.since) return false
   if (w.before !== null && r.ts >= w.before) return false
-  // Projects filter by id (§5.1): two teams' "helpdesk" are two projects.
+  // Projects filter by id: two teams' "helpdesk" are two projects.
   if (f.project.length && !f.project.includes(r.projectId ?? '')) return false
   if (f.key.length && !f.key.includes(r.keyName)) return false
   if (f.team.length && !f.team.includes(r.team)) return false
@@ -69,11 +69,6 @@ function queryString(f: Filters, w: TrafficWindow | null) {
     for (const v of vals) q.append(dim, dim === 'key' ? (keys.find((k) => k.name === v)?.id ?? v) : v)
   }
   return q
-}
-
-/** POST /receipts/export's query for this view: its filters and window (every matching receipt, from the database). */
-export function exportQuery(f: Filters, w: TrafficWindow) {
-  return queryString(f, w).toString()
 }
 
 export function useTrafficFeed(filters: Filters, window: TrafficWindow): TrafficFeed {

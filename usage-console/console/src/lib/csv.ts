@@ -38,7 +38,7 @@ export function downloadText(name: string, text: string, type = 'text/csv') {
 }
 
 /** Saves a blob as a file through a temporary link. */
-export function downloadBlob(name: string, blob: Blob) {
+function downloadBlob(name: string, blob: Blob) {
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = name

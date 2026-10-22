@@ -1,5 +1,5 @@
 // Mock-mode spend views for the demo tenant. In api mode GET /spend serves
-// these from the receipts continuous aggregates (§4.6); here the seeded
+// these from OpenMeter; here the seeded
 // daily-by-team series is split across keys, projects and models with
 // hand-tuned shares, so the breakdown and the trend reconcile to the same
 // totals.
@@ -67,7 +67,7 @@ const modelWeight: Record<string, Record<string, number>> = {
   security: { 'llama-3.3-70b': 0.7, 'claude-haiku-4-5': 0.3 },
 }
 
-export const cells: Cell[] = (() => {
+const cells: Cell[] = (() => {
   const out: Cell[] = []
   for (const t of teams) {
     const teamKeys = keys.filter((k) => k.team === t.id && k.status !== 'revoked')
@@ -97,7 +97,7 @@ export const cells: Cell[] = (() => {
   return out
 })()
 
-export const windowDays: Record<TimeRange, number> = {
+const windowDays: Record<TimeRange, number> = {
   '15m': 1 / 96,
   '1h': 1 / 24,
   '6h': 0.25,
@@ -107,7 +107,7 @@ export const windowDays: Record<TimeRange, number> = {
 }
 
 /** Days shown in the trend chart. Spend is aggregated daily, so short ranges show a week of context. */
-export function trendDays(range: TimeRange) {
+function trendDays(range: TimeRange) {
   return range === '30d' ? 30 : range === '7d' ? 7 : 14
 }
 
@@ -124,7 +124,7 @@ function teamSpendOver(days: number, offsetDays = 0) {
   return out
 }
 
-export interface BreakdownRow {
+interface BreakdownRow {
   id: string
   label: string
   dim: Dim

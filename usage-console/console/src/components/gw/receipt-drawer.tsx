@@ -1,11 +1,10 @@
-import { ArrowRight, Copy, Download, Eye, FileSignature, Link2, Lock, Printer, ShieldAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowRight, Copy, Download, Link2, Lock, Printer, ShieldAlert } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Drawer, DrawerBody, DrawerContent, DrawerDescription, DrawerFooter, DrawerHeader, DrawerTitle } from '@/components/ui/drawer'
 import { toast } from '@/components/ui/toast'
-import { API_BASE, api as apiCall, ApiError, can, changes, dataMode, downloadSignedExport, type PriceSource, type Receipt } from '@/data/catalog'
+import { changes, dataMode, type PriceSource, type Receipt } from '@/data/catalog'
 import { ago, clock } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { receiptStream, useApp, useReceipts } from '@/state/app-state'
@@ -14,8 +13,8 @@ import { DecisionTrace } from './decision-trace'
 import { Duration, Money, TokenCount } from './numbers'
 import { failedAfterAllowed, VerdictBadge } from './verdict'
 
-// §7.5.4 Request receipt. A drawer, deep-linkable (?receipt=id), printable,
-// exportable as signed JSON. Sections in the spec's order.
+// Request receipt. A drawer, deep-linkable (?receipt=id), printable and
+// exportable as JSON.
 
 // The alert above the trace names what stopped the request, from its error
 // code: a rule, a budget, the key's allowlist, Warden, routing or the provider.
@@ -57,14 +56,9 @@ const modes: Record<NonNullable<Receipt['policyMode']>, { label: string; note?: 
 
 const api = dataMode === 'api'
 
-/** Downloads the receipt as JSON: in api mode, exactly what the control plane returns. */
-async function exportJson(r: Receipt) {
-  let body = JSON.stringify(r, null, 2)
-  if (api) {
-    const res = await fetch(`${API_BASE}/receipts/${encodeURIComponent(r.id)}`)
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-    body = JSON.stringify(await res.json(), null, 2)
-  }
+/** Downloads the receipt as JSON, as the console received it. */
+function exportJson(r: Receipt) {
+  const body = JSON.stringify(r, null, 2)
   const url = URL.createObjectURL(new Blob([body + '\n'], { type: 'application/json' }))
   const a = document.createElement('a')
   a.href = url
@@ -72,24 +66,6 @@ async function exportJson(r: Receipt) {
   a.click()
   URL.revokeObjectURL(url)
 }
-
-/** POST /receipts/{id}/reveal: the stored content, after the server wrote the audit row naming who looked (§9.2). */
-interface Revealed {
-  content: unknown
-  revealedBy: string
-  revealedAt: number
-}
-
-/** Stored content as the dev gateway keeps it: {messages: [{role, content}], response}. Anything else shows as JSON. */
-function contentText(c: unknown) {
-  const v = c as { messages?: { role?: string; content?: unknown }[]; response?: unknown } | null
-  if (!v || !Array.isArray(v.messages)) return JSON.stringify(c, null, 2)
-  const lines = v.messages.map((m) => `[${m.role ?? '?'}] ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
-  if (v.response !== undefined) lines.push(`[response] ${typeof v.response === 'string' ? v.response : JSON.stringify(v.response)}`)
-  return lines.join('\n')
-}
-
-const errorText = (e: unknown) => (e instanceof ApiError ? e.message : `${String(e)}. Try again.`)
 
 function Sub({ title, children, className }: { title: string; children: React.ReactNode; className?: string }) {
   return (
@@ -113,9 +89,6 @@ export function ReceiptDrawer() {
   const { receiptId, closeReceipt } = useApp()
   useReceipts() // re-render when an in-flight receipt settles
   const r = receiptId ? receiptStream.byId.get(receiptId) : undefined
-  useEffect(() => {
-    if (receiptId && !r) receiptStream.ensure(receiptId)
-  }, [receiptId, r])
   return (
     <Drawer open={!!receiptId} onOpenChange={(o) => !o && closeReceipt()} side="right">
       <DrawerContent data-print-receipt style={{ ['--drawer-content-width' as string]: 'min(46rem, 100vw)' }}>
@@ -142,27 +115,6 @@ function NotFound({ id }: { id: string | null }) {
 
 function ReceiptBody({ r }: { r: Receipt }) {
   const { pathname } = useLocation()
-  const [revealed, setRevealed] = useState(false)
-  // api mode: what the server returned for this receipt's reveal.
-  const [liveReveal, setLiveReveal] = useState<{ id: string; v: Revealed } | null>(null)
-  const shown = liveReveal?.id === r.id ? liveReveal.v : null
-  const [busy, setBusy] = useState<'reveal' | 'export' | null>(null)
-  const reveal = () => {
-    setBusy('reveal')
-    apiCall<Revealed>(`/receipts/${encodeURIComponent(r.id)}/reveal`, { method: 'POST' })
-      .then((v) => setLiveReveal({ id: r.id, v }))
-      .catch((e: unknown) => toast.add({ title: "The content couldn't be revealed", description: errorText(e), type: 'error' }))
-      .finally(() => setBusy(null))
-  }
-  const exportSigned = () => {
-    setBusy('export')
-    downloadSignedExport(`/receipts/${encodeURIComponent(r.id)}/export`)
-      .then((ex) =>
-        toast.add({ title: 'Signed receipt exported', description: `${ex.filename}: the README inside says how to verify it. The export is recorded in the audit log.`, type: 'success' }),
-      )
-      .catch((e: unknown) => toast.add({ title: "The receipt couldn't be exported", description: errorText(e), type: 'error' }))
-      .finally(() => setBusy(null))
-  }
   const basis = r.costBasis
   const precedingChange = changes.find((c) => c.ts < r.ts)
   const { sameKey, sameSession } = useRelated(r)
@@ -175,7 +127,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
 
   const cacheWrites = r.cacheWriteTokens ?? 0
   const inputBilled = Math.max(r.inputTokens - r.cachedInputTokens - cacheWrites, 0)
-  // Priced from the snapshot stored with the receipt (§5.1), never today's prices.
+  // Priced from the snapshot stored with the receipt, never today's prices.
   // Older snapshots have no cache-write rate and no sources.
   const lines = [
     { label: 'Input', tok: inputBilled, rate: basis?.inPerM, source: basis?.sources?.input },
@@ -325,16 +277,6 @@ function ReceiptBody({ r }: { r: Receipt }) {
             <span>
               Inbound inspection: <span className="font-medium text-foreground">{inbound[r.inboundVerdict] ?? r.inboundVerdict}</span>
             </span>
-            {r.redactions.length > 0 &&
-              (api ? (
-                <Link to="/guardrails" className="ml-auto underline underline-offset-4 hover:text-foreground" data-print-hide>
-                  Review this redaction on Guardrails → Detectors
-                </Link>
-              ) : (
-                <button type="button" data-print-hide className="ml-auto underline underline-offset-4 hover:text-foreground" onClick={() => toast.add({ title: 'Sent to the false-positive review queue', type: 'info' })}>
-                  Mark a redaction as incorrect
-                </button>
-              ))}
           </div>
           {mode?.note && <p className="mt-2 text-xs text-v-degraded-fg">{mode.note}</p>}
         </Sub>
@@ -405,49 +347,9 @@ function ReceiptBody({ r }: { r: Receipt }) {
 
         {/* 5. Content */}
         <Sub title="Content">
-          {r.contentCaptured ? (
-            api ? (
-              shown ? (
-                <div className="flex flex-col gap-2">
-                  <p className="text-xs text-v-degraded-fg">
-                    Reveal recorded in the audit log as {shown.revealedBy} at {clock(shown.revealedAt)}.
-                  </p>
-                  <pre aria-label="Revealed content" className="max-h-48 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground-strong">
-                    {contentText(shown.content)}
-                  </pre>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border-strong p-3">
-                  <p className="text-sm text-muted-foreground-strong">
-                    Content was kept for this request: its route captures content, with each detected value replaced by a placeholder. Revealing it writes an audit record naming you first.
-                  </p>
-                  <Button variant="outline" size="sm" onClick={reveal} disabled={busy === 'reveal' || !can('capture').ok} title={can('capture').reason} data-print-hide>
-                    <Eye /> {busy === 'reveal' ? 'Revealing…' : 'Reveal content'}
-                  </Button>
-                </div>
-              )
-            ) : revealed ? (
-              <div className="flex flex-col gap-2">
-                <p className="text-xs text-v-degraded-fg">Reveal recorded in the audit log as priya@acme.dev at {clock(Date.now())}.</p>
-                <pre className="max-h-48 overflow-auto rounded-md border border-border bg-muted p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground-strong">
-                  {`[system] You are the Acme support assistant…\n[user] My account ⟦ACCOUNT_1⟧ was charged twice, please refund to ⟦PERSON_1⟧.\n[assistant] I've opened a refund request for ⟦ACCOUNT_1⟧…`}
-                </pre>
-              </div>
-            ) : (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed border-border-strong p-3">
-                <p className="text-sm text-muted-foreground-strong">
-                  Content was captured for route <span className="font-mono">eu-private</span>. Revealing it writes an audit record.
-                </p>
-                <Button variant="outline" size="sm" onClick={() => setRevealed(true)}>
-                  <Eye /> Reveal content
-                </Button>
-              </div>
-            )
-          ) : (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Lock className="size-4" aria-hidden="true" /> {api ? 'Not captured for this request: only its hashes were stored.' : 'Not captured for this route. Hashes only.'}
-            </p>
-          )}
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Lock className="size-4" aria-hidden="true" /> {api ? 'Not captured for this request: only its hashes were stored.' : 'Not captured for this route. Hashes only.'}
+          </p>
           <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 font-mono text-xs">
             <KV k="request_hash">{r.requestHash}</KV>
             <KV k="response_hash">{r.responseHash}</KV>
@@ -495,7 +397,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
             <Button variant="ghost" size="sm" onClick={() => copy(window.location.href, 'Link')}>
               <Link2 /> Copy link
             </Button>
-            {/* Opened over another page (Guardrails, Keys…): Traffic shows it among the requests around it. */}
+            {/* Opened over another page (Overview, Keys…): Traffic shows it among the requests around it. */}
             {pathname !== '/traffic' && (
               <Button variant="ghost" size="sm" render={<Link to={`/traffic?receipt=${r.id}`} />}>
                 <ArrowRight /> Open in Traffic
@@ -506,33 +408,11 @@ function ReceiptBody({ r }: { r: Receipt }) {
             <Button variant="outline" size="sm" onClick={() => window.print()}>
               <Printer /> Print
             </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                exportJson(r).catch((e: Error) => toast.add({ title: "The receipt couldn't be exported", description: `${e.message}. Try again.`, type: 'error' }))
-              }
-            >
+            <Button variant="outline" size="sm" onClick={() => exportJson(r)}>
               <Download /> Export JSON
             </Button>
-            {api ? (
-              <Button variant="outline" size="sm" onClick={exportSigned} disabled={r.inFlight || busy === 'export'} aria-describedby={r.inFlight ? 'sign-reason' : undefined}>
-                <FileSignature /> {busy === 'export' ? 'Exporting…' : 'Export signed'}
-              </Button>
-            ) : (
-              <Button variant="outline" size="sm" onClick={() => toast.add({ title: 'Signed receipt exported', description: 'Export recorded in the audit log.', type: 'success' })}>
-                <Download /> Export signed JSON
-              </Button>
-            )}
           </div>
         </div>
-        {api && (
-          <p id="sign-reason" className="text-right text-xs text-muted-foreground">
-            {r.inFlight
-              ? 'Signed export waits until the request settles.'
-              : 'Export JSON is unsigned. Export signed adds an Ed25519 signature over the exact bytes, which anyone can verify.'}
-          </p>
-        )}
       </DrawerFooter>
     </>
   )
@@ -540,7 +420,7 @@ function ReceiptBody({ r }: { r: Receipt }) {
 
 const HOUR = 3_600_000
 
-/** Same session, and same key in the hour before (§7.5.4). In api mode, asked of the server, not the loaded rows. */
+/** Same session, and same key in the hour before. In api mode, asked of the server, not the loaded rows. */
 function useRelated(r: Receipt) {
   const all = useReceipts()
   const keyQ = `/receipts?limit=5&key=${encodeURIComponent(r.keyId)}&since=${r.ts - HOUR}&before=${r.ts}`

@@ -2,8 +2,8 @@ import { TriangleAlert } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useDegradations } from '@/state/degradations'
 
-// §7.4: one banner slot, ranked by severity. Fail-open is persistent and
-// non-dismissible while active (§7.6), so there is no close button.
+// One banner slot, ranked by severity. A degradation stays while it lasts,
+// so there is no close button.
 
 export function DegradationBanner() {
   const [top, ...rest] = useDegradations()

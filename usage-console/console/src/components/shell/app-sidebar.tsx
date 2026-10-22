@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/sidebar'
 import { dataMode, session } from '@/data/catalog'
 
-// §7.4 information architecture, grouped by the job each screen serves:
+// Pages grouped by the job each one serves:
 // watching the request stream, governing money and data.
 const groups = [
   {
@@ -51,7 +51,7 @@ export function AppSidebar() {
         <div className="flex flex-col gap-4">
           {groups.map((g) => (
             <SidebarGroup key={g.label} role="group" aria-labelledby={`nav-${g.label}`}>
-              {/* Spec §7.3: sentence case, no all-caps — override nebari's uppercase label. */}
+              {/* Sentence case, no all-caps: override nebari's uppercase label. */}
               <SidebarGroupLabel id={`nav-${g.label}`} className="text-xs tracking-normal normal-case">
                 {g.label}
               </SidebarGroupLabel>

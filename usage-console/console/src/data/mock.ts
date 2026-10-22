@@ -1,14 +1,13 @@
-// Seeded synthetic data for the demo tenant (spec §7.5.1). Everything here is
+// Seeded synthetic data for the demo tenant (mock mode). Everything here is
 // fabricated and deterministic so screens render the same way on every load.
 
 /** throttled: refused for now (429 with Retry-After) by a throttle budget over its cap, not blocked. */
 export type Verdict = 'allowed' | 'redacted' | 'rerouted' | 'blocked' | 'truncated' | 'throttled'
 // skipped: the response wasn't inspected (never reached, or no inspector in the path)
-export type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
-export type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
-export type Provenance = 'console' | 'git' | 'adopted'
-/** not_reconciled: api mode before a reconciler exists (§4.4); nothing is applied or observed. */
-export type SyncState = 'synced' | 'applying' | 'failed' | 'drift' | 'not_reconciled' | 'pending' | 'no_endpoint'
+type InboundVerdict = 'allowed' | 'stripped' | 'blocked' | 'skipped'
+type RouteReason = 'alias' | 'policy' | 'fallback' | 'explicit'
+/** not_reconciled: nothing is applied or observed. */
+type SyncState = 'synced' | 'applying' | 'failed' | 'drift' | 'not_reconciled' | 'pending' | 'no_endpoint'
 
 export interface Team {
   id: string
@@ -17,7 +16,7 @@ export interface Team {
 }
 
 /**
- * A team's project (§5.2). Names are for people, unique within a team
+ * A team's project. Names are for people, unique within a team
  * (ignoring case); receipts, budgets and rules name it by id, so it can be
  * renamed.
  */
@@ -25,8 +24,6 @@ export interface Project {
   id: string
   team: string
   name: string
-  /** The version a rename or delete names in If-Match (api mode). */
-  etag?: string
 }
 
 export interface ApiKey {
@@ -48,27 +45,9 @@ export interface ApiKey {
   spend24hUsd?: number
   /** Api mode: requests over the same 24h with no price, which spend24hUsd leaves out. */
   unpriced24h?: number
-  status: 'active' | 'revoked' | 'rotating'
-  rotation?: KeyRotation
-  /** Who created it: they may revoke, rotate, extend and finish it; anyone else needs admin. */
+  status: 'active' | 'revoked'
+  /** Who created it. */
   owner: string
-}
-
-/** A rotating key's overlap window. Null where it wasn't recorded. */
-export interface KeyRotation {
-  startedAt: number | null
-  startedBy: string | null
-  endsAt: number | null
-  /** Mock mode's traffic share on each secret, over the last 24h. */
-  split?: { newShare: number; oldActors: string[] }
-  /**
-   * Api mode: requests since the rotation started, by the secret that
-   * authenticated them. Null when the start isn't recorded. Unrecorded is
-   * requests from before receipts recorded the secret.
-   */
-  oldSecretRequests?: number | null
-  newSecretRequests?: number | null
-  unrecordedRequests?: number
 }
 
 export interface Model {
@@ -92,9 +71,9 @@ export interface MockModel extends Model {
   reasoningPerM: number
 }
 
-/** The price a receipt was costed with (§5.1). Receipts from before per-backend
+/** The price a receipt was costed with. Receipts from before per-backend
  * prices carry only the model and its four rates. */
-export interface CostBasis {
+interface CostBasis {
   id: string
   display: string
   provider: string
@@ -121,7 +100,7 @@ export interface TraceStep {
   state: 'ok' | 'warn' | 'fail' | 'throttle' | 'skip'
 }
 
-export interface RuleEval {
+interface RuleEval {
   ruleId: string
   name: string
   /** The rule's policy (api mode). Receipts from before policies lack them; their rule id is the policy's. */
@@ -166,7 +145,7 @@ export interface Receipt {
   cacheWriteTokens?: number
   /** null when the (model, backend) had no price: unknown, not $0. */
   costUsd: number | null
-  /** The price row this receipt was costed with (§5.1); absent on receipts written before it was recorded, and on unpriced ones. */
+  /** The price row this receipt was costed with; absent on receipts written before it was recorded, and on unpriced ones. */
   costBasis?: CostBasis
   verdict: Verdict
   inboundVerdict: InboundVerdict
@@ -197,7 +176,7 @@ function mulberry32(seed: number) {
   }
 }
 
-export const rand = mulberry32(20260924)
+const rand = mulberry32(20260924)
 const pick = <T,>(arr: readonly T[], r = rand) => arr[Math.floor(r() * arr.length)]
 const hex = (n: number, r = rand) =>
   Array.from({ length: n }, () => Math.floor(r() * 16).toString(16)).join('')
@@ -224,56 +203,28 @@ export const models: MockModel[] = [
 
 export const modelById: Record<string, MockModel> = Object.fromEntries(models.map((m) => [m.id, m]))
 
-export type RateName = 'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning'
+type RateName = 'input' | 'cachedInput' | 'cacheWrite' | 'output' | 'reasoning'
 export type PriceSource = 'seed' | 'litellm' | 'manual'
 
 export interface Backend {
   name: string
   provider: string
   region: string
-  provenance: Provenance
   sync: SyncState
-  source?: string
   models: string[]
   /** idle: no requests in the last 15 minutes (api mode only). */
   health: 'healthy' | 'degraded' | 'down' | 'idle'
   p50: number
   errorRate: number
-  /** Settled requests in the last hour (api mode only). */
-  requests1h?: number
-  captureContent?: boolean
-  /** Where the gateway reaches it (api mode); absent for a backend it can't. */
-  endpoint?: BackendEndpoint
-  /** The gateway resources it compiles to (api mode). */
-  yaml?: string
-  /** A provider key set from the console: its prefix only, never the key (§9.1). */
-  key?: { prefix: string; setAt: number }
-  /** The last connection test: the models listed, or the provider's refusal. */
-  lastTest?: { at: number; ok: boolean; message: string }
-  /** For If-Match on edit and delete (api mode). */
-  etag?: string
 }
 
 export const backends: Backend[] = [
-  { name: 'openai-prod', provider: 'OpenAI', region: 'us-east', provenance: 'console', sync: 'synced', models: ['gpt-5-mini', 'gpt-5.5'], health: 'healthy', p50: 412, errorRate: 0.2 },
-  { name: 'anthropic-prod', provider: 'Anthropic', region: 'us-east', provenance: 'console', sync: 'applying', models: ['claude-sonnet-5', 'claude-opus-4-1'], health: 'degraded', p50: 980, errorRate: 3.1 },
-  { name: 'bedrock-eu', provider: 'Bedrock', region: 'eu-central', provenance: 'git', sync: 'synced', source: 'github.com/acme/platform-gitops/blob/main/gateway/backends/bedrock-eu.yaml', models: ['claude-haiku-4-5', 'claude-sonnet-5'], health: 'healthy', p50: 640, errorRate: 0.4 },
-  { name: 'vllm-internal', provider: 'Self-hosted', region: 'eu-private', provenance: 'git', sync: 'drift', source: 'github.com/acme/platform-gitops/blob/main/gateway/backends/vllm-internal.yaml', models: ['llama-3.3-70b'], health: 'healthy', p50: 220, errorRate: 0.1, captureContent: true },
-  { name: 'azure-openai-eu', provider: 'Azure', region: 'eu-west', provenance: 'adopted', sync: 'failed', models: ['gpt-5-mini'], health: 'down', p50: 0, errorRate: 100 },
+  { name: 'openai-prod', provider: 'OpenAI', region: 'us-east', sync: 'synced', models: ['gpt-5-mini', 'gpt-5.5'], health: 'healthy', p50: 412, errorRate: 0.2 },
+  { name: 'anthropic-prod', provider: 'Anthropic', region: 'us-east', sync: 'applying', models: ['claude-sonnet-5', 'claude-opus-4-1'], health: 'degraded', p50: 980, errorRate: 3.1 },
+  { name: 'bedrock-eu', provider: 'Bedrock', region: 'eu-central', sync: 'synced', models: ['claude-haiku-4-5', 'claude-sonnet-5'], health: 'healthy', p50: 640, errorRate: 0.4 },
+  { name: 'vllm-internal', provider: 'Self-hosted', region: 'eu-private', sync: 'drift', models: ['llama-3.3-70b'], health: 'healthy', p50: 220, errorRate: 0.1 },
+  { name: 'azure-openai-eu', provider: 'Azure', region: 'eu-west', sync: 'failed', models: ['gpt-5-mini'], health: 'down', p50: 0, errorRate: 100 },
 ]
-
-/** A backend's desired state; host and port may be aigw ${VAR:-default}s. */
-export interface BackendEndpoint {
-  schema: string
-  prefix: string
-  host: string
-  port: string
-  tls?: boolean
-  /** The environment variable holding the provider key the gateway sends. */
-  apiKeyEnv?: string
-  /** The endpoint as a base URL, ${VAR:-default}s at their defaults. */
-  baseUrl?: string
-}
 
 type SeedKey = Omit<ApiKey, 'hourly24h' | 'projectId' | 'owner'>
 
@@ -281,7 +232,7 @@ const seedKeys: SeedKey[] = [
   { id: 'k1', name: 'support-bot', prefix: 'ngw_live_7f3a', team: 'support', project: 'helpdesk', allowedModels: ['gpt-5-mini', 'claude-sonnet-5'], allowedRegions: ['us-east', 'eu-central'], expiresAt: '2027-03-01', lastUsed: '12s ago', requests24h: 18_240, status: 'active' },
   { id: 'k2', name: 'agents-prod', prefix: 'ngw_live_c19e', team: 'agents', project: 'orchestrator', allowedModels: ['claude-sonnet-5', 'claude-opus-4-1', 'gpt-5.5'], allowedRegions: ['us-east'], expiresAt: '2026-12-31', lastUsed: '3s ago', requests24h: 9_812, status: 'active' },
   { id: 'k3', name: 'batch-summarize', prefix: 'ngw_live_02bd', team: 'batch', project: 'nightly-digest', allowedModels: ['gpt-5-mini', 'claude-opus-4-1', 'llama-3.3-70b'], allowedRegions: ['us-east', 'eu-private'], expiresAt: '2026-11-15', lastUsed: '41s ago', requests24h: 4_406, status: 'active' },
-  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'rotating', rotation: { startedAt: Date.now() - 20 * 3_600_000, startedBy: 'priya@acme.dev', endsAt: Date.now() + 28 * 3_600_000, split: { newShare: 0.61, oldActors: ['web-assistant-7c9', 'web-assistant-2f1'] } } },
+  { id: 'k4', name: 'web-chat', prefix: 'ngw_live_9a0c', team: 'web', project: 'assistant', allowedModels: ['gpt-5-mini', 'claude-haiku-4-5'], allowedRegions: ['us-east'], expiresAt: '2027-01-20', lastUsed: '1s ago', requests24h: 22_019, status: 'active' },
   { id: 'k5', name: 'research', prefix: 'ngw_live_e55f', team: 'research', project: 'evals', allowedModels: ['claude-opus-4-1', 'gpt-5.5', 'claude-sonnet-5'], allowedRegions: ['us-east'], expiresAt: null, lastUsed: '6m ago', requests24h: 1_204, status: 'active' },
   { id: 'k6', name: 'secops-triage', prefix: 'ngw_live_41d2', team: 'security', project: 'soc', allowedModels: ['llama-3.3-70b', 'claude-haiku-4-5'], allowedRegions: ['eu-private', 'eu-central'], expiresAt: '2026-10-02', lastUsed: '2h ago', requests24h: 88, status: 'active' },
   { id: 'k7', name: 'legacy-intranet', prefix: 'ngw_live_77aa', team: 'web', project: 'intranet', allowedModels: ['gpt-5-mini'], allowedRegions: ['us-east'], expiresAt: '2026-08-30', lastUsed: '26d ago', requests24h: 0, status: 'revoked' },
@@ -299,8 +250,8 @@ function hourly(k: SeedKey) {
   })
 }
 
-/** A mock project's id. The control plane derives its own (demo.ProjectID). */
-export const mockProjectId = (team: string, name: string) => `p-${team}-${name}`
+/** A mock project's id. */
+const mockProjectId = (team: string, name: string) => `p-${team}-${name}`
 
 // Mock keys have a few owners, so the Keys page shows whose each is.
 const mockKeyOwners: Record<string, string> = { k2: 'marco@acme.dev', k3: 'sam@acme.dev', k6: 'marco@acme.dev' }
@@ -329,12 +280,10 @@ export interface Budget {
   trailingDailyUsd: number
   /** Api mode: this month's requests in scope with no price, which currentUsd leaves out. */
   unpricedRequests?: number
-  /** The version an edit or delete names in If-Match (api mode). */
-  etag?: string
 }
 
-/** The gateway's throttle (gateway.ThrottleRate): requests a minute per key while a throttle budget is over its cap. */
-export const THROTTLE_PER_MINUTE = 10
+/** Requests a minute per key while a throttle budget is over its cap. */
+const THROTTLE_PER_MINUTE = 10
 
 /** Requests a minute each key gets while `b`, a throttle budget, is over its cap. */
 export const throttleRate = (b: Pick<Budget, 'throttlePerMinute'>) => b.throttlePerMinute ?? THROTTLE_PER_MINUTE
@@ -346,7 +295,7 @@ export const budgetLabel = (b: Pick<Budget, 'scope' | 'scopeName'>) => b.scopeNa
 export type BudgetKey = { id: string; team: string; projectId: string }
 
 /** Whether a budget applies to a key: its team, its project, or the key itself (both by id). */
-export function budgetCovers(b: Budget, k: BudgetKey) {
+function budgetCovers(b: Budget, k: BudgetKey) {
   return b.scopeType === 'team' ? b.scope === k.team : b.scopeType === 'project' ? b.scope === k.projectId : b.scope === k.id
 }
 
@@ -747,8 +696,6 @@ export interface SavingsOpportunity {
   basis: string
   receipts: number
   href: string
-  alias: string
-  diff: string
 }
 
 const perRequest = (model: string, inTok: number, outTok: number) => (inTok * modelById[model].inPerM + outTok * modelById[model].outPerM) / 1e6
@@ -767,21 +714,6 @@ export const savings: SavingsOpportunity[] = (() => {
       basis: `${(perDay1 * 30).toLocaleString('en-US')} requests in 30 days from batch-summarize call claude-opus-4-1 directly with summarize-shaped prompts (~12k in, <800 out). Same prompts routed through the summarize-* alias already run on gpt-5-mini.`,
       receipts: perDay1 * 30,
       href: '/traffic?key=batch-summarize&model=claude-opus-4-1',
-      alias: 'summarize-*',
-      diff: `
- apiVersion: gateway.nebari.dev/v1
- kind: ModelAlias
- metadata:
-   name: summarize
- spec:
-   match: "summarize-*"
--  target: claude-opus-4-1
-+  target: gpt-5-mini
-+  conditions:
-+    - field: key.name
-+      op: in
-+      value: [batch-summarize]
-   fallback: [llama-3.3-70b]`,
     },
     {
       id: 'o2',
@@ -793,16 +725,6 @@ export const savings: SavingsOpportunity[] = (() => {
       basis: `${(perDay2 * 30).toLocaleString('en-US')} requests in 30 days on claude-sonnet-5 with under 100 output tokens and a fixed system prompt. Same model family; quality not measured — run a shadow comparison before promoting.`,
       receipts: perDay2 * 30,
       href: '/traffic?key=support-bot&model=claude-sonnet-5',
-      alias: 'support-classify',
-      diff: `
- apiVersion: gateway.nebari.dev/v1
- kind: ModelAlias
- metadata:
-+  name: support-classify
-+spec:
-+  match: "support-classify"
-+  target: claude-haiku-4-5
-+  fallback: [claude-sonnet-5]`,
     },
   ]
 })()
@@ -828,9 +750,8 @@ export const changes: Change[] = [
   { id: 'c6', ts: NOW - 26 * 3_600_000, actor: 'marco@acme.dev', action: 'Published rule in monitor mode', target: 'card-numbers v1', targetKind: 'Policy', effect: 'Would have redacted 22 requests', effectTone: 'neutral', source: 'console' },
 ]
 
-// Banner conditions (§7.4, §7.6). The control plane computes these from
-// Warden's health and recent receipts (GET /degradations); these are the
-// mock-mode fixtures.
+// Banner conditions (GET /degradations in api mode); these are the mock-mode
+// fixtures.
 export interface Degradation {
   kind: string
   severity: number
@@ -860,39 +781,24 @@ export const degradations: Degradation[] = [
   },
 ]
 
-/** A kind of write the role table governs (server/internal/api/authz.go). */
-export type Action = 'read' | 'rules.draft' | 'rules.publish' | 'killswitch' | 'capture' | 'prices' | 'budgets' | 'routing' | 'projects' | 'detectors' | 'keys.own' | 'keys.any' | 'members'
-export const actions: Action[] = ['read', 'rules.draft', 'rules.publish', 'killswitch', 'capture', 'prices', 'budgets', 'routing', 'projects', 'detectors', 'keys.own', 'keys.any', 'members']
-
-/** Whether the caller may do an action, and which roles may (owner always may and isn't listed; none listed is owner only). */
-export interface Permission {
-  allowed: boolean
-  roles: string[]
-}
-
 // Where the console is and who's using it (GET /session in api mode).
 export interface Session {
   tenant: { id: string; name: string }
   environment: string
-  /** roles come from the token's Keycloak groups, most powerful first; role is the first. */
-  actor: { email: string; name?: string; role?: string; roles: string[]; authenticated: boolean }
-  /** dev: no IdP, every caller is the dev user (owner); oidc: people sign in with Keycloak. */
-  auth: { mode: 'dev' | 'oidc'; signInUrl?: string; signOutUrl?: string; accountUrl?: string; groupsUrl?: string; groupPrefix?: string }
-  permissions: Record<Action, Permission>
+  /** roles are most powerful first. */
+  actor: { email: string; name?: string; roles: string[] }
+  /** dev: no sign-in, so nothing to sign out of; oidc: people sign in with Keycloak. */
+  auth: { mode: 'dev' | 'oidc'; signOutUrl?: string }
   versions: { controlPlane: string }
   /** null when the control plane doesn't know where Warden is. */
   warden: { connected: boolean; version?: string; snapshotAgeSeconds?: number; passthrough: boolean } | null
-  /** The OpenAI-compatible base URL callers use (api mode). */
-  gatewayUrl?: string
 }
 
 export const session: Session = {
   tenant: { id: 'acme', name: 'acme' },
   environment: 'production',
-  actor: { email: 'priya@acme.dev', name: 'Priya Shah', role: 'admin', roles: ['admin'], authenticated: true },
-  auth: { mode: 'oidc', signOutUrl: '/api/auth/logout', groupsUrl: 'https://keycloak.acme.dev/admin/master/console/#/nebari/groups', groupPrefix: 'stargate-' },
-  // The mock admin may do everything the demo shows.
-  permissions: Object.fromEntries(actions.map((a): [Action, Permission] => [a, { allowed: true, roles: [] }])) as Record<Action, Permission>,
+  actor: { email: 'priya@acme.dev', name: 'Priya Shah', roles: ['admin'] },
+  auth: { mode: 'oidc', signOutUrl: '/api/auth/logout' },
   versions: { controlPlane: '0.1' },
   warden: { connected: true, version: '0.4.2', snapshotAgeSeconds: 252, passthrough: false },
 }
@@ -905,7 +811,7 @@ export const notifications = [
 ]
 
 // Overview numbers for a range against the span before it (GET /summary).
-export interface WindowTotals {
+interface WindowTotals {
   requests: number
   blocked: number
   redacted: number
@@ -914,7 +820,7 @@ export interface WindowTotals {
   unpriced?: number
 }
 
-export interface KeyAnomaly {
+interface KeyAnomaly {
   keyId: string
   keyName: string
   spendUsd: number
@@ -936,7 +842,7 @@ export interface Summary {
   unpricedPairs?: UnpricedPair[]
 }
 
-export interface UnpricedPair {
+interface UnpricedPair {
   model: string
   backend: string
   requests: number
@@ -968,11 +874,11 @@ export const summary: Summary = {
   keyAnomalies: [{ keyId: 'k1', keyName: 'support-bot', spendUsd: 1_404, baselineUsd: 484, ratio: 2.9, topModel: 'claude-sonnet-5', topModelShare: 0.71 }],
 }
 
-// ---- Activity (§7.5.9) ------------------------------------------------------
-// GET /activity joins each change to receipts_5m either side of it and lists
-// traffic events. Mock mode keeps the mockup's hand-written readouts.
+// ---- Activity -----------------------------------------------------------------
+// GET /activity: each config change with its effect on traffic, and traffic
+// events.
 
-export interface ActivityAgg {
+interface ActivityAgg {
   requests: number
   /** Over served requests with a price; null when none had one (api mode). */
   costPerRequestUsd: number | null
@@ -982,7 +888,7 @@ export interface ActivityAgg {
   blockedRedactedShare: number
 }
 
-export interface ActivityImpact {
+interface ActivityImpact {
   windowMinutes: number
   /** Start of the change's 5-minute bucket, which counts as after. */
   pivot: number
@@ -994,9 +900,9 @@ export interface ActivityImpact {
   comparable: boolean
 }
 
-export type ActivityChange = Change & { impact: ActivityImpact }
+type ActivityChange = Change & { impact: ActivityImpact }
 
-export interface TrafficEvent {
+interface TrafficEvent {
   id: string
   ts: number
   kind: string

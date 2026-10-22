@@ -17,6 +17,6 @@ export default defineConfig({
   define: { __CONSOLE_VERSION__: JSON.stringify(consoleVersion) },
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },
-  // `npm run dev:api` talks to the Go control plane (server/, `make dev`).
-  server: { proxy: { '/api': process.env.STARGATE_API ?? 'http://localhost:8080' } },
+  // `npm run dev:api` talks to openmeter-api (server/cmd/openmeter-api) on :8080.
+  server: { proxy: { '/api': process.env.CONSOLE_API ?? 'http://localhost:8080' } },
 })
