@@ -5,23 +5,45 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
 
-// fakeKeys is the key store; tests add keys to it as the key-manager would.
+// fakeKeys is the key store; tests add and revoke keys as the key-manager
+// would.
 type fakeKeys struct {
-	mu   sync.Mutex
-	keys []secrets.KeyInfo
+	mu    sync.Mutex
+	keys  []secrets.KeyInfo
+	reads int           // ListAllKeys calls
+	delay time.Duration // how long a read takes
 }
 
 func (f *fakeKeys) ListAllKeys(context.Context) ([]secrets.KeyInfo, error) {
 	f.mu.Lock()
+	f.reads++
+	keys := append([]secrets.KeyInfo(nil), f.keys...)
+	delay := f.delay
+	f.mu.Unlock()
+	time.Sleep(delay)
+	return keys, nil
+}
+
+func (f *fakeKeys) revoke(clientID string) {
+	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]secrets.KeyInfo(nil), f.keys...), nil
+	f.keys = slices.DeleteFunc(f.keys, func(k secrets.KeyInfo) bool { return k.ClientID == clientID })
+}
+
+func (f *fakeKeys) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
 }
 
 func (f *fakeKeys) add(k secrets.KeyInfo) {
@@ -87,5 +109,70 @@ func TestKeyMintedAfterEarlierLookupsIsFound(t *testing.T) {
 
 	if code, owner := getOwner(t, api, "user-bob-model-1"); code != http.StatusOK || owner.Subject != "sub-bob" {
 		t.Errorf("lookup of a new key = %d %+v, want 200 with sub-bob", code, owner)
+	}
+}
+
+// The gateway's access log for a key's last requests can reach the pipeline
+// after the key is revoked. A client ID is never reissued, so its owner is
+// still the person who minted it.
+func TestRevokedKeyStillNamesItsOwner(t *testing.T) {
+	keys := &fakeKeys{keys: []secrets.KeyInfo{{ClientID: "user-alice-model-1", Creator: "alice", CreatorSubject: "sub-alice"}}}
+	api := lookupAPI(keys)
+	if code, _ := getOwner(t, api, "user-alice-model-1"); code != http.StatusOK {
+		t.Fatalf("lookup before revoke status = %d, want 200", code)
+	}
+
+	keys.revoke("user-alice-model-1")
+	getOwner(t, api, "user-nobody-1") // an unknown ID makes the lookup re-read the key store
+
+	if code, owner := getOwner(t, api, "user-alice-model-1"); code != http.StatusOK || owner.Subject != "sub-alice" {
+		t.Errorf("lookup of a revoked key = %d %+v, want 200 with sub-alice", code, owner)
+	}
+}
+
+// Every unknown client ID costs a read of every key from the Kubernetes API.
+// Lookups arriving together share one read instead of making one each.
+func TestConcurrentUnknownLookupsShareOneKeyStoreRead(t *testing.T) {
+	keys := &fakeKeys{delay: 50 * time.Millisecond}
+	api := lookupAPI(keys)
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			getOwner(t, api, "user-nobody-"+strconv.Itoa(i))
+		}()
+	}
+	wg.Wait()
+
+	if reads := keys.readCount(); reads > 2 {
+		t.Errorf("50 concurrent unknown lookups read the key store %d times, want at most 2", reads)
+	}
+}
+
+// Unknown client IDs one after another read the key store at most once per
+// interval. A lookup that would have to wait longer than its caller allows
+// answers 503, so the caller retries rather than taking the key as unknown.
+func TestUnknownLookupsReadTheKeyStoreAtMostOncePerInterval(t *testing.T) {
+	keys := &fakeKeys{}
+	h := NewHandler(keys)
+	h.minInterval = time.Hour
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	if code, _ := getOwner(t, mux, "user-nobody-1"); code != http.StatusNotFound {
+		t.Fatalf("first unknown lookup status = %d, want 404", code)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/internal/v1/key-owners/user-nobody-2", nil).WithContext(ctx))
+
+	if reads := keys.readCount(); reads != 1 {
+		t.Errorf("key store read %d times, want 1", reads)
+	}
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("second unknown lookup status = %d, want 503", rr.Code)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
@@ -31,17 +32,26 @@ type KeyLister interface {
 	ListAllKeys(ctx context.Context) ([]secrets.KeyInfo, error)
 }
 
+// minRefreshInterval is the least time between two reads of the key store.
+// Each read lists every key from the Kubernetes API, and an unknown client ID
+// is what triggers one.
+const minRefreshInterval = time.Second
+
 // Handler serves the key-owner lookup.
 type Handler struct {
 	keys KeyLister
 
-	mu     sync.Mutex
-	owners map[string]Owner // as of the last read of the key store
+	mu     sync.RWMutex
+	owners map[string]Owner // every key seen in the key store, revoked or not
+
+	refreshMu   sync.Mutex // held while reading the key store
+	lastRefresh time.Time  // when the last read finished
+	minInterval time.Duration
 }
 
 // NewHandler returns a Handler over keys.
 func NewHandler(keys KeyLister) *Handler {
-	return &Handler{keys: keys}
+	return &Handler{keys: keys, owners: map[string]Owner{}, minInterval: minRefreshInterval}
 }
 
 // RegisterRoutes registers GET /internal/v1/key-owners/{clientID}.
@@ -49,25 +59,53 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /internal/v1/key-owners/{clientID}", h.getOwner)
 }
 
-// owner returns the owner of a key. Owners are remembered between calls; an
-// unknown client ID triggers one fresh read of the key store, which is what
-// finds a key minted since the last read.
+// owner returns the owner of a key.
+//
+// A client ID is never reissued, so its owner never changes: owners are
+// remembered for good, including after the key is revoked, since the access
+// log for a key's last requests can arrive after that. An unknown client ID
+// (usually a key minted since the last read) triggers a fresh read of the key
+// store. Reads are at least minInterval apart, and lookups that arrive while
+// one is in progress share it, so unknown IDs cannot make the key manager
+// list every key from the Kubernetes API once each.
 func (h *Handler) owner(ctx context.Context, clientID string) (Owner, bool, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if o, ok := h.owners[clientID]; ok {
+	if o, ok := h.cached(clientID); ok {
 		return o, true, nil
 	}
+	arrived := time.Now()
+	h.refreshMu.Lock()
+	defer h.refreshMu.Unlock()
+	if h.lastRefresh.After(arrived) {
+		// The key store was read after this lookup arrived.
+		o, ok := h.cached(clientID)
+		return o, ok, nil
+	}
+	if wait := time.Until(h.lastRefresh.Add(h.minInterval)); wait > 0 {
+		select {
+		case <-ctx.Done():
+			return Owner{}, false, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 	keys, err := h.keys.ListAllKeys(ctx)
+	h.lastRefresh = time.Now()
 	if err != nil {
 		return Owner{}, false, err
 	}
-	h.owners = make(map[string]Owner, len(keys))
+	h.mu.Lock()
 	for _, k := range keys {
 		h.owners[k.ClientID] = Owner{ClientID: k.ClientID, Subject: k.CreatorSubject, Username: k.Creator, Groups: k.CreatorGroups}
 	}
-	o, ok := h.owners[clientID]
+	h.mu.Unlock()
+	o, ok := h.cached(clientID)
 	return o, ok, nil
+}
+
+func (h *Handler) cached(clientID string) (Owner, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	o, ok := h.owners[clientID]
+	return o, ok
 }
 
 func (h *Handler) getOwner(w http.ResponseWriter, r *http.Request) {
