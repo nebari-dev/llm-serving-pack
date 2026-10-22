@@ -106,6 +106,22 @@ LLM prices daily. Every value under
 `openmeter` is the subchart's
 (`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
 
+OpenMeter's API has no authentication. The bundled OpenMeter runs in the
+release namespace, while the collector and the key manager run in the
+operator namespace (`<fullname>-system`); the chart's `NetworkPolicy` admits
+those two pods to the API from there, and no other pod outside OpenMeter.
+
+ClickHouse's password is made in the cluster: a pre-install and pre-upgrade
+hook (a `PreSync` hook under Argo CD) creates a Secret with a random password
+the first time and leaves it alone after that, so re-rendering the chart never
+changes it. To manage it yourself, set `openmeter.clickhouse.existingSecret`
+to a Secret with the password under `clickhouse-password`.
+
+The sink worker drops repeated events by the ids it keeps in Redis, in memory
+only: a Redis restart forgets them, and a full Redis
+(`openmeter.redis.maxMemory`) evicts the oldest first, so an event
+redelivered after either is counted again.
+
 With an OpenMeter you run yourself:
 
 ```yaml

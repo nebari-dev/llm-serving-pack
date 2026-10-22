@@ -28,9 +28,12 @@ GW_NS=envoy-gateway-system
 KC_URL=http://keycloak.keycloak.svc.cluster.local:8080
 # The openmeter subchart, installed on its own here because the dev cluster
 # runs the pack from manifests; in a chart install it is openmeter.enabled.
+# Like a chart install, it runs in its own namespace, away from the collector
+# and key-manager, with the chart's policy admitting them across namespaces.
 OM_RELEASE=usage
+OM_NS="${OM_NAMESPACE:-usage-openmeter}"
 OM_CHART=../charts/nebari-llm-serving/charts/nebari-openmeter
-OPENMETER_URL="http://${OM_RELEASE}-openmeter-api.${NS}.svc"
+OPENMETER_URL="http://${OM_RELEASE}-openmeter-api.${OM_NS}.svc"
 
 # Pinned to the kind cluster's context so this never acts on another cluster.
 KUBECTL="kubectl --context kind-${CLUSTER_NAME}"
@@ -64,13 +67,27 @@ step "making sure alice (team-a) and bob (team-b) exist in the dev realm"
 ./demo-users.sh
 
 # --- 2. OpenMeter and the usage console (the openmeter subchart) ------------------------
-step "installing the openmeter subchart as $OM_RELEASE in $NS; its logs: $KUBECTL -n $NS logs -f deploy/${OM_RELEASE}-openmeter-api"
-$HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$NS" -f manifests/usage-openmeter-values.yaml --wait --timeout 10m
+if [[ "$OM_NS" != "$NS" ]] && $HELM -n "$NS" status "$OM_RELEASE" >/dev/null 2>&1; then
+  # Earlier versions of this script installed it next to the pack; two copies
+  # would not fit in the Docker VM. Its volumes are kept.
+  step "removing the openmeter subchart left in $NS by an earlier run (now in $OM_NS)"
+  $HELM -n "$NS" uninstall "$OM_RELEASE" --wait --timeout 5m
+fi
+step "installing the openmeter subchart as $OM_RELEASE in $OM_NS; its logs: $KUBECTL -n $OM_NS logs -f deploy/${OM_RELEASE}-openmeter-api"
+$HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$OM_NS" --create-namespace \
+  -f manifests/usage-openmeter-values.yaml --wait --timeout 10m
+# The admission a chart install (openmeter.enabled) renders for the collector
+# and key-manager in the operator namespace, from the chart's own template.
+helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
+  --set fullnameOverride=llm-operator --set platform.baseDomain=local \
+  --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
+  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.console.image.tag=dev \
+  | $KUBECTL apply -f - >/dev/null
 # A rebuilt image under the same tag needs new pods.
-$KUBECTL -n "$NS" rollout restart deploy/${OM_RELEASE}-openmeter-console >/dev/null
-$KUBECTL -n "$NS" rollout status deploy/${OM_RELEASE}-openmeter-console --timeout=120s >/dev/null
-$KUBECTL -n "$NS" logs job/${OM_RELEASE}-openmeter-bootstrap --tail=1
-$KUBECTL -n "$NS" logs deploy/${OM_RELEASE}-openmeter-sink-worker -c sink-start-position --tail=1
+$KUBECTL -n "$OM_NS" rollout restart deploy/${OM_RELEASE}-openmeter-console >/dev/null
+$KUBECTL -n "$OM_NS" rollout status deploy/${OM_RELEASE}-openmeter-console --timeout=120s >/dev/null
+$KUBECTL -n "$OM_NS" logs job/${OM_RELEASE}-openmeter-bootstrap --tail=1
+$KUBECTL -n "$OM_NS" logs deploy/${OM_RELEASE}-openmeter-sink-worker -c sink-start-position --tail=1
 
 # --- 3. key-manager (key owners, customer sync) and the usage collector -------------------
 step "pointing the key-manager at $OPENMETER_URL and deploying the usage collector from the chart"
@@ -104,6 +121,13 @@ $KUBECTL -n "$NS" wait certificate/mock-provider-tls --for=condition=Ready --tim
 $KUBECTL -n "$NS" rollout restart deploy/mock-provider >/dev/null
 $KUBECTL -n "$NS" rollout status deploy/mock-provider --timeout=120s >/dev/null
 $KUBECTL -n "$NS" wait passthroughmodel/mock-provider --for=jsonpath='{.status.phase}'=Ready --timeout=180s >/dev/null
+
+step "checking that an unlabelled pod in $NS cannot reach OpenMeter's API"
+# The mock provider has no openmeter-client label: the policies must drop it.
+if $KUBECTL -n "$NS" exec deploy/mock-provider -- python -c \
+  'import sys, urllib.request; urllib.request.urlopen(sys.argv[1] + "/api/v1/meters", timeout=5)' "$OPENMETER_URL" >/dev/null 2>&1; then
+  echo "ERROR: the mock provider reached $OPENMETER_URL; OpenMeter's API is not restricted" >&2; exit 1
+fi
 
 # --- 5. gateway: the published access-log settings ---------------------------------------
 step "configuring the gateway with examples/usage-access-log.yaml"
@@ -144,7 +168,8 @@ forward_all() {
   for p in "${PIDS[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null || true; done
   PIDS=()
   $KUBECTL -n "$NS" port-forward svc/llm-key-manager 18080:8080 >/dev/null 2>&1 & PIDS+=($!)
-  $KUBECTL -n "$NS" port-forward svc/${OM_RELEASE}-openmeter-console 18892:80 >/dev/null 2>&1 & PIDS+=($!)
+  $KUBECTL -n "$OM_NS" port-forward svc/${OM_RELEASE}-openmeter-console 18892:80 >/dev/null 2>&1 & PIDS+=($!)
+  $KUBECTL -n "$OM_NS" port-forward svc/${OM_RELEASE}-openmeter-api 18893:80 >/dev/null 2>&1 & PIDS+=($!)
   $KUBECTL -n "$GW_NS" port-forward "$(gateway_svc nebari-gateway)" 18443:443 >/dev/null 2>&1 & PIDS+=($!)
   $KUBECTL -n "$GW_NS" port-forward "$(gateway_svc nebari-internal-gateway)" 19443:443 >/dev/null 2>&1 & PIDS+=($!)
   sleep 2
@@ -230,7 +255,7 @@ got="$before"
 for attempt in $(seq 1 90); do
   got="$(requests || echo "$got")"
   [[ "$got" -ge "$want" ]] && break
-  [[ $attempt -eq 90 ]] && { echo "ERROR: the console shows $got requests, expected $want. Sink: $KUBECTL -n $NS logs deploy/${OM_RELEASE}-openmeter-sink-worker" >&2; exit 1; }
+  [[ $attempt -eq 90 ]] && { echo "ERROR: the console shows $got requests, expected $want. Sink: $KUBECTL -n $OM_NS logs deploy/${OM_RELEASE}-openmeter-sink-worker" >&2; exit 1; }
   sleep 2
 done
 echo "  $got of $want requests"
@@ -244,6 +269,14 @@ for _ in $(seq 1 60); do
   last="$now"; sleep 2
 done
 
+step "checking the key-manager's customer sync reached OpenMeter in $OM_NS"
+customers() { curl -sf "http://localhost:18893/api/v1/customers?pageSize=100" | python3 -c '
+import sys, json
+names = {c.get("name") for c in json.load(sys.stdin)["items"]}
+sys.exit(0 if {"alice", "bob"} <= names else 1)'; }
+retry 30 customers || { echo "ERROR: no OpenMeter customers for alice and bob. Key-manager: $KUBECTL -n $NS logs deploy/llm-key-manager" >&2; exit 1; }
+echo "  alice and bob are OpenMeter customers"
+
 step "spend by person and by team, from the usage console's API (last 30 days)"
 for by in person team; do
   curl -sf "$API/spend?range=30d&by=$by" | python3 -c '
@@ -251,4 +284,4 @@ import sys, json
 for r in json.load(sys.stdin)["rows"]: print("  %-10s %3d requests %6d tokens  $%.4f" % (r["label"], r["requests"], r["tokens"], r["spendUsd"]))'
 done
 echo
-echo "Usage console: $CONSOLE (this script's port-forward). To keep it open: $KUBECTL -n $NS port-forward svc/${OM_RELEASE}-openmeter-console 18892:80"
+echo "Usage console: $CONSOLE (this script's port-forward). To keep it open: $KUBECTL -n $OM_NS port-forward svc/${OM_RELEASE}-openmeter-console 18892:80"

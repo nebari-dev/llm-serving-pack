@@ -33,6 +33,8 @@ CONTEXT = "kind-" + os.environ.get("CLUSTER_NAME", "llm-serving-test")
 NS = "llm-operator-system"
 GW_NS = "envoy-gateway-system"
 RELEASE = os.environ.get("OM_RELEASE", "usage")
+# OpenMeter and the console run in their own namespace (usage-e2e.sh's OM_NAMESPACE).
+OM_NS = os.environ.get("OM_NAMESPACE", "usage-openmeter")
 os.environ.setdefault("KUBECONFIG", str(Path.home() / ".cache/kind-llm.kubeconfig"))
 
 KUBECTL = ["kubectl", "--context", CONTEXT]
@@ -46,9 +48,9 @@ FORWARDS = {
     "key-manager": (NS, "svc/llm-key-manager", 28440, 8080),
     # The key-owner lookup the collector makes (internal port, cluster-only).
     "key-owners": (NS, "svc/llm-key-manager-owners", 28446, 8081),
-    "openmeter": (NS, f"svc/{RELEASE}-openmeter-api", 28441, 80),
+    "openmeter": (OM_NS, f"svc/{RELEASE}-openmeter-api", 28441, 80),
     "collector": (NS, "deploy/llm-operator-usage-collector", 28442, 4195),
-    "console": (NS, f"svc/{RELEASE}-openmeter-console", 28445, 80),
+    "console": (OM_NS, f"svc/{RELEASE}-openmeter-console", 28445, 80),
 }
 
 
@@ -145,15 +147,15 @@ COMPONENTS = {
                   "OpenMeter's Benthos collector (Go). Its pipeline is the pack's files/usage-collector.yaml, mounted at /etc/usage-collector/."),
     "key-manager": (NS, "app=llm-key-manager",
                     "The pack's key manager (Go). The collector calls its owner lookup on port 8081, through the llm-key-manager-owners Service."),
-    "kafka": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=kafka", "Confluent's Kafka image (Java), one broker."),
-    "sink-worker": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=sink-worker",
+    "kafka": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=kafka", "Confluent's Kafka image (Java), one broker."),
+    "sink-worker": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=sink-worker",
                     "OpenMeter's sink worker (Go): the same image as the API, running the openmeter-sink-worker binary."),
-    "redis": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=redis", "Redis (C). The sink worker keeps the event ids it has stored here, to drop repeats."),
-    "clickhouse": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=clickhouse", "ClickHouse server (C++)."),
-    "openmeter-api": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=api", "OpenMeter (Go): the openmeter binary, serving its HTTP API."),
-    "postgres": (NS, f"cnpg.io/cluster={RELEASE}-openmeter-db",
+    "redis": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=redis", "Redis (C). The sink worker keeps the event ids it has stored here, to drop repeats."),
+    "clickhouse": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=clickhouse", "ClickHouse server (C++)."),
+    "openmeter-api": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=api", "OpenMeter (Go): the openmeter binary, serving its HTTP API."),
+    "postgres": (OM_NS, f"cnpg.io/cluster={RELEASE}-openmeter-db",
                  "PostgreSQL, run by CloudNativePG. OpenMeter keeps its own records here (customers, features, prices); usage events are not stored here."),
-    "console": (NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=console",
+    "console": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=console",
                 "The usage console: a Go server that reads OpenMeter's API and serves the React app, in one container."),
 }
 _components = {"at": 0, "data": None}
@@ -309,13 +311,13 @@ def stage_openmeter(t):
         for e in events
     ]
     rows.sort(key=lambda r: (r["type"] != "llm.request", r["id"]))
-    cmd = f"kubectl -n {NS} port-forward svc/{RELEASE}-openmeter-api 18893:80 & curl -s 'localhost:18893/api/v1/events?id={rid}' | jq"
+    cmd = f"kubectl -n {OM_NS} port-forward svc/{RELEASE}-openmeter-api 18893:80 & curl -s 'localhost:18893/api/v1/events?id={rid}' | jq"
     return (rows or None), cmd
 
 
 def stage_kafka(t):
     rid = t["requestId"]
-    args = KUBECTL + ["-n", NS, "exec", f"{RELEASE}-openmeter-kafka-0", "--", "kafka-console-consumer", "--bootstrap-server", "localhost:9092",
+    args = KUBECTL + ["-n", OM_NS, "exec", f"{RELEASE}-openmeter-kafka-0", "--", "kafka-console-consumer", "--bootstrap-server", "localhost:9092",
                       "--topic", "om_default_events", "--from-beginning", "--timeout-ms", "8000", "--property", "print.partition=true", "--property", "print.offset=true"]
     p = subprocess.run(args, capture_output=True, text=True, timeout=40)
     msgs = []
@@ -337,7 +339,7 @@ def stage_clickhouse(t):
     query = "SELECT type, id, subject, toString(time) AS time, data FROM openmeter.om_events WHERE startsWith(id, {rid:String}) ORDER BY id FORMAT JSONEachRow"
     # The container has its password in CLICKHOUSE_PASSWORD, so the tracer never handles it.
     script = 'exec clickhouse-client --password "$CLICKHOUSE_PASSWORD" --param_rid="$1" -q "$2"'
-    args = KUBECTL + ["-n", NS, "exec", f"{RELEASE}-openmeter-clickhouse-0", "--", "sh", "-c", script, "sh", rid, query]
+    args = KUBECTL + ["-n", OM_NS, "exec", f"{RELEASE}-openmeter-clickhouse-0", "--", "sh", "-c", script, "sh", rid, query]
     rows = []
     for line in run(args).splitlines():
         r = json.loads(line)
@@ -346,7 +348,7 @@ def stage_clickhouse(t):
         except (ValueError, TypeError):
             pass
         rows.append(r)
-    cmd = f"kubectl -n {NS} exec {RELEASE}-openmeter-clickhouse-0 -- sh -c 'clickhouse-client --password \"$CLICKHOUSE_PASSWORD\" --param_rid={rid} -q \"{query}\"'"
+    cmd = f"kubectl -n {OM_NS} exec {RELEASE}-openmeter-clickhouse-0 -- sh -c 'clickhouse-client --password \"$CLICKHOUSE_PASSWORD\" --param_rid={rid} -q \"{query}\"'"
     return (rows or None), cmd
 
 

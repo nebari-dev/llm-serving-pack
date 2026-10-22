@@ -1,5 +1,5 @@
 {{- $kafka := include "om.name" (dict "root" . "component" "kafka") }}
-{{- $creds := include "om.name" (dict "root" . "component" "credentials") }}
+{{- $creds := include "om.clickhouseSecret" . }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -152,7 +152,10 @@ spec:
       containers:
         - name: redis
           image: {{ .Values.redis.image }}
-          args: ["redis-server", "--maxmemory", "50mb", "--maxmemory-policy", "noeviction", "--save", ""]
+          # Every dedupe key has a TTL (openmeter.dedupeExpiration). When
+          # Redis is full, volatile-ttl evicts the ids closest to expiring
+          # instead of refusing writes, which would stop the sink worker.
+          args: ["redis-server", "--maxmemory", {{ .Values.redis.maxMemory | quote }}, "--maxmemory-policy", "volatile-ttl", "--save", ""]
           ports:
             - containerPort: 6379
           readinessProbe:

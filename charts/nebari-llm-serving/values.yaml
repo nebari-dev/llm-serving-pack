@@ -180,8 +180,10 @@ keyManager:
 # OpenMeter, the usage store, and the read-only usage console (Stargate's
 # console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
 # default. With it on, usage.openmeter.url can stay empty: the collector and
-# the key-manager use the bundled OpenMeter. Every value under openmeter is
-# the subchart's; see charts/nebari-openmeter/values.yaml.
+# the key-manager use the bundled OpenMeter. It runs in the release
+# namespace; with usage.enabled this chart admits the collector and the
+# key-manager (operator namespace) to its API, and no other pod. Every value
+# under openmeter is the subchart's; see charts/nebari-openmeter/values.yaml.
 openmeter:
   enabled: false
   console:

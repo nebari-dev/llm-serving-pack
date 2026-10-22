@@ -11,7 +11,9 @@ openmeter:
       requests: {cpu: 50m, memory: 96Mi}
       limits: {memory: 384Mi}
   # Usage events with an ID already stored are dropped for this long, so a
-  # redelivered gateway access-log entry is counted once.
+  # redelivered gateway access-log entry is counted once. The ids live in
+  # Redis, in memory only; see redis below for its size and what a restart
+  # or a full Redis does.
   dedupeExpiration: 768h
 
 # The model resources the LLM serving pack runs, each with the OpenMeter
@@ -63,6 +65,13 @@ clickhouse:
   resources:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {memory: 2Gi}
+  # A Secret you manage with ClickHouse's password under clickhouse-password.
+  # Empty: a pre-install/pre-upgrade hook (an Argo CD PreSync hook) creates
+  # <release>-openmeter-clickhouse-password once, with a random password,
+  # and leaves it as it is after that. Changing the password in your own
+  # Secret takes a restart of ClickHouse, the OpenMeter API and the sink
+  # worker (kubectl rollout restart), since they read it at start.
+  existingSecret: ""
 # OpenMeter's Postgres: a CloudNativePG Cluster. Needs the CloudNativePG
 # operator, which Nebari installs on every cluster (namespace cnpg-system).
 postgres:
@@ -76,17 +85,33 @@ postgres:
   # Where the CloudNativePG operator runs; the database's network policy
   # admits it.
   operatorNamespace: cnpg-system
+# Redis holds the event ids the sink worker has stored, each for
+# openmeter.dedupeExpiration, to drop repeats; up to 5 ids per request. It
+# keeps nothing on disk: a Redis restart forgets them, and an event
+# redelivered after that is counted again. When it reaches maxMemory it
+# evicts the ids closest to expiring (volatile-ttl), so under heavy traffic
+# repeats are caught for less than dedupeExpiration, instead of the sink
+# stopping. An id takes a few hundred bytes (about 550 measured on a small
+# dev install), so 256mb holds roughly half a million ids, about 100,000
+# requests. Raise maxMemory with traffic, and keep limits.memory about 1.5
+# times it for Redis's own overhead.
 redis:
   image: redis:7.4.7@sha256:c6e4a82ce60b829a72a21cc4ad4c1c274fa6962eb0d6ac698e8157cbc3fe16a4
+  maxMemory: 256mb
   resources:
     requests: {cpu: 20m, memory: 32Mi}
-    limits: {memory: 96Mi}
+    limits: {memory: 384Mi}
 
 # Who may call OpenMeter's API, which has no authentication of its own:
 # the console, the bootstrap job, pods in this namespace with one of these
 # label sets, and pods in these namespaces. As part of the LLM serving pack,
 # the usage collector and the key-manager carry
-# llm.nebari.dev/openmeter-client: "true".
+# llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
+# (<fullname>-system), not this one; the serving pack's chart adds a policy
+# admitting that label from that namespace only
+# (templates/openmeter-networkpolicy.yaml), so nothing needs setting here.
+# Installed on its own, admit the clients' namespace with a policy of your
+# own, or list it under apiClientNamespaces (which admits every pod in it).
 networkPolicy:
   enabled: true
   apiClientPodLabels:
