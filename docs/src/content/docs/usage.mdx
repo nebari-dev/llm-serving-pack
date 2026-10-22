@@ -61,7 +61,10 @@ the API key's client ID (`login` for a token):
   manager's key-owner lookup (`sub`, username and groups recorded when the key
   was minted). An `x-auth-*` header a caller sends here is ignored. A key
   minted before this release has no recorded owner; its usage is billed to
-  the key's client ID.
+  the key's client ID. If the lookup keeps failing for 15 seconds (key
+  manager down or restarting), the usage is also billed to the key's client
+  ID, its events carry `owner_lookup: failed`, and the collector logs the
+  failure at `ERROR`.
 - **OIDC token (internal endpoint):** the verified token's `sub`, username and
   groups.
 
@@ -70,7 +73,10 @@ teams keeps billing older keys to the old one until they mint new keys.
 
 The key manager also creates, for each key creator, an OpenMeter customer
 whose key is the creator's `sub` and whose subject keys are that `sub` plus
-the client ID of every key they minted.
+the client ID of every key they minted. A subject key that another customer
+already holds is left on that customer, and the key manager logs a warning
+naming the key and the customer; move it in OpenMeter if the key's creator
+should be billed for it.
 
 If you bill organizations rather than people, turn the sync off
 (`usage.customerSync.enabled: false`) and assign subjects to your own
