@@ -4,12 +4,17 @@ import { fileURLToPath } from 'node:url';
 import starlight from '@astrojs/starlight';
 import { nebari } from '@nebari/starlight';
 import rehypeMermaid from 'rehype-mermaid';
-import remarkBaseLinks from './src/plugins/remark-base-links';
+import remarkBaseLinks, { prefixUrl } from './src/plugins/remark-base-links';
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
   base: process.env.BASE || '/',
   site: process.env.SITE,
+  // Old page slugs, kept so published links keep working.
+  redirects: {
+    // Astro writes the redirect meta refresh without the base; prefix it here.
+    '/gateway-upgrades': prefixUrl('/upgrading/', process.env.BASE || '/'),
+  },
   integrations: [
     starlight({
       title: 'LLM Serving Pack',
@@ -33,8 +38,8 @@ export default defineConfig({
             { label: 'Quickstart', slug: 'quickstart' },
             { label: 'Provider Integrations', slug: 'providers' },
             { label: 'AWS Bedrock', slug: 'bedrock' },
-            { label: 'Gateway Upgrades', slug: 'gateway-upgrades' },
             { label: 'Installation', slug: 'installation' },
+            { label: 'Upgrading', slug: 'upgrading' },
             { label: 'Local Development', slug: 'local-development' },
             { label: 'UI Development', slug: 'ui-development' },
             { label: 'Shared Storage', slug: 'shared-storage' },
