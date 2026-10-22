@@ -3,6 +3,7 @@
 //
 //	openmeter-api [flags]                      serve
 //	openmeter-api bootstrap -config FILE.json  set up OpenMeter's features and prices, then exit
+//	openmeter-api ensure-secret -name N -key K  create Secret N with a random password at K, unless it exists
 package main
 
 import (
@@ -19,12 +20,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/kubesecret"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
 		bootstrap(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "ensure-secret" {
+		ensureSecret(os.Args[2:])
 		return
 	}
 	addr := flag.String("addr", ":8080", "listen address")
@@ -69,6 +75,33 @@ func console(dir string) http.Handler {
 		}
 		files.ServeHTTP(w, r)
 	})
+}
+
+// ensureSecret creates a Secret with a random password in the pod's own
+// namespace, once; an existing Secret is left as it is.
+func ensureSecret(args []string) {
+	fs := flag.NewFlagSet("ensure-secret", flag.ExitOnError)
+	name := fs.String("name", "", "the Secret's name")
+	key := fs.String("key", "password", "the key that holds the password")
+	fs.Parse(args)
+	if *name == "" {
+		log.Fatal("ensure-secret: -name is required")
+	}
+	c, ns, err := kubesecret.InCluster()
+	if err != nil {
+		log.Fatalf("ensure-secret: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	created, err := c.Ensure(ctx, ns, *name, *key)
+	if err != nil {
+		log.Fatalf("ensure-secret: %v", err)
+	}
+	if created {
+		log.Printf("ensure-secret: created %s/%s", ns, *name)
+	} else {
+		log.Printf("ensure-secret: %s/%s exists; left as it is", ns, *name)
+	}
 }
 
 // bootstrap applies a BootstrapConfig, retrying while OpenMeter starts.
