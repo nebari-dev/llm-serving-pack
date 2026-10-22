@@ -253,23 +253,27 @@ func buildJWTSecurityPolicy(name, namespace string, labels map[string]interface{
 		"remoteJWKS": map[string]interface{}{
 			"uri": cfg.OIDCIssuerURL + "/protocol/openid-connect/certs",
 		},
-		"claimToHeaders": []interface{}{
-			map[string]interface{}{
-				"header": "X-Auth-Groups",
-				"claim":  cfg.OIDCGroupsClaim,
-			},
-			map[string]interface{}{
-				"header": "X-Auth-User",
-				"claim":  "preferred_username",
-			},
-			// The stable identity of the caller. A username can be renamed
-			// and reused; usage records are attributed to the subject.
-			map[string]interface{}{
-				"header": "X-Auth-Subject",
-				"claim":  "sub",
-			},
+	}
+
+	claimToHeaders := []interface{}{
+		map[string]interface{}{
+			"header": "X-Auth-Groups",
+			"claim":  cfg.OIDCGroupsClaim,
+		},
+		map[string]interface{}{
+			"header": "X-Auth-User",
+			"claim":  "preferred_username",
 		},
 	}
+	if cfg.UsageMeteringEnabled {
+		// The stable identity of the caller. A username can be renamed
+		// and reused; usage records are attributed to the subject.
+		claimToHeaders = append(claimToHeaders, map[string]interface{}{
+			"header": "X-Auth-Subject",
+			"claim":  "sub",
+		})
+	}
+	provider["claimToHeaders"] = claimToHeaders
 
 	if cfg.OIDCAudience != "" {
 		provider["audiences"] = []interface{}{cfg.OIDCAudience}

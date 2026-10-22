@@ -126,23 +126,45 @@ func jwtClaimHeaders(t *testing.T, policy *unstructured.Unstructured) map[string
 	return headers
 }
 
-// A username can be renamed and reused; the OIDC subject cannot. Usage records
-// are attributed to the subject, so the internal (JWT) endpoint has to forward it.
-func TestInternalEndpointsForwardTokenSubject(t *testing.T) {
-	served, err := BuildAuthResources(defaultRoutingModel(), defaultRoutingConfig(), nil, nil)
+// internalPolicies returns the internal (JWT) SecurityPolicies the operator
+// generates for a served model and a passthrough model under cfg.
+func internalPolicies(t *testing.T, cfg func() *config.OperatorConfig) map[string]*unstructured.Unstructured {
+	t.Helper()
+	served, err := BuildAuthResources(defaultRoutingModel(), cfg(), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildAuthResources: %v", err)
 	}
-	passthrough, err := BuildPassthroughResources(testPassthroughModel(), testPassthroughConfig(), nil, nil)
+	passthrough, err := BuildPassthroughResources(testPassthroughModel(), cfg(), nil, nil)
 	if err != nil {
 		t.Fatalf("BuildPassthroughResources: %v", err)
 	}
-	for name, policy := range map[string]*unstructured.Unstructured{
+	return map[string]*unstructured.Unstructured{
 		"served model": served.InternalSecurityPolicy,
 		"passthrough":  passthrough.InternalSecurityPolicy,
-	} {
+	}
+}
+
+// A username can be renamed and reused; the OIDC subject cannot. Usage records
+// are attributed to the subject, so with metering on the internal (JWT)
+// endpoint has to forward it.
+func TestInternalEndpointsForwardTokenSubject(t *testing.T) {
+	cfg := func() *config.OperatorConfig { return meteringConfig(defaultRoutingConfig()) }
+	for name, policy := range internalPolicies(t, cfg) {
 		if got := jwtClaimHeaders(t, policy)["X-Auth-Subject"]; got != "sub" {
 			t.Errorf("%s: X-Auth-Subject carries claim %q, want %q", name, got, "sub")
+		}
+	}
+}
+
+// With metering off nothing reads the subject, so it is not sent upstream.
+func TestInternalEndpointsDoNotForwardTokenSubjectWhenMeteringIsOff(t *testing.T) {
+	for name, policy := range internalPolicies(t, defaultRoutingConfig) {
+		headers := jwtClaimHeaders(t, policy)
+		if claim, found := headers["X-Auth-Subject"]; found {
+			t.Errorf("%s: X-Auth-Subject forwards claim %q with usage metering off", name, claim)
+		}
+		if headers["X-Auth-User"] != "preferred_username" {
+			t.Errorf("%s: X-Auth-User carries claim %q, want preferred_username", name, headers["X-Auth-User"])
 		}
 	}
 }
