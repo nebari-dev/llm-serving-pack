@@ -8,7 +8,7 @@ model request's tokens and cost, by team, person, API key and model.
 gateway access log --> usage collector (LLM serving pack) --> OpenMeter (this pack) --> console
 ```
 
-The chart (`chart/`, `nebari-openmeter`) deploys:
+The chart (`nebari-openmeter`) deploys:
 
 - **OpenMeter** v1.0.0-beta.234: the API, which takes usage events and
   answers queries, and the sink worker, which moves events from Kafka into
@@ -98,6 +98,7 @@ cd dev && make usage-e2e   # on the kind cluster: install, send traffic, check t
 
 ## History
 
-`ui/` started as the Stargate gateway console. Its original commits, with
-their authors, are kept unchanged at the start of this repository's history;
-the commits after them adapt it to OpenMeter.
+The usage console (`usage-console/`) started as the Stargate gateway console.
+Its original commits, with their authors, are kept in this repository's
+history; the commits after them adapt it to OpenMeter and keep only what this
+pack uses.

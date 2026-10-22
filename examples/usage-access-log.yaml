@@ -44,6 +44,10 @@ spec:
           format:
             type: JSON
             json:
+              # The event id OpenMeter dedupes on. Envoy Gateway generates
+              # it per request by default; don't set a ClientTrafficPolicy
+              # requestID of Preserve or PreserveOrGenerate on these
+              # gateways, or callers could choose ids and have usage dropped.
               request_id: "%REQ(X-REQUEST-ID)%"
               start_time: "%START_TIME%"
               route: "%ROUTE_NAME%"
