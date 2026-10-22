@@ -188,6 +188,7 @@ SENT=0; FAILED=0
 call() { local code; code="$("$@")"; SENT=$((SENT + 1)); [[ "$code" == "200" ]] || FAILED=$((FAILED + 1)); }
 
 step "alice (team-a) and bob (team-b) sign in and mint API keys"
+userpw() { $KUBECTL -n keycloak get secret demo-users -o jsonpath="{.data.$1}" | base64 -d; }
 ALICE_TOKEN="$(token_for alice "$(userpw alice)")"
 BOB_TOKEN="$(token_for bob "$(userpw bob)")"
 ALICE_KEY_1="$(mint "$ALICE_TOKEN" "alice notebook")"
