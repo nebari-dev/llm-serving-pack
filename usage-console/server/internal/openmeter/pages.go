@@ -7,8 +7,7 @@ import (
 )
 
 // receiptCount counts requests in [since, before) from the llm_requests
-// meter. With Traffic's filters it says it can't count exactly, as
-// Stargate's does when its aggregate can't.
+// meter. With Traffic's filters it says it can't count exactly.
 func (s *Server) receiptCount(r *http.Request) (any, error) {
 	q := r.URL.Query()
 	ms := func(name string) int64 {

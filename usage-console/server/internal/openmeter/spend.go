@@ -70,7 +70,7 @@ func (s *Server) spend(r *http.Request) (any, error) {
 	return out, nil
 }
 
-// trendBuckets are the Spend chart's bars per range, as Stargate's.
+// trendBuckets are the Spend chart's bars per range.
 var trendBuckets = map[string]struct {
 	bucket time.Duration
 	points int
@@ -139,9 +139,8 @@ func (s *Server) spendTrend(ctx context.Context, rangeName, by string, now time.
 	return tr, nil
 }
 
-// projectionDays is the trailing average's span. Stargate shortens it when
-// history is newer than that; finding the first usage would mean reading
-// every event, so here it is always the last 7 days.
+// projectionDays is the trailing average's span. Finding the first usage
+// would mean reading every event, so it is always the last 7 days.
 const projectionDays = 7
 
 // projection is month-end spend: this UTC month to date, plus the trailing

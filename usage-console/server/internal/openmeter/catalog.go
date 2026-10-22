@@ -154,7 +154,7 @@ func (s *Server) keys(r *http.Request) (any, error) {
 	return out, nil
 }
 
-// trafficBuckets are the Overview chart's points per range, as Stargate's.
+// trafficBuckets are the Overview chart's points per range.
 var trafficBuckets = map[string]struct {
 	bucket time.Duration
 	points int

@@ -9,17 +9,12 @@ type Team struct {
 	CostCenter string `json:"costCenter"`
 }
 
-// Project groups a team's keys (§5.2). Names are for people and unique
-// within a team (ignoring case); receipts, budgets and rules name the
-// project by id, so it can be renamed.
+// Project groups a team's keys: here, a team's model resource. Receipts
+// name the project by id.
 type Project struct {
 	ID   string `json:"id"`
 	Team string `json:"team"`
 	Name string `json:"name"`
-	// Deleted projects stay, so the history of their revoked keys keeps a
-	// name; GET /projects leaves them out.
-	Deleted bool   `json:"-"`
-	ETag    string `json:"etag,omitempty"` // for If-Match
 }
 
 // Model is a catalog entry. Prices are per (model, backend).
@@ -40,7 +35,7 @@ type Deprecation struct {
 	Date    string `json:"date"` // YYYY-MM-DD
 }
 
-// CostBasis is the price a receipt was costed with (§5.1). Receipts from
+// CostBasis is the price a receipt was costed with. Receipts from
 // before per-backend prices carry only the model and its four rates; the
 // field names are theirs, so both decode.
 type CostBasis struct {
@@ -82,26 +77,10 @@ type APIKey struct {
 	// Spend24hUSD leaves out.
 	Unpriced24h int `json:"unpriced24h"`
 	// Hourly24h is requests per hour over the same rolling 24h, oldest first.
-	Hourly24h []int        `json:"hourly24h"`
-	Status    string       `json:"status"`
-	Rotation  *KeyRotation `json:"rotation,omitempty"`
-	// Owner may revoke, rotate, extend and finish the key; anyone else needs
-	// admin (backend-decisions §7). Whoever created it.
+	Hourly24h []int  `json:"hourly24h"`
+	Status    string `json:"status"`
+	// Owner is the person whose requests the key carries.
 	Owner string `json:"owner"`
-}
-
-// KeyRotation is a rotating key's overlap window. Each field is null when
-// it wasn't recorded.
-type KeyRotation struct {
-	StartedAt *int64  `json:"startedAt"` // epoch ms, from the audit log
-	StartedBy *string `json:"startedBy"`
-	EndsAt    *int64  `json:"endsAt"` // epoch ms, from rotate_until
-	// Requests since the rotation started, by the secret that authenticated
-	// them; null without a start. Unrecorded is requests from before
-	// receipts recorded the secret.
-	OldSecretRequests  *int `json:"oldSecretRequests"`
-	NewSecretRequests  *int `json:"newSecretRequests"`
-	UnrecordedRequests int  `json:"unrecordedRequests"`
 }
 
 type Change struct {
@@ -142,7 +121,7 @@ type Redaction struct {
 	Type  string `json:"type"`
 	Count int    `json:"count"`
 	// Rehydrated is how many placeholders of this type the response had put
-	// back (a rule that rehydrates on return, §4.5 step 5).
+	// back.
 	Rehydrated int `json:"rehydrated,omitempty"`
 }
 
@@ -177,7 +156,7 @@ type Receipt struct {
 	ReasoningTokens   int         `json:"reasoningTokens"`
 	CacheWriteTokens  int         `json:"cacheWriteTokens"`    // input tokens written to the provider's prompt cache
 	CostUSD           *float64    `json:"costUsd"`             // nil when the (model, backend) had no price: unknown, not $0
-	CostBasis         *CostBasis  `json:"costBasis,omitempty"` // the price row this receipt was costed with (§5.1)
+	CostBasis         *CostBasis  `json:"costBasis,omitempty"` // the price row this receipt was costed with
 	Verdict           string      `json:"verdict"`
 	InboundVerdict    string      `json:"inboundVerdict"`       // allowed | stripped | blocked | skipped (not inspected)
 	PolicyMode        string      `json:"policyMode,omitempty"` // enforced | passthrough | fail-open | fail-closed; "" when nothing evaluated policy

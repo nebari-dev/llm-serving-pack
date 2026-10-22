@@ -48,8 +48,8 @@ func (s *Server) Handler() http.Handler {
 	h("/keys", s.keys)
 	h("/series/traffic", s.trafficSeries)
 	h("/series/spend", s.spendSeries)
-	// Stargate's configuration: this pack doesn't route, guard or cap, so
-	// there is none.
+	// The pages also read backends, routes, budgets, policies, config
+	// changes and degradations; this pack has none of them.
 	for _, p := range []string{"/backends", "/routes", "/budgets", "/policies", "/changes", "/degradations"} {
 		h(p, none)
 	}

@@ -11,18 +11,12 @@ type Session struct {
 	Tenant      SessionTenant `json:"tenant"`
 	Environment string        `json:"environment"`
 	Actor       SessionActor  `json:"actor"`
-	// Auth is how people sign in here (dev mode or OIDC), and where.
-	Auth SessionAuth `json:"auth"`
-	// Permissions is, per action, whether the caller may do it and which
-	// roles may: the console disables what they can't, with "Needs role …".
-	Permissions map[Action]Permission `json:"permissions"`
+	Auth        SessionAuth   `json:"auth"`
 	Versions    struct {
 		ControlPlane string `json:"controlPlane"`
 	} `json:"versions"`
 	// Warden is nil: this pack has no Warden in the request path.
 	Warden *SessionWarden `json:"warden"`
-	// GatewayURL is the OpenAI-compatible base callers point at, "" if unknown.
-	GatewayURL string `json:"gatewayUrl"`
 }
 
 type SessionTenant struct {
@@ -31,14 +25,8 @@ type SessionTenant struct {
 }
 
 type SessionActor struct {
-	Email string `json:"email"`
-	Name  string `json:"name,omitempty"`
-	// Roles are most powerful first; Role is the first ("" with none).
+	Email string   `json:"email"`
 	Roles []string `json:"roles"`
-	Role  string   `json:"role,omitempty"`
-	// Authenticated is false in dev mode, where every caller is the dev user
-	// without signing in.
-	Authenticated bool `json:"authenticated"`
 }
 
 type SessionWarden struct {
@@ -49,44 +37,9 @@ type SessionWarden struct {
 }
 
 type SessionAuth struct {
-	// Mode is "oidc" when people sign in, "dev" when everyone is the dev user.
+	// Mode is "dev": the gateway in front signs people in, so the console
+	// has nothing to sign out of.
 	Mode string `json:"mode"`
-	// SignInURL and SignOutURL are the sign-in endpoints (empty in dev mode).
-	SignInURL  string `json:"signInUrl,omitempty"`
-	SignOutURL string `json:"signOutUrl,omitempty"`
-	// AccountURL is the user's Keycloak account page; GroupsURL the realm's
-	// groups in Keycloak's admin console, where roles are assigned.
-	AccountURL string `json:"accountUrl,omitempty"`
-	GroupsURL  string `json:"groupsUrl,omitempty"`
-	// GroupPrefix: the Keycloak group for role r is GroupPrefix+r.
-	GroupPrefix string `json:"groupPrefix,omitempty"`
-}
-
-// Action is a kind of write the console asks permission for; it reads which
-// ones the caller may do from GET /session.
-type Action string
-
-const (
-	ActRead         Action = "read"
-	ActDraftRules   Action = "rules.draft"
-	ActPublishRules Action = "rules.publish"
-	ActKillSwitch   Action = "killswitch"
-	ActCapture      Action = "capture"
-	ActPrices       Action = "prices"
-	ActBudgets      Action = "budgets"
-	ActRouting      Action = "routing"
-	ActProjects     Action = "projects"
-	ActDetectors    Action = "detectors"
-	ActOwnKeys      Action = "keys.own"
-	ActAnyKeys      Action = "keys.any"
-	ActMembers      Action = "members"
-)
-
-// Permission is whether the caller may do an action, and who may.
-type Permission struct {
-	Allowed bool `json:"allowed"`
-	// Roles may do it besides owner; empty for owner only.
-	Roles []string `json:"roles"`
 }
 
 // WindowTotals sums requests over [from, to). SpendUSD leaves out the
@@ -278,8 +231,7 @@ type ActivityView struct {
 	Events  []TrafficEvent   `json:"events"`
 }
 
-// ActivityChange is an audit row with its computed effect in place of the
-// stored one.
+// ActivityChange is a config change with its effect on traffic.
 type ActivityChange struct {
 	model.Change
 	Impact ActivityImpact `json:"impact"`

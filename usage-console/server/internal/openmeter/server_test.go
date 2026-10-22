@@ -263,21 +263,13 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 	}
 }
 
-// The console is read-only: whoever reaches it may read, and every write is
-// disabled with the reason.
-func TestSessionIsReadOnly(t *testing.T) {
+// Everyone who reaches the console is a viewer, signed in by the gateway in
+// front: dev mode, so the console offers no sign-out, and no Warden.
+func TestSessionIsAViewer(t *testing.T) {
 	s := get[openmeter.Session](t, newAPI(t, &fakeOpenMeter{}), "/session")
 
-	if s.Tenant.ID != "demo" || len(s.Actor.Roles) == 0 || s.Actor.Role != "viewer" {
+	if s.Tenant.ID != "demo" || len(s.Actor.Roles) != 1 || s.Actor.Roles[0] != "viewer" || s.Auth.Mode != "dev" {
 		t.Fatalf("session %+v", s)
-	}
-	if !s.Permissions[openmeter.ActRead].Allowed {
-		t.Fatalf("read not allowed: %+v", s.Permissions)
-	}
-	for _, a := range []openmeter.Action{openmeter.ActBudgets, openmeter.ActRouting, openmeter.ActOwnKeys, openmeter.ActPrices, openmeter.ActPublishRules} {
-		if p, ok := s.Permissions[a]; !ok || p.Allowed {
-			t.Fatalf("%s: %+v (present %v)", a, p, ok)
-		}
 	}
 	if s.Warden != nil {
 		t.Fatalf("warden %+v", s.Warden)
