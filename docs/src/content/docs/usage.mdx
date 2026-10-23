@@ -8,8 +8,8 @@ The pack can meter every model request in [OpenMeter](https://github.com/openmet
 (Apache-2.0): who called, which model, how many tokens of each kind, and what
 that cost. OpenMeter stores the usage, prices tokens from its LLM price table,
 and provides customers, plans, entitlements and invoicing on top. The pack
-sends usage to an OpenMeter you point it at, or runs one itself
-(`openmeter.enabled`).
+sends usage to an OpenMeter you point it at, or runs one itself together with
+a read-only usage console (`openmeter.enabled`).
 
 It is off by default.
 
@@ -101,7 +101,7 @@ customers: one subject can belong to only one customer.
 
 ## Enable it
 
-With the bundled OpenMeter:
+With the bundled OpenMeter and usage console:
 
 ```yaml
 usage:
@@ -110,6 +110,9 @@ openmeter:
   enabled: true
   modelResources:            # your model resources and the provider that prices them
     - {name: bedrock, provider: bedrock}
+  nebariapp:                 # the console, behind Keycloak sign-in
+    enabled: true
+    hostname: usage.<your-domain>
 ```
 
 `openmeter` deploys OpenMeter with Kafka, ClickHouse and Redis, and its
@@ -250,7 +253,47 @@ price table by OpenMeter; set your own prices with
 
 Read the totals from OpenMeter's API: its meter queries
 (`GET /api/v1/meters/llm_requests/query?groupBy=user`, `groupBy=team`, ...)
-and the features' cost queries above.
+and the features' cost queries above, or in the usage console.
+
+## The usage console
+
+With `openmeter.enabled`, the usage console shows the usage read live from
+OpenMeter: an overview, every request (Traffic), spend by team, person,
+project (model resource), key, model or provider with a month-end projection,
+and each API key's owner and last day. It keeps no data of its own and is
+read-only: everyone who reaches it is a viewer. It is the Stargate gateway
+console (`usage-console/console`) on `openmeter-api`
+(`usage-console/server/cmd/openmeter-api`), cut down to the pages above. A
+receipt shows its request at today's price, so receipts add up to the spend
+totals.
+
+### Signing in
+
+With `openmeter.nebariapp.enabled`, the console runs behind a NebariApp at
+`openmeter.nebariapp.hostname`, and the gateway signs people in with Keycloak
+before they reach it (`auth.enforceAtGateway`). The Nebari operator makes a
+Keycloak client for the console and keeps its issuer URL and client ID in the
+Secret `<release>-openmeter-console-oidc-client`, which the console reads.
+
+- The gateway forwards each signed-in person's access token to the console
+  (`openmeter.nebariapp.auth.forwardAccessToken`, on by default).
+- The console checks the token itself: its signature against Keycloak's
+  published keys, the issuer, the client it was issued to, and its expiry.
+  The header shows that person's name and email; they are still a viewer.
+- A request without a valid token gets `401`, so the console's data can't be
+  read by going around the gateway; `503` means it could not read Keycloak's
+  keys.
+- Sign out goes to the gateway's `/logout`, which ends the gateway session
+  and the Keycloak one.
+- `openmeter.nebariapp.auth.groups` limits the console to members of those
+  Keycloak groups (empty: everyone in the realm).
+- `openmeter.console.oidc.issuerURL` and `clientID` set the issuer and client
+  by hand instead of the Secret; `discoveryURL` reads Keycloak's keys from
+  another address, such as an in-cluster one.
+
+Without a NebariApp or an issuer, the console has no sign-in of its own:
+everyone who can reach its Service is the same viewer. Use that only on a
+dev cluster.
 
 ## Uninstall and reinstall
 
@@ -280,7 +323,7 @@ the entries that were lost.
 ```sh
 cd dev
 make setup                 # kind cluster + gateway
-make usage-e2e             # bundled OpenMeter, collector, alice and bob, traffic, per-person and per-team totals
+make usage-e2e             # bundled OpenMeter and console, collector, alice and bob, traffic, per-person and per-team totals
 make usage-tracer          # http://127.0.0.1:18894: send one request, follow it step by step
 make test-usage-collector  # the collector pipeline's tests
 ```
