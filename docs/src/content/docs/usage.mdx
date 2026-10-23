@@ -155,6 +155,20 @@ uses, and adjust the collector's Service name and namespace to your release:
 
 <Code code={accessLogExample} lang="yaml" title="examples/usage-access-log.yaml" />
 
+With `usage.enabled`, the operator adds a ClientTrafficPolicy named
+`llm-https-client-headers` (and `llm-internal-https-client-headers`) on the
+pack's listeners. It removes any `x-llm-client-id`, `x-auth-user`,
+`x-auth-subject` or `x-auth-groups` header a caller sends before
+authentication runs, and makes Envoy generate every request id. If your
+gateway already has a ClientTrafficPolicy covering those listeners (one on the
+whole Gateway counts), the operator does not add its own, because Envoy
+Gateway would apply only one of them. It logs a warning instead: add
+`headers.earlyRequestHeaders.remove: [x-llm-client-id, x-auth-user,
+x-auth-subject, x-auth-groups]` to your policy and keep `headers.requestID`
+at `Generate` (the default). The collector also ignores any request the
+gateway itself rejected with 401 or 403, so keep the `response_code_details`
+field from the example.
+
 The collector's OTLP port has no authentication. The chart renders a
 `NetworkPolicy` that admits only the gateway namespaces; on a cluster whose
 network plugin does not enforce `NetworkPolicy`, restrict it another way.

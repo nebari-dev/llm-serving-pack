@@ -36,7 +36,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -139,6 +139,9 @@ test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-s
 
 usage-e2e: ## Usage metering end to end with the bundled OpenMeter: alice and bob call the mock provider, per-person and per-team totals read back from OpenMeter's meters (run `make setup` first)
 	./usage-e2e.sh
+
+usage-forgery-check: ## Check callers cannot choose the identity or request id the usage access log records (after usage-e2e)
+	./usage-forgery-check.sh
 
 usage-tracer: ## Web page that sends one request and follows it through the gateway log, collector, Kafka, ClickHouse and OpenMeter, at http://127.0.0.1:18894 (run `make usage-e2e` first)
 	python3 usage-tracer/server.py
