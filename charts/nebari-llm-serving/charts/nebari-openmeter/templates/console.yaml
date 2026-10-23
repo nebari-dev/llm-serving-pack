@@ -22,6 +22,7 @@ spec:
           image: {{ include "om.consoleImage" . }}
           env:
             - {name: OPENMETER_URL, value: {{ printf "http://%s" (include "om.name" (dict "root" . "component" "api")) | quote }}}
+            {{- with include "om.consoleOIDCEnv" . | trim }}{{ . | nindent 12 }}{{ end }}
           ports:
             - {name: http, containerPort: 8080}
           readinessProbe:
@@ -69,6 +70,11 @@ spec:
     provider: keycloak
     provisionClient: {{ .provisionClient }}
     enforceAtGateway: {{ .enforceAtGateway }}
+    forwardAccessToken: {{ .forwardAccessToken }}
+    {{- with .groups }}
+    groups:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   {{- end }}
   {{- end }}
   {{- with .Values.nebariapp.landingPage }}

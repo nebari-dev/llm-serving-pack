@@ -49,6 +49,21 @@ console:
   resources:
     requests: {cpu: 20m, memory: 32Mi}
     limits: {memory: 128Mi}
+  # Whose access tokens the console accepts, to show who is signed in. With
+  # the NebariApp's gateway sign-in on and forwardAccessToken true, leave
+  # these empty: the console reads the issuer and its client ID from the
+  # Secret the Nebari operator makes for its Keycloak client
+  # (<release>-openmeter-console-oidc-client). Set issuerURL (with clientID)
+  # to use another client or issuer. With neither, the console has no
+  # sign-in of its own (dev mode: everyone is the same viewer).
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    # discoveryURL - where to read the issuer's discovery document and keys
+    # when the console can't reach issuerURL (an in-cluster Keycloak address,
+    # such as http://keycloak-keycloakx-http.keycloak.svc:8080/realms/nebari).
+    # Empty: issuerURL, or the Secret's issuer URL.
+    discoveryURL: ""
 
 # openmeter-setup (openmeter-setup/ in this repository): the image the
 # bootstrap Job (features and prices) and the ClickHouse password hook run.
@@ -153,6 +168,12 @@ nebariapp:
     enabled: true
     enforceAtGateway: true
     provisionClient: true
+    # forwardAccessToken - the gateway passes the signed-in person's Keycloak
+    # access token to the console, which checks it and shows who they are.
+    forwardAccessToken: true
+    # groups - only members of these Keycloak groups may open the console.
+    # Empty: every user in the realm.
+    groups: []
   landingPage:
     enabled: true
     displayName: LLM usage

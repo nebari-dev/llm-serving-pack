@@ -89,3 +89,27 @@ volumeClaimTemplates:
           storage: {{ .store.persistence.size }}
 {{- end }}
 {{- end -}}
+
+{{/*
+The console's token check: OIDC_ISSUER_URL and OIDC_CLIENT_ID from
+console.oidc, or else, when the NebariApp's gateway sign-in forwards access
+tokens, from the Secret the Nebari operator makes for the console's Keycloak
+client. Nothing (dev mode) otherwise.
+*/}}
+{{- define "om.consoleOIDCEnv" -}}
+{{- $o := .Values.console.oidc -}}
+{{- $a := .Values.nebariapp.auth -}}
+{{- $secret := printf "%s-oidc-client" (include "om.name" (dict "root" . "component" "console")) -}}
+{{- if $o.issuerURL }}
+- {name: OIDC_ISSUER_URL, value: {{ $o.issuerURL | quote }}}
+- {name: OIDC_CLIENT_ID, value: {{ required "console.oidc.clientID is required with console.oidc.issuerURL" $o.clientID | quote }}}
+{{- else if and .Values.nebariapp.enabled $a.enabled $a.enforceAtGateway $a.provisionClient $a.forwardAccessToken }}
+- name: OIDC_ISSUER_URL
+  valueFrom: {secretKeyRef: {name: {{ $secret }}, key: issuer-url}}
+- name: OIDC_CLIENT_ID
+  valueFrom: {secretKeyRef: {name: {{ $secret }}, key: client-id}}
+{{- end }}
+{{- with $o.discoveryURL }}
+- {name: OIDC_DISCOVERY_URL, value: {{ . | quote }}}
+{{- end }}
+{{- end -}}
