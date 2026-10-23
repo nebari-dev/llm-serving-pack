@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage metering end to end on the local kind cluster, with the bundled
-# OpenMeter (the chart's openmeter subchart):
+# OpenMeter and usage console (the chart's openmeter subchart):
 #
 #   alice, bob --API key or Keycloak token--> gateway --> mock provider
 #                                               |
@@ -10,11 +10,14 @@
 #                        | usage events
 #                        v
 #                    OpenMeter <--meter and cost queries-- this script
+#                        ^
+#                        +--reads-- usage console <--its API-- this script
 #
 # Two people in the dev Keycloak, alice (team-a) and bob (team-b), mint API
 # keys and call the mock provider with keys and with their logins; the totals
 # are then read back from OpenMeter's own API (its meters), per person and per
-# team, and must cover every request each of them sent.
+# team, and must cover every request each of them sent. The usage console's
+# API must show the same requests, and alice and bob in its spend.
 #
 # Prereq: `make setup`. Safe to re-run: each run adds traffic and new keys.
 # Needs about 3 GB of free memory in the Docker VM (Kafka and ClickHouse).
@@ -55,8 +58,10 @@ fi
 step "building and loading images, deploying the operator, key-manager and Keycloak"
 make build-images >/dev/null
 docker build -q -t openmeter-setup:dev ../openmeter-setup >/dev/null
+docker build -q -t usage-console:dev ../usage-console >/dev/null
 make load-images >/dev/null
 kind load docker-image openmeter-setup:dev --name "$CLUSTER_NAME" >/dev/null
+kind load docker-image usage-console:dev --name "$CLUSTER_NAME" >/dev/null
 make deploy >/dev/null
 make deploy-keycloak >/dev/null
 make deploy-cnpg >/dev/null
@@ -68,7 +73,7 @@ $KUBECTL -n "$NS" set env deploy/llm-operator LLM_OIDC_ISSUER_URL="$KC_URL/realm
 step "making sure alice (team-a) and bob (team-b) exist in the dev realm"
 ./demo-users.sh
 
-# --- 2. OpenMeter (the openmeter subchart) ---------------------------------------------
+# --- 2. OpenMeter and the usage console (the openmeter subchart) ------------------------
 if [[ "$OM_NS" != "$NS" ]] && $HELM -n "$NS" status "$OM_RELEASE" >/dev/null 2>&1; then
   # Earlier versions of this script installed it next to the pack; two copies
   # would not fit in the Docker VM. Its volumes are kept.
@@ -83,8 +88,11 @@ $HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$OM_NS" --create-namespace
 helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
   --set fullnameOverride=llm-operator --set platform.baseDomain=local \
   --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
-  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.setup.image.tag=dev \
+  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev \
   | $KUBECTL apply -f - >/dev/null
+# A rebuilt image under the same tag needs new pods.
+$KUBECTL -n "$OM_NS" rollout restart deploy/${OM_RELEASE}-openmeter-console >/dev/null
+$KUBECTL -n "$OM_NS" rollout status deploy/${OM_RELEASE}-openmeter-console --timeout=120s >/dev/null
 $KUBECTL -n "$OM_NS" logs job/${OM_RELEASE}-openmeter-bootstrap --tail=1
 $KUBECTL -n "$OM_NS" logs deploy/${OM_RELEASE}-openmeter-sink-worker -c sink-start-position --tail=1
 
@@ -168,6 +176,7 @@ forward_all() {
   PIDS=()
   $KUBECTL -n "$NS" port-forward svc/llm-key-manager 18080:8080 >/dev/null 2>&1 & PIDS+=($!)
   $KUBECTL -n "$OM_NS" port-forward svc/${OM_RELEASE}-openmeter-api 18893:80 >/dev/null 2>&1 & PIDS+=($!)
+  $KUBECTL -n "$OM_NS" port-forward svc/${OM_RELEASE}-openmeter-console 18892:80 >/dev/null 2>&1 & PIDS+=($!)
   $KUBECTL -n "$GW_NS" port-forward "$(gateway_svc nebari-gateway)" 18443:443 >/dev/null 2>&1 & PIDS+=($!)
   $KUBECTL -n "$GW_NS" port-forward "$(gateway_svc nebari-internal-gateway)" 19443:443 >/dev/null 2>&1 & PIDS+=($!)
   sleep 2
@@ -175,8 +184,11 @@ forward_all() {
 forward_all
 KM=http://localhost:18080
 OM=http://localhost:18893
+CONSOLE=http://localhost:18892
+API="$CONSOLE/api/v1/demo"
 retry 30 curl -sf -o /dev/null "$KM/healthz"
 retry 30 curl -sf -o /dev/null "$OM/api/v1/meters"
+retry 30 curl -sf -o /dev/null "$CONSOLE/healthz"
 # Totals over the last 30 days from OpenMeter's meters, as JSON:
 # {"all": n, "user": {"alice": n, ...}, "team": {"team-a": n, ...}}.
 FROM="$(python3 -c 'import datetime as d; print((d.datetime.now(d.timezone.utc) - d.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
@@ -196,6 +208,9 @@ PY
 }
 requests() { totals llm_requests | python3 -c 'import sys, json; print(int(json.load(sys.stdin)["all"]))'; }
 before="$(retry 15 totals llm_requests)"
+# The console's own count of the last 30 days' requests.
+console_requests() { curl -sf "$API/summary?range=30d" | python3 -c 'import sys, json; print(json.load(sys.stdin)["current"]["requests"])'; }
+console_before="$(retry 15 console_requests)"
 
 # --- 7. alice and bob: keys and traffic -------------------------------------------------------
 token_for() { # user password -> access token (minted inside the cluster: in-cluster issuer)
@@ -320,6 +335,32 @@ sys.exit(0 if {"alice", "bob"} <= names else 1)'; }
 retry 30 customers || { echo "ERROR: no OpenMeter customers for alice and bob. Key-manager: $KUBECTL -n $NS logs deploy/llm-key-manager" >&2; exit 1; }
 echo "  alice and bob are OpenMeter customers"
 
+step "checking the usage console's API shows the same usage"
+want=$((console_before + SENT))
+got="$console_before"
+for attempt in $(seq 1 30); do
+  got="$(console_requests || echo "$got")"
+  [[ "$got" -ge "$want" ]] && break
+  [[ $attempt -eq 30 ]] && { echo "ERROR: the console shows $got requests, expected $want. Console: $KUBECTL -n $OM_NS logs deploy/${OM_RELEASE}-openmeter-console" >&2; exit 1; }
+  sleep 2
+done
+echo "  $got of $want requests in the console's summary"
+curl -sf "$API/session" | python3 -c '
+import sys, json
+s = json.load(sys.stdin)
+a = s["actor"]
+print("  session: %s, roles %s, sign-in mode %s" % (a.get("name") or a.get("email") or "(none)", ",".join(a.get("roles") or []), s["auth"]["mode"]))'
+for by in person team; do
+  curl -sf "$API/spend?range=30d&by=$by" | python3 -c '
+import sys, json
+by, rows = sys.argv[1], json.load(sys.stdin)["rows"]
+for r in rows: print("  %-6s %-10s %3d requests %6d tokens  $%.4f" % (by, r["label"], r["requests"], r["tokens"], r["spendUsd"]))
+want = {"person": {"alice", "bob"}, "team": {"team-a", "team-b"}}[by]
+seen = {r["label"] for r in rows if r["requests"] > 0 and r["tokens"] > 0}
+if not want <= seen:
+    sys.exit("ERROR: the console has no requests or tokens for " + ", ".join(sorted(want - seen)) + " by " + by)' "$by"
+done
+
 step "spend by person and by team, from OpenMeter's cost queries (last 30 days)"
 TO="$(python3 -c 'import datetime as d; print(d.datetime.now(d.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 features="$(curl -sf "$OM/api/v3/openmeter/features?page%5Bsize%5D=100")"
@@ -341,3 +382,4 @@ for k, (usage, cost) in sorted(total.items()):
 done
 echo
 echo "OpenMeter's API: $OM (this script's port-forward). To keep it open: $KUBECTL -n $OM_NS port-forward svc/${OM_RELEASE}-openmeter-api 18893:80"
+echo "Usage console: $CONSOLE (this script's port-forward). To keep it open: $KUBECTL -n $OM_NS port-forward svc/${OM_RELEASE}-openmeter-console 18892:80"
