@@ -361,7 +361,7 @@ export interface Session {
   environment: string
   /** roles are most powerful first. */
   actor: { email: string; name?: string; roles: string[] }
-  /** dev: no sign-in, so nothing to sign out of; oidc: people sign in with Keycloak. */
+  /** dev: no sign-in, so nothing to sign out of; oidc: people sign in with Keycloak at the gateway, and signOutUrl is its logout path. */
   auth: { mode: 'dev' | 'oidc'; signOutUrl?: string }
   versions: { controlPlane: string }
 }
@@ -370,7 +370,7 @@ export const session: Session = {
   tenant: { id: 'acme', name: 'acme' },
   environment: 'production',
   actor: { email: 'priya@acme.dev', name: 'Priya Shah', roles: ['admin'] },
-  auth: { mode: 'oidc', signOutUrl: '/api/auth/logout' },
+  auth: { mode: 'oidc', signOutUrl: '/logout' },
   versions: { controlPlane: '0.1' },
 }
 

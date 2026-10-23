@@ -48,8 +48,9 @@ export function AppHeader() {
   const { themeMode, setThemeMode } = useTheme()
   const { label: envLabel, production } = envDisplay(dataMode, session.environment, env)
   const actor = session.actor
-  // Dev mode: no IdP, every caller is the dev user (dev@localhost, owner).
+  // Dev mode: no IdP, every caller is the same viewer.
   const devMode = dataMode === 'api' && session.auth.mode === 'dev'
+  const canSignOut = dataMode === 'api' && !devMode && !!session.auth.signOutUrl
 
   return (
     <div className="relative">
@@ -221,7 +222,7 @@ export function AppHeader() {
                   disabled={devMode}
                   title={devMode ? 'Dev mode: no identity provider is configured, so there’s nothing to sign out of' : undefined}
                   onClick={() => {
-                    if (dataMode === 'api' && !devMode) void signOut()
+                    if (canSignOut) signOut()
                   }}
                   className="leading-5 text-sign-out-foreground data-[highlighted]:text-sign-out-foreground"
                 >
