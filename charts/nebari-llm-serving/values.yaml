@@ -203,8 +203,9 @@ usage:
     existingSecret: ""
   keyOwnerLookup:
     # port - internal port where the key-manager answers "who owns this API
-    # key?" for the usage collector. Unauthenticated; a NetworkPolicy admits
-    # only the collector.
+    # key?" for the usage collector. Unauthenticated; a NetworkPolicy, always
+    # rendered with usage.enabled (usage.collector.networkPolicy.enabled does
+    # not turn it off), admits only the collector.
     port: 8081
   customerSync:
     # enabled - keep one OpenMeter customer per API-key creator (keyed by the
@@ -228,7 +229,8 @@ usage:
       # enabled - the OTLP port has no authentication: whoever can reach it can
       # write usage events. When true, only pods in the gateway namespaces
       # (platform.gateway.*.namespace) may reach the collector. Has no effect
-      # on a cluster whose network plugin does not enforce NetworkPolicy.
+      # on a cluster whose network plugin does not enforce NetworkPolicy. The
+      # key-owner lookup's policy is separate and always on.
       enabled: true
 
 # frontend - the React SPA served by its own nginx image. nginx serves the
