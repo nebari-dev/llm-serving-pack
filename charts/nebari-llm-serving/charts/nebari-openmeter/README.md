@@ -75,6 +75,16 @@ project, key, model or provider, with the month-end projection) and Keys
 pack doesn't do (routing, guardrails, the model catalog, settings). Everyone
 who reaches the console is a viewer: there is nothing to edit.
 
+People sign in with Keycloak at the gateway (the NebariApp's
+`auth.enforceAtGateway`). The gateway forwards each person's access token to
+the console (`nebariapp.auth.forwardAccessToken`), which checks it against
+Keycloak's published keys and shows who is signed in; Sign out goes to the
+gateway's `/logout`, which ends the gateway session and Keycloak's. The
+console answers 401 to a request without a valid token, so its data can't be
+read around the gateway. `nebariapp.auth.groups` limits the console to
+members of those Keycloak groups. `console.oidc` sets the issuer and client
+by hand; see `values.yaml`.
+
 ## Known limits
 
 - **Costs use today's prices.** OpenMeter prices all usage with the price in
