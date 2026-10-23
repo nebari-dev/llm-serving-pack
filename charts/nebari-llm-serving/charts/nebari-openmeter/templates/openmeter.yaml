@@ -1,0 +1,228 @@
+{{- $api := include "om.name" (dict "root" . "component" "api") }}
+{{- $config := include "om.name" (dict "root" . "component" "config") }}
+{{- $kafka := include "om.name" (dict "root" . "component" "kafka") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $api }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "api") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+      containers:
+        - name: openmeter
+          image: {{ .Values.openmeter.image }}
+          command: ["openmeter", "--address", "0.0.0.0:8888", "--config", "/etc/openmeter/config.yaml"]
+          env:
+            {{- include "om.storeEnv" . | nindent 12 }}
+          ports:
+            - containerPort: 8888
+          readinessProbe:
+            httpGet: {path: /api/v1/debug/metrics, port: 8888}
+            periodSeconds: 5
+            failureThreshold: 60
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.openmeter.api.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/openmeter}
+      volumes:
+        - name: config
+          configMap: {name: {{ $config }}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $api }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - {name: http, port: 80, targetPort: 8888}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "sink-worker") }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # The init step below needs the consumer group idle: no overlap.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "sink-worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "sink-worker") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+      initContainers:
+        # OpenMeter's sink worker starts a consumer group with no saved
+        # position at the newest event (auto.offset.reset=latest, hardcoded),
+        # so events ingested before it first saves one are skipped, with no
+        # error. Before it starts: if the group has no saved position, set it
+        # to the oldest event. Once it has one, this leaves it alone.
+        - name: sink-start-position
+          image: {{ .Values.kafka.image }}
+          env:
+            - {name: BROKER, value: {{ printf "%s:9092" $kafka | quote }}}
+            - {name: GROUP, value: openmeter-sink-worker}
+            - {name: TOPIC, value: om_default_events}
+          # The Kafka image's user (appuser) by number, which runAsNonRoot needs.
+          securityContext:
+            runAsUser: 1000
+            {{- include "om.securityContext" . | nindent 12 }}
+          command: ["bash", "-ec"]
+          args:
+            - |
+              until kafka-topics --bootstrap-server "$BROKER" --describe --topic "$TOPIC" >/dev/null 2>&1; do
+                echo "waiting for $TOPIC (OpenMeter's API creates it on start)"; sleep 5
+              done
+              if kafka-consumer-groups --bootstrap-server "$BROKER" --describe --group "$GROUP" 2>/dev/null \
+                  | awk -v t="$TOPIC" '$2 == t && $4 ~ /^[0-9]+$/ { saved = 1 } END { exit !saved }'; then
+                echo "$GROUP has a saved position on $TOPIC; leaving it"
+              else
+                echo "$GROUP has no saved position on $TOPIC; starting it at the oldest event"
+                kafka-consumer-groups --bootstrap-server "$BROKER" --group "$GROUP" --topic "$TOPIC" --reset-offsets --to-earliest --execute
+              fi
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits: {memory: 512Mi}
+      containers:
+        - name: sink-worker
+          image: {{ .Values.openmeter.image }}
+          command: ["openmeter-sink-worker", "--config", "/etc/openmeter/config.yaml"]
+          env:
+            {{- include "om.storeEnv" . | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 10000}
+            periodSeconds: 5
+            failureThreshold: 60
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.openmeter.sinkWorker.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/openmeter}
+      volumes:
+        - name: config
+          configMap: {name: {{ $config }}}
+---
+{{- define "om.priceSyncPod" }}
+metadata:
+  labels:
+    {{- include "om.selector" (dict "root" . "component" "price-sync") | nindent 4 }}
+spec:
+  restartPolicy: Never
+  enableServiceLinks: false
+  securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532}
+  containers:
+    - name: sync
+      image: {{ .Values.openmeter.image }}
+      command: ["openmeter-jobs", "--config", "/etc/openmeter/config.yaml", "llm-cost", "sync"]
+      env:
+        {{- include "om.storeEnv" . | nindent 8 }}
+      securityContext:
+        {{- include "om.securityContext" . | nindent 8 }}
+      volumeMounts:
+        - {name: config, mountPath: /etc/openmeter}
+  volumes:
+    - name: config
+      configMap: {name: {{ include "om.name" (dict "root" . "component" "config") }}}
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "price-sync") }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.priceSync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        {{- include "om.priceSyncPod" . | nindent 8 }}
+---
+# Prices right after install, without waiting for the schedule; retried
+# while OpenMeter's stores come up. An ordinary Job, not a hook: it fetches
+# public prices, and a slow or offline fetch shouldn't fail the install.
+#
+# A Job's pod template can't be changed, so the name carries a hash of the
+# pod and OpenMeter's config: a change (a new image, say) makes a new Job,
+# which runs again, and Helm or Argo CD (with pruning) deletes the old one.
+# Not .Release.Revision: Argo CD renders with helm template, where it is
+# always 1, so the second change failed the sync ("field is immutable").
+# No ttlSecondsAfterFinished either: Argo CD would see the deleted Job as
+# missing and create it again.
+{{- $priceSyncPod := include "om.priceSyncPod" . }}
+{{- $priceSyncHash := print $priceSyncPod (include (print $.Template.BasePath "/config.yaml") .) | sha256sum | trunc 10 }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" (printf "price-sync-%s" $priceSyncHash)) }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 6
+  template:
+    {{- $priceSyncPod | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "bootstrap") }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true}
+      containers:
+        - name: bootstrap
+          image: {{ include "om.setupImage" . }}
+          command: ["/openmeter-setup", "bootstrap", "-config", "/etc/openmeter-setup/bootstrap.json"]
+          env:
+            - {name: OPENMETER_URL, value: {{ printf "http://%s" $api | quote }}}
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: config, mountPath: /etc/openmeter-setup}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $config }}
+            items: [{key: bootstrap.json, path: bootstrap.json}]

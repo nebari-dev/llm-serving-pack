@@ -51,6 +51,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{/*
 Operator namespace (the namespace where the operator and key manager run)
 */}}
+{{/*
+OpenMeter's API: usage.openmeter.url, else the bundled OpenMeter when
+openmeter.enabled.
+*/}}
+{{- define "nebari-llm-serving.openmeterURL" -}}
+{{- if .Values.usage.openmeter.url -}}
+{{ .Values.usage.openmeter.url }}
+{{- else if .Values.openmeter.enabled -}}
+{{ printf "http://%s-openmeter-api.%s.svc" .Release.Name .Release.Namespace }}
+{{- else -}}
+{{ fail "usage.enabled=true needs usage.openmeter.url, or openmeter.enabled=true for the bundled OpenMeter" }}
+{{- end -}}
+{{- end }}
+
 {{- define "nebari-llm-serving.operatorNamespace" -}}
 {{- printf "%s-system" (include "nebari-llm-serving.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}

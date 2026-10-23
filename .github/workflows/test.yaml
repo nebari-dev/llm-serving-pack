@@ -63,6 +63,39 @@ jobs:
         working-directory: key-manager
         run: go test ./...
 
+  test-usage-collector:
+    name: Test usage collector pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run pipeline tests in the pinned collector image
+        working-directory: dev
+        run: make test-usage-collector
+
+  test-openmeter-setup:
+    name: Test openmeter-setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: openmeter-setup/go.mod
+          cache: false
+
+      - name: Check module tidiness
+        working-directory: openmeter-setup
+        run: go mod tidy -diff
+
+      - name: Vet
+        working-directory: openmeter-setup
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: openmeter-setup
+        run: go test ./...
+
   test-frontend:
     name: Test frontend
     runs-on: ubuntu-latest

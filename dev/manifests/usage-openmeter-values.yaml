@@ -1,0 +1,20 @@
+# Values for the openmeter subchart on the dev kind cluster (usage-e2e.sh):
+# the mock provider alongside Bedrock, the locally built openmeter-setup
+# image, small volumes.
+modelResources:
+  - {name: mock-provider, provider: mock}
+  - {name: bedrock, provider: bedrock}
+# The mock's token counts are tiny; prices high enough that totals read in
+# cents.
+prices:
+  - provider: mock
+    model: mock/small
+    pricing: {input_per_token: "0.001", output_per_token: "0.002", cache_read_per_token: "0.0001"}
+  - provider: mock
+    model: mock/large
+    pricing: {input_per_token: "0.003", output_per_token: "0.015", cache_read_per_token: "0.0003"}
+setup:
+  image: {repository: docker.io/library/openmeter-setup, tag: dev}
+kafka: {persistence: {size: 2Gi}}
+clickhouse: {persistence: {size: 2Gi}}
+postgres: {storage: {size: 1Gi}}

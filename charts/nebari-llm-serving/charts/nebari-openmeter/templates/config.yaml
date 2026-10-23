@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "config") }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    ingest:
+      kafka:
+        broker: {{ include "om.name" (dict "root" . "component" "kafka") }}:9092
+        brokerAddressFamily: v4
+        socketKeepAliveEnable: true
+        topicMetadataRefreshInterval: 10s
+    aggregation:
+      clickhouse:
+        address: {{ include "om.name" (dict "root" . "component" "clickhouse") }}:9000
+        username: default
+        database: openmeter
+    sink:
+      minCommitCount: 1
+      namespaceRefetch: 1s
+      namespaceRefetchTimeout: 1s
+      kafka:
+        brokers: {{ include "om.name" (dict "root" . "component" "kafka") }}:9092
+        brokerAddressFamily: v4
+        socketKeepAliveEnable: true
+        topicMetadataRefreshInterval: 10s
+      dedupe:
+        enabled: true
+        driver: redis
+        config:
+          address: {{ include "om.name" (dict "root" . "component" "redis") }}:6379
+          database: 0
+          expiration: {{ .Values.openmeter.dedupeExpiration }}
+    postgres:
+      autoMigrate: migration
+    # The meters the LLM serving pack's usage collector feeds: one llm.request
+    # event per gateway request, one llm.tokens event per token type.
+    meters:
+      - slug: llm_tokens
+        description: LLM tokens per model and token type
+        eventType: llm.tokens
+        aggregation: SUM
+        valueProperty: $.tokens
+        groupBy:
+          model: $.model
+          model_resource: $.model_resource
+          token_type: $.token_type
+          access_path: $.access_path
+          user: $.user
+          team: $.team
+          api_key: $.api_key
+      - slug: llm_requests
+        description: LLM requests, including those with no token counts
+        eventType: llm.request
+        aggregation: COUNT
+        groupBy:
+          model: $.model
+          model_resource: $.model_resource
+          usage_reported: $.usage_reported
+          response_code: $.response_code
+          access_path: $.access_path
+          user: $.user
+          team: $.team
+          api_key: $.api_key
+  bootstrap.json: |
+    {{- dict "resources" .Values.modelResources "prices" .Values.prices | toJson | nindent 4 }}

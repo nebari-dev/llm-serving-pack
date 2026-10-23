@@ -103,6 +103,9 @@ func main() {
 		}
 	}()
 
+	startCustomerSync(ctx, secretsMgr, logger)
+	startIdentityLookup(ctx, secretsMgr, logger)
+
 	// 7. Start audit if userinfo URL is configured.
 	if oidcUserinfoURL != "" {
 		lookup := makeUserinfoLookup(oidcUserinfoURL)

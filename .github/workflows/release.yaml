@@ -16,7 +16,7 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@v1
+    uses: nebari-dev/.github/.github/workflows/pack-release.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
     with:
       chart-path: charts/nebari-llm-serving
       chart-name: nebari-llm-serving
@@ -25,5 +25,6 @@ jobs:
         keyManager.image.tag
         frontend.image.tag
         modelDownloader.image.tag
+        openmeter.setup.image.tag
     secrets:
       NEBARI_HELM_REPO_TOKEN: ${{ secrets.NEBARI_HELM_REPO_TOKEN }}

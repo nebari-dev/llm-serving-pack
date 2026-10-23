@@ -1,0 +1,132 @@
+# OpenMeter: the API (ingests usage events, answers queries) and the sink
+# worker (moves events from Kafka into ClickHouse). Same image for both.
+openmeter:
+  image: ghcr.io/openmeterio/openmeter:v1.0.0-beta.234@sha256:43a2a0b804fb4a241000983f3703ac531114f46b670a20b582b5c892193585d4
+  api:
+    resources:
+      requests: {cpu: 100m, memory: 128Mi}
+      limits: {memory: 512Mi}
+  sinkWorker:
+    resources:
+      requests: {cpu: 50m, memory: 96Mi}
+      limits: {memory: 384Mi}
+  # Usage events with an ID already stored are dropped for up to this long,
+  # so a redelivered gateway access-log entry is usually counted once. Best
+  # effort: the ids live in Redis, which can lose or evict them; see redis
+  # below.
+  dedupeExpiration: 768h
+
+# The model resources the LLM serving pack runs, each with the OpenMeter
+# provider whose prices apply to its models. Each gets a priced feature over
+# the tokens meter. Prices come from OpenMeter's public price sync, except
+# for models listed under prices.
+modelResources:
+  - name: bedrock
+    provider: bedrock
+
+# Manual prices (USD per token) for models no public price list has, such as
+# self-hosted ones. Keys as OpenMeter's pricing: input_per_token,
+# output_per_token, cache_read_per_token, cache_write_per_token,
+# reasoning_per_token.
+prices: []
+#  - provider: vllm
+#    model: qwen3-32b
+#    pricing: {input_per_token: "0.0000002", output_per_token: "0.0000006"}
+
+# OpenMeter's LLM price sync (public sources such as models.dev). It runs
+# once after install and then on this schedule.
+priceSync:
+  schedule: "17 3 * * *"
+
+# openmeter-setup (openmeter-setup/ in this repository): the image the
+# bootstrap Job (features and prices) and the ClickHouse password hook run.
+setup:
+  image:
+    repository: ghcr.io/nebari-dev/llm-serving-pack/openmeter-setup
+    tag: ""
+    digest: ""
+
+# What helm uninstall (or deleting the Argo CD Application) does with the
+# data. true: keeps all of it, the Postgres Cluster (customers, features,
+# prices) and the stores' volumes (Kafka, ClickHouse, Redis), so installing
+# again under the same release name and namespace carries on with the same
+# usage and billing setup. false: deletes all of it with the release. Either
+# way the usage and the billing setup go together. See the README's
+# "Uninstall and reinstall".
+keepDataOnUninstall: true
+
+# Bundled stores, one replica each. persistence.enabled false keeps data in
+# emptyDir (lost when the pod restarts); use that only for throwaway installs.
+kafka:
+  image: confluentinc/cp-kafka:8.0.3@sha256:db5eac24a1d15a1689fa89642ef97a7e3bc4f55ad5159a07b213c4dc7d0114e3
+  persistence: {enabled: true, size: 10Gi, storageClass: ""}
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 768Mi}
+clickhouse:
+  image: clickhouse/clickhouse-server:25.12.3-alpine@sha256:74da41cd61db84f652c6364fd30d59e19b7276d34f7c82515f5f0e70d6f325da
+  persistence: {enabled: true, size: 20Gi, storageClass: ""}
+  # ClickHouse caps itself at 90% of the limit and sits near 1 GiB when idle;
+  # at 1 GiB it refused queries and was OOM-killed.
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 2Gi}
+  # A Secret you manage with ClickHouse's password under clickhouse-password.
+  # Empty: a pre-install/pre-upgrade hook (an Argo CD PreSync hook) creates
+  # <release>-openmeter-clickhouse-password once, with a random password,
+  # and leaves it as it is after that. Changing the password in your own
+  # Secret takes a restart of ClickHouse, the OpenMeter API and the sink
+  # worker (kubectl rollout restart), since they read it at start.
+  existingSecret: ""
+# OpenMeter's Postgres: a CloudNativePG Cluster. Needs the CloudNativePG
+# operator, which Nebari installs on every cluster (namespace cnpg-system).
+postgres:
+  instances: 1
+  # The image Nebari's own Keycloak database runs; bump it deliberately.
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.4-system-trixie@sha256:42708a75345b7a48fdd9257b071830783a97fd228529196b6313187a7198e185
+  storage: {size: 5Gi, storageClass: ""}
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {memory: 512Mi}
+  # Where the CloudNativePG operator runs; the database's network policy
+  # admits it.
+  operatorNamespace: cnpg-system
+# Redis holds the event ids the sink worker has stored, each for
+# openmeter.dedupeExpiration, to drop repeats; up to 5 ids per request.
+# Dropping repeats is best effort, within what Redis still remembers:
+# - persistence.enabled (the default) logs every write to an append-only file
+#   on Redis's volume, synced once a second, so a restart keeps the ids; a
+#   crash can lose the last second of them. Without it a restart forgets
+#   them all.
+# - When it reaches maxMemory it evicts the ids closest to expiring
+#   (volatile-ttl) instead of stopping the sink, so under heavy traffic
+#   repeats are caught for less than dedupeExpiration.
+# An event redelivered after its id is gone is counted again. An id takes a
+# few hundred bytes (about 550 measured on a small dev install), so 256mb
+# holds roughly half a million ids, about 100,000 requests. Raise maxMemory
+# with traffic, keep limits.memory about 1.5 times it for Redis's own
+# overhead, and persistence.size a few times it: rewriting the append-only
+# file briefly needs room for the old and the new copy.
+redis:
+  image: redis:7.4.7@sha256:c6e4a82ce60b829a72a21cc4ad4c1c274fa6962eb0d6ac698e8157cbc3fe16a4
+  maxMemory: 256mb
+  persistence: {enabled: true, size: 1Gi, storageClass: ""}
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 384Mi}
+
+# Who may call OpenMeter's API, which has no authentication of its own:
+# the bootstrap job, pods in this namespace with one of these
+# label sets, and pods in these namespaces. As part of the LLM serving pack,
+# the usage collector and the key-manager carry
+# llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
+# (<fullname>-system), not this one; the serving pack's chart adds a policy
+# admitting that label from that namespace only
+# (templates/openmeter-networkpolicy.yaml), so nothing needs setting here.
+# Installed on its own, admit the clients' namespace with a policy of your
+# own, or list it under apiClientNamespaces (which admits every pod in it).
+networkPolicy:
+  enabled: true
+  apiClientPodLabels:
+    - llm.nebari.dev/openmeter-client: "true"
+  apiClientNamespaces: []

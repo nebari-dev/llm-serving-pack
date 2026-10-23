@@ -4,3 +4,10 @@ description: Nebari software pack for serving LLMs via llm-d
 type: application
 version: 0.1.4
 appVersion: "0.1.4"
+# OpenMeter, the usage store, shipped inside this chart (charts/), off unless
+# openmeter.enabled.
+dependencies:
+  - name: nebari-openmeter
+    version: 0.1.0
+    alias: openmeter
+    condition: openmeter.enabled

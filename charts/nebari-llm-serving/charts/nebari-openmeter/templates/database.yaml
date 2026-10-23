@@ -1,0 +1,41 @@
+{{- $db := include "om.name" (dict "root" . "component" "db") }}
+# OpenMeter's Postgres, run by the CloudNativePG operator (which Nebari
+# installs on every cluster). initdb creates the openmeter database and
+# owner and publishes their generated credentials in the Secret
+# <name>-app (keys: username, password, dbname, host, port, uri); OpenMeter
+# reads its URL from there, so no password appears in this chart.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $db }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+  annotations:
+    # Ahead of OpenMeter in an Argo CD sync: its pods need the Secret this
+    # Cluster generates.
+    argocd.argoproj.io/sync-wave: "-1"
+    {{- if .Values.keepDataOnUninstall }}
+    # Kept by helm uninstall, and by Argo CD when the Application is deleted,
+    # like the stores' volumes: the customers, features and prices here go
+    # with the usage in ClickHouse and Kafka.
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Delete=false
+    {{- end }}
+spec:
+  instances: {{ .Values.postgres.instances }}
+  imageName: {{ .Values.postgres.imageName }}
+  resources:
+    {{- toYaml .Values.postgres.resources | nindent 4 }}
+  storage:
+    size: {{ .Values.postgres.storage.size }}
+    {{- with .Values.postgres.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+  bootstrap:
+    initdb:
+      database: openmeter
+      owner: openmeter
+      # OpenMeter's migrations create pgcrypto; created here as superuser so
+      # they don't depend on the owner being allowed to.
+      postInitApplicationSQL:
+        - CREATE EXTENSION IF NOT EXISTS pgcrypto

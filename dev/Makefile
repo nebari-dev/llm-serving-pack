@@ -15,16 +15,28 @@ GATEWAY_API_VERSION ?= v1.5.1
 GIE_VERSION ?= v1.4.0
 ENVOY_GATEWAY_VERSION ?= v1.8.1
 AI_GATEWAY_VERSION ?= v1.1.0
+# OpenMeter collector image the usage collector runs; keep in step with
+# usage.collector.image in the chart values.
+USAGE_COLLECTOR_IMAGE ?= ghcr.io/openmeterio/benthos-collector:v1.0.0-beta.234@sha256:cdc35416af4ededfbdb531463a3135127274f595c4b4b44573e685e82aac4fc4
+# CloudNativePG operator, which Nebari installs on every cluster; the bundled
+# OpenMeter's Postgres is a CloudNativePG Cluster. 0.29.1 ships operator
+# 1.30.1, which fixes CVE-2026-84304 (gRPC) in 1.30.0.
+CNPG_CHART_VERSION ?= 0.29.1
+CNPG_IMAGE_TAG ?= 1.30.1@sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07
 
-# Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side,
-# which conflicts with the standalone install in `setup` (owned by a different
-# field manager). Force ownership so the chart wins. Helm 3 has no server-side
-# apply and skips already-present crds/, so it neither needs nor accepts this
-# flag - keep it empty there. Empty when helm is missing (setup fails later).
+# Helm 4 applies the eg chart's bundled Gateway API CRDs (crds/) server-side.
+# Those are the experimental channel, and the safe-upgrades admission policy
+# that Gateway API v1.5 installs with the standard channel in `setup` refuses
+# experimental CRDs on top of standard ones, so the chart install fails. On
+# Helm 4, `setup` therefore applies only Envoy Gateway's own CRDs from the
+# chart and installs the chart without its crds/ (and without a second copy of
+# the admission policy). Helm 3 skips already-present crds/, so it needs none
+# of this - keep it empty there. Empty when helm is missing (setup fails later).
 HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -E 's/^v?([0-9]+).*/\1/')
-HELM_FORCE_CONFLICTS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--force-conflicts,)
+EG_CHART := oci://docker.io/envoyproxy/gateway-helm
+EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
+.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -39,9 +51,7 @@ setup: ## Create kind cluster and install dependencies
 	# cert-manager
 	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
 	$(KUBECTL) -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
-	# Gateway API CRDs. Server-side apply so the field ownership matches the
-	# eg chart's own SSA on Helm 4, letting it cleanly take co-ownership with
-	# --force-conflicts (see HELM_FORCE_CONFLICTS above) instead of erroring.
+	# Gateway API CRDs (standard channel).
 	$(KUBECTL) apply --server-side --force-conflicts -f https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	# GIE CRDs (includes the graduated inference.networking.k8s.io group)
 	$(KUBECTL) apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/$(GIE_VERSION)/manifests.yaml
@@ -54,13 +64,20 @@ setup: ## Create kind cluster and install dependencies
 	# Envoy Gateway, wired with the AI Gateway ext_proc extension (enableBackend,
 	# extensionManager, backendResources). Without this the per-model routing
 	# layer 404s and passthrough upstreams never get a TLS transport socket.
-	helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(HELM_FORCE_CONFLICTS) -f eg-extension-values.yaml
+	@if [ -n "$(EG_SKIP_BUNDLED_CRDS)" ]; then \
+		tmp=$$(mktemp -d) && \
+		helm pull $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) --untar --untardir $$tmp && \
+		$(KUBECTL) apply --server-side -f $$tmp/gateway-helm/charts/crds/crds/generated/ && \
+		rm -rf $$tmp; \
+	fi
+	helm upgrade -i eg $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(EG_SKIP_BUNDLED_CRDS) -f eg-extension-values.yaml
 	$(KUBECTL) -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# CRDs (served LLMModels and external-provider PassthroughModels)
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml
 	# Test Gateways
 	$(KUBECTL) apply -f gateways.yaml
+	$(MAKE) deploy-cnpg
 
 teardown: ## Delete kind cluster
 	kind delete cluster --name $(CLUSTER_NAME)
@@ -84,6 +101,10 @@ deploy-operator: ## Deploy operator
 deploy-key-manager: ## Deploy key manager (dev mode: auth bypassed, dev identity injected)
 	$(KUBECTL) apply -f manifests/key-manager.yaml
 	$(KUBECTL) -n llm-operator-system rollout status deployment/llm-key-manager --timeout=60s
+
+deploy-cnpg: ## Install the CloudNativePG operator (as Nebari does), for the bundled OpenMeter's Postgres
+	helm upgrade -i cnpg cloudnative-pg --repo https://cloudnative-pg.github.io/charts --version $(CNPG_CHART_VERSION) \
+		--kube-context kind-$(CLUSTER_NAME) -n cnpg-system --create-namespace --set image.tag=$(CNPG_IMAGE_TAG) --wait
 
 deploy-keycloak: ## Deploy dev Keycloak (imports the nebari realm)
 	$(KUBECTL) create namespace keycloak --dry-run=client -o yaml | $(KUBECTL) apply -f -
@@ -115,6 +136,19 @@ test-auth: ## Verify the key-manager's real bearer-token JWKS validation (deploy
 
 test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-spoofing through the gateway (deploys two mock models, asserts the 200/403/401 matrix). KEEP=1 leaves the models.
 	./test-model-scope.sh
+
+usage-e2e: ## Usage metering end to end with the bundled OpenMeter: alice and bob call the mock provider, per-person and per-team totals read back from OpenMeter's meters (run `make setup` first)
+	./usage-e2e.sh
+
+usage-forgery-check: ## Check callers cannot choose the identity or request id the usage access log records (after usage-e2e)
+	./usage-forgery-check.sh
+
+usage-tracer: ## Web page that sends one request and follows it through the gateway log, collector, Kafka, ClickHouse and OpenMeter, at http://127.0.0.1:18894 (run `make usage-e2e` first)
+	python3 usage-tracer/server.py
+
+test-usage-collector: ## Run the usage collector pipeline tests in the pinned collector image
+	docker run --rm -e OPENMETER_URL=http://unused -v "$(CURDIR)/../charts/nebari-llm-serving/files:/t:ro" \
+		$(USAGE_COLLECTOR_IMAGE) test /t/usage-collector.yaml
 
 logs-operator: ## Tail operator logs
 	$(KUBECTL) -n llm-operator-system logs -f deployment/llm-operator

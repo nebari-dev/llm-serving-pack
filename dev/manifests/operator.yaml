@@ -68,7 +68,7 @@ rules:
     resources: ["aigatewayroutes", "aiservicebackends", "backendsecuritypolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.envoyproxy.io"]
-    resources: ["securitypolicies", "backends"]
+    resources: ["securitypolicies", "backends", "clienttrafficpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Observe AI Gateway-owned routes before removing endpoint authentication.
   # get alone suffices: unstructured reads bypass the manager's cache, so no
