@@ -1,7 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
-# OpenMeter's API has no authentication: only the console, the bootstrap
-# job, pods in this namespace with one of apiClientPodLabels, and the listed
-# namespaces may call it. As a subchart of the LLM serving pack, the parent
+# OpenMeter's API has no authentication: only the bootstrap job, pods in
+# this namespace with one of apiClientPodLabels, and the listed namespaces
+# may call it. As a subchart of the LLM serving pack, the parent
 # chart adds a second policy for its clients in the operator namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -16,9 +16,6 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - podSelector:
-            matchLabels:
-              {{- include "om.selector" (dict "root" . "component" "console") | nindent 14 }}
         - podSelector:
             matchLabels:
               {{- include "om.selector" (dict "root" . "component" "bootstrap") | nindent 14 }}

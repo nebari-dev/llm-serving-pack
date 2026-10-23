@@ -310,7 +310,6 @@
 <section class="panel links" id="links" hidden>
   <h2>Come back to this request</h2>
   <div class="row">This trace: <a id="link-trace" href="#"></a></div>
-  <div class="row" id="row-console" hidden>In the usage console: <a id="link-console" href="#" target="_blank" rel="noopener"></a></div>
 </section>
 </div>
 
@@ -320,7 +319,6 @@ const ICONS = {"envoyproxy": {"d": "m23.351 7.593-7.068-4.379a1.034 1.034 0 0 0-
 // Glyphs for the parts without a logo of their own.
 const GLYPHS = {
   terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M12.5 15H17"/></svg>',
-  console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="17" rx="2.5"/><path d="M2.5 8.5h19M7 17v-4M12 17v-6M17 17v-2"/></svg>',
 };
 // Logos that are one dark colour are drawn in the text colour, so they show in dark mode too.
 const MONO = new Set(["apachekafka", "opentelemetry", "keycloak"]);
@@ -333,7 +331,7 @@ function icon(name, size = "") {
   if (name === "clickhouse") cls += " dark";
   return `<span class="${cls.trim()}" title="${esc(TITLES[name] || name)}">${inner}</span>`;
 }
-const TITLES = { envoyproxy: "Envoy", apachekafka: "Apache Kafka", clickhouse: "ClickHouse", opentelemetry: "OpenTelemetry", kubernetes: "Kubernetes", keycloak: "Keycloak", redis: "Redis", openmeter: "OpenMeter", cloudevents: "CloudEvents", terminal: "Your machine", console: "Usage console" };
+const TITLES = { envoyproxy: "Envoy", apachekafka: "Apache Kafka", clickhouse: "ClickHouse", opentelemetry: "OpenTelemetry", kubernetes: "Kubernetes", keycloak: "Keycloak", redis: "Redis", openmeter: "OpenMeter", cloudevents: "CloudEvents", terminal: "Your machine" };
 const c = (s) => `<code class="ic">${s}</code>`;
 
 // The metering path: [hop into the step, then the step]. A hop says what moves between two steps and how.
@@ -359,10 +357,6 @@ const STEPS = [
     what: `One ${c("llm.request")}, plus one ${c("llm.tokens")} per token type.`,
     hop: { logos: ["openmeter", "clickhouse"], proto: "HTTP GET /api/v1/events",
       text: `Read back from ClickHouse. Nothing moves.` } },
-  { key: "console", title: "Usage console", logos: ["console"],
-    what: `The priced receipt.`,
-    hop: { logos: ["openmeter"], proto: "HTTP GET /api/v2/events",
-      text: `Joins the request and token events.` } },
 ];
 
 // Theme toggle: an explicit choice wins and is remembered; until then, follow the OS.
@@ -511,7 +505,6 @@ const IMPORTANT = {
   owner: ["subject", "username", "groups"],
   event: ["id", "type", "subject", "data"],
   eventData: ["user", "team", "api_key", "model", "token_type", "tokens", "response_code", "usage_reported"],
-  receipt: ["actor", "team", "keyId", "resolvedModel", "inputTokens", "cachedInputTokens", "outputTokens", "costUsd", "verdict"],
 };
 const COLUMNS = { kafka: ["offset", "id", "type"], clickhouse: ["type", "id", "subject", "data"], openmeter: ["type", "id", "subject", "user", "team", "api_key", "token_type", "tokens"] };
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));
@@ -547,9 +540,9 @@ function brief(text, k) {
 // How each part runs, read live from the cluster by the tracer.
 let COMP = null;
 const RUNS = { gateway: ["gateway"], model: ["model"], collector: ["collector", "key-manager"], kafka: ["kafka"],
-  clickhouse: ["sink-worker", "redis", "clickhouse"], openmeter: ["openmeter-api", "postgres"], console: ["console"] };
+  clickhouse: ["sink-worker", "redis", "clickhouse"], openmeter: ["openmeter-api", "postgres"] };
 const NAMES = { gateway: "Envoy gateway", model: "Model", collector: "Usage collector", "key-manager": "Key manager", kafka: "Kafka",
-  "sink-worker": "Sink worker", redis: "Redis", clickhouse: "ClickHouse", "openmeter-api": "OpenMeter API", postgres: "Postgres", console: "Usage console" };
+  "sink-worker": "Sink worker", redis: "Redis", clickhouse: "ClickHouse", "openmeter-api": "OpenMeter API", postgres: "Postgres" };
 const shortImage = (img) => img.split("@")[0].split("/").pop();
 function runsView(where, small = false) {
   if (!COMP) return "";
@@ -602,7 +595,7 @@ function render(trace) {
     } else if (s?.found) {
       const d = step.key === "kafka" ? s.data.map(({ event, ...row }) => row) : s.data;
       const inner = Array.isArray(d) ? tableView(d, COLUMNS[step.key], `cols-${step.key}`)
-        : jsonView(d, step.key === "gateway" ? IMPORTANT.record : step.key === "console" ? IMPORTANT.receipt : Object.keys(d), `all-${step.key}`);
+        : jsonView(d, step.key === "gateway" ? IMPORTANT.record : Object.keys(d), `all-${step.key}`);
       body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : "");
     }
     if (s?.error) body += `<div class="note">${esc(s.error)}</div>`;
@@ -662,9 +655,6 @@ function showLinks(trace) {
   links.hidden = false;
   const url = `${location.origin}/#trace=${currentTrace}`;
   Object.assign(document.getElementById("link-trace"), { href: url, textContent: url });
-  const rc = document.getElementById("row-console");
-  rc.hidden = !trace.consoleUrl;
-  if (trace.consoleUrl) Object.assign(document.getElementById("link-console"), { href: trace.consoleUrl, textContent: trace.consoleUrl });
 }
 document.getElementById("journey").addEventListener("click", (e) => {
   const b = e.target.closest("[data-copy]"); if (!b) return;

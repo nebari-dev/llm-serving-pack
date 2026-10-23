@@ -73,38 +73,28 @@ jobs:
         working-directory: dev
         run: make test-usage-collector
 
-  test-usage-console:
-    name: Test usage console
+  test-openmeter-setup:
+    name: Test openmeter-setup
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: usage-console/server/go.mod
-          cache-dependency-path: usage-console/server/go.sum
+          go-version-file: openmeter-setup/go.mod
+          cache: false
 
-      - name: Run control-plane tests
-        working-directory: usage-console/server
+      - name: Check module tidiness
+        working-directory: openmeter-setup
+        run: go mod tidy -diff
+
+      - name: Vet
+        working-directory: openmeter-setup
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: openmeter-setup
         run: go test ./...
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: usage-console/console/.node-version
-          cache: npm
-          cache-dependency-path: usage-console/console/package-lock.json
-
-      - name: Install console deps
-        working-directory: usage-console/console
-        run: npm ci --ignore-scripts
-
-      - name: Type-check and build the console
-        working-directory: usage-console/console
-        run: VITE_DATA=api npm run build
-
-      - name: Run console tests
-        working-directory: usage-console/console
-        run: npm test
 
   test-frontend:
     name: Test frontend

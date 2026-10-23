@@ -204,15 +204,15 @@ spec:
       securityContext: {runAsNonRoot: true}
       containers:
         - name: bootstrap
-          image: {{ include "om.consoleImage" . }}
-          command: ["/openmeter-api", "bootstrap", "-config", "/etc/usage-console/bootstrap.json"]
+          image: {{ include "om.setupImage" . }}
+          command: ["/openmeter-setup", "bootstrap", "-config", "/etc/openmeter-setup/bootstrap.json"]
           env:
             - {name: OPENMETER_URL, value: {{ printf "http://%s" $api | quote }}}
           securityContext:
             {{- include "om.securityContext" . | nindent 12 }}
             readOnlyRootFilesystem: true
           volumeMounts:
-            - {name: config, mountPath: /etc/usage-console}
+            - {name: config, mountPath: /etc/openmeter-setup}
       volumes:
         - name: config
           configMap:

@@ -8,8 +8,8 @@ The pack can meter every model request in [OpenMeter](https://github.com/openmet
 (Apache-2.0): who called, which model, how many tokens of each kind, and what
 that cost. OpenMeter stores the usage, prices tokens from its LLM price table,
 and provides customers, plans, entitlements and invoicing on top. The pack
-sends usage to an OpenMeter you point it at, or runs one itself together with
-a read-only usage console (`openmeter.enabled`).
+sends usage to an OpenMeter you point it at, or runs one itself
+(`openmeter.enabled`).
 
 It is off by default.
 
@@ -87,7 +87,7 @@ customers: one subject can belong to only one customer.
 
 ## Enable it
 
-With the bundled OpenMeter and usage console:
+With the bundled OpenMeter:
 
 ```yaml
 usage:
@@ -96,9 +96,6 @@ openmeter:
   enabled: true
   modelResources:            # your model resources and the provider that prices them
     - {name: bedrock, provider: bedrock}
-  nebariapp:                 # the console, behind Keycloak sign-in
-    enabled: true
-    hostname: usage.<your-domain>
 ```
 
 `openmeter` deploys OpenMeter with Kafka, ClickHouse and Redis, and its
@@ -210,19 +207,12 @@ price table by OpenMeter; set your own prices with
 - Streamed chat completions end with one extra `usage` chunk even when the
   client did not ask for it. The gateway adds
   `stream_options.include_usage=true` so that streams can be counted.
+- Costs follow OpenMeter's prices in effect now: OpenMeter prices past usage
+  at today's price, and replacing a manual price deletes the old one.
 
-## The usage console
-
-With `openmeter.enabled`, the usage console shows the usage read live from
-OpenMeter: an overview, every request (Traffic), spend by team, person,
-project (model resource), key, model or provider with a month-end projection,
-and each API key's owner and last day. It keeps no data of its own and is
-read-only: everyone who reaches it is a viewer. It is the Stargate gateway
-console (`usage-console/console`) on `openmeter-api`
-(`usage-console/server/cmd/openmeter-api`), cut down to the pages above.
-
-Costs follow OpenMeter's prices in effect now: OpenMeter prices past usage at
-today's price, and replacing a manual price deletes the old one.
+Read the totals from OpenMeter's API: its meter queries
+(`GET /api/v1/meters/llm_requests/query?groupBy=user`, `groupBy=team`, ...)
+and the features' cost queries above.
 
 ## Delivery
 
@@ -238,7 +228,7 @@ each event once.
 ```sh
 cd dev
 make setup                 # kind cluster + gateway
-make usage-e2e             # bundled OpenMeter and console, collector, alice and bob, traffic, totals
+make usage-e2e             # bundled OpenMeter, collector, alice and bob, traffic, per-person and per-team totals
 make usage-tracer          # http://127.0.0.1:18894: send one request, follow it step by step
 make test-usage-collector  # the collector pipeline's tests
 ```

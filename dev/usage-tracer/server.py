@@ -7,8 +7,8 @@ It signs in as alice or bob (the dev realm's people, see usage-e2e.sh),
 sends one request through the gateway with an API key or the login token,
 and then looks for that request in each place it passes through: the
 gateway's access log, the usage collector's counters, Kafka, ClickHouse,
-OpenMeter's events API and the usage console. Every lookup is a real kubectl or
-HTTP call, shown next to its result.
+and OpenMeter's events API. Every lookup is a real kubectl or HTTP call,
+shown next to its result.
 
 Local dev only: it listens on 127.0.0.1, runs a fixed set of commands
 (never a shell), and never returns a password or a key to the page.
@@ -33,7 +33,7 @@ CONTEXT = "kind-" + os.environ.get("CLUSTER_NAME", "llm-serving-test")
 NS = "llm-operator-system"
 GW_NS = "envoy-gateway-system"
 RELEASE = os.environ.get("OM_RELEASE", "usage")
-# OpenMeter and the console run in their own namespace (usage-e2e.sh's OM_NAMESPACE).
+# OpenMeter runs in its own namespace (usage-e2e.sh's OM_NAMESPACE).
 OM_NS = os.environ.get("OM_NAMESPACE", "usage-openmeter")
 os.environ.setdefault("KUBECONFIG", str(Path.home() / ".cache/kind-llm.kubeconfig"))
 
@@ -50,7 +50,6 @@ FORWARDS = {
     "key-owners": (NS, "svc/llm-key-manager-owners", 28446, 8081),
     "openmeter": (OM_NS, f"svc/{RELEASE}-openmeter-api", 28441, 80),
     "collector": (NS, "deploy/llm-operator-usage-collector", 28442, 4195),
-    "console": (OM_NS, f"svc/{RELEASE}-openmeter-console", 28445, 80),
 }
 
 
@@ -155,8 +154,6 @@ COMPONENTS = {
     "openmeter-api": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=api", "OpenMeter (Go): the openmeter binary, serving its HTTP API."),
     "postgres": (OM_NS, f"cnpg.io/cluster={RELEASE}-openmeter-db",
                  "PostgreSQL, run by CloudNativePG. OpenMeter keeps its own records here (customers, features, prices); usage events are not stored here."),
-    "console": (OM_NS, f"app.kubernetes.io/instance={RELEASE},app.kubernetes.io/component=console",
-                "The usage console: a Go server that reads OpenMeter's API and serves the React app, in one container."),
 }
 _components = {"at": 0, "data": None}
 
@@ -352,15 +349,6 @@ def stage_clickhouse(t):
     return (rows or None), cmd
 
 
-def stage_console(t):
-    rid = t["requestId"]
-    receipts = http_json("console", "/api/v1/demo/receipts?limit=200")
-    found = next((r for r in receipts if r["id"] == rid), None)
-    if found:
-        found = {k: found.get(k) for k in ("actor", "team", "keyId", "resolvedModel", "inputTokens", "cachedInputTokens", "outputTokens", "costUsd", "verdict", "status", "errorCode")}
-    return found, f"curl -s 'localhost:{FORWARDS['console'][2]}/api/v1/demo/receipts?limit=200' | jq '.[] | select(.id==\"{rid}\")'"
-
-
 STAGES = [
     ("gateway", stage_gateway, False),
     ("collector", stage_collector, False),
@@ -368,7 +356,6 @@ STAGES = [
     ("clickhouse", stage_clickhouse, True),
     # OpenMeter's events API reads ClickHouse, so it can only answer after it.
     ("openmeter", stage_openmeter, True),
-    ("console", stage_console, True),
 ]
 
 
@@ -397,8 +384,6 @@ def poll(tid):
                     continue
                 if needs_id and not t.get("requestId"):
                     t["stages"][name] = {"found": False, "waiting": "the gateway's record"}
-                elif name == "console" and not t["stages"].get("openmeter", {}).get("found"):
-                    t["stages"][name] = {"found": False, "waiting": "OpenMeter"}  # the console scan is costly
                 else:
                     todo.append((name, fn))
             threads = [threading.Thread(target=check, args=(t, name, fn)) for name, fn in todo]
@@ -409,8 +394,6 @@ def poll(tid):
         finally:
             t["polling"].release()
     out = {k: v for k, v in t.items() if k not in ("collectorBefore", "match", "polling")}
-    if t.get("requestId"):
-        out["consoleUrl"] = f"http://127.0.0.1:{FORWARDS['console'][2]}/traffic?receipt={t['requestId']}"
     return out
 
 

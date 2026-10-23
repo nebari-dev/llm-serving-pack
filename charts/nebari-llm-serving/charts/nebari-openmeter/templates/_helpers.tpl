@@ -20,12 +20,13 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
-{{- define "om.consoleImage" -}}
-{{- $i := .Values.console.image -}}
+{{/* The openmeter-setup image the bootstrap and ensure-secret Jobs run. */}}
+{{- define "om.setupImage" -}}
+{{- $i := .Values.setup.image -}}
 {{- if $i.digest -}}
 {{ $i.repository }}{{ with $i.tag }}:{{ . }}{{ end }}@{{ $i.digest }}
 {{- else -}}
-{{ $i.repository }}:{{ required "console.image.tag or console.image.digest is required" $i.tag }}
+{{ $i.repository }}:{{ required "setup.image.tag or setup.image.digest is required" $i.tag }}
 {{- end -}}
 {{- end -}}
 

@@ -137,10 +137,10 @@ test-auth: ## Verify the key-manager's real bearer-token JWKS validation (deploy
 test-model-scope: ## Verify per-model API-key scoping and x-llm-client-id anti-spoofing through the gateway (deploys two mock models, asserts the 200/403/401 matrix). KEEP=1 leaves the models.
 	./test-model-scope.sh
 
-usage-e2e: ## Usage metering end to end with the bundled OpenMeter and usage console: alice and bob call the mock provider, totals read back from the console (run `make setup` first)
+usage-e2e: ## Usage metering end to end with the bundled OpenMeter: alice and bob call the mock provider, per-person and per-team totals read back from OpenMeter's meters (run `make setup` first)
 	./usage-e2e.sh
 
-usage-tracer: ## Web page that sends one request and follows it through the gateway log, collector, Kafka, ClickHouse, OpenMeter and the console, at http://127.0.0.1:18894 (run `make usage-e2e` first)
+usage-tracer: ## Web page that sends one request and follows it through the gateway log, collector, Kafka, ClickHouse and OpenMeter, at http://127.0.0.1:18894 (run `make usage-e2e` first)
 	python3 usage-tracer/server.py
 
 test-usage-collector: ## Run the usage collector pipeline tests in the pinned collector image
