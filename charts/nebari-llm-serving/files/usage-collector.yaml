@@ -7,7 +7,7 @@
 #
 # Steps:
 #   1. normalize  - read the entry; drop it unless it is a model request with
-#                   an authenticated caller.
+#                   an authenticated caller that the gateway let through.
 #   2. identify   - for an API-key request, ask the key-manager who minted the
 #                   key (KEY_OWNER_URL); for a token request, use the verified
 #                   token's subject and groups from the gateway. If the
@@ -15,9 +15,10 @@
 #                   its events carry `owner_lookup: failed`.
 #   3. events     - one `llm.request` event, id = <request id>, plus one
 #                   `llm.tokens` event per non-zero token type,
-#                   id = <request id>:<type>. OpenMeter drops an event whose
-#                   (source, id) it has already stored, so a redelivered
-#                   access-log entry is counted once.
+#                   id = <request id>:<type>. OpenMeter drops, on a
+#                   best-effort basis, an event whose (source, id) it has
+#                   already seen within its dedupe window, so a redelivered
+#                   access-log entry is normally counted once.
 #
 # Subject (who is billed) is the person's OIDC subject. Every event also
 # carries the person's username, their team (the first group starting with
@@ -27,8 +28,10 @@
 # the API key, set by the gateway, identifies the caller.
 #
 # Token types match OpenMeter's LLM price table: input, cache_read,
-# cache_write, output. The gateway's input count includes cached tokens for
-# every provider it supports, so `input` here is the uncached remainder. The
+# cache_write, output. The gateway's input count includes cache reads and
+# cache writes for every provider (Envoy AI Gateway v1.1.0 adds them for
+# Anthropic and AWS Bedrock, whose own input count excludes them), so `input`
+# here is the uncached remainder. The
 # output count already includes reasoning tokens, which are not emitted
 # separately (they would be charged twice).
 
@@ -56,9 +59,15 @@ pipeline:
           _ => ""
         }
         let request_id = $val.request_id.or("")
+        # A 401 or 403 the gateway answered itself (API key, token or access
+        # check failed) never reached the model, and its identity headers are
+        # whatever the caller sent. Only the model's own 401/403 is
+        # "via_upstream". Without that field (an older access-log format) a
+        # 401 or 403 is taken as the gateway's.
+        let rejected = ["401", "403"].contains($val.response_code.or("")) && $val.response_code_details.or("") != "via_upstream"
 
-        if $access_path == "" || $caller == "" || $request_id == "" {
-          # Not a model endpoint, or rejected before a caller was known.
+        if $access_path == "" || $caller == "" || $request_id == "" || $rejected {
+          # Not a model endpoint, or rejected before the caller was verified.
           root = deleted()
         } else {
           root = {
@@ -90,22 +99,22 @@ pipeline:
         # Only API-key requests need the lookup; the result is merged back.
         request_map: 'root = if this.access_path == "api_key" { this.client_id } else { deleted() }'
         processors:
-          # A failed lookup (key manager restarting, 503, timeout) is retried
-          # for up to 15s, inside the input's 30s timeout; failing the entry
-          # instead would drop its usage. A 404 is an answer, not a failure:
-          # the key manager has no such key.
-          - retry:
-              backoff:
-                initial_interval: 250ms
-                max_interval: 4s
-                max_elapsed_time: 15s
-              processors:
-                - http:
-                    url: '${KEY_OWNER_URL}/internal/v1/key-owners/${! content() }'
-                    verb: GET
-                    timeout: 5s
-                    retries: 0
-                    successful_on: [404]
+          # One OTLP export carries many records and must finish inside the
+          # input's 30s timeout, or Envoy drops the whole export. So the
+          # records' lookups run in parallel, and each one gives up after at
+          # most 3 attempts of 3s with 0.5s and 1s waits between them
+          # (about 10.5s); a record that still has no answer is billed to its
+          # key and marked below. A 404 is an answer, not a failure: the key
+          # manager has no such key.
+          - http:
+              url: '${KEY_OWNER_URL}/internal/v1/key-owners/${! content() }'
+              verb: GET
+              parallel: true
+              timeout: 3s
+              retries: 2
+              retry_period: 500ms
+              max_retry_backoff: 1s
+              successful_on: [404]
           - catch:
               # Still failing: bill the key, mark the events and log it, so
               # the gap is visible. OpenMeter keeps the first event with an

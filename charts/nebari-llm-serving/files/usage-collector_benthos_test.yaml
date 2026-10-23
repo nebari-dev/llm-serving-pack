@@ -118,3 +118,147 @@ tests:
             "route": "httproute/apps/dashboard/rule/0/match/0/example_com",
             "client_id": "user-alice-bedrock-0123-1", "model": "m", "response_code": "200"}}}
     output_batches: []
+
+  - name: A request the gateway's auth layer rejected is never billed, whatever identity headers it carries
+    # A caller can send any x-llm-client-id or x-auth-* header; the gateway
+    # only overwrites them once authentication succeeds. The mocked lookup
+    # would bill alice if any of these records got through.
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = {"subject": "sub-alice", "username": "alice", "groups": ["team-a"]}'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {"request_id": "req-forged-401", "start_time": "2026-01-15T10:00:06Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m",
+            "response_code": "401", "response_code_details": "unkonwn_api_key"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-forged-401-old-log", "start_time": "2026-01-15T10:00:06Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m", "response_code": "401"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-forged-jwt-401", "start_time": "2026-01-15T10:00:06Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_subject": "sub-alice", "auth_user": "alice", "model": "m",
+            "response_code": "401", "response_code_details": "jwt_authn_access_denied{Jwt_verification_fails}"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-forged-rbac-403", "start_time": "2026-01-15T10:00:06Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_subject": "sub-carol", "auth_user": "carol", "auth_groups": "team-a", "model": "m",
+            "response_code": "403", "response_code_details": "rbac_access_denied_matched_policy[DENY]"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-forged-403-old-log", "start_time": "2026-01-15T10:00:06Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_subject": "sub-carol", "auth_user": "carol", "auth_groups": "team-a", "model": "m",
+            "response_code": "403"}}}
+    output_batches: []
+
+  - name: A model's own 401 or 403 is still a request by an authenticated caller
+    target_processors: /pipeline/processors
+    input_batch:
+      - content: |
+          {"record": {"attributes": {"request_id": "req-upstream-403", "start_time": "2026-01-15T10:00:07Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_user": "bob", "auth_subject": "sub-bob", "auth_groups": "team-b", "model": "m",
+            "response_code": "403", "response_code_details": "via_upstream"}}}
+    output_batches:
+      - - json_contains: {id: req-upstream-403, type: llm.request, subject: sub-bob, data: {response_code: "403", usage_reported: "false"}}
+
+  - name: Every record of an export is marked when the key manager is down, within the input's timeout
+    # One OTLP export from Envoy carries many records, and the export fails
+    # (and is not resent) if they are not all done within the input's 30s.
+    # Here the lookup is real and the key manager refuses connections; timing
+    # this test (dev/Makefile test-usage-collector) shows the batch's cost.
+    target_processors: /pipeline/processors
+    environment:
+      KEY_OWNER_URL: http://127.0.0.1:1
+    input_batch:
+      - content: |
+          {"record": {"attributes": {"request_id": "req-batch-1", "start_time": "2026-01-15T10:00:08Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m", "input_tokens": "1", "response_code": "200"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-batch-2", "start_time": "2026-01-15T10:00:08Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-2", "model": "m", "input_tokens": "1", "response_code": "200"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-batch-3", "start_time": "2026-01-15T10:00:08Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-3", "model": "m", "input_tokens": "1", "response_code": "200"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-batch-4", "start_time": "2026-01-15T10:00:08Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-4", "model": "m", "input_tokens": "1", "response_code": "200"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-batch-5", "start_time": "2026-01-15T10:00:08Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-5", "model": "m", "input_tokens": "1", "response_code": "200"}}}
+    output_batches:
+      - 
+        - json_contains: {id: req-batch-1, subject: user-alice-bedrock-0123-1, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-batch-1:input", data: {owner_lookup: failed}}
+        - json_contains: {id: req-batch-2, subject: user-alice-bedrock-0123-2, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-batch-2:input", data: {owner_lookup: failed}}
+        - json_contains: {id: req-batch-3, subject: user-alice-bedrock-0123-3, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-batch-3:input", data: {owner_lookup: failed}}
+        - json_contains: {id: req-batch-4, subject: user-alice-bedrock-0123-4, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-batch-4:input", data: {owner_lookup: failed}}
+        - json_contains: {id: req-batch-5, subject: user-alice-bedrock-0123-5, data: {owner_lookup: failed}}
+        - json_contains: {id: "req-batch-5:input", data: {owner_lookup: failed}}
+
+  - name: Input tokens are never under- or double-counted, whichever provider reports them
+    # The gateway's input count (llm_input_token) includes cache reads and
+    # cache writes for every provider (Envoy AI Gateway v1.1.0): for OpenAI
+    # and Gemini it is the provider's own prompt count, which already includes
+    # them; for Anthropic and AWS Bedrock, whose input count excludes them, the
+    # gateway adds them (metrics.ExtractTokenUsageFromExplicitCaching). Each
+    # record is what the gateway logs for one provider's response.
+    target_processors: /pipeline/processors
+    input_batch:
+      # Anthropic Messages API (also GCP Vertex and Bedrock InvokeModel
+      # Anthropic): input_tokens 10, cache_read_input_tokens 100,
+      # cache_creation_input_tokens 20.
+      - content: |
+          {"record": {"attributes": {"request_id": "req-anthropic", "start_time": "2026-01-15T10:00:09Z",
+            "route": "httproute/llm-system/m-internal/rule/0/match/0/h", "auth_subject": "sub-bob", "model": "m",
+            "input_tokens": "130", "cached_input_tokens": "100", "cache_creation_input_tokens": "20",
+            "output_tokens": "5", "response_code": "200", "response_code_details": "via_upstream"}}}
+      # AWS Bedrock Converse: inputTokens 10, cacheReadInputTokens 100,
+      # cacheWriteInputTokens 20.
+      - content: |
+          {"record": {"attributes": {"request_id": "req-bedrock-converse", "start_time": "2026-01-15T10:00:09Z",
+            "route": "httproute/llm-system/m-internal/rule/0/match/0/h", "auth_subject": "sub-bob", "model": "m",
+            "input_tokens": "130", "cached_input_tokens": "100", "cache_creation_input_tokens": "20",
+            "output_tokens": "5", "response_code": "200", "response_code_details": "via_upstream"}}}
+      # OpenAI: prompt_tokens 150, of which prompt_tokens_details.cached_tokens 100.
+      - content: |
+          {"record": {"attributes": {"request_id": "req-openai", "start_time": "2026-01-15T10:00:09Z",
+            "route": "httproute/llm-system/m-internal/rule/0/match/0/h", "auth_subject": "sub-bob", "model": "m",
+            "input_tokens": "150", "cached_input_tokens": "100", "cache_creation_input_tokens": "0",
+            "output_tokens": "5", "response_code": "200", "response_code_details": "via_upstream"}}}
+      # GCP Vertex Gemini: promptTokenCount 150, of which cachedContentTokenCount 100.
+      - content: |
+          {"record": {"attributes": {"request_id": "req-gemini", "start_time": "2026-01-15T10:00:09Z",
+            "route": "httproute/llm-system/m-internal/rule/0/match/0/h", "auth_subject": "sub-bob", "model": "m",
+            "input_tokens": "150", "cached_input_tokens": "100",
+            "output_tokens": "5", "response_code": "200", "response_code_details": "via_upstream"}}}
+    output_batches:
+      - - json_contains: {id: req-anthropic}
+        - json_contains: {id: "req-anthropic:cache_read", data: {tokens: 100}}
+        - json_contains: {id: "req-anthropic:cache_write", data: {tokens: 20}}
+        - json_contains: {id: "req-anthropic:input", data: {tokens: 10}}
+        - json_contains: {id: "req-anthropic:output", data: {tokens: 5}}
+        - json_contains: {id: req-bedrock-converse}
+        - json_contains: {id: "req-bedrock-converse:cache_read", data: {tokens: 100}}
+        - json_contains: {id: "req-bedrock-converse:cache_write", data: {tokens: 20}}
+        - json_contains: {id: "req-bedrock-converse:input", data: {tokens: 10}}
+        - json_contains: {id: "req-bedrock-converse:output", data: {tokens: 5}}
+        - json_contains: {id: req-openai}
+        - json_contains: {id: "req-openai:cache_read", data: {tokens: 100}}
+        - json_contains: {id: "req-openai:input", data: {tokens: 50}}
+        - json_contains: {id: "req-openai:output", data: {tokens: 5}}
+        - json_contains: {id: req-gemini}
+        - json_contains: {id: "req-gemini:cache_read", data: {tokens: 100}}
+        - json_contains: {id: "req-gemini:input", data: {tokens: 50}}
+        - json_contains: {id: "req-gemini:output", data: {tokens: 5}}
