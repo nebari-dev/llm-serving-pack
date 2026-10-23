@@ -21,14 +21,17 @@ type SessionTenant struct {
 }
 
 type SessionActor struct {
+	Name  string   `json:"name,omitempty"`
 	Email string   `json:"email"`
 	Roles []string `json:"roles"`
 }
 
 type SessionAuth struct {
-	// Mode is "dev": the gateway in front signs people in, so the console
-	// has nothing to sign out of.
+	// Mode is "oidc" when the caller signed in with Keycloak at the gateway,
+	// or "dev" when no identity provider is configured (nothing to sign out of).
 	Mode string `json:"mode"`
+	// SignOutURL is where the browser goes to sign out (oidc only).
+	SignOutURL string `json:"signOutUrl,omitempty"`
 }
 
 // WindowTotals sums requests over [from, to). SpendUSD leaves out the

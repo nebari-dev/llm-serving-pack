@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/oidc"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
@@ -24,10 +25,25 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	omURL := flag.String("openmeter-url", cmp.Or(os.Getenv("OPENMETER_URL"), "http://localhost:8888"), "OpenMeter's API ($OPENMETER_URL); its token, if any, is $OPENMETER_TOKEN")
 	consoleDir := flag.String("console-dir", "", "the built console (console/dist) to serve; empty serves the API only")
+	issuer := flag.String("oidc-issuer-url", os.Getenv("OIDC_ISSUER_URL"), "the issuer of the access tokens the gateway forwards ($OIDC_ISSUER_URL); empty: no sign-in (dev mode)")
+	discovery := flag.String("oidc-discovery-url", os.Getenv("OIDC_DISCOVERY_URL"), "where to read the issuer's discovery document and keys, if not the issuer URL ($OIDC_DISCOVERY_URL)")
+	clientID := flag.String("oidc-client-id", os.Getenv("OIDC_CLIENT_ID"), "the client the tokens must be issued to ($OIDC_CLIENT_ID)")
 	flag.Parse()
 
+	var identity openmeter.Identity = openmeter.DevIdentity{}
+	if *issuer != "" {
+		v, err := oidc.NewVerifier(oidc.Config{Issuer: *issuer, DiscoveryURL: *discovery, ClientID: *clientID})
+		if err != nil {
+			log.Fatal(err)
+		}
+		identity = openmeter.GatewayIdentity{Tokens: v}
+		log.Printf("sign-in: tokens from %s issued to %s", *issuer, *clientID)
+	} else {
+		log.Printf("sign-in: none configured (dev mode): every caller is the same viewer")
+	}
+
 	// The console calls its tenant "demo" (API_BASE in console/src/data/catalog.ts).
-	s := &openmeter.Server{Client: openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN")), Tenant: "demo", Now: time.Now}
+	s := &openmeter.Server{Client: openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN")), Tenant: "demo", Now: time.Now, Identity: identity}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", s.Handler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })

@@ -21,7 +21,7 @@ var now = time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
 func newAPI(t *testing.T, f *fakeOpenMeter) http.Handler {
 	t.Helper()
 	om := f.server(t)
-	return (&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }}).Handler()
+	return (&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Identity: openmeter.DevIdentity{}}).Handler()
 }
 
 func get[T any](t *testing.T, h http.Handler, path string) T {
@@ -262,8 +262,8 @@ func TestConsoleStartupCallsAnswer(t *testing.T) {
 	}
 }
 
-// Everyone who reaches the console is a viewer, signed in by the gateway in
-// front: dev mode, so the console offers no sign-out.
+// With no identity provider configured, everyone is the same viewer: dev
+// mode, so the console offers no sign-out.
 func TestSessionIsAViewer(t *testing.T) {
 	s := get[openmeter.Session](t, newAPI(t, &fakeOpenMeter{}), "/session")
 
@@ -333,7 +333,7 @@ func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
 	f := &fakeOpenMeter{}
 	f.request("old", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
 	om := f.server(t)
-	srv := httptest.NewServer((&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Poll: 20 * time.Millisecond}).Handler())
+	srv := httptest.NewServer((&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Poll: 20 * time.Millisecond, Identity: openmeter.DevIdentity{}}).Handler())
 	t.Cleanup(srv.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

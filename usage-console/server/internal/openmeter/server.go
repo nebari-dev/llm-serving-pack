@@ -15,15 +15,20 @@ type Server struct {
 	Now    func() time.Time
 	// Poll is how often the live stream reads OpenMeter; 0 is 5 seconds.
 	Poll time.Duration
+	// Identity says who is calling; every API request needs one.
+	Identity Identity
 }
 
 type handlerFunc func(r *http.Request) (any, error)
 
 func (s *Server) Handler() http.Handler {
+	if s.Identity == nil {
+		panic("openmeter: Server.Identity is required")
+	}
 	mux := http.NewServeMux()
 	p := "/api/v1/" + s.Tenant
 	h := func(pattern string, fn handlerFunc) {
-		mux.HandleFunc("GET "+p+pattern, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("GET "+p+pattern, s.authenticated(func(w http.ResponseWriter, r *http.Request) {
 			v, err := fn(r)
 			if err != nil {
 				slog.Error("request failed", "path", r.URL.Path, "err", err)
@@ -31,10 +36,10 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusOK, v)
-		})
+		}))
 	}
 	h("/receipts", s.receipts)
-	mux.HandleFunc("GET "+p+"/stream/traffic", s.streamTraffic)
+	mux.HandleFunc("GET "+p+"/stream/traffic", s.authenticated(s.streamTraffic))
 	h("/receipts/count", s.receiptCount)
 	h("/spend", s.spend)
 	h("/session", s.session)
