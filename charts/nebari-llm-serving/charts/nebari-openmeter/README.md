@@ -1,11 +1,11 @@
 # openmeter-pack
 
 A Nebari software pack that stores the LLM serving pack's usage in
-[OpenMeter](https://openmeter.io): every model request's tokens and cost, by
-team, person, API key and model, read from OpenMeter's API.
+[OpenMeter](https://openmeter.io) and shows it in a read-only console: every
+model request's tokens and cost, by team, person, API key and model.
 
 ```
-gateway access log --> usage collector (LLM serving pack) --> OpenMeter (this pack)
+gateway access log --> usage collector (LLM serving pack) --> OpenMeter (this pack) --> console
 ```
 
 The chart (`nebari-openmeter`) deploys:
@@ -26,6 +26,10 @@ The chart (`nebari-openmeter`) deploys:
 - **Two setup Jobs** from the `openmeter-setup` image (`openmeter-setup/` in
   this repository): `bootstrap` creates the features and prices after each
   install or upgrade, and `ensure-secret` makes the ClickHouse password once.
+- **The console**: Stargate's console (`usage-console/console`) on
+  `openmeter-api` (`usage-console/server/cmd/openmeter-api`), which answers
+  the console's read API from OpenMeter. It keeps no data of its own.
+  Optionally it runs behind a NebariApp with Keycloak sign-in.
 
 ## Install
 
@@ -38,7 +42,8 @@ On its own:
 
 ```bash
 helm install usage . -n openmeter --create-namespace \
-  --set setup.image.tag=<tag>
+  --set setup.image.tag=<tag> --set console.image.tag=<tag> \
+  --set nebariapp.enabled=true --set nebariapp.hostname=usage.<your-domain>
 ```
 
 Then point the LLM serving pack at it:
@@ -55,18 +60,28 @@ namespace like the serving pack's `templates/openmeter-networkpolicy.yaml`
 (pods labelled `llm.nebari.dev/openmeter-client: "true"` in the operator
 namespace), or list the operator namespace in
 `networkPolicy.apiClientNamespaces`, which admits every pod in it.
-OpenMeter's API has no authentication, so only the admitted pods and the
-bootstrap job can reach it.
+OpenMeter's API has no authentication, so only the admitted pods, the
+console and the bootstrap job can reach it.
 
 `modelResources` lists the serving pack's model resources and the OpenMeter
 provider that prices each one's models (for example `bedrock`). `prices`
 sets per-token USD rates for models with no public price.
 
+## What the console shows
+
+Overview, Traffic (one receipt per request, live), Spend (by team, person,
+project, key, model or provider, with the month-end projection) and Keys
+(each key's owner, team and last 24 hours). It has no pages for things this
+pack doesn't do (routing, guardrails, the model catalog, settings). Everyone
+who reaches the console is a viewer: there is nothing to edit.
+
 ## Known limits
 
 - **Costs use today's prices.** OpenMeter prices all usage with the price in
   effect now, and replacing a manual price deletes the old one; it keeps no
-  price history. A price change therefore changes past costs too.
+  price history. A price change therefore changes past costs too. A receipt
+  in the console shows its request at today's price, not the price when the
+  request ran, so receipts add up to the Spend totals.
 - **Repeats are dropped while Redis remembers them, best effort.** The sink
   worker keeps each event id in Redis for `openmeter.dedupeExpiration`.
   Redis logs every write to an append-only file on its volume, synced once a
@@ -74,7 +89,10 @@ sets per-token USD rates for models with no public price.
   of them (and with `redis.persistence.enabled: false` a restart forgets
   them all). When Redis reaches `redis.maxMemory` it evicts the ids closest
   to expiring. An event redelivered after its id is gone is counted again.
-- **No caps.** OpenMeter does not stop spend. Caps belong in the gateway.
+- **Times are as fine as OpenMeter's windows.** A key's "last used" is the
+  start of the hour (or day) of its last request.
+- **No caps.** Neither OpenMeter nor the console stops spend. Caps belong in
+  the gateway.
 
 ## Uninstall and reinstall
 
@@ -118,5 +136,14 @@ second command matches; Postgres's volume goes with its `Cluster`.
 
 ```bash
 cd openmeter-setup && go test ./...   # bootstrap and ensure-secret against fakes
+cd usage-console/server && go test ./internal/openmeter/   # the console API against a fake OpenMeter
+cd usage-console/console && npm ci --ignore-scripts && npx vitest run
 cd dev && make usage-e2e              # on the kind cluster: install, send traffic, check totals
 ```
+
+## History
+
+The usage console (`usage-console/`) started as the Stargate gateway console.
+Its original commits, with their authors, are kept in this repository's
+history; the commits after them adapt it to OpenMeter and keep only what this
+pack uses.

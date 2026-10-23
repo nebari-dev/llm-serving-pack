@@ -177,8 +177,9 @@ keyManager:
 # gateway also has to send its access log to the collector: see
 # examples/usage-access-log.yaml and the Usage metering docs.
 
-# OpenMeter, the usage store, bundled as the nebari-openmeter subchart. Off
-# by default. With it on, usage.openmeter.url can stay empty: the collector and
+# OpenMeter, the usage store, and the read-only usage console (Stargate's
+# console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
+# default. With it on, usage.openmeter.url can stay empty: the collector and
 # the key-manager use the bundled OpenMeter. It runs in the release
 # namespace; with usage.enabled this chart admits the collector and the
 # key-manager (operator namespace) to its API, and no other pod. Every value
@@ -188,6 +189,10 @@ openmeter:
   # The image of the subchart's setup Jobs (openmeter-setup/); the release
   # workflow pins it.
   setup:
+    image:
+      tag: ""
+  # The usage console's image (usage-console/); the release workflow pins it.
+  console:
     image:
       tag: ""
 
