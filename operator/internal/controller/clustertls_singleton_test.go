@@ -65,6 +65,11 @@ func newFakeClientWithGateway(t *testing.T, extraObjs ...client.Object) client.W
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "SecretList"},
 		&unstructured.UnstructuredList{},
 	)
+	scheme.AddKnownTypeWithName(clientTrafficPolicyGVK(), &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "ClientTrafficPolicyList"},
+		&unstructured.UnstructuredList{},
+	)
 
 	extGW := newGateway(t, "nebari-gateway", "envoy-gateway-system", []interface{}{
 		// Pre-existing unrelated listener - the operator must preserve it.

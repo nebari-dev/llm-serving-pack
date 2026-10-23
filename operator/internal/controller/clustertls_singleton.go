@@ -42,7 +42,9 @@ const defaultClusterTLSResyncInterval = 5 * time.Minute
 //     Certificate is deleted instead and the user-provided Secret is used.
 //  2. ReferenceGrants permitting the external and internal Gateways to
 //     consume the resulting Secret across namespaces.
-//  3. HTTPS listeners on the external and internal Gateways pointing at
+//  3. With usage metering on, a ClientTrafficPolicy per shared listener
+//     that removes caller-sent identity headers (listener_headers.go).
+//  4. HTTPS listeners on the external and internal Gateways pointing at
 //     the shared Secret (skipped when Config.ManageSharedListeners is false).
 //
 // Unlike LLMModelReconciler, which is driven per-CR, this reconciler owns
@@ -149,10 +151,15 @@ func (r *ClusterTLSSingleton) Reconcile(ctx context.Context) error {
 		}
 	}
 
-	// 3. Patch Gateway listeners unless opted out.
+	// 3. With usage metering on, remove caller-sent identity headers on the
+	// shared listeners. A failure here (for example RBAC from an older chart)
+	// is reported but does not hold up the listener patch below.
+	headerPolicyErr := r.ensureListenerHeaderPolicies(ctx)
+
+	// 4. Patch Gateway listeners unless opted out.
 	if !r.Config.ManageSharedListeners {
 		log.V(1).Info("skipping Gateway listener patch: manageSharedListeners=false")
-		return nil
+		return headerPolicyErr
 	}
 
 	if err := r.patchGatewayListener(
@@ -175,7 +182,7 @@ func (r *ClusterTLSSingleton) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("patching internal Gateway listener: %w", err)
 	}
 
-	return nil
+	return headerPolicyErr
 }
 
 func (r *ClusterTLSSingleton) ensureCertificate(ctx context.Context) error {

@@ -51,6 +51,7 @@ rules:
   - gateway.envoyproxy.io
   resources:
   - backends
+  - clienttrafficpolicies
   - securitypolicies
   verbs:
   - create
