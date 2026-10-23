@@ -38,6 +38,18 @@ prices: []
 priceSync:
   schedule: "17 3 * * *"
 
+# The read-only usage console (Stargate's console on openmeter-api,
+# usage-console/ in this repository).
+console:
+  image:
+    repository: ghcr.io/nebari-dev/llm-serving-pack/usage-console
+    tag: ""
+    digest: ""
+  replicas: 1
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 128Mi}
+
 # openmeter-setup (openmeter-setup/ in this repository): the image the
 # bootstrap Job (features and prices) and the ClickHouse password hook run.
 setup:
@@ -116,7 +128,7 @@ redis:
     limits: {memory: 384Mi}
 
 # Who may call OpenMeter's API, which has no authentication of its own:
-# the bootstrap job, pods in this namespace with one of these
+# the console, the bootstrap job, pods in this namespace with one of these
 # label sets, and pods in these namespaces. As part of the LLM serving pack,
 # the usage collector and the key-manager carry
 # llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
@@ -130,3 +142,19 @@ networkPolicy:
   apiClientPodLabels:
     - llm.nebari.dev/openmeter-client: "true"
   apiClientNamespaces: []
+
+# Routing, TLS and Keycloak sign-in for the console through the Nebari
+# operator. auth.enforceAtGateway signs people in before they reach it.
+nebariapp:
+  enabled: false
+  # hostname: usage.nebari.example.com
+  gateway: public
+  auth:
+    enabled: true
+    enforceAtGateway: true
+    provisionClient: true
+  landingPage:
+    enabled: true
+    displayName: LLM usage
+    description: Tokens and cost of every model request, by team, person and API key.
+    category: AI

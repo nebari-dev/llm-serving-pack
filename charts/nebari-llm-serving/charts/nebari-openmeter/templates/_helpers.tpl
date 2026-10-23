@@ -28,6 +28,16 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{/* The usage console's image (usage-console/). */}}
+{{- define "om.consoleImage" -}}
+{{- $i := .Values.console.image -}}
+{{- if $i.digest -}}
+{{ $i.repository }}{{ with $i.tag }}:{{ . }}{{ end }}@{{ $i.digest }}
+{{- else -}}
+{{ $i.repository }}:{{ required "console.image.tag or console.image.digest is required" $i.tag }}
+{{- end -}}
+{{- end -}}
+
 {{/* The openmeter-setup image the bootstrap and ensure-secret Jobs run. */}}
 {{- define "om.setupImage" -}}
 {{- $i := .Values.setup.image -}}

@@ -1,0 +1,55 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node / frontend
+node_modules/
+dist/
+build/
+.vite/
+.turbo/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+vendor/
+
+# Python (tooling / scripts)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Kubernetes / Helm / local clusters
+charts/**/charts/
+*.tgz
+kubeconfig*
+.tilt/
+
+# Logs and temp
+*.log
+tmp/
