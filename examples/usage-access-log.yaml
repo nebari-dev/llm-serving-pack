@@ -25,6 +25,15 @@
 # completion text: every field is a header the gateway set, a token count, or
 # request metadata.
 #
+# The identity fields are headers, so they are only trustworthy because the
+# gateway removes any x-llm-client-id or x-auth-* a caller sends before
+# authentication runs: with usage metering on, the operator puts a
+# ClientTrafficPolicy on the pack's two listeners that does this (and makes
+# Envoy generate every request id). If the gateway already has a
+# ClientTrafficPolicy of its own, the operator leaves it alone and logs what
+# to add to it. The collector also ignores any request the gateway itself
+# answered with 401 or 403 (response_code_details is not "via_upstream").
+#
 # The field names are a contract with the collector pipeline
 # (charts/nebari-llm-serving/files/usage-collector.yaml), and the llm_*_token
 # keys are a contract with the routes the operator generates. Renaming either
@@ -44,10 +53,11 @@ spec:
           format:
             type: JSON
             json:
-              # The event id OpenMeter dedupes on. Envoy Gateway generates
-              # it per request by default; don't set a ClientTrafficPolicy
-              # requestID of Preserve or PreserveOrGenerate on these
-              # gateways, or callers could choose ids and have usage dropped.
+              # The event id OpenMeter dedupes on. Envoy generates it per
+              # request and replaces any id the caller sends; don't set a
+              # ClientTrafficPolicy requestID of Preserve or
+              # PreserveOrGenerate on these listeners, or callers could
+              # choose ids and have usage dropped.
               request_id: "%REQ(X-REQUEST-ID)%"
               start_time: "%START_TIME%"
               route: "%ROUTE_NAME%"
@@ -65,6 +75,9 @@ spec:
               total_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_total_token)%"
               response_code: "%RESPONSE_CODE%"
               response_flags: "%RESPONSE_FLAGS%"
+              # "via_upstream" when the model answered; otherwise what the
+              # gateway answered for (e.g. a rejected key or token).
+              response_code_details: "%RESPONSE_CODE_DETAILS%"
               duration_ms: "%DURATION%"
           sinks:
             # The pack's usage collector (chart: <release>-usage-collector in
@@ -77,7 +90,8 @@ spec:
                     port: 4317
             # A second copy on stdout. The OTLP sink does not retry, so this is
             # the copy to replay from if the collector was down (OpenMeter
-            # stores each event once, however often it is delivered).
+            # drops duplicates on a best-effort basis within its dedupe
+            # window, so a replay is normally counted once).
             - type: File
               file:
                 path: /dev/stdout
