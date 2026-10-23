@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -526,7 +527,7 @@ func TestRevokeKey(t *testing.T) {
 		wantErrMsg string
 	}{
 		{
-			name:      "removes key from Secret and ConfigMap",
+			name:      "removes key from Secret and key listings",
 			modelName: "my-model",
 			clientID:  "user-chuck-1",
 			secretData: map[string][]byte{
@@ -587,14 +588,15 @@ func TestRevokeKey(t *testing.T) {
 				t.Errorf("expected clientID %q to be removed from Secret", tc.clientID)
 			}
 
-			// Verify removed from ConfigMap
-			updatedCM := &corev1.ConfigMap{}
-			cmKey := types.NamespacedName{Namespace: testNamespace, Name: tc.modelName + "-api-key-metadata"}
-			if err := fakeClient.Get(context.Background(), cmKey, updatedCM); err != nil {
-				t.Fatalf("Get ConfigMap after revoke: %v", err)
+			// Verify no longer listed (the ConfigMap keeps only its owner).
+			keys, err := mgr.ListKeys(context.Background(), tc.modelName)
+			if err != nil {
+				t.Fatalf("ListKeys after revoke: %v", err)
 			}
-			if _, ok := updatedCM.Data[tc.clientID]; ok {
-				t.Errorf("expected clientID %q to be removed from ConfigMap", tc.clientID)
+			for _, k := range keys {
+				if k.ClientID == tc.clientID {
+					t.Errorf("expected clientID %q to be no longer listed", tc.clientID)
+				}
 			}
 		})
 	}
@@ -784,5 +786,91 @@ func TestCreateKey_RemembersCreatorGroups(t *testing.T) {
 	}
 	if len(keys) != 1 || strings.Join(keys[0].CreatorGroups, ",") != "llm-users,team-a" {
 		t.Errorf("key creator groups = %v, want [llm-users team-a]", keys)
+	}
+}
+
+// Usage records for a key's last requests can be processed after the key is
+// revoked, and after the key manager restarts. Revoking keeps who minted the
+// key in the metadata ConfigMap, so the owner can still be looked up, while
+// the key itself is gone from every key listing.
+func TestRevokeKey_KeepsWhoMintedTheKey(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	ctx := context.Background()
+	created, err := mgr.CreateKey(ctx, "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice", Groups: []string{"team-a"}}, "notebook")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	if err := mgr.RevokeKey(ctx, "my-model", created.ClientID); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+
+	if keys, _ := mgr.ListKeys(ctx, "my-model"); len(keys) != 0 {
+		t.Errorf("ListKeys after revoke = %+v, want none", keys)
+	}
+	if keys, _ := mgr.ListAllKeys(ctx); len(keys) != 0 {
+		t.Errorf("ListAllKeys after revoke = %+v, want none", keys)
+	}
+	if keys, _ := mgr.ListKeysForUser(ctx, "alice"); len(keys) != 0 {
+		t.Errorf("ListKeysForUser after revoke = %+v, want none", keys)
+	}
+	all, err := mgr.ListAllKeysIncludingRevoked(ctx)
+	if err != nil {
+		t.Fatalf("ListAllKeysIncludingRevoked: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("ListAllKeysIncludingRevoked = %+v, want the revoked key", all)
+	}
+	k := all[0]
+	if k.ClientID != created.ClientID || k.Creator != "alice" || k.CreatorSubject != "sub-alice" ||
+		strings.Join(k.CreatorGroups, ",") != "team-a" || k.RevokedAt == nil {
+		t.Errorf("revoked key = %+v, want alice / sub-alice / [team-a] with a revoke time", k)
+	}
+	if k.Description != "" {
+		t.Errorf("revoked key keeps description %q, want it dropped", k.Description)
+	}
+	// A revoked key cannot be revoked twice.
+	if err := mgr.RevokeKey(ctx, "my-model", created.ClientID); err == nil {
+		t.Error("second RevokeKey succeeded, want an error")
+	}
+}
+
+// What a revoked key leaves behind is dropped once it is older than
+// RevokedKeyRetention, so the ConfigMap (at most 1 MiB) cannot fill up with
+// them and stop new keys being minted.
+func TestRevokeKey_DropsRevokedKeysPastRetention(t *testing.T) {
+	old := time.Now().Add(-secrets.RevokedKeyRetention - time.Hour).UTC().Format(time.RFC3339)
+	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	cm := makeConfigMap("my-model", testNamespace)
+	cm.Data = map[string]string{
+		"user-old-1":    `{"clientId":"user-old-1","creator":"old","revokedAt":"` + old + `"}`,
+		"user-recent-1": `{"clientId":"user-recent-1","creator":"recent","revokedAt":"` + recent + `"}`,
+		"user-live-1":   `{"clientId":"user-live-1","creator":"live"}`,
+	}
+	secret := makeSecret("my-model", testNamespace)
+	secret.Data = map[string][]byte{"user-live-1": []byte("sk-live")}
+	fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(secret, cm).Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	if err := mgr.RevokeKey(context.Background(), "my-model", "user-live-1"); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+
+	all, err := mgr.ListAllKeysIncludingRevoked(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeysIncludingRevoked: %v", err)
+	}
+	var ids []string
+	for _, k := range all {
+		ids = append(ids, k.ClientID)
+	}
+	slices.Sort(ids)
+	if strings.Join(ids, ",") != "user-live-1,user-recent-1" {
+		t.Errorf("keys left = %v, want user-live-1 (just revoked) and user-recent-1", ids)
 	}
 }

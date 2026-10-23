@@ -12,6 +12,11 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
 )
 
@@ -24,7 +29,7 @@ type fakeKeys struct {
 	delay time.Duration // how long a read takes
 }
 
-func (f *fakeKeys) ListAllKeys(context.Context) ([]secrets.KeyInfo, error) {
+func (f *fakeKeys) ListAllKeysIncludingRevoked(context.Context) ([]secrets.KeyInfo, error) {
 	f.mu.Lock()
 	f.reads++
 	keys := append([]secrets.KeyInfo(nil), f.keys...)
@@ -174,5 +179,38 @@ func TestUnknownLookupsReadTheKeyStoreAtMostOncePerInterval(t *testing.T) {
 	}
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("second unknown lookup status = %d, want 503", rr.Code)
+	}
+}
+
+// The lookup only remembers owners in memory. After the key manager
+// restarts, a key revoked before the restart must still name its owner, as
+// the usage of its last requests can be processed later.
+func TestKeyRevokedBeforeARestartStillNamesItsOwner(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{"llm.nebari.dev/model-name": "m"}
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "m-api-keys", Namespace: "ns", Labels: labels}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "m-api-key-metadata", Namespace: "ns", Labels: labels}},
+	).Build()
+	keys := secrets.NewManager(kube, "ns")
+	ctx := context.Background()
+	created, err := keys.CreateKey(ctx, "m", secrets.Creator{Username: "alice", Subject: "sub-alice", Groups: []string{"team-a"}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.RevokeKey(ctx, "m", created.ClientID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new handler: nothing remembered from before the restart.
+	mux := http.NewServeMux()
+	NewHandler(keys).RegisterRoutes(mux)
+	code, owner := getOwner(t, mux, created.ClientID)
+
+	if code != http.StatusOK || owner.Subject != "sub-alice" || owner.Username != "alice" || strings.Join(owner.Groups, ",") != "team-a" {
+		t.Errorf("lookup of a key revoked before the restart = %d %+v, want 200 with alice / sub-alice / [team-a]", code, owner)
 	}
 }

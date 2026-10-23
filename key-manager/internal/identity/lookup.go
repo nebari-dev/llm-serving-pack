@@ -27,9 +27,10 @@ type Owner struct {
 	Groups   []string `json:"groups"`
 }
 
-// KeyLister lists the metadata of every API key (secrets.Manager).
+// KeyLister lists the metadata of every API key, and the owners of recently
+// revoked ones (secrets.Manager).
 type KeyLister interface {
-	ListAllKeys(ctx context.Context) ([]secrets.KeyInfo, error)
+	ListAllKeysIncludingRevoked(ctx context.Context) ([]secrets.KeyInfo, error)
 }
 
 // minRefreshInterval is the least time between two reads of the key store.
@@ -63,7 +64,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 //
 // A client ID is never reissued, so its owner never changes: owners are
 // remembered for good, including after the key is revoked, since the access
-// log for a key's last requests can arrive after that. An unknown client ID
+// log for a key's last requests can arrive after that. A revoked key's owner
+// is also kept in the key store (secrets.RevokedKeyRetention), so it is
+// still found after the key manager restarts. An unknown client ID
 // (usually a key minted since the last read) triggers a fresh read of the key
 // store. Reads are at least minInterval apart, and lookups that arrive while
 // one is in progress share it, so unknown IDs cannot make the key manager
@@ -87,7 +90,7 @@ func (h *Handler) owner(ctx context.Context, clientID string) (Owner, bool, erro
 		case <-time.After(wait):
 		}
 	}
-	keys, err := h.keys.ListAllKeys(ctx)
+	keys, err := h.keys.ListAllKeysIncludingRevoked(ctx)
 	h.lastRefresh = time.Now()
 	if err != nil {
 		return Owner{}, false, err

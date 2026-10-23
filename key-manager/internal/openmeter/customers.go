@@ -183,9 +183,10 @@ func (c *Client) customersWithSubjectKey(ctx context.Context, subjectKey string)
 	}
 }
 
-// KeyLister lists the metadata of every API key (secrets.Manager).
+// KeyLister lists the metadata of every API key, and the owners of recently
+// revoked ones (secrets.Manager).
 type KeyLister interface {
-	ListAllKeys(ctx context.Context) ([]secrets.KeyInfo, error)
+	ListAllKeysIncludingRevoked(ctx context.Context) ([]secrets.KeyInfo, error)
 }
 
 // CustomerSync attaches API keys to their creators' OpenMeter customers.
@@ -214,8 +215,10 @@ type owner struct {
 }
 
 // Sync makes sure every key creator has a customer holding their subject and
-// all their keys' client IDs. Subject keys are only ever added: a revoked
-// key's past usage stays attributed. It is safe to run repeatedly.
+// all their keys' client IDs, revoked keys included (a key minted and
+// revoked between two syncs is still attached). Subject keys are only ever
+// added: a revoked key's past usage stays attributed. It is safe to run
+// repeatedly.
 //
 // OpenMeter lets a subject key belong to one customer only. A client ID that
 // another customer already holds (client IDs used to be reissued after a
@@ -224,7 +227,7 @@ type owner struct {
 // would hand that customer's past usage under the ID to the key's creator,
 // which only the operator can judge.
 func (s *CustomerSync) Sync(ctx context.Context) error {
-	keys, err := s.keys.ListAllKeys(ctx)
+	keys, err := s.keys.ListAllKeysIncludingRevoked(ctx)
 	if err != nil {
 		return fmt.Errorf("listing API keys: %w", err)
 	}

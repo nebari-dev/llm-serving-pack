@@ -30,7 +30,18 @@ type KeyInfo struct {
 	CreatedAt     time.Time `json:"createdAt"`
 	ModelName     string    `json:"modelName"`
 	Namespace     string    `json:"namespace"`
+	// RevokedAt is set on what a revoked key leaves in the metadata
+	// ConfigMap: who minted it, kept so usage recorded with the key can
+	// still be attributed after the key is gone. Key listings skip these.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
 }
+
+// RevokedKeyRetention is how long a revoked key's owner stays in the
+// metadata ConfigMap. It covers usage records processed late (a collector
+// outage, a replay of the gateway's log) and the next OpenMeter customer
+// sync; older entries are dropped so the ConfigMap (at most 1 MiB) does not
+// fill up and stop new keys being minted.
+const RevokedKeyRetention = 90 * 24 * time.Hour
 
 // Creator is the user minting a key.
 type Creator struct {
@@ -329,7 +340,7 @@ func (m *Manager) ListKeys(ctx context.Context, modelName string) ([]KeyInfo, er
 	if err != nil {
 		return nil, err
 	}
-	return parseConfigMapKeys(cm), nil
+	return liveKeys(parseConfigMapKeys(cm)), nil
 }
 
 // ListKeysForUser returns metadata for keys created by a specific user across all models.
@@ -349,6 +360,18 @@ func (m *Manager) ListKeysForUser(ctx context.Context, username string) ([]KeyIn
 
 // ListAllKeys returns metadata for every key across all models.
 func (m *Manager) ListAllKeys(ctx context.Context) ([]KeyInfo, error) {
+	all, err := m.ListAllKeysIncludingRevoked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return liveKeys(all), nil
+}
+
+// ListAllKeysIncludingRevoked returns metadata for every key across all
+// models, and the owners of keys revoked within RevokedKeyRetention
+// (RevokedAt set). The usage pipeline uses it to attribute usage recorded
+// with a key that has since been revoked.
+func (m *Manager) ListAllKeysIncludingRevoked(ctx context.Context) ([]KeyInfo, error) {
 	// List all ConfigMaps in the namespace and filter by label/name to find API key metadata ConfigMaps.
 	allCMs := &corev1.ConfigMapList{}
 	if err := m.client.List(ctx, allCMs, client.InNamespace(m.namespace)); err != nil {
@@ -402,12 +425,43 @@ func (m *Manager) revokeKeyOnce(ctx context.Context, modelName, clientID string)
 		return fmt.Errorf("key %q not found for model %s", clientID, modelName)
 	}
 
+	var keyInfo KeyInfo
+	if v, ok := cm.Data[clientID]; ok {
+		// A key without readable metadata is still revoked; its owner is
+		// then unknown, as it already was.
+		_ = json.Unmarshal([]byte(v), &keyInfo)
+	}
+
 	delete(secret.Data, clientID)
 	if err := m.client.Update(ctx, secret); err != nil {
 		return fmt.Errorf("updating Secret for model %s: %w", modelName, err)
 	}
 
-	delete(cm.Data, clientID)
+	// Keep who minted the key, so usage recorded with it can still be
+	// attributed, and drop what older revoked keys left behind.
+	now := time.Now().UTC().Truncate(time.Second)
+	for id, info := range parseConfigMapEntries(cm) {
+		if info.RevokedAt != nil && now.Sub(*info.RevokedAt) > RevokedKeyRetention {
+			delete(cm.Data, id)
+		}
+	}
+	tombstone, err := json.Marshal(KeyInfo{
+		ClientID:       clientID,
+		Creator:        keyInfo.Creator,
+		CreatorSubject: keyInfo.CreatorSubject,
+		CreatorGroups:  keyInfo.CreatorGroups,
+		CreatedAt:      keyInfo.CreatedAt,
+		ModelName:      keyInfo.ModelName,
+		Namespace:      keyInfo.Namespace,
+		RevokedAt:      &now,
+	})
+	if err != nil {
+		return fmt.Errorf("marshaling revoked key metadata: %w", err)
+	}
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data[clientID] = string(tombstone)
 	if err := m.client.Update(ctx, cm); err != nil {
 		return fmt.Errorf("updating ConfigMap for model %s: %w", modelName, err)
 	}
@@ -415,15 +469,37 @@ func (m *Manager) revokeKeyOnce(ctx context.Context, modelName, clientID string)
 	return nil
 }
 
-// parseConfigMapKeys parses all KeyInfo entries from a ConfigMap's data map.
+// parseConfigMapKeys parses all KeyInfo entries, revoked ones included, from
+// a ConfigMap's data map.
 func parseConfigMapKeys(cm *corev1.ConfigMap) []KeyInfo {
 	var result []KeyInfo
-	for _, v := range cm.Data {
+	for _, info := range parseConfigMapEntries(cm) {
+		result = append(result, info)
+	}
+	return result
+}
+
+// parseConfigMapEntries parses a ConfigMap's KeyInfo entries by data key,
+// skipping any that are not valid KeyInfo JSON.
+func parseConfigMapEntries(cm *corev1.ConfigMap) map[string]KeyInfo {
+	result := make(map[string]KeyInfo, len(cm.Data))
+	for k, v := range cm.Data {
 		var info KeyInfo
 		if err := json.Unmarshal([]byte(v), &info); err != nil {
 			continue
 		}
-		result = append(result, info)
+		result[k] = info
+	}
+	return result
+}
+
+// liveKeys returns the keys that have not been revoked.
+func liveKeys(keys []KeyInfo) []KeyInfo {
+	var result []KeyInfo
+	for _, k := range keys {
+		if k.RevokedAt == nil {
+			result = append(result, k)
+		}
 	}
 	return result
 }

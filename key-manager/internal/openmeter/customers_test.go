@@ -151,7 +151,7 @@ func (f *fakeOpenMeter) field(key, name string) any {
 
 type fakeKeys []secrets.KeyInfo
 
-func (k fakeKeys) ListAllKeys(context.Context) ([]secrets.KeyInfo, error) { return k, nil }
+func (k fakeKeys) ListAllKeysIncludingRevoked(context.Context) ([]secrets.KeyInfo, error) { return k, nil }
 
 func key(clientID, creator, subject string) secrets.KeyInfo {
 	return secrets.KeyInfo{ClientID: clientID, Creator: creator, CreatorSubject: subject}
