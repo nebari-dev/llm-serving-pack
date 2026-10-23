@@ -10,10 +10,10 @@ openmeter:
     resources:
       requests: {cpu: 50m, memory: 96Mi}
       limits: {memory: 384Mi}
-  # Usage events with an ID already stored are dropped for this long, so a
-  # redelivered gateway access-log entry is counted once. The ids live in
-  # Redis, in memory only; see redis below for its size and what a restart
-  # or a full Redis does.
+  # Usage events with an ID already stored are dropped for up to this long,
+  # so a redelivered gateway access-log entry is usually counted once. Best
+  # effort: the ids live in Redis, which can lose or evict them; see redis
+  # below.
   dedupeExpiration: 768h
 
 # The model resources the LLM serving pack runs, each with the OpenMeter
@@ -45,6 +45,15 @@ setup:
     repository: ghcr.io/nebari-dev/llm-serving-pack/openmeter-setup
     tag: ""
     digest: ""
+
+# What helm uninstall (or deleting the Argo CD Application) does with the
+# data. true: keeps all of it, the Postgres Cluster (customers, features,
+# prices) and the stores' volumes (Kafka, ClickHouse, Redis), so installing
+# again under the same release name and namespace carries on with the same
+# usage and billing setup. false: deletes all of it with the release. Either
+# way the usage and the billing setup go together. See the README's
+# "Uninstall and reinstall".
+keepDataOnUninstall: true
 
 # Bundled stores, one replica each. persistence.enabled false keeps data in
 # emptyDir (lost when the pod restarts); use that only for throwaway installs.
@@ -83,18 +92,25 @@ postgres:
   # admits it.
   operatorNamespace: cnpg-system
 # Redis holds the event ids the sink worker has stored, each for
-# openmeter.dedupeExpiration, to drop repeats; up to 5 ids per request. It
-# keeps nothing on disk: a Redis restart forgets them, and an event
-# redelivered after that is counted again. When it reaches maxMemory it
-# evicts the ids closest to expiring (volatile-ttl), so under heavy traffic
-# repeats are caught for less than dedupeExpiration, instead of the sink
-# stopping. An id takes a few hundred bytes (about 550 measured on a small
-# dev install), so 256mb holds roughly half a million ids, about 100,000
-# requests. Raise maxMemory with traffic, and keep limits.memory about 1.5
-# times it for Redis's own overhead.
+# openmeter.dedupeExpiration, to drop repeats; up to 5 ids per request.
+# Dropping repeats is best effort, within what Redis still remembers:
+# - persistence.enabled (the default) logs every write to an append-only file
+#   on Redis's volume, synced once a second, so a restart keeps the ids; a
+#   crash can lose the last second of them. Without it a restart forgets
+#   them all.
+# - When it reaches maxMemory it evicts the ids closest to expiring
+#   (volatile-ttl) instead of stopping the sink, so under heavy traffic
+#   repeats are caught for less than dedupeExpiration.
+# An event redelivered after its id is gone is counted again. An id takes a
+# few hundred bytes (about 550 measured on a small dev install), so 256mb
+# holds roughly half a million ids, about 100,000 requests. Raise maxMemory
+# with traffic, keep limits.memory about 1.5 times it for Redis's own
+# overhead, and persistence.size a few times it: rewriting the append-only
+# file briefly needs room for the old and the new copy.
 redis:
   image: redis:7.4.7@sha256:c6e4a82ce60b829a72a21cc4ad4c1c274fa6962eb0d6ac698e8157cbc3fe16a4
   maxMemory: 256mb
+  persistence: {enabled: true, size: 1Gi, storageClass: ""}
   resources:
     requests: {cpu: 20m, memory: 32Mi}
     limits: {memory: 384Mi}

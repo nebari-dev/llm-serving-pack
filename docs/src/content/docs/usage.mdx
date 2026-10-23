@@ -13,6 +13,17 @@ sends usage to an OpenMeter you point it at, or runs one itself
 
 It is off by default.
 
+## Requirements
+
+- **Envoy AI Gateway 1.1 or newer.** Metering makes the operator declare
+  token costs on every route it generates (`llmRequestCosts`), including a
+  `ReasoningToken` cost. Envoy AI Gateway 0.5 rejects `ReasoningToken`, and
+  with it every route the operator writes, so turning `usage.enabled` on
+  against 0.5 takes down every model route, not only metering. Upgrade the
+  gateway first (see [gateway upgrades](/gateway-upgrades/)).
+- For the bundled OpenMeter (`openmeter.enabled`), the CloudNativePG
+  operator, which Nebari installs on every cluster.
+
 ## How a request becomes usage in OpenMeter
 
 1. With `usage.enabled`, the operator asks the Envoy AI Gateway to count
@@ -50,8 +61,11 @@ already includes cached tokens, so the collector subtracts them; reasoning
 tokens are part of `output`.
 
 The event `source` is constant, so a redelivered access-log entry produces
-events OpenMeter has already seen, and OpenMeter counts them once (turn on its
-`sink.dedupe`).
+events OpenMeter has already seen, and OpenMeter drops the ones it still
+remembers (turn on its `sink.dedupe`). This is best effort, not a guarantee
+that each event is stored once: OpenMeter remembers ids in Redis for a
+limited time and Redis can lose or evict them (see below for the bundled
+OpenMeter).
 
 ### Who a request is attributed to
 
@@ -117,10 +131,14 @@ the first time and leaves it alone after that, so re-rendering the chart never
 changes it. To manage it yourself, set `openmeter.clickhouse.existingSecret`
 to a Secret with the password under `clickhouse-password`.
 
-The sink worker drops repeated events by the ids it keeps in Redis, in memory
-only: a Redis restart forgets them, and a full Redis
-(`openmeter.redis.maxMemory`) evicts the oldest first, so an event
-redelivered after either is counted again.
+The sink worker drops repeated events by the ids it keeps in Redis, for
+`openmeter.openmeter.dedupeExpiration` (32 days). That is best effort, within
+what Redis still remembers. Redis writes every id to an append-only file on
+its own volume (`openmeter.redis.persistence`, on by default), synced once a
+second, so a restart keeps them, but a crash can lose the last second of
+ids. When Redis is full (`openmeter.redis.maxMemory`) it evicts the ids
+closest to expiring rather than stopping the sink. An event redelivered after
+its id is gone is counted again.
 
 With an OpenMeter you run yourself:
 
@@ -202,6 +220,12 @@ price table by OpenMeter; set your own prices with
   counts: a failed request, or a streamed response the client cancelled part
   way. Envoy AI Gateway 1.1 only learns the counts when the response
   completes. The provider may still have charged for it.
+- A stream the client cancels after the last token but before the final
+  `usage` chunk is not billed: the client has the whole answer, the provider
+  generated (and may charge for) every token, but the gateway never saw the
+  counts, so there is one `llm.request` with `usage_reported=false` and no
+  `llm.tokens`. Nothing alerts on this yet; to watch for it, query the
+  `llm_requests` meter grouped by `usage_reported`.
 - Requests the gateway rejected before identifying a caller (a wrong API key,
   a missing token) produce no events.
 - Streamed chat completions end with one extra `usage` chunk even when the
@@ -214,14 +238,28 @@ Read the totals from OpenMeter's API: its meter queries
 (`GET /api/v1/meters/llm_requests/query?groupBy=user`, `groupBy=team`, ...)
 and the features' cost queries above.
 
+## Uninstall and reinstall
+
+With the bundled OpenMeter, `helm uninstall` (or deleting the Argo CD
+Application) keeps all of its data by default
+(`openmeter.keepDataOnUninstall: true`): the Postgres `Cluster` with the
+customers, features and prices, and the Kafka, ClickHouse and Redis volumes
+with the usage. Installing again under the same release name and namespace
+carries on from there. Set `openmeter.keepDataOnUninstall: false` before
+uninstalling to delete all of it with the release instead. Either way the
+usage and the billing setup go together, so a reinstall never finds usage
+events without the customers and prices they are billed with. The subchart's
+README lists what is kept and how to delete it by hand.
+
 ## Delivery
 
 The collector acknowledges the gateway's batch only after OpenMeter accepted
 the events. The gateway itself sends each batch once and does not retry, so
 entries produced while the collector or OpenMeter is down are lost. The example
 keeps a second copy of every entry on the gateway's stdout; if container logs
-are shipped somewhere durable, that copy can be replayed, and OpenMeter counts
-each event once.
+are shipped somewhere durable, that copy can be replayed; OpenMeter drops the
+events whose ids it still remembers (best effort, as above), so replay only
+the entries that were lost.
 
 ## Try it locally
 

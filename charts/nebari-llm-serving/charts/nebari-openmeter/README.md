@@ -13,8 +13,9 @@ The chart (`nebari-openmeter`) deploys:
 - **OpenMeter** v1.0.0-beta.234: the API, which takes usage events and
   answers queries, and the sink worker, which moves events from Kafka into
   ClickHouse.
-- **Its stores**: Kafka, ClickHouse and Postgres on persistent volumes, and
-  Redis for de-duplicating events. All are pinned upstream images.
+- **Its stores**: Kafka, ClickHouse, Redis (for dropping repeated events,
+  with an append-only file) and Postgres, on persistent volumes. All are
+  pinned upstream images.
   Postgres's credentials come from CloudNativePG. ClickHouse's password is
   `clickhouse.existingSecret`, or a Secret a pre-install/pre-upgrade hook
   (Argo CD `PreSync`) creates once with a random password and never changes,
@@ -66,12 +67,52 @@ sets per-token USD rates for models with no public price.
 - **Costs use today's prices.** OpenMeter prices all usage with the price in
   effect now, and replacing a manual price deletes the old one; it keeps no
   price history. A price change therefore changes past costs too.
-- **Repeats are dropped while Redis remembers them.** The sink worker keeps
-  each event id in Redis for `openmeter.dedupeExpiration`, in memory only. A
-  Redis restart forgets them, and when Redis reaches `redis.maxMemory` it
-  evicts the ids closest to expiring; an event redelivered after either is
-  counted again.
+- **Repeats are dropped while Redis remembers them, best effort.** The sink
+  worker keeps each event id in Redis for `openmeter.dedupeExpiration`.
+  Redis logs every write to an append-only file on its volume, synced once a
+  second, so a restart keeps the ids, but a crash can lose the last second
+  of them (and with `redis.persistence.enabled: false` a restart forgets
+  them all). When Redis reaches `redis.maxMemory` it evicts the ids closest
+  to expiring. An event redelivered after its id is gone is counted again.
 - **No caps.** OpenMeter does not stop spend. Caps belong in the gateway.
+
+## Uninstall and reinstall
+
+`keepDataOnUninstall` decides what `helm uninstall`, or deleting the Argo CD
+Application, does with the data. Both settings keep the usage and the billing
+setup together, so a reinstall never finds usage events without the
+customers, features and prices that go with them.
+
+- **`true` (the default): keep everything.** The Postgres `Cluster` carries
+  `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options:
+  Delete=false`, so it stays, with its volume (customers, features, prices).
+  The Kafka, ClickHouse and Redis volumes stay too
+  (`persistentVolumeClaimRetentionPolicy.whenDeleted: Retain`). Install again
+  with the same release name and namespace and OpenMeter carries on with the
+  same usage and billing setup: Helm and Argo CD take the kept `Cluster`
+  back, and the StatefulSets mount the kept volumes.
+- **`false`: delete everything with the release.** The `Cluster` is deleted
+  (CloudNativePG deletes its volume with it), and the StatefulSets' volumes
+  are deleted with them (`whenDeleted: Delete`). Set it with a `helm upgrade`
+  (or an Argo CD sync) before uninstalling; the setting in effect when the
+  release is removed is the one that applies.
+
+Keeping is the default because the usage is what you bill from: losing it
+should take a deliberate step. In both cases the ClickHouse password Secret
+(`<release>-openmeter-clickhouse-password`, made by a hook, not by the
+release) stays. A reinstall reuses it, which is what kept ClickHouse data
+needs; a fresh ClickHouse takes it as its new password.
+
+To delete kept data by hand, after `helm uninstall`:
+
+```bash
+kubectl -n <namespace> delete cluster <release>-openmeter-db
+kubectl -n <namespace> delete pvc -l app.kubernetes.io/name=nebari-openmeter,app.kubernetes.io/instance=<release>
+kubectl -n <namespace> delete secret <release>-openmeter-clickhouse-password
+```
+
+The store volumes carry the StatefulSets' selector labels, which is what the
+second command matches; Postgres's volume goes with its `Cluster`.
 
 ## Develop
 

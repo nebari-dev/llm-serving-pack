@@ -56,7 +56,7 @@ spec:
         - name: data
           emptyDir: {}
       {{- end }}
-  {{- include "om.dataClaim" (dict "store" .Values.kafka) | nindent 2 }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.kafka) | nindent 2 }}
 ---
 apiVersion: v1
 kind: Service
@@ -113,7 +113,7 @@ spec:
         - name: data
           emptyDir: {}
       {{- end }}
-  {{- include "om.dataClaim" (dict "store" .Values.clickhouse) | nindent 2 }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.clickhouse) | nindent 2 }}
 ---
 apiVersion: v1
 kind: Service
@@ -129,15 +129,17 @@ spec:
     - {name: http, port: 8123, targetPort: 8123}
 ---
 {{- $redis := include "om.name" (dict "root" . "component" "redis") }}
-# Redis holds only the sink's recently seen event IDs (deduplication), so it
-# keeps no data across restarts.
+# Redis holds the sink's recently stored event ids (deduplication). With
+# persistence it logs every write to an append-only file on its volume, so a
+# restart keeps them; see redis in values.yaml for what it still misses.
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ $redis }}
   labels:
     {{- include "om.labels" . | nindent 4 }}
 spec:
+  serviceName: {{ $redis }}
   replicas: 1
   selector:
     matchLabels:
@@ -148,14 +150,29 @@ spec:
         {{- include "om.selector" (dict "root" . "component" "redis") | nindent 8 }}
     spec:
       enableServiceLinks: false
-      securityContext: {runAsNonRoot: true, runAsUser: 999}
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999}
       containers:
         - name: redis
           image: {{ .Values.redis.image }}
           # Every dedupe key has a TTL (openmeter.dedupeExpiration). When
           # Redis is full, volatile-ttl evicts the ids closest to expiring
           # instead of refusing writes, which would stop the sink worker.
-          args: ["redis-server", "--maxmemory", {{ .Values.redis.maxMemory | quote }}, "--maxmemory-policy", "volatile-ttl", "--save", ""]
+          # appendonly: every write goes to /data/appendonlydir, synced each
+          # second; no RDB snapshots (--save "").
+          args:
+            - redis-server
+            - --maxmemory
+            - {{ .Values.redis.maxMemory | quote }}
+            - --maxmemory-policy
+            - volatile-ttl
+            - --save
+            - ""
+            - --appendonly
+            - {{ ternary "yes" "no" .Values.redis.persistence.enabled | quote }}
+            - --appendfsync
+            - everysec
+            - --dir
+            - /data
           ports:
             - containerPort: 6379
           readinessProbe:
@@ -165,6 +182,14 @@ spec:
             {{- include "om.securityContext" . | nindent 12 }}
           resources:
             {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      {{- if not .Values.redis.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.redis) | nindent 2 }}
 ---
 apiVersion: v1
 kind: Service

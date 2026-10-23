@@ -48,9 +48,16 @@ allowPrivilegeEscalation: false
 capabilities: {drop: [ALL]}
 {{- end -}}
 
-{{/* A store's data volume: its claim when persistence is on, else emptyDir. */}}
+{{/*
+A store's data volume: its claim when persistence is on, else emptyDir. The
+claim outlives the StatefulSet (helm uninstall) unless keepDataOnUninstall
+is false.
+*/}}
 {{- define "om.dataClaim" -}}
 {{- if .store.persistence.enabled }}
+persistentVolumeClaimRetentionPolicy:
+  whenDeleted: {{ ternary "Retain" "Delete" .root.Values.keepDataOnUninstall }}
+  whenScaled: Retain
 volumeClaimTemplates:
   - metadata:
       name: data

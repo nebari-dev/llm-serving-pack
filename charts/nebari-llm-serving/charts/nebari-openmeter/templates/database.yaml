@@ -14,6 +14,13 @@ metadata:
     # Ahead of OpenMeter in an Argo CD sync: its pods need the Secret this
     # Cluster generates.
     argocd.argoproj.io/sync-wave: "-1"
+    {{- if .Values.keepDataOnUninstall }}
+    # Kept by helm uninstall, and by Argo CD when the Application is deleted,
+    # like the stores' volumes: the customers, features and prices here go
+    # with the usage in ClickHouse and Kafka.
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Delete=false
+    {{- end }}
 spec:
   instances: {{ .Values.postgres.instances }}
   imageName: {{ .Values.postgres.imageName }}
