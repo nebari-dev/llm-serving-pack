@@ -166,21 +166,29 @@ spec:
       template:
         {{- include "om.priceSyncPod" . | nindent 8 }}
 ---
-# Prices right after each install or upgrade, without waiting for the
-# schedule; retried while OpenMeter's stores come up. An ordinary Job, not a
-# hook: it fetches public prices, and a slow or offline fetch shouldn't fail
-# the install.
+# Prices right after install, without waiting for the schedule; retried
+# while OpenMeter's stores come up. An ordinary Job, not a hook: it fetches
+# public prices, and a slow or offline fetch shouldn't fail the install.
+#
+# A Job's pod template can't be changed, so the name carries a hash of the
+# pod and OpenMeter's config: a change (a new image, say) makes a new Job,
+# which runs again, and Helm or Argo CD (with pruning) deletes the old one.
+# Not .Release.Revision: Argo CD renders with helm template, where it is
+# always 1, so the second change failed the sync ("field is immutable").
+# No ttlSecondsAfterFinished either: Argo CD would see the deleted Job as
+# missing and create it again.
+{{- $priceSyncPod := include "om.priceSyncPod" . }}
+{{- $priceSyncHash := print $priceSyncPod (include (print $.Template.BasePath "/config.yaml") .) | sha256sum | trunc 10 }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "om.name" (dict "root" . "component" (printf "price-sync-%d" .Release.Revision)) }}
+  name: {{ include "om.name" (dict "root" . "component" (printf "price-sync-%s" $priceSyncHash)) }}
   labels:
     {{- include "om.labels" . | nindent 4 }}
 spec:
   backoffLimit: 6
-  ttlSecondsAfterFinished: 86400
   template:
-    {{- include "om.priceSyncPod" . | nindent 4 }}
+    {{- $priceSyncPod | nindent 4 }}
 ---
 apiVersion: batch/v1
 kind: Job
