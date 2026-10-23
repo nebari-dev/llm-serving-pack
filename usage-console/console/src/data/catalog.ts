@@ -44,11 +44,13 @@ export async function api<T>(path: string): Promise<T> {
 
 // ---- sign-out ---------------------------------------------------------------
 
-/** Ends the console session and Keycloak's, then lands back on the console. */
-export async function signOut() {
-  const res = await fetch(session.auth.signOutUrl ?? '/api/auth/logout', { method: 'POST' })
-  const body = (await res.json().catch(() => null)) as { redirect?: string } | null
-  window.location.assign(body?.redirect ?? '/')
+/**
+ * Signs out at the session's sign-out URL: the gateway's logout path, which
+ * ends the gateway session and Keycloak's. It's a page navigation, since the
+ * gateway answers with redirects to Keycloak.
+ */
+export function signOut() {
+  if (session.auth.signOutUrl) window.location.assign(session.auth.signOutUrl)
 }
 
 /** The control plane sends lastUsedAt (epoch ms); screens show "12s ago". */
