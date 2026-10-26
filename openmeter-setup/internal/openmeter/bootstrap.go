@@ -41,17 +41,16 @@ const tokensMeter = "llm_tokens"
 // Bootstrap creates what cfg lists and OpenMeter doesn't have yet. A feature
 // is matched by key, a price by provider, model and rates.
 func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() time.Time) error {
-	var meters struct {
-		Data []struct {
-			ID  string `json:"id"`
-			Key string `json:"key"`
-		} `json:"data"`
+	type meter struct {
+		ID  string `json:"id"`
+		Key string `json:"key"`
 	}
-	if err := c.get(ctx, "/api/v3/openmeter/meters", nil, &meters); err != nil {
+	meters, err := listAll[meter](ctx, c, "/api/v3/openmeter/meters")
+	if err != nil {
 		return err
 	}
 	meterID := ""
-	for _, m := range meters.Data {
+	for _, m := range meters {
 		if m.Key == tokensMeter {
 			meterID = m.ID
 		}

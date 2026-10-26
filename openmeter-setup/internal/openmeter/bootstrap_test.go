@@ -83,3 +83,23 @@ func TestBootstrapReadsEveryPage(t *testing.T) {
 		t.Fatalf("created %+v, want nothing: all of it is on page 2", f.created)
 	}
 }
+
+// The meters list is paged too (20 a page by default): the tokens meter is
+// found wherever it is.
+func TestBootstrapFindsTheTokensMeterOnALaterPage(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for i := range 120 {
+		f.meters = append(f.meters, map[string]any{"id": fmt.Sprintf("m-%d", i), "key": fmt.Sprintf("other_%d", i)})
+	}
+	f.meters = append(f.meters, map[string]any{"id": "m-tok", "key": "llm_tokens"})
+	c := openmeter.NewClient(f.server(t).URL, "")
+
+	err := openmeter.Bootstrap(context.Background(), c, openmeter.BootstrapConfig{Resources: []openmeter.Resource{{Name: "new", Provider: "bedrock"}}}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.created) != 1 || f.created[0]["meter"].(map[string]any)["id"] != "m-tok" {
+		t.Fatalf("created %+v, want one feature over m-tok", f.created)
+	}
+}
