@@ -116,7 +116,10 @@ openmeter:
 Postgres as a CloudNativePG `Cluster`; it needs the CloudNativePG operator,
 which Nebari installs on every cluster. It creates the meters and a priced
 feature per model resource (see Set up OpenMeter below), and syncs public
-LLM prices daily. Every value under
+LLM prices daily. Changing a resource's `provider` later updates its
+feature on the next install or upgrade; OpenMeter prices usage when it is
+queried, from the feature as it is then, so that also re-prices the
+resource's past usage under the new provider. Every value under
 `openmeter` is the subchart's
 (`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
 

@@ -103,3 +103,28 @@ func TestBootstrapFindsTheTokensMeterOnALaterPage(t *testing.T) {
 		t.Fatalf("created %+v, want one feature over m-tok", f.created)
 	}
 }
+
+// A resource whose provider changed in the values gets its existing feature's
+// unit cost updated to the new provider, once.
+func TestBootstrapUpdatesAFeaturesProvider(t *testing.T) {
+	f := &fakeOpenMeter{features: []map[string]any{feature("f-chat", "chat", "openai")}}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Resources: []openmeter.Resource{{Name: "chat", Provider: "bedrock"}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 0 {
+		t.Errorf("created %+v, want the existing feature updated instead", f.created)
+	}
+	if len(f.patched) != 1 {
+		t.Fatalf("patched %+v, want one update", f.patched)
+	}
+	uc := f.patched[0]["unit_cost"].(map[string]any)
+	if f.patched[0]["_id"] != "f-chat" || uc["type"] != "llm" || uc["provider"] != "bedrock" || uc["model_property"] != "model" || uc["token_type_property"] != "token_type" {
+		t.Fatalf("patch %+v, want f-chat's unit cost priced under bedrock", f.patched[0])
+	}
+}

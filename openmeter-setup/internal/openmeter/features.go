@@ -18,9 +18,25 @@ type Price struct {
 // Feature is a priced OpenMeter feature; the pack makes one per model
 // resource, over the llm_tokens meter filtered to that resource.
 type Feature struct {
+	ID    string `json:"id"`
+	Key   string `json:"key"`
 	Meter struct {
 		Filters map[string]map[string]string `json:"filters"`
 	} `json:"meter"`
+	UnitCost UnitCost `json:"unit_cost"`
+}
+
+// UnitCost is how a feature's usage is priced: OpenMeter's LLM unit cost
+// fields. OpenMeter also returns the prices it resolved, which are ignored.
+type UnitCost struct {
+	Type              string `json:"type"`
+	Provider          string `json:"provider,omitempty"`
+	ProviderProperty  string `json:"provider_property,omitempty"`
+	Model             string `json:"model,omitempty"`
+	ModelProperty     string `json:"model_property,omitempty"`
+	TokenType         string `json:"token_type,omitempty"`
+	TokenTypeProperty string `json:"token_type_property,omitempty"`
+	Amount            string `json:"amount,omitempty"` // a manual unit cost
 }
 
 func (c *Client) Features(ctx context.Context) ([]Feature, error) {

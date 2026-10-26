@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"maps"
 	"math/big"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 )
@@ -63,12 +65,27 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 	if err != nil {
 		return err
 	}
-	have := map[string]bool{}
+	have := map[string][]Feature{}
 	for _, f := range fs {
-		have[f.Meter.Filters["model_resource"]["eq"]] = true
+		r := f.Meter.Filters["model_resource"]["eq"]
+		have[r] = append(have[r], f)
 	}
 	for _, r := range cfg.Resources {
-		if have[r.Name] {
+		want := llmUnitCost(r.Provider)
+		for _, f := range have[r.Name] {
+			if f.UnitCost == want {
+				continue
+			}
+			// OpenMeter prices a feature's usage when it is queried, from the
+			// feature's unit cost as it is then, so this also re-prices the
+			// usage the resource recorded under the old provider.
+			log.Printf("feature %s (%s): unit cost %+v differs from the values' %+v; updating it, which re-prices this resource's past usage too",
+				f.Key, r.Name, f.UnitCost, want)
+			if err := c.patch(ctx, "/api/v3/openmeter/features/"+url.PathEscape(f.ID), map[string]any{"unit_cost": want}); err != nil {
+				return fmt.Errorf("feature for %s: %w", r.Name, err)
+			}
+		}
+		if len(have[r.Name]) > 0 {
 			continue
 		}
 		err := c.post(ctx, "/api/v3/openmeter/features", map[string]any{
@@ -78,7 +95,7 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 				"id":      meterID,
 				"filters": map[string]any{"model_resource": map[string]string{"eq": r.Name}},
 			},
-			"unit_cost": map[string]string{"type": "llm", "provider": r.Provider, "model_property": "model", "token_type_property": "token_type"},
+			"unit_cost": want,
 		})
 		if err != nil {
 			return fmt.Errorf("feature for %s: %w", r.Name, err)
@@ -155,12 +172,27 @@ func featureKey(resource string) string {
 	return notKeyChar.ReplaceAllString(resource, "_") + "_tokens"
 }
 
+// llmUnitCost is the unit cost of a model resource's feature: tokens priced
+// from OpenMeter's LLM prices for the provider, by the events' model and
+// token type.
+func llmUnitCost(provider string) UnitCost {
+	return UnitCost{Type: "llm", Provider: provider, ModelProperty: "model", TokenTypeProperty: "token_type"}
+}
+
 func (c *Client) post(ctx context.Context, path string, body any) error {
+	return c.send(ctx, http.MethodPost, path, body)
+}
+
+func (c *Client) patch(ctx context.Context, path string, body any) error {
+	return c.send(ctx, http.MethodPatch, path, body)
+}
+
+func (c *Client) send(ctx context.Context, method, path string, body any) error {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
