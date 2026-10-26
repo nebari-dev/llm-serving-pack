@@ -315,15 +315,21 @@ Secret `<release>-openmeter-console-oidc-client`, which the console reads.
   keys.
 - Sign out goes to the gateway's `/logout`, which ends the gateway session
   and the Keycloak one.
-- `openmeter.nebariapp.auth.groups` limits the console to members of those
-  Keycloak groups (empty: everyone in the realm).
+- Only members of the Keycloak groups in `openmeter.nebariapp.auth.groups`
+  may open the console, since it shows everyone's usage. The default is
+  `llm-usage-admins`, which the Nebari operator creates; add the people who
+  may see usage to it. An empty list lets everyone in the realm in.
 - `openmeter.console.oidc.issuerURL` and `clientID` set the issuer and client
   by hand instead of the Secret; `discoveryURL` reads Keycloak's keys from
   another address, such as an in-cluster one.
 
+With `openmeter.networkPolicy.enabled` (the default), the console's Service
+takes connections only from the gateway's Envoy proxies in
+`openmeter.networkPolicy.gatewayNamespace` (`envoy-gateway-system`), so other
+pods in the cluster can't call it. `kubectl port-forward` still reaches it.
+
 Without a NebariApp or an issuer, the console has no sign-in of its own:
-everyone who can reach its Service is the same viewer. Use that only on a
-dev cluster.
+everyone who reaches it is the same viewer. Use that only on a dev cluster.
 
 ## Uninstall and reinstall
 

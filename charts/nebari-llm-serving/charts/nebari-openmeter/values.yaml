@@ -157,6 +157,9 @@ networkPolicy:
   apiClientPodLabels:
     - llm.nebari.dev/openmeter-client: "true"
   apiClientNamespaces: []
+  # gatewayNamespace - where Envoy Gateway runs the gateway's proxies; the
+  # console takes connections from those only.
+  gatewayNamespace: envoy-gateway-system
 
 # Routing, TLS and Keycloak sign-in for the console through the Nebari
 # operator. auth.enforceAtGateway signs people in before they reach it.
@@ -171,9 +174,11 @@ nebariapp:
     # forwardAccessToken - the gateway passes the signed-in person's Keycloak
     # access token to the console, which checks it and shows who they are.
     forwardAccessToken: true
-    # groups - only members of these Keycloak groups may open the console.
-    # Empty: every user in the realm.
-    groups: []
+    # groups - only members of these Keycloak groups may open the console,
+    # which shows every person's and team's usage. The Nebari operator
+    # creates the groups; add the people who may see usage to them. Empty:
+    # every user in the realm.
+    groups: [llm-usage-admins]
   landingPage:
     enabled: true
     displayName: LLM usage

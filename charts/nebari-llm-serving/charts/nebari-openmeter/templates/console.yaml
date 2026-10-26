@@ -16,6 +16,8 @@ spec:
         {{- include "om.selector" (dict "root" . "component" "console") | nindent 8 }}
     spec:
       enableServiceLinks: false
+      # The console calls nothing in the Kubernetes API.
+      automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true}
       containers:
         - name: console
