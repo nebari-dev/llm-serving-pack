@@ -290,7 +290,7 @@ Generated resources (all in the CR's namespace, no serving stack):
 | Resource | Purpose |
 |---|---|
 | Backend (`<name>-backend`) | Envoy Gateway fqdn backend for the provider |
-| BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, SNI) |
+| BackendTLSPolicy (`<name>-backend-tls`) | TLS validation toward the provider (System CAs, or the `spec.provider.tls.caConfigMapName` bundle; SNI) |
 | AIServiceBackend (`<name>`) | Selected provider schema, such as OpenAI or AWSBedrock |
 | BackendSecurityPolicy (`<name>-upstream-auth`) | Selected provider credential, such as API key or AWS workload identity |
 | AIGatewayRoute (`<name>-external` / `-internal`) | Declared-model rule (+`modelsOwnedBy`, on both routes) and/or Host-only catch-all rule |

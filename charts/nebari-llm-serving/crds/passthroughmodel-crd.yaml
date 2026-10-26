@@ -182,6 +182,25 @@ spec:
                       or "v1" for api.openai.com. Versionless backends (Bedrock Converse)
                       reject values other than the CRD default.
                     type: string
+                  tls:
+                    description: |-
+                      tls selects which certificate authorities the gateway trusts for the
+                      provider. When omitted, the gateway verifies the provider against its
+                      built-in public CA roots.
+                    properties:
+                      caConfigMapName:
+                        description: |-
+                          caConfigMapName names a ConfigMap in the PassthroughModel's own
+                          namespace holding the PEM certificate authorities that sign the
+                          provider's certificate, under the "ca.crt" key or as the ConfigMap's
+                          only key (the shape a trust-manager Bundle target writes). The gateway
+                          trusts this bundle instead of its built-in public roots, which suits a
+                          self-hosted server with a certificate from a private or corporate CA.
+                        minLength: 1
+                        type: string
+                    required:
+                    - caConfigMapName
+                    type: object
                 type: object
             required:
             - access
