@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -33,6 +34,35 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		return err
 	}
 	return c.do(req, out)
+}
+
+// pageSize is how many items listAll asks OpenMeter for a page.
+const pageSize = 100
+
+// listAll reads every page of an OpenMeter list endpoint (page[number] from
+// 1, page[size]), stopping at a short page or once meta.page.total items
+// have been read.
+func listAll[T any](ctx context.Context, c *Client, path string) ([]T, error) {
+	var all []T
+	for number := 1; ; number++ {
+		var page struct {
+			Data []T `json:"data"`
+			Meta struct {
+				Page struct {
+					Total *int `json:"total"`
+				} `json:"page"`
+			} `json:"meta"`
+		}
+		q := url.Values{"page[number]": {strconv.Itoa(number)}, "page[size]": {strconv.Itoa(pageSize)}}
+		if err := c.get(ctx, path, q, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Data...)
+		total := page.Meta.Page.Total
+		if len(page.Data) < pageSize || (total != nil && len(all) >= *total) {
+			return all, nil
+		}
+	}
 }
 
 func (c *Client) do(req *http.Request, out any) error {

@@ -2,7 +2,6 @@ package openmeter
 
 import (
 	"context"
-	"net/url"
 )
 
 // Price is one OpenMeter LLM price row, as the manual overrides list them.
@@ -25,15 +24,9 @@ type Feature struct {
 }
 
 func (c *Client) Features(ctx context.Context) ([]Feature, error) {
-	var out struct {
-		Data []Feature `json:"data"`
-	}
-	return out.Data, c.get(ctx, "/api/v3/openmeter/features", url.Values{"page[size]": {"100"}}, &out)
+	return listAll[Feature](ctx, c, "/api/v3/openmeter/features")
 }
 
 func (c *Client) Overrides(ctx context.Context) ([]Price, error) {
-	var out struct {
-		Data []Price `json:"data"`
-	}
-	return out.Data, c.get(ctx, "/api/v3/openmeter/llm-cost/overrides", url.Values{"page[size]": {"100"}}, &out)
+	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/overrides")
 }

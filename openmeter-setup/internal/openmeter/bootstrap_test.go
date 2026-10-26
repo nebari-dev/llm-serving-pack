@@ -2,6 +2,7 @@ package openmeter_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -56,5 +57,29 @@ func TestBootstrapComparesPricesAsNumbers(t *testing.T) {
 
 	if len(f.created) != 1 {
 		t.Fatalf("created %d overrides, want 1: %+v", len(f.created), f.created)
+	}
+}
+
+// OpenMeter pages its lists. With more features and prices than fit one
+// page, the ones on later pages are still found and not created again.
+func TestBootstrapReadsEveryPage(t *testing.T) {
+	f := &fakeOpenMeter{}
+	cfg := openmeter.BootstrapConfig{}
+	for i := range 150 {
+		name := fmt.Sprintf("resource-%03d", i)
+		f.features = append(f.features, feature("f-"+name, name, "bedrock"))
+		f.overrides = append(f.overrides, map[string]any{"provider": map[string]any{"id": "mock"}, "model": map[string]any{"id": name},
+			"pricing": map[string]any{"input_per_token": "0.001", "output_per_token": "0.002", "cache_read_per_token": "0", "cache_write_per_token": "0", "reasoning_per_token": "0"}})
+	}
+	cfg.Resources = []openmeter.Resource{{Name: "resource-149", Provider: "bedrock"}}
+	cfg.Prices = []openmeter.ManualPrice{{Provider: "mock", Model: "resource-149", Pricing: map[string]string{"input_per_token": "0.001", "output_per_token": "0.002"}}}
+	c := openmeter.NewClient(f.server(t).URL, "")
+
+	if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.created) != 0 {
+		t.Fatalf("created %+v, want nothing: all of it is on page 2", f.created)
 	}
 }
