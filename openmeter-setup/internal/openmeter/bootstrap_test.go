@@ -38,3 +38,23 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 		t.Fatalf("override %+v", ov)
 	}
 }
+
+// OpenMeter stores prices as decimals and lists them in canonical form, so a
+// price written as 3e-6 or 0.0000030 is the price it lists as 0.000003, and
+// a rate left out is the one it lists as "0". Neither makes a new override.
+func TestBootstrapComparesPricesAsNumbers(t *testing.T) {
+	f := &fakeOpenMeter{}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Prices: []openmeter.ManualPrice{{Provider: "mock", Model: "mock/small",
+		Pricing: map[string]string{"input_per_token": "3e-6", "output_per_token": "0.0000150"}}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 1 {
+		t.Fatalf("created %d overrides, want 1: %+v", len(f.created), f.created)
+	}
+}

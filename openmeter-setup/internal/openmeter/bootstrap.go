@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math/big"
 	"net/http"
 	"regexp"
 	"time"
@@ -104,13 +105,48 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 	return nil
 }
 
+// hasPrice reports whether ov has p. OpenMeter stores rates as
+// decimals and lists them in canonical form (0.000003 for 3e-6, "0" for a
+// rate never set), so rates are compared as numbers, a missing one as zero.
 func hasPrice(ov []Price, p ManualPrice) bool {
 	for _, o := range ov {
-		if o.Provider.ID == p.Provider && o.Model.ID == p.Model && maps.Equal(o.Pricing, p.Pricing) {
+		if o.Provider.ID == p.Provider && o.Model.ID == p.Model && samePricing(o.Pricing, p.Pricing) {
 			return true
 		}
 	}
 	return false
+}
+
+func samePricing(a, b map[string]string) bool {
+	for k := range maps.Keys(a) {
+		if !sameRate(a[k], b[k]) {
+			return false
+		}
+	}
+	for k := range maps.Keys(b) {
+		if !sameRate(a[k], b[k]) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameRate compares two decimal rates; "" is zero, and a rate that does not
+// parse equals only the same string.
+func sameRate(a, b string) bool {
+	ra, okA := rate(a)
+	rb, okB := rate(b)
+	if !okA || !okB {
+		return a == b
+	}
+	return ra.Cmp(rb) == 0
+}
+
+func rate(s string) (*big.Rat, bool) {
+	if s == "" {
+		return new(big.Rat), true
+	}
+	return new(big.Rat).SetString(s)
 }
 
 var notKeyChar = regexp.MustCompile(`[^a-z0-9]+`)
