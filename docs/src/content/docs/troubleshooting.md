@@ -301,10 +301,13 @@ The `<name>-api-keys` Secret is the key-manager's user API-key store, not an ups
 **Upstream connection fails (HTTP 503, `upstream connect error or disconnect/reset before headers`).** A 503 alone does not establish a certificate problem. Envoy hides the detailed transport failure from the response body by default. Check the Envoy proxy access logs for `CERTIFICATE_VERIFY_FAILED` in the response-code details to confirm a TLS certificate verification failure:
 
 ```bash
-kubectl -n envoy-gateway-system get pods
-kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+kubectl -n envoy-gateway-system logs \
+  -l gateway.envoyproxy.io/owning-gateway-name=<gateway> \
+  -c envoy --since=10m --tail=-1 \
   | grep CERTIFICATE_VERIFY_FAILED
 ```
+
+`<gateway>` is the Gateway the request came in through, named in the chart's `platform.gateway` values: by default `nebari-gateway` for `llm.<baseDomain>` and `nebari-internal-gateway` for `llm-internal.<baseDomain>`. Keep `--tail=-1`: with a label selector, `kubectl logs` otherwise prints only the last 10 lines of each pod.
 
 By default the gateway accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status:
 
@@ -325,7 +328,9 @@ The certificate must list `spec.provider.hostname` in its subject alternative na
 **A CA bundle update does not take effect, even though the policy is accepted.** `Accepted=True` and `ResolvedRefs=True` on the `BackendTLSPolicy` do not prove Envoy loaded the CA certificates. With Envoy Gateway 1.8.1, malformed PEM can pass those checks while Envoy rejects the TLS configuration with `Failed to load trusted CA certificates from <inline>`:
 
 ```bash
-kubectl -n envoy-gateway-system logs <envoy-proxy-pod> -c envoy --since=10m \
+kubectl -n envoy-gateway-system logs \
+  -l gateway.envoyproxy.io/owning-gateway-name=<gateway> \
+  -c envoy --since=10m --tail=-1 \
   | grep -E 'Failed to load trusted CA certificates|CERTIFICATE_VERIFY_FAILED|Secret is not supplied by SDS'
 ```
 
