@@ -159,13 +159,26 @@ With `usage.enabled`, the operator adds a ClientTrafficPolicy named
 `llm-https-client-headers` (and `llm-internal-https-client-headers`) on the
 pack's listeners. It removes any `x-llm-client-id`, `x-auth-user`,
 `x-auth-subject` or `x-auth-groups` header a caller sends before
-authentication runs, and makes Envoy generate every request id. If your
-gateway already has a ClientTrafficPolicy covering those listeners (one on the
-whole Gateway counts), the operator does not add its own, because Envoy
-Gateway would apply only one of them. It logs a warning instead: add
-`headers.earlyRequestHeaders.remove: [x-llm-client-id, x-auth-user,
-x-auth-subject, x-auth-groups]` to your policy and keep `headers.requestID`
-at `Generate` (the default). The collector also ignores any request the
+authentication runs, and makes Envoy generate every request id.
+
+Envoy Gateway applies one ClientTrafficPolicy per listener: a policy on a
+listener replaces the Gateway-wide one there, with nothing merged. So if your
+Gateway has a Gateway-wide ClientTrafficPolicy (NIC ships one on
+`nebari-gateway` that sets `connection.bufferLimit: 50Mi`), the operator's
+listener policy starts from a copy of its settings and adds the header
+settings; it follows changes to your policy within seconds. Keep that limit
+on the Gateway-wide policy: the pack's listener shares port 443 with your
+other HTTPS listeners, and Envoy uses one connection buffer limit per port,
+so every policy on the port has to agree on it (Envoy's 32KiB default
+rejects larger chat requests with 413). If a ClientTrafficPolicy of yours
+targets one of the pack's listeners itself (`sectionName`), the two cannot
+both apply, so the operator removes its own and posts a Warning Event,
+reason `UsageHeadersNotProtected`, on the Gateway (`kubectl describe
+gateway`), and logs it as an error: caller-sent identity headers are not
+removed there, so callers can choose the identity their usage is billed
+under. Add `headers.earlyRequestHeaders.remove: [x-llm-client-id,
+x-auth-user, x-auth-subject, x-auth-groups]` and `headers.requestID:
+Generate` to that policy. The collector also ignores any request the
 gateway itself rejected with 401 or 403, so keep the `response_code_details`
 field from the example.
 

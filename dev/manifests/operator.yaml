@@ -70,6 +70,10 @@ rules:
   - apiGroups: ["gateway.envoyproxy.io"]
     resources: ["securitypolicies", "backends", "clienttrafficpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Warning Events on a Gateway whose usage header policy cannot be applied.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
   # Observe AI Gateway-owned routes before removing endpoint authentication.
   # get alone suffices: unstructured reads bypass the manager's cache, so no
   # informer needs list/watch (see PassthroughModelReconciler.removeEndpoint).

@@ -29,9 +29,10 @@
 # gateway removes any x-llm-client-id or x-auth-* a caller sends before
 # authentication runs: with usage metering on, the operator puts a
 # ClientTrafficPolicy on the pack's two listeners that does this (and makes
-# Envoy generate every request id). If the gateway already has a
-# ClientTrafficPolicy of its own, the operator leaves it alone and logs what
-# to add to it. The collector also ignores any request the gateway itself
+# Envoy generate every request id). A Gateway-wide ClientTrafficPolicy of
+# your own is copied into that policy (Envoy Gateway does not merge them);
+# one that targets a pack listener itself wins, and the operator then posts a
+# Warning Event on the Gateway saying what to add to it. The collector also ignores any request the gateway itself
 # answered with 401 or 403 (response_code_details is not "via_upstream").
 #
 # The field names are a contract with the collector pipeline

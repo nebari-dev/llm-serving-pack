@@ -60,6 +60,10 @@ rules:
   - apiGroups: ["gateway.envoyproxy.io"]
     resources: ["clienttrafficpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # A Warning Event on the Gateway when that policy cannot be applied.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
   {{- end }}
   # Observe AI Gateway-owned routes before removing endpoint authentication.
   # get alone suffices: unstructured reads bypass the manager's cache, so no

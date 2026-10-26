@@ -15,9 +15,15 @@
 #   4. valid token (alice)        -> recorded user, subject, groups are alice's
 #   5. valid API key (alice)      -> recorded client ID is the key's
 #   6. invalid API key, sent from inside a pod (an in-cluster caller)
+#   7. valid API key, bodies over Envoy's 32KiB default buffer -> 200, when a
+#      Gateway-wide ClientTrafficPolicy raises nebari-gateway's connection
+#      buffer limit (as NIC's does): the listener policy that removes the
+#      headers must carry that limit, or the body is rejected with 413. A
+#      48KiB body over HTTP/2 (each HTTP/2 stream is also held to Envoy
+#      Gateway's 64KiB default stream window) and a 1MiB body over HTTP/1.1
 #
 # In every case the recorded request id must be one the gateway made, not the
-# one sent.
+# one sent, and no forged group may be recorded.
 #
 # Prereq: `make usage-e2e` has run (mock provider, metering on, access log).
 # The identity headers are removed by the ClientTrafficPolicy the operator
@@ -67,6 +73,7 @@ cleanup() {
     [[ -n "$revoked" ]] || echo "WARNING: could not revoke alice's check key $KEY_CLIENT_ID; revoke it in the key manager" >&2
   fi
   kc_admin "delete-user" "$TEMP_USER" "" >/dev/null 2>&1
+  [[ -n "${SEEN_FILE:-}" ]] && rm -f "$SEEN_FILE"
   for p in "${PIDS[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null; done
 }
 trap cleanup EXIT INT TERM
@@ -121,13 +128,13 @@ BODY="{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hello
 # and x-ai-eg-model so that a request rejected before the AI Gateway reads its
 # body is still in the access log. Retried on HTTP 000 (a dropped port-forward).
 send() {
-  local host="$1" port="$2" bearer="$3" rid="$4" code=000
+  local host="$1" port="$2" bearer="$3" rid="$4" body="${5:-$BODY}" proto="${6:---http2}" code=000
   for _ in 1 2 3 4 5; do
-    code="$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$host:$port:127.0.0.1" \
+    code="$(curl "$proto" -sk -o /dev/null -w '%{http_code}' --max-time 20 --resolve "$host:$port:127.0.0.1" \
       -H "Authorization: Bearer $bearer" -H 'Content-Type: application/json' -H "x-ai-eg-model: $MODEL" \
       -H "x-llm-client-id: $FORGED_CLIENT" -H "x-auth-subject: $FORGED_SUBJECT" \
       -H "x-auth-user: $FORGED_USER" -H "x-auth-groups: $FORGED_GROUPS" -H "x-request-id: $rid" \
-      -d "$BODY" "https://$host:$port/v1/chat/completions" || true)"
+      --data-binary @- "https://$host:$port/v1/chat/completions" <<<"$body" || true)"
     [[ "$code" != "000" ]] && break
     forward_all
   done
@@ -137,7 +144,9 @@ send() {
 # entry gateway since route-suffix status -> the one access-log record (JSON)
 # for the request just sent, read from the gateway's stdout copy. Records
 # already matched by an earlier case are skipped.
-SEEN=""
+# Request ids already matched, in a file: entry runs in a command substitution
+# (a subshell), so a variable it set would be lost.
+SEEN_FILE="$(mktemp)"
 entry() {
   local gw="$1" since="$2" suffix="$3" status="$4" out
   for _ in $(seq 1 15); do
@@ -160,12 +169,12 @@ if len(found) == 1:
     print(json.dumps(found[0]))
 elif len(found) > 1:
     print("AMBIGUOUS")
-' "$suffix" "$status" "$SEEN")"
+' "$suffix" "$status" "$(cat "$SEEN_FILE")")"
     if [[ "$out" == "AMBIGUOUS" ]]; then
       echo "ERROR: other traffic on $gw matched too; re-run when the gateway is idle" >&2; exit 1
     fi
     if [[ -n "$out" ]]; then
-      SEEN="$SEEN $(python3 -c 'import sys, json; print(json.loads(sys.argv[1])["request_id"])' "$out")"
+      python3 -c 'import sys, json; print(json.loads(sys.argv[1])["request_id"])' "$out" >>"$SEEN_FILE"
       echo "$out"; return 0
     fi
     sleep 1
@@ -253,7 +262,7 @@ check "3 valid token, no groups (HTTP $code)" "$(entry nebari-internal-gateway "
 
 rid="$RUN-4"; t="$(since)"; code="$(send llm-internal.local "$INT_PORT" "$ALICE_TOKEN" "$rid")"
 check "4 valid token, alice (HTTP $code)" "$(entry nebari-internal-gateway "$t" -internal "$code")" "$rid" \
-  response_code=200 client_id=ABSENT auth_user=alice auth_subject="$ALICE_SUB" auth_groups=include:team-a
+  response_code=200 client_id=ABSENT auth_user=alice auth_subject="$ALICE_SUB" auth_groups=include:team-a auth_groups=not-forged
 
 rid="$RUN-5"; t="$(since)"; code="$(send llm.local "$EXT_PORT" "$ALICE_KEY" "$rid")"
 check "5 valid API key, alice (HTTP $code)" "$(entry nebari-gateway "$t" -external "$code")" "$rid" \
@@ -281,9 +290,29 @@ PY
 check "6 invalid API key from a pod (HTTP $code)" "$(entry nebari-gateway "$t" -external "$code")" "$rid" \
   response_code=401 client_id=ABSENT auth_user=ABSENT auth_subject=ABSENT auth_groups=ABSENT
 
+# Gateway-wide policies (no sectionName) on nebari-gateway that set a buffer limit.
+GW_BUFFER="$($KUBECTL -n "$GW_NS" get clienttrafficpolicy -o json | python3 -c '
+import json, sys
+for p in json.load(sys.stdin)["items"]:
+    refs = p["spec"].get("targetRefs", [])
+    if any(r.get("name") == "nebari-gateway" and not r.get("sectionName") for r in refs) and p["spec"].get("connection", {}).get("bufferLimit"):
+        print(p["metadata"]["name"], p["spec"]["connection"]["bufferLimit"])')"
+if [[ -z "$GW_BUFFER" ]]; then
+  echo "skip 7 large body: no Gateway-wide ClientTrafficPolicy sets a connection buffer limit on nebari-gateway"
+else
+  large_body() { python3 -c 'import json, sys; print(json.dumps({"model": sys.argv[1], "messages": [{"role": "user", "content": "x" * int(sys.argv[2])}]}))' "$MODEL" "$1"; }
+  for c in "7a 49152 --http2" "7b 1048576 --http1.1"; do
+    read -r n size proto <<<"$c"
+    body="$(large_body "$size")"
+    rid="$RUN-$n"; t="$(since)"; code="$(send llm.local "$EXT_PORT" "$ALICE_KEY" "$rid" "$body" "$proto")"
+    check "$n valid API key, ${#body}-byte body over ${proto#--}, Gateway buffer limit $GW_BUFFER (HTTP $code)" "$(entry nebari-gateway "$t" -external "$code")" "$rid" \
+      response_code=200 client_id="$KEY_CLIENT_ID" auth_user=ABSENT auth_subject=ABSENT auth_groups=ABSENT
+  done
+fi
+
 echo
 if [[ $FAILED -gt 0 ]]; then
-  echo "FAILED: $FAILED of 6 cases recorded a caller-chosen value" >&2
+  echo "FAILED: $FAILED case(s) above" >&2
   exit 1
 fi
 echo "PASS: no caller-chosen identity or request id reached the access log"

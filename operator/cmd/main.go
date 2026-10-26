@@ -208,12 +208,20 @@ func main() {
 	// Certificate and HTTPS listener patches on the external/internal
 	// Gateways. It runs once on leader acquisition and then on a slow
 	// resync; see internal/controller/clustertls_singleton.go.
-	if err := mgr.Add(&controller.ClusterTLSSingleton{
-		Client: mgr.GetClient(),
-		Config: operatorCfg,
-	}); err != nil {
+	clusterTLS := &controller.ClusterTLSSingleton{
+		Client:   mgr.GetClient(),
+		Config:   operatorCfg,
+		Recorder: mgr.GetEventRecorderFor("llm-operator"),
+	}
+	if err := mgr.Add(clusterTLS); err != nil {
 		setupLog.Error(err, "unable to register ClusterTLSSingleton")
 		os.Exit(1)
+	}
+	if operatorCfg.UsageMeteringEnabled {
+		if err := clusterTLS.SetupClientTrafficPolicyWatch(mgr); err != nil {
+			setupLog.Error(err, "unable to watch ClientTrafficPolicies")
+			os.Exit(1)
+		}
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
