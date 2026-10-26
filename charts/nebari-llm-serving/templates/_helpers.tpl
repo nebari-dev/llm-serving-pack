@@ -59,7 +59,7 @@ openmeter.enabled.
 {{- if .Values.usage.openmeter.url -}}
 {{ .Values.usage.openmeter.url }}
 {{- else if .Values.openmeter.enabled -}}
-{{ printf "http://%s-openmeter-api.%s.svc" .Release.Name .Release.Namespace }}
+{{ printf "http://%s.%s.svc" (include "om.name" (dict "root" . "component" "api")) .Release.Namespace }}
 {{- else -}}
 {{ fail "usage.enabled=true needs usage.openmeter.url, or openmeter.enabled=true for the bundled OpenMeter" }}
 {{- end -}}

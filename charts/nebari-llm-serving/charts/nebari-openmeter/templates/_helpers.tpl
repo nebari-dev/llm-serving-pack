@@ -2,9 +2,17 @@
 {{- printf "%s-openmeter" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* A component's name: <release>-openmeter-<component>. */}}
+{{/*
+A component's name: <release>-openmeter-<component>, at most 50 characters.
+A long release name is cut, never the component, so a name that ends in a
+hash (the price-sync Job) keeps all of it. 50 is the tightest limit among
+the components: CloudNativePG refuses a Cluster name over 50, and a
+StatefulSet over 52 cannot create pods (their controller-revision-hash label
+is the name plus a hash and must fit 63).
+*/}}
 {{- define "om.name" -}}
-{{- printf "%s-%s" (include "om.fullname" .root) .component | trunc 63 | trimSuffix "-" -}}
+{{- $prefix := include "om.fullname" .root | trunc (int (sub 49 (len .component))) | trimSuffix "-" -}}
+{{- printf "%s-%s" $prefix .component -}}
 {{- end -}}
 
 {{- define "om.labels" -}}
