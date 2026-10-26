@@ -63,6 +63,32 @@ var _ = Describe("PassthroughModel Webhook", func() {
 			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, pm) })
 		})
 
+		It("should accept a PassthroughModel that trusts a CA ConfigMap", func() {
+			ns := newManagedNamespace("pt-managed-ca-valid")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			pm := newBasePassthroughModel("pt-ca", ns.Name)
+			pm.Spec.Provider.TLS = &llmv1alpha1.ProviderTLS{CAConfigMapName: "nebari-trust-bundle"}
+			Expect(k8sClient.Create(bgCtx, pm)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, pm) })
+			// The stored object keeps the field, so the CRD schema carries it.
+			Expect(pm.Spec.Provider.TLS).NotTo(BeNil())
+			Expect(pm.Spec.Provider.TLS.CAConfigMapName).To(Equal("nebari-trust-bundle"))
+		})
+
+		It("should reject a CA ConfigMap name that is not a valid object name", func() {
+			ns := newManagedNamespace("pt-managed-bad-ca")
+			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(bgCtx, ns) })
+
+			pm := newBasePassthroughModel("pt-bad-ca", ns.Name)
+			pm.Spec.Provider.TLS = &llmv1alpha1.ProviderTLS{CAConfigMapName: "Corp_CA"}
+			err := k8sClient.Create(bgCtx, pm)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("tls.caConfigMapName"))
+		})
+
 		It("should reject a PassthroughModel in a namespace without the managed label", func() {
 			ns := newUnmanagedNamespace("pt-unmanaged-create")
 			Expect(k8sClient.Create(bgCtx, ns)).To(Succeed())

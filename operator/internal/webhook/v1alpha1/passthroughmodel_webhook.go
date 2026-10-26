@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -214,6 +215,11 @@ func validateProvider(pm *llmv1alpha1.PassthroughModel) error {
 	}
 	if strings.TrimSpace(pm.Spec.Provider.CredentialSecretName) == "" {
 		return fmt.Errorf("spec.provider.credentialSecretName must not be empty")
+	}
+	if tls := pm.Spec.Provider.TLS; tls != nil {
+		if problems := validation.IsDNS1123Subdomain(tls.CAConfigMapName); len(problems) > 0 {
+			return fmt.Errorf("spec.provider.tls.caConfigMapName must be a ConfigMap name: %s", strings.Join(problems, "; "))
+		}
 	}
 	return nil
 }

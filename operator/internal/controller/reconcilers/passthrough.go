@@ -165,6 +165,18 @@ func buildProviderBackend(pm *llmv1alpha1.PassthroughModel, labels map[string]st
 }
 
 func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[string]string) *unstructured.Unstructured {
+	validation := map[string]interface{}{"hostname": pm.Spec.Provider.Hostname}
+	if tls := pm.Spec.Provider.TLS; tls != nil && tls.CAConfigMapName != "" {
+		// Gateway API accepts exactly one trust source, so a CA bundle
+		// replaces the system roots rather than extending them.
+		validation["caCertificateRefs"] = []interface{}{map[string]interface{}{
+			"group": "",
+			"kind":  "ConfigMap",
+			"name":  tls.CAConfigMapName,
+		}}
+	} else {
+		validation["wellKnownCACertificates"] = "System"
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			// BackendTLSPolicy is GA as v1 in the Gateway API Standard channel
@@ -185,10 +197,7 @@ func buildProviderBackendTLSPolicy(pm *llmv1alpha1.PassthroughModel, labels map[
 						"name":  providerBackendName(pm),
 					},
 				},
-				"validation": map[string]interface{}{
-					"wellKnownCACertificates": "System",
-					"hostname":                pm.Spec.Provider.Hostname,
-				},
+				"validation": validation,
 			},
 		},
 	}

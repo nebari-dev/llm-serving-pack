@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -468,5 +469,27 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 	authzNo := noKeys.ExternalSecurityPolicy.Object["spec"].(map[string]interface{})["authorization"].(map[string]interface{})
 	if _, present := authzNo["rules"]; present {
 		t.Errorf("expected deny-all (no rules) for zero client IDs, got %v", authzNo["rules"])
+	}
+}
+
+func TestBuildPassthroughResourcesTrustsConfiguredCA(t *testing.T) {
+	pm := testPassthroughModel()
+	pm.Spec.Provider.Hostname = "macstudio.corp.example.com"
+	pm.Spec.Provider.TLS = &llmv1alpha1.ProviderTLS{CAConfigMapName: "corp-ca"}
+	res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+	validation, _ := specMap(t, res.BackendTLSPolicy)["validation"].(map[string]interface{})
+	if validation["hostname"] != "macstudio.corp.example.com" {
+		t.Errorf("validation hostname = %v", validation["hostname"])
+	}
+	// Gateway API rejects a policy that sets both trust sources.
+	if _, exists := validation["wellKnownCACertificates"]; exists {
+		t.Error("a CA bundle must replace wellKnownCACertificates, not join it")
+	}
+	want := []interface{}{map[string]interface{}{"group": "", "kind": "ConfigMap", "name": "corp-ca"}}
+	if !reflect.DeepEqual(validation["caCertificateRefs"], want) {
+		t.Errorf("caCertificateRefs = %#v, want %#v", validation["caCertificateRefs"], want)
 	}
 }
