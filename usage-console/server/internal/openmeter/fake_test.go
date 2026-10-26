@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -22,7 +23,11 @@ type fakeOpenMeter struct {
 	overrides []map[string]any
 	prices    []map[string]any
 	customers []map[string]any
-	pageSize  int
+	// features replaces the default two price features when set.
+	features []map[string]any
+	pageSize int
+	// eventReads counts GET /api/v2/events calls.
+	eventReads int
 	// cost is USD per token by model, for the fake's cost queries; a model
 	// missing here has no price.
 	cost map[string]float64
@@ -56,6 +61,7 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/events", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		f.eventReads++
 		evs := append([]map[string]any(nil), f.events...)
 		f.mu.Unlock()
 		sort.SliceStable(evs, func(i, j int) bool { return evs[i]["time"].(string) > evs[j]["time"].(string) })
@@ -77,7 +83,7 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 		writeJSON(w, out)
 	})
 	mux.HandleFunc("GET /api/v3/openmeter/llm-cost/overrides", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"data": orEmpty(f.overrides)})
+		writePage(w, r, f.overrides)
 	})
 	mux.HandleFunc("GET /api/v3/openmeter/llm-cost/prices", func(w http.ResponseWriter, r *http.Request) {
 		provider, model := r.URL.Query().Get("filter[provider][eq]"), r.URL.Query().Get("filter[model_id][eq]")
@@ -90,7 +96,11 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 		writeJSON(w, map[string]any{"data": out})
 	})
 	mux.HandleFunc("GET /api/v3/openmeter/features", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"data": []map[string]any{feature("f-mock", "mock-provider", "mock"), feature("f-bedrock", "bedrock", "bedrock")}})
+		fs := f.features
+		if fs == nil {
+			fs = []map[string]any{feature("f-mock", "mock-provider", "mock"), feature("f-bedrock", "bedrock", "bedrock")}
+		}
+		writePage(w, r, fs)
 	})
 	mux.HandleFunc("GET /api/v1/customers", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"items": orEmpty(f.customers)})
@@ -231,6 +241,21 @@ func (f *fakeOpenMeter) aggregate(typ string, groupBy []string, from, to, window
 		out = append(out, by[k])
 	}
 	return out
+}
+
+// writePage writes one page of items as OpenMeter's v3 lists do: page[size]
+// a page (20 unless asked), page[number] from 1, and the total.
+func writePage(w http.ResponseWriter, r *http.Request, items []map[string]any) {
+	size, number := 20, 1
+	if v, err := strconv.Atoi(r.URL.Query().Get("page[size]")); err == nil {
+		size = v
+	}
+	if v, err := strconv.Atoi(r.URL.Query().Get("page[number]")); err == nil {
+		number = v
+	}
+	start := min((number-1)*size, len(items))
+	end := min(start+size, len(items))
+	writeJSON(w, map[string]any{"data": orEmpty(items[start:end]), "meta": map[string]any{"page": map[string]any{"number": number, "size": size, "total": len(items)}}})
 }
 
 func orEmpty(xs []map[string]any) []map[string]any {

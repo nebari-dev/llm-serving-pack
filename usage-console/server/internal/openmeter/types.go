@@ -60,12 +60,10 @@ type TeamIncrease struct {
 	DeltaUSD float64 `json:"deltaUsd"`
 }
 
-// ReceiptCount is how many receipts match. Count is null when it can't be
-// answered exactly, and Reason says why.
+// ReceiptCount is how many receipts Traffic's filters match since Since.
 type ReceiptCount struct {
-	Count  *int   `json:"count"`
-	Since  int64  `json:"since"`
-	Reason string `json:"reason,omitempty"`
+	Count int   `json:"count"`
+	Since int64 `json:"since"`
 }
 
 type SpendView struct {

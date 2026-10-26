@@ -35,25 +35,15 @@ type Feature struct {
 }
 
 func (c *Client) Features(ctx context.Context) ([]Feature, error) {
-	var out struct {
-		Data []Feature `json:"data"`
-	}
-	return out.Data, c.get(ctx, "/api/v3/openmeter/features", url.Values{"page[size]": {"100"}}, &out)
+	return listAll[Feature](ctx, c, "/api/v3/openmeter/features", nil)
 }
 
 func (c *Client) Overrides(ctx context.Context) ([]Price, error) {
-	var out struct {
-		Data []Price `json:"data"`
-	}
-	return out.Data, c.get(ctx, "/api/v3/openmeter/llm-cost/overrides", url.Values{"page[size]": {"100"}}, &out)
+	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/overrides", nil)
 }
 
 func (c *Client) Prices(ctx context.Context, provider, model string) ([]Price, error) {
-	var out struct {
-		Data []Price `json:"data"`
-	}
-	q := url.Values{"filter[provider][eq]": {provider}, "filter[model_id][eq]": {model}, "page[size]": {"100"}}
-	return out.Data, c.get(ctx, "/api/v3/openmeter/llm-cost/prices", q, &out)
+	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/prices", url.Values{"filter[provider][eq]": {provider}, "filter[model_id][eq]": {model}})
 }
 
 // tokenRate names each collector token type's rate in OpenMeter's pricing.
@@ -67,7 +57,12 @@ var tokenRate = map[string]string{
 
 // pricer costs requests as OpenMeter's cost queries do: per model resource's
 // provider, the override in effect now, else the newest synced price in
-// effect now.
+// effect now. Now, not at each request's time: OpenMeter resolves one price
+// per model for a whole cost query at the current time (ResolvePrice with no
+// At, openmeter/cost/adapter/adapter.go at the pinned commit), and a new
+// override soft-deletes the old one, so Spend re-costs past usage at today's
+// price too. Pricing receipts at their own time would stop them adding up to
+// Spend.
 type pricer struct {
 	client    *Client
 	now       time.Time

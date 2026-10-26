@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -307,47 +308,48 @@ func TestSpendByKeySplitsLoginUsageByPerson(t *testing.T) {
 	}
 }
 
-// Traffic's count answers from OpenMeter for the window, and says it can't
-// count with filters.
+// Traffic's count answers from OpenMeter for the window, with the same
+// filters as the list, so the two agree.
 func TestReceiptCount(t *testing.T) {
 	f := &fakeOpenMeter{}
 	f.request("a1", now.Add(-2*time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
-	f.request("a2", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
+	f.request("a2", now.Add(-time.Hour), alice("mock/large", "key-a1", "api_key"), nil)
 	f.request("a3", now.Add(-26*time.Hour), alice("mock/small", "key-a1", "api_key"), nil)
+	refused := bob("mock/small", "key-b1")
+	refused["response_code"], refused["usage_reported"] = "429", "false"
+	f.request("b1", now.Add(-time.Hour), refused, nil)
 	h := newAPI(t, f)
 
-	since := now.Add(-24 * time.Hour).UnixMilli()
-	c := get[openmeter.ReceiptCount](t, h, "/receipts/count?since="+strconv.FormatInt(since, 10))
-	if c.Count == nil || *c.Count != 2 || c.Since != since {
-		t.Fatalf("count %+v", c)
-	}
-	c = get[openmeter.ReceiptCount](t, h, "/receipts/count?model=mock/small")
-	if c.Count != nil || c.Reason == "" {
-		t.Fatalf("filtered count %+v", c)
+	since := "since=" + strconv.FormatInt(now.Add(-24*time.Hour).UnixMilli(), 10)
+	for q, want := range map[string]int{
+		since:                                       3,
+		since + "&model=mock/small":                 2,
+		since + "&team=team-a&key=key-a1":           2,
+		since + "&project=team-b/mock-provider":     1,
+		since + "&verdict=throttled":                1,
+		since + "&verdict=allowed&model=mock/small": 1,
+	} {
+		c := get[openmeter.ReceiptCount](t, h, "/receipts/count?"+q)
+		if c.Count != want {
+			t.Errorf("%s: count %+v, want %d", q, c, want)
+		}
 	}
 }
 
-// Live Traffic: requests that reach OpenMeter after the page opened arrive
-// on the stream, and arrive again when their token counts land later.
-func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
-	f := &fakeOpenMeter{}
-	f.request("old", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
-	om := f.server(t)
-	srv := httptest.NewServer((&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Poll: 20 * time.Millisecond, Identity: openmeter.DevIdentity{}}).Handler())
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/demo/stream/traffic", nil)
+// openStream opens /stream/traffic?query and returns each receipt it
+// sends, once the stream says it is ready.
+func openStream(t *testing.T, ctx context.Context, url, query string) func() model.Receipt {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(ctx, "GET", url+"/api/v1/demo/stream/traffic?"+query, nil)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	t.Cleanup(func() { res.Body.Close() })
 	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content type %q", ct)
 	}
-	events := make(chan model.Receipt)
+	events := make(chan model.Receipt, 16)
 	ready := make(chan struct{})
 	go func() {
 		sc := bufio.NewScanner(res.Body)
@@ -363,7 +365,12 @@ func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
 			}
 		}
 	}()
-	next := func() model.Receipt {
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("stream never ready")
+	}
+	return func() model.Receipt {
 		t.Helper()
 		select {
 		case r := <-events:
@@ -373,24 +380,77 @@ func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
 		}
 		return model.Receipt{}
 	}
+}
+
+func streamAPI(t *testing.T, f *fakeOpenMeter) *httptest.Server {
+	t.Helper()
+	om := f.server(t)
+	srv := httptest.NewServer((&openmeter.Server{Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now }, Poll: 20 * time.Millisecond, Identity: openmeter.DevIdentity{}}).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func (f *fakeOpenMeter) add(e map[string]any) {
+	f.mu.Lock()
+	f.events = append(f.events, e)
+	f.mu.Unlock()
+}
+
+// Live Traffic: requests that reach OpenMeter after the page opened arrive
+// on the stream, and arrive again when their token counts land later.
+func TestStreamSendsNewAndUpdatedReceipts(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("old", now.Add(-time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	next := openStream(t, ctx, streamAPI(t, f).URL, "")
 
 	// What was already there when the stream opened isn't sent again.
-	select {
-	case <-ready:
-	case <-ctx.Done():
-		t.Fatal("stream never ready")
-	}
-	f.mu.Lock()
-	f.events = append(f.events, event("new", "llm.request", now, alice("mock/small", "key-a1", "api_key")))
-	f.mu.Unlock()
+	f.add(event("new", "llm.request", now, alice("mock/small", "key-a1", "api_key")))
 	if r := next(); r.ID != "new" || r.InputTokens != 0 {
 		t.Fatalf("first %+v", r)
 	}
-	f.mu.Lock()
-	f.events = append(f.events, event("new:input", "llm.tokens", now, map[string]any{"token_type": "input", "tokens": 9, "user": "alice"}))
-	f.mu.Unlock()
+	f.add(event("new:input", "llm.tokens", now, map[string]any{"token_type": "input", "tokens": 9, "user": "alice"}))
 	if r := next(); r.ID != "new" || r.InputTokens != 9 {
 		t.Fatalf("update %+v", r)
+	}
+}
+
+// A filtered Traffic view gets only the receipts its filters match.
+func TestStreamFollowsTrafficFilters(t *testing.T) {
+	f := &fakeOpenMeter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	next := openStream(t, ctx, streamAPI(t, f).URL, "team=team-b")
+
+	f.add(event("a1", "llm.request", now, alice("mock/small", "key-a1", "api_key")))
+	f.add(event("b1", "llm.request", now.Add(time.Second), bob("mock/small", "key-b1")))
+	if r := next(); r.ID != "b1" {
+		t.Fatalf("got %s, want only team-b's b1", r.ID)
+	}
+}
+
+// Open streams share one read of OpenMeter per poll: more tabs don't mean
+// more load.
+func TestStreamsShareOnePoller(t *testing.T) {
+	f := &fakeOpenMeter{}
+	srv := streamAPI(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for range 8 {
+		openStream(t, ctx, srv.URL, "")
+	}
+	f.mu.Lock()
+	f.eventReads = 0
+	f.mu.Unlock()
+	const polls = 15
+	time.Sleep(polls * 20 * time.Millisecond)
+	f.mu.Lock()
+	reads := f.eventReads
+	f.mu.Unlock()
+	// One poller reads about once per poll; eight would read eight times as often.
+	if reads > polls+5 {
+		t.Fatalf("%d event reads over %d polls with 8 streams open", reads, polls)
 	}
 }
 
@@ -456,5 +516,92 @@ func TestRefusedRequestsAreBlockedOrThrottled(t *testing.T) {
 	}
 	if verdict["r403"] != "blocked" || verdict["r429"] != "throttled" {
 		t.Fatalf("verdicts %v", verdict)
+	}
+}
+
+// A request ID can hold a colon (Envoy keeps a caller's x-request-id from
+// trusted hops); its token events still find their request.
+func TestReceiptTokensForARequestIDWithAColon(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("lb:7f3a", now.Add(-time.Minute), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 4, "output": 2})
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), "/receipts")
+
+	if len(rs) != 1 || rs[0].InputTokens != 4 || rs[0].OutputTokens != 2 {
+		t.Fatalf("got %+v", rs)
+	}
+}
+
+// Traffic's filters narrow the receipts on the server: each named value of a
+// dimension is allowed, dimensions combine, and since/before bound the time.
+func TestReceiptsFollowTrafficFilters(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("a1", now.Add(-50*time.Minute), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
+	f.request("a2", now.Add(-40*time.Minute), alice("mock/large", "key-a2", "api_key"), map[string]int{"input": 1})
+	f.request("b1", now.Add(-30*time.Minute), bob("mock/small", "key-b1"), map[string]int{"input": 1})
+	refused := bob("mock/small", "key-b1")
+	refused["response_code"], refused["usage_reported"] = "429", "false"
+	f.request("b2", now.Add(-20*time.Minute), refused, nil)
+	f.request("b3", now.Add(-10*time.Minute), bob("mock/small", "key-b1"), map[string]int{"input": 1})
+	h := newAPI(t, f)
+	ids := func(q string) string {
+		t.Helper()
+		var out []string
+		for _, r := range get[[]model.Receipt](t, h, "/receipts?"+q) {
+			out = append(out, r.ID)
+		}
+		return strings.Join(out, ",")
+	}
+	ms := func(d time.Duration) string { return strconv.FormatInt(now.Add(-d).UnixMilli(), 10) }
+
+	for q, want := range map[string]string{
+		"team=team-a":                                      "a2,a1",
+		"key=key-a1&key=key-b1":                            "b3,b2,b1,a1",
+		"project=team-b/mock-provider":                     "b3,b2,b1",
+		"model=mock/large":                                 "a2",
+		"verdict=throttled":                                "b2",
+		"team=team-b&verdict=allowed":                      "b3,b1",
+		"since=" + ms(45*time.Minute):                      "b3,b2,b1,a2",
+		"before=" + ms(25*time.Minute):                     "b1,a2,a1",
+		"team=team-b&limit=1&before=" + ms(15*time.Minute): "b2",
+	} {
+		if got := ids(q); got != want {
+			t.Errorf("%s: got %s, want %s", q, got, want)
+		}
+	}
+}
+
+// Prices come from every page of OpenMeter's features and overrides, not
+// only the first.
+func TestReceiptCostReadsEveryPageOfFeaturesAndOverrides(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for i := range 150 {
+		f.features = append(f.features, feature(fmt.Sprintf("f-%d", i), fmt.Sprintf("other-%d", i), "other"))
+		f.overrides = append(f.overrides, price("other", fmt.Sprintf("model-%d", i), now.Add(-time.Hour), map[string]string{"input_per_token": "1"}))
+	}
+	f.features = append(f.features, feature("f-mock", "mock-provider", "mock"))
+	f.overrides = append(f.overrides, price("mock", "mock/small", now.Add(-time.Hour), map[string]string{"input_per_token": "0.5"}))
+	f.request("r1", now.Add(-time.Minute), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 2})
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), "/receipts")
+
+	if len(rs) != 1 || rs[0].CostUSD == nil || *rs[0].CostUSD != 1 {
+		t.Fatalf("got %+v", rs)
+	}
+}
+
+// A request made before a price change costs what OpenMeter's cost queries
+// charge for it, today's price, so receipts keep adding up to Spend.
+func TestReceiptCostUsesThePriceInEffectNowLikeSpend(t *testing.T) {
+	f := &fakeOpenMeter{prices: []map[string]any{
+		price("mock", "mock/small", now.Add(-72*time.Hour), map[string]string{"input_per_token": "1"}),
+		price("mock", "mock/small", now.Add(-time.Hour), map[string]string{"input_per_token": "2"}),
+	}}
+	f.request("r1", now.Add(-48*time.Hour), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 3})
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), "/receipts")
+
+	if len(rs) != 1 || rs[0].CostUSD == nil || *rs[0].CostUSD != 6 {
+		t.Fatalf("got %+v", rs)
 	}
 }

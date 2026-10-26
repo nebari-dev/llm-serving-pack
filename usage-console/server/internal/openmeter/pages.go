@@ -6,37 +6,39 @@ import (
 	"time"
 )
 
-// receiptCount counts requests in [since, before) from the llm_requests
-// meter. With Traffic's filters it says it can't count exactly.
+// receiptCount counts the requests Traffic's filters match in [since,
+// before) from the llm_requests meter, which groups by every field they
+// compare.
 func (s *Server) receiptCount(r *http.Request) (any, error) {
-	q := r.URL.Query()
-	ms := func(name string) int64 {
-		v, _ := strconv.ParseInt(q.Get(name), 10, 64)
-		return v
-	}
+	f := filterOf(r.URL.Query())
 	now := s.Now().UTC()
 	from, to := now.Add(-catalogSpan), now
-	if v := ms("since"); v > 0 {
-		from = time.UnixMilli(v)
+	if f.since > 0 {
+		from = time.UnixMilli(f.since)
 	}
-	if v := ms("before"); v > 0 {
-		to = time.UnixMilli(v)
+	if f.before > 0 {
+		to = time.UnixMilli(f.before)
 	}
-	out := ReceiptCount{Since: from.UnixMilli()}
-	for _, f := range []string{"key", "team", "project", "model", "verdict", "session"} {
-		if q.Has(f) {
-			out.Reason = "Counts aren't available with filters."
-			return out, nil
-		}
-	}
-	rows, err := s.Client.meterQuery(r.Context(), "llm_requests", from, to, nil, nil)
+	rows, err := s.Client.meterQuery(r.Context(), "llm_requests", from, to, nil,
+		[]string{"api_key", "team", "model", "model_resource", "response_code", "usage_reported"})
 	if err != nil {
 		return nil, err
 	}
 	n := 0
 	for _, row := range rows {
-		n += int(row.Value)
+		g := func(k string) string {
+			if v := row.GroupBy[k]; v != nil {
+				return *v
+			}
+			return ""
+		}
+		status, _ := strconv.Atoi(g("response_code"))
+		if f.match(fields{
+			key: g("api_key"), team: g("team"), project: projectID(g("team"), g("model_resource")),
+			model: g("model"), verdict: verdictOf(status, g("usage_reported")),
+		}) {
+			n += int(row.Value)
+		}
 	}
-	out.Count = &n
-	return out, nil
+	return ReceiptCount{Count: n, Since: from.UnixMilli()}, nil
 }

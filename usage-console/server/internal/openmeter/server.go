@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -17,6 +18,9 @@ type Server struct {
 	Poll time.Duration
 	// Identity says who is calling; every API request needs one.
 	Identity Identity
+
+	hubOnce sync.Once
+	hub     *hub
 }
 
 type handlerFunc func(r *http.Request) (any, error)
@@ -58,7 +62,7 @@ func (s *Server) receipts(r *http.Request) (any, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 240
 	}
-	return s.listReceipts(r.Context(), limit)
+	return s.listReceipts(r.Context(), limit, filterOf(r.URL.Query()))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
