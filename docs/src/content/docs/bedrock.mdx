@@ -133,7 +133,7 @@ external client authentication.
 An existing cluster needs the pack release that introduces the Bedrock backend
 and credential fields in the `PassthroughModel` CRD, plus the matching operator,
 before applying the manifest. Helm does not upgrade installed CRDs automatically; update the
-`PassthroughModel` CRD through your cluster's CRD deployment process.
+`PassthroughModel` CRD as described in [Upgrading](/upgrading/#routine-upgrade).
 `Ready` means the operator applied resources, not that it successfully called AWS.
 
 ## Gateway checks and additional providers

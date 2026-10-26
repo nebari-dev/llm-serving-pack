@@ -1,13 +1,91 @@
 ---
-title: Upgrade the AI gateway
-description: Move existing installations to Envoy AI Gateway 1.1.
+title: Upgrading
+description: How to upgrade the pack, and the extra steps some releases need.
+tableOfContents:
+  maxHeadingLevel: 4
 ---
+
+Every upgrade follows the [routine steps](#routine-upgrade). Some releases also
+need [release-specific steps](#release-specific-steps), listed newest first:
+read every entry between your current version and the target before you start.
+
+## Routine upgrade
+
+Read the [release notes](https://github.com/nebari-dev/llm-serving-pack/releases)
+for every version between your current version and the target first. Confirm
+the target chart is available before changing the Application:
+
+```bash
+helm show chart oci://quay.io/nebari/charts/nebari-llm-serving --version <version>
+```
+
+A GitHub Release can appear before its chart is published. Pointing ArgoCD at
+an unavailable version reports `Sync: Unknown` with a `ComparisonError`, even
+while health still shows `Healthy`. Wait for chart publication before proceeding;
+see the [release publication caveat in the README](https://github.com/nebari-dev/llm-serving-pack#releasing).
+
+Bump `targetRevision` in the pack's ArgoCD Application
+([Installation section 8.1](/installation/#81-add-the-argocd-application)) to
+the new chart version, push, and re-apply the Application with `kubectl apply -f`
+(or let your app-of-apps sync it). Pushing alone does not update an Application
+that was installed manually. With `automated` sync on, ArgoCD then rolls it out;
+otherwise sync it by hand.
+
+**CRDs.** The chart ships the `LLMModel` and `PassthroughModel` CRDs in
+its `crds/` directory. ArgoCD applies them on every sync, so they move
+with the operator as long as the Application does not set
+`skipCrds: true`. Plain `helm upgrade` installs `crds/` only on first
+install and never updates it, so a Helm-managed install must apply the
+CRDs from the target release before upgrading:
+
+```bash
+helm pull oci://quay.io/nebari/charts/nebari-llm-serving --version <version> --untar
+kubectl apply --server-side --force-conflicts -f nebari-llm-serving/crds/
+kubectl wait --for=condition=Established --timeout=60s \
+  crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
+helm upgrade nebari-llm-serving oci://quay.io/nebari/charts/nebari-llm-serving \
+  --version <version> -n nebari-llm-serving-system -f <your-values>.yaml
+```
+
+For a plain Helm install, `--force-conflicts` transfers ownership of the CRD
+schema fields from Helm to `kubectl`: Helm owns them from the initial install
+but does not update them during upgrades. If a separate tool manages the CRDs
+(such as a GitOps repository or platform CRD pipeline), update them through
+that tool instead of forcing ownership away from it.
+
+Stop if the CRD apply fails. An old CRD can still report `Established`, and
+`helm upgrade` can succeed while leaving its schema unchanged.
+
+If the CRDs lag behind the chart, the API server keeps validating against
+the old schema: fields the release added are rejected or dropped, so those
+features do not work until the CRDs are updated.
+
+:::caution[Never delete a CRD to upgrade it]
+Deleting a CRD deletes every resource of that kind. Removing the
+`LLMModel` or `PassthroughModel` CRD removes every model, and their
+cleanup deletes the API keys users minted for them.
+:::
+
+Then re-run the checks in
+[Installation section 8.2](/installation/#82-verify-the-install).
+
+## Supported gateway versions
 
 The supported deployment target is **Envoy AI Gateway 1.1.0, Envoy Gateway
 1.8.1, and Gateway API 1.5.1**. Use the released upstream Helm charts, including
 the separate AI Gateway CRD chart. The pack does not install those controllers.
 
-## Existing provider settings
+## Release-specific steps
+
+Newest first. A release with no entry needs only the routine steps.
+
+### Upgrading from 0.1.4 or earlier: Envoy AI Gateway 1.1
+
+Releases after 0.1.4 emit `aigateway.envoyproxy.io/v1beta1` resources and target
+the gateway versions above. An installation on 0.1.4 or earlier needs these
+steps.
+
+#### Existing provider settings
 
 The operator translates the legacy `spec.provider.schemaVersion` setting into
 Envoy's `schema.prefix`: `api/v1` still reaches `/api/v1/chat/completions`, and
@@ -34,30 +112,7 @@ upgrading: underscores, empty labels, URLs, ports, paths, and whitespace are
 rejected. Older webhooks admitted some of these values; correct any remaining
 invalid names before upgrading to avoid reconciliation failures.
 
-## Upgrade the pack's CRDs with plain Helm
-
-`helm upgrade` does not update files in a chart's `crds/` directory. The pack's
-CRDs need an explicit update as well as the gateway CRDs. Otherwise the old
-`PassthroughModel` schema still requires a hostname and API-key Secret and does
-not recognize the new backend and credential fields.
-
-At the pack-operator step of the migration below, run these commands from a
-checkout of the **same release or revision as the chart being installed**:
-
-```sh
-kubectl apply --server-side -f charts/nebari-llm-serving/crds/
-kubectl wait --for=condition=Established --timeout=60s \
-  crd/llmmodels.llm.nebari.dev crd/passthroughmodels.llm.nebari.dev
-```
-
-Then upgrade the Helm release with the matching chart and your existing values.
-Wait for the updated operator and webhook before applying Bedrock resources.
-If another tool owns the CRDs, update them through that tool instead; resolve
-field-ownership conflicts rather than forcing them. Argo CD installations that
-already manage the CRDs as rendered manifests should keep that existing workflow.
-Never delete the CRDs to upgrade them: deletion also removes their resources.
-
-## Upgrade an installation on AI Gateway 0.5
+#### Upgrade an installation on AI Gateway 0.5
 
 Follow the upstream [controller upgrade policy](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/RELEASES.md#upgrading-the-envoy-ai-gateway-controller)
 and [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/).
@@ -75,8 +130,12 @@ Use staged revisions, rather than changing every controller independently:
    these resources, pause that reconciler during the handover. Move any custom
    `AIGatewayRoute.spec.filterConfig` into `GatewayConfig`; this pack does not
    generate `filterConfig`.
-4. Upgrade AI Gateway CRDs and controller to 0.7, then update the pack's CRDs
-   and deploy the new pack operator. Version 0.7 supports hostname-scoped catalogs
+4. Upgrade AI Gateway CRDs and controller to 0.7, then update the pack's CRDs as
+   in the [routine steps](#routine-upgrade) and deploy the
+   new pack operator. Until the CRDs are updated, the old `PassthroughModel`
+   schema still requires a hostname and an API-key Secret and rejects the new
+   backend and credential fields, so wait for the new operator and webhook
+   before applying Bedrock resources. Version 0.7 supports hostname-scoped catalogs
    and the `v1beta1` resources the operator now emits. Confirm that all resources reconcile before
    proceeding to AI Gateway 1.1, using 1.0 as an intermediate controller release.
    AI Gateway 1.0 has a namespace-discovery bug when the Gateway lives in the
@@ -102,14 +161,14 @@ while retaining the installed CRDs. Returning to AI Gateway 0.5 also requires
 restoring its path-prefix and catalog configuration; an image-only rollback is
 not sufficient.
 
-## Scope of the upgrade
+#### Scope of the upgrade
 
 AI Gateway 1.1 makes newer protocol translation, token counting, streaming
 controls, and tracing available. It does not automatically enable additional
 providers, failover, or tracing, and does not grant cloud model access. Provider
 adapters still select the appropriate upstream schema and authentication.
 
-## Check generated resources against upstream CRDs
+#### Check generated resources against upstream CRDs
 
 The operator's `TestGatewayAdmission` uses a local Kubernetes API server with
 the released AI Gateway CRDs. It checks admission and stored fields, including
