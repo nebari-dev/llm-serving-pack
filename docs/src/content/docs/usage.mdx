@@ -185,6 +185,20 @@ Generate` to that policy. The collector also ignores any request the
 gateway itself rejected with 401 or 403, so keep the `response_code_details`
 field from the example.
 
+Turning `usage.enabled` off leaves these two policies in place: the
+operator no longer manages them, and the chart drops its permission to.
+They keep the Gateway-wide settings they last copied and go on replacing
+the Gateway-wide policy on the pack's listeners, so a later change to that
+policy (such as its buffer limit) would not reach them. Delete them after
+turning metering off:
+
+```sh
+kubectl -n envoy-gateway-system delete clienttrafficpolicy \
+  llm-https-client-headers llm-internal-https-client-headers
+```
+
+(use the namespace of your Gateways, `platform.gateway.*.namespace`).
+
 The collector's OTLP port has no authentication. The chart renders a
 `NetworkPolicy` that admits only the gateway namespaces; on a cluster whose
 network plugin does not enforce `NetworkPolicy`, restrict it another way.
