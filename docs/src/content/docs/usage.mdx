@@ -312,13 +312,16 @@ Secret `<release>-openmeter-console-oidc-client`, which the console reads.
   The header shows that person's name and email; they are still a viewer.
 - A request without a valid token gets `401`, so the console's data can't be
   read by going around the gateway; `503` means it could not read Keycloak's
-  keys.
+  keys. If Keycloak is down when the keys are due a refresh, the keys already
+  read keep working.
 - Sign out goes to the gateway's `/logout`, which ends the gateway session
   and the Keycloak one.
 - Only members of the Keycloak groups in `openmeter.nebariapp.auth.groups`
   may open the console, since it shows everyone's usage. The default is
   `llm-usage-admins`, which the Nebari operator creates; add the people who
-  may see usage to it. An empty list lets everyone in the realm in.
+  may see usage to it. The gateway checks the groups, and so does the
+  console, from the token's `groups` claim: anyone else signed in gets `403`.
+  An empty list lets everyone in the realm in.
 - `openmeter.console.oidc.issuerURL` and `clientID` set the issuer and client
   by hand instead of the Secret; `discoveryURL` reads Keycloak's keys from
   another address, such as an in-cluster one.
@@ -328,8 +331,23 @@ takes connections only from the gateway's Envoy proxies in
 `openmeter.networkPolicy.gatewayNamespace` (`envoy-gateway-system`), so other
 pods in the cluster can't call it. `kubectl port-forward` still reaches it.
 
-Without a NebariApp or an issuer, the console has no sign-in of its own:
-everyone who reaches it is the same viewer. Use that only on a dev cluster.
+The chart refuses to render a NebariApp for the console without sign-in:
+with `openmeter.nebariapp.enabled`, keep `auth.enabled`, `enforceAtGateway`,
+`provisionClient` and `forwardAccessToken` on, or set
+`openmeter.console.oidc.issuerURL` and `clientID`. Without a NebariApp or an
+issuer, the console has no sign-in of its own and everyone who reaches it
+(through `kubectl port-forward`) is the same viewer. Use that only on a dev
+cluster.
+
+### Traffic
+
+Traffic's filters and time range are applied on the server. It reads only
+the request events in the range from OpenMeter, then the token counts of the
+ones that match. A rare filter over a long range stops after 5,000 requests,
+and "Load older" carries on from there. The live view reads every request of
+the last two minutes on each poll, shared by everyone watching. Above about
+40 requests a second it can't read them all; it then says how many it
+missed.
 
 ## Uninstall and reinstall
 
