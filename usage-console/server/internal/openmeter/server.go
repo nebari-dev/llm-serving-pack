@@ -21,6 +21,9 @@ type Server struct {
 
 	hubOnce sync.Once
 	hub     *hub
+
+	pricerMu     sync.Mutex
+	cachedPricer *pricer
 }
 
 type handlerFunc func(r *http.Request) (any, error)
@@ -35,14 +38,13 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET "+p+pattern, s.authenticated(func(w http.ResponseWriter, r *http.Request) {
 			v, err := fn(r)
 			if err != nil {
-				slog.Error("request failed", "path", r.URL.Path, "err", err)
-				writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]string{"code": "openmeter_unavailable", "message": err.Error()}})
+				writeOpenMeterError(w, r, err)
 				return
 			}
 			writeJSON(w, http.StatusOK, v)
 		}))
 	}
-	h("/receipts", s.receipts)
+	mux.HandleFunc("GET "+p+"/receipts", s.authenticated(s.receipts))
 	mux.HandleFunc("GET "+p+"/stream/traffic", s.authenticated(s.streamTraffic))
 	h("/receipts/count", s.receiptCount)
 	h("/spend", s.spend)
@@ -57,12 +59,28 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func (s *Server) receipts(r *http.Request) (any, error) {
+// receipts is Traffic's list. When the read stopped before finding limit
+// matches, X-Receipts-Continue-Before is the before (epoch ms) to ask with
+// for the older ones.
+func (s *Server) receipts(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 || limit > 1000 {
 		limit = 240
 	}
-	return s.listReceipts(r.Context(), limit, filterOf(r.URL.Query()))
+	rs, continueBefore, err := s.listReceipts(r.Context(), limit, filterOf(r.URL.Query()))
+	if err != nil {
+		writeOpenMeterError(w, r, err)
+		return
+	}
+	if continueBefore > 0 {
+		w.Header().Set("X-Receipts-Continue-Before", strconv.FormatInt(continueBefore, 10))
+	}
+	writeJSON(w, http.StatusOK, rs)
+}
+
+func writeOpenMeterError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Error("request failed", "path", r.URL.Path, "err", err)
+	writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]string{"code": "openmeter_unavailable", "message": err.Error()}})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

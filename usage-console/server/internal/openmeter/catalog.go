@@ -68,7 +68,7 @@ func (s *Server) models(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	prices, err := s.newPricer(ctx)
+	prices, err := s.pricer(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { api, dataMode, keys, type Receipt } from '@/data/catalog'
+import { apiReceipts, dataMode, keys, type Receipt } from '@/data/catalog'
 import { useLive } from './live'
 import { receiptStream, type StreamSampling } from './app-state'
 
@@ -86,11 +86,14 @@ function useMockFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
 
 function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
   const key = filters ? queryString(filters, w).toString() : null
-  const [state, setState] = useState<{ key: string | null; rows: Receipt[]; loaded: boolean; reachedEnd: boolean }>({
+  // continueBefore: the server stopped looking before it filled the last
+  // page; older rows are asked for from there.
+  const [state, setState] = useState<{ key: string | null; rows: Receipt[]; loaded: boolean; reachedEnd: boolean; continueBefore: number | null }>({
     key: null,
     rows: [],
     loaded: false,
     reachedEnd: false,
+    continueBefore: null,
   })
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [dropped, setDropped] = useState(0)
@@ -110,12 +113,14 @@ function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
     if (!filters || key === null) return
     let live = true
     setDropped(0)
-    setState({ key, rows: [], loaded: false, reachedEnd: false })
-    api<Receipt[]>(`/receipts?limit=${PAGE}&${key}`)
-      .then((rows) => {
+    setState({ key, rows: [], loaded: false, reachedEnd: false, continueBefore: null })
+    apiReceipts<Receipt>(`/receipts?limit=${PAGE}&${key}`)
+      .then(({ rows, continueBefore }) => {
         if (!live) return
         for (const r of rows) receiptStream.remember(r)
-        setState((s) => (s.key === key ? { ...s, rows: mergeNewer(s.rows, rows), loaded: true, reachedEnd: rows.length < PAGE } : s))
+        setState((s) =>
+          s.key === key ? { ...s, rows: mergeNewer(s.rows, rows), loaded: true, reachedEnd: rows.length < PAGE && continueBefore === null, continueBefore } : s,
+        )
       })
       .catch(() => live && setState((s) => (s.key === key ? { ...s, loaded: true } : s)))
 
@@ -145,28 +150,31 @@ function useApiFeed(filters: Filters | null, w: TrafficWindow): TrafficFeed {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, nonce])
 
-  const current = state.key === key ? state : { rows: [], loaded: false, reachedEnd: false }
+  const current = state.key === key ? state : { rows: [], loaded: false, reachedEnd: false, continueBefore: null }
+  // before is exclusive, so ask from oldest + 1ms and drop what we have:
+  // rows sharing the oldest millisecond aren't skipped. Where the server
+  // stopped looking, carry on from there.
   const oldest = current.rows.at(-1)?.ts
+  const before = current.continueBefore ?? (oldest === undefined ? undefined : oldest + 1)
   const loadOlder = useCallback(() => {
-    if (!filters || loadingOlder || current.reachedEnd || !current.loaded || oldest === undefined) return
+    if (!filters || loadingOlder || current.reachedEnd || !current.loaded || before === undefined) return
     const k = key
     setLoadingOlder(true)
-    // before is exclusive, so ask from oldest + 1ms and drop what we have:
-    // rows sharing the oldest millisecond aren't skipped.
-    const q = queryString(filters, { since: w.since, before: oldest + 1 })
-    api<Receipt[]>(`/receipts?limit=${PAGE}&${q}`)
-      .then((rows) => {
+    const q = queryString(filters, { since: w.since, before })
+    apiReceipts<Receipt>(`/receipts?limit=${PAGE}&${q}`)
+      .then(({ rows, continueBefore }) => {
         for (const r of rows) receiptStream.remember(r)
         setState((s) => {
           if (s.key !== k) return s
           const seen = new Set(s.rows.map((r) => r.id))
           const older = rows.filter((r) => !seen.has(r.id))
-          return { ...s, rows: [...s.rows, ...older], reachedEnd: rows.length < PAGE || older.length === 0 }
+          const ended = continueBefore === null && (rows.length < PAGE || older.length === 0)
+          return { ...s, rows: [...s.rows, ...older], reachedEnd: ended, continueBefore }
         })
       })
       .catch(() => {})
       .finally(() => keyRef.current === k && setLoadingOlder(false))
-  }, [filters, loadingOlder, current.reachedEnd, current.loaded, oldest, key, w.since])
+  }, [filters, loadingOlder, current.reachedEnd, current.loaded, before, key, w.since])
 
   const count = useLive<{ count: number | null } | null>(key !== null ? `/receipts/count?${key}` : null, null, 15_000).data?.count ?? null
 

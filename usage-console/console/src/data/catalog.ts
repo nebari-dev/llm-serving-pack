@@ -33,13 +33,28 @@ export const seedSummary: Summary = mock.summary
 export const seedRates: Record<string, mock.MockModel> | null = dataMode === 'api' ? null : mock.modelById
 
 /** GET `path` under the console's API; a failed answer throws its error message. */
-export async function api<T>(path: string): Promise<T> {
+async function get(path: string): Promise<Response> {
   const res = await fetch(API_BASE + path, { headers: { Accept: 'application/json' } })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
     throw new Error(body?.error?.message ?? `${res.status} ${res.statusText}`)
   }
-  return res.json() as Promise<T>
+  return res
+}
+
+/** GET `path` under the console's API as JSON. */
+export async function api<T>(path: string): Promise<T> {
+  return (await get(path)).json() as Promise<T>
+}
+
+/**
+ * GET a page of receipts. `continueBefore` is set when the server stopped
+ * looking before it filled the page: older matches may exist before it.
+ */
+export async function apiReceipts<T>(path: string): Promise<{ rows: T[]; continueBefore: number | null }> {
+  const res = await get(path)
+  const more = res.headers.get('X-Receipts-Continue-Before')
+  return { rows: (await res.json()) as T[], continueBefore: more ? Number(more) : null }
 }
 
 // ---- sign-out ---------------------------------------------------------------

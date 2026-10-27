@@ -26,8 +26,9 @@ type fakeOpenMeter struct {
 	// features replaces the default two price features when set.
 	features []map[string]any
 	pageSize int
-	// eventReads counts GET /api/v2/events calls.
-	eventReads int
+	// eventReads counts GET /api/v2/events calls, eventsServed the events
+	// they returned; featureReads counts GET .../features calls.
+	eventReads, eventsServed, featureReads int
 	// cost is USD per token by model, for the fake's cost queries; a model
 	// missing here has no price.
 	cost map[string]float64
@@ -60,9 +61,19 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/events", func(w http.ResponseWriter, r *http.Request) {
+		match, err := eventFilter(r.URL.Query().Get("filter"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		f.mu.Lock()
 		f.eventReads++
-		evs := append([]map[string]any(nil), f.events...)
+		var evs []map[string]any
+		for _, e := range f.events {
+			if match(e) {
+				evs = append(evs, e)
+			}
+		}
 		f.mu.Unlock()
 		sort.SliceStable(evs, func(i, j int) bool { return evs[i]["time"].(string) > evs[j]["time"].(string) })
 		size := f.pageSize
@@ -76,6 +87,9 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 		for _, e := range evs[start:end] {
 			items = append(items, map[string]any{"event": e})
 		}
+		f.mu.Lock()
+		f.eventsServed += end - start
+		f.mu.Unlock()
 		out := map[string]any{"items": items}
 		if end < len(evs) {
 			out["nextCursor"] = fmt.Sprint(end)
@@ -96,6 +110,9 @@ func (f *fakeOpenMeter) server(t *testing.T) *httptest.Server {
 		writeJSON(w, map[string]any{"data": out})
 	})
 	mux.HandleFunc("GET /api/v3/openmeter/features", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.featureReads++
+		f.mu.Unlock()
 		fs := f.features
 		if fs == nil {
 			fs = []map[string]any{feature("f-mock", "mock-provider", "mock"), feature("f-bedrock", "bedrock", "bedrock")}
@@ -241,6 +258,63 @@ func (f *fakeOpenMeter) aggregate(typ string, groupBy []string, from, to, window
 		out = append(out, by[k])
 	}
 	return out
+}
+
+// eventFilter is GET /api/v2/events's filter, a JSON object, for the
+// fields and operators the console sends: time ($gte, $lt, or both under
+// $and), type ($eq) and id ($in). Like OpenMeter, one field takes one
+// operator.
+func eventFilter(raw string) (func(map[string]any) bool, error) {
+	if raw == "" {
+		return func(map[string]any) bool { return true }, nil
+	}
+	var f map[string]map[string]any
+	if err := json.Unmarshal([]byte(raw), &f); err != nil {
+		return nil, err
+	}
+	for field, ops := range f {
+		if len(ops) != 1 {
+			return nil, fmt.Errorf("%s: multiple operators are set", field)
+		}
+	}
+	var timeOK func(time.Time, map[string]any) bool
+	timeOK = func(at time.Time, ops map[string]any) bool {
+		for op, v := range ops {
+			switch op {
+			case "$and":
+				for _, sub := range v.([]any) {
+					if !timeOK(at, sub.(map[string]any)) {
+						return false
+					}
+				}
+			case "$gte", "$lt":
+				b, _ := time.Parse(time.RFC3339Nano, v.(string))
+				if (op == "$gte" && at.Before(b)) || (op == "$lt" && !at.Before(b)) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return func(e map[string]any) bool {
+		at, _ := time.Parse(time.RFC3339, e["time"].(string))
+		if ops, ok := f["time"]; ok && !timeOK(at, ops) {
+			return false
+		}
+		if v, ok := f["type"]["$eq"]; ok && e["type"] != v {
+			return false
+		}
+		if v, ok := f["id"]["$in"]; ok {
+			in := false
+			for _, id := range v.([]any) {
+				in = in || id == e["id"]
+			}
+			if !in {
+				return false
+			}
+		}
+		return true
+	}, nil
 }
 
 // writePage writes one page of items as OpenMeter's v3 lists do: page[size]

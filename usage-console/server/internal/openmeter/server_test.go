@@ -359,8 +359,12 @@ func openStream(t *testing.T, ctx context.Context, url, query string) func() mod
 			}
 			if data, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
 				var r model.Receipt
+				var d struct{ Count int }
 				if json.Unmarshal([]byte(data), &r) == nil && r.ID != "" {
 					events <- r
+				} else if json.Unmarshal([]byte(data), &d) == nil && d.Count > 0 {
+					// A dropped event, as a receipt with only its count.
+					events <- model.Receipt{ID: "dropped", Status: d.Count}
 				}
 			}
 		}
@@ -603,5 +607,132 @@ func TestReceiptCostUsesThePriceInEffectNowLikeSpend(t *testing.T) {
 
 	if len(rs) != 1 || rs[0].CostUSD == nil || *rs[0].CostUSD != 6 {
 		t.Fatalf("got %+v", rs)
+	}
+}
+
+// Opening a past day reads that day from OpenMeter, not every newer event
+// down to it.
+func TestReceiptsForAPastDayReadOnlyThatDay(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for i := range 2000 {
+		f.request(fmt.Sprintf("new-%d", i), now.Add(-time.Duration(i)*time.Second), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
+	}
+	day := now.Add(-48 * time.Hour)
+	for i := range 3 {
+		f.request(fmt.Sprintf("old-%d", i), day.Add(time.Duration(i)*time.Minute), bob("mock/small", "key-b1"), map[string]int{"input": 2, "output": 1})
+	}
+	q := fmt.Sprintf("/receipts?since=%d&before=%d", day.Add(-time.Hour).UnixMilli(), day.Add(time.Hour).UnixMilli())
+
+	rs := get[[]model.Receipt](t, newAPI(t, f), q)
+
+	if len(rs) != 3 || rs[0].ID != "old-2" || rs[0].InputTokens != 2 || rs[0].OutputTokens != 1 {
+		t.Fatalf("got %+v", rs)
+	}
+	if f.eventsServed > 20 {
+		t.Fatalf("read %d events from OpenMeter for 3 requests", f.eventsServed)
+	}
+}
+
+// A rare filter doesn't read the whole window in one call: the read stops
+// after a bounded number of requests and says where to carry on.
+func TestReceiptsScanStopsAndSaysHowFarItGot(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for i := range 5100 {
+		f.events = append(f.events, event(fmt.Sprintf("a%d", i), "llm.request", now.Add(-time.Duration(i)*time.Second), alice("mock/small", "key-a1", "api_key")))
+	}
+	f.events = append(f.events, event("b-old", "llm.request", now.Add(-3*time.Hour), bob("mock/small", "key-b1")))
+	h := newAPI(t, f)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/demo/receipts?team=team-b", nil))
+
+	to, err := strconv.ParseInt(rec.Header().Get("X-Receipts-Continue-Before"), 10, 64)
+	if rec.Code != 200 || err != nil || strings.TrimSpace(rec.Body.String()) != "[]" {
+		t.Fatalf("%d %q %s", rec.Code, rec.Header().Get("X-Receipts-Continue-Before"), rec.Body)
+	}
+	// Asking again from there finds the older match, with no header.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", fmt.Sprintf("/api/v1/demo/receipts?team=team-b&before=%d", to), nil))
+	if rec.Header().Get("X-Receipts-Continue-Before") != "" || !strings.Contains(rec.Body.String(), `"b-old"`) {
+		t.Fatalf("second read %q %s", rec.Header().Get("X-Receipts-Continue-Before"), rec.Body)
+	}
+}
+
+// Prices are read from OpenMeter once a minute, not on every list.
+func TestReceiptPricesAreReused(t *testing.T) {
+	f := &fakeOpenMeter{}
+	f.request("r1", now.Add(-time.Minute), alice("mock/small", "key-a1", "api_key"), map[string]int{"input": 1})
+	h := newAPI(t, f)
+
+	get[[]model.Receipt](t, h, "/receipts")
+	get[[]model.Receipt](t, h, "/receipts")
+
+	if f.featureReads != 1 {
+		t.Fatalf("features read %d times", f.featureReads)
+	}
+}
+
+// A burst between two polls reaches the live view whole, and a quiet
+// team's request in it still reaches that team's filtered view.
+func TestStreamKeepsUpWithABurst(t *testing.T) {
+	f := &fakeOpenMeter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	srv := streamAPI(t, f)
+	all := openStream(t, ctx, srv.URL, "")
+	teamB := openStream(t, ctx, srv.URL, "team=team-b")
+
+	f.mu.Lock()
+	for i := range 300 {
+		at := now.Add(-time.Duration(i) * time.Millisecond)
+		f.events = append(f.events, event(fmt.Sprintf("a%d", i), "llm.request", at, alice("mock/small", "key-a1", "api_key")))
+		if i == 250 {
+			f.events = append(f.events, event("b1", "llm.request", at, bob("mock/small", "key-b1")))
+		}
+	}
+	f.mu.Unlock()
+
+	seen := map[string]bool{}
+	for len(seen) < 301 {
+		seen[all().ID] = true
+	}
+	if r := teamB(); r.ID != "b1" {
+		t.Fatalf("team-b's view got %s", r.ID)
+	}
+}
+
+// A window too busy to read whole is reported on the stream, once: the
+// console can say the live view has gaps.
+func TestStreamReportsWhatItCouldNotRead(t *testing.T) {
+	f := &fakeOpenMeter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	next := openStream(t, ctx, streamAPI(t, f).URL, "")
+
+	f.mu.Lock()
+	for i := range 5100 {
+		f.events = append(f.events, event(fmt.Sprintf("a%d", i), "llm.request", now.Add(-time.Duration(i)*10*time.Millisecond), alice("mock/small", "key-a1", "api_key")))
+	}
+	f.mu.Unlock()
+
+	dropped := 0
+	for received := 0; received < 5000; {
+		if r := next(); r.ID == "dropped" {
+			dropped += r.Status
+		} else {
+			received++
+		}
+	}
+	// The next poll reads the same window and reports nothing new.
+	f.add(event("late", "llm.request", now, alice("mock/small", "key-a1", "api_key")))
+	for r := next(); r.ID != "late"; r = next() {
+		if r.ID == "dropped" {
+			dropped += r.Status
+		}
+	}
+	// Event times are whole seconds, so the count is good to within the
+	// requests of the second the read stopped in.
+	if dropped < 1 || dropped > 100 {
+		t.Fatalf("reported %d dropped, want about 100", dropped)
 	}
 }

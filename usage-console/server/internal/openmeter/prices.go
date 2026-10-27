@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -68,7 +69,29 @@ type pricer struct {
 	now       time.Time
 	providers map[string]string // model resource -> provider
 	overrides []Price
-	cache     map[[2]string]*Price
+	// mu guards cache: a cached pricer is shared by concurrent requests.
+	mu    sync.Mutex
+	cache map[[2]string]*Price
+}
+
+// pricerTTL is how long a pricer's features, overrides and prices are
+// reused before they are read from OpenMeter again.
+const pricerTTL = time.Minute
+
+// pricer returns a pricer read from OpenMeter at most pricerTTL ago, so
+// list and stream reads don't page every feature and override each time.
+func (s *Server) pricer(ctx context.Context) (*pricer, error) {
+	s.pricerMu.Lock()
+	defer s.pricerMu.Unlock()
+	if s.cachedPricer != nil && s.Now().Sub(s.cachedPricer.now) < pricerTTL {
+		return s.cachedPricer, nil
+	}
+	p, err := s.newPricer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.cachedPricer = p
+	return p, nil
 }
 
 func (s *Server) newPricer(ctx context.Context) (*pricer, error) {
@@ -128,6 +151,8 @@ func (p *pricer) price(ctx context.Context, provider, model string) (*Price, err
 	}
 	provider, model = strings.ToLower(strings.TrimSpace(provider)), canonicalModel(model)
 	k := [2]string{provider, model}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if pr, ok := p.cache[k]; ok {
 		return pr, nil
 	}
