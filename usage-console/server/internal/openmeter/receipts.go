@@ -102,18 +102,27 @@ func (s *Server) complete(ctx context.Context, rs []model.Receipt) error {
 	return nil
 }
 
-// tokensOf reads the receipts' llm.tokens events by ID, a batch of receipts
-// a call, and returns each receipt's count by token type.
+// tokensOf reads the receipts' llm.tokens events by ID and time, a batch of
+// receipts a call, and returns each receipt's count by token type.
 func (s *Server) tokensOf(ctx context.Context, rs []model.Receipt) (map[string]map[string]int, error) {
 	out := make(map[string]map[string]int, len(rs))
 	for start := 0; start < len(rs); start += tokenLookupBatch {
-		var ids []string
-		for _, r := range rs[start:min(start+tokenLookupBatch, len(rs))] {
+		// Token events carry their request's time, in whole seconds: bounding
+		// the lookup by the batch's times lets ClickHouse skip other months.
+		q := eventQuery{typ: tokensEvent}
+		for i, r := range rs[start:min(start+tokenLookupBatch, len(rs))] {
 			for _, typ := range tokenTypes {
-				ids = append(ids, r.ID+":"+typ)
+				q.ids = append(q.ids, r.ID+":"+typ)
+			}
+			at := time.UnixMilli(r.TS).Truncate(time.Second)
+			if i == 0 || at.Before(q.since) {
+				q.since = at
+			}
+			if end := at.Add(time.Second); i == 0 || end.After(q.before) {
+				q.before = end
 			}
 		}
-		err := s.Client.EachEvent(ctx, eventQuery{typ: tokensEvent, ids: ids}, func(e Event) bool {
+		err := s.Client.EachEvent(ctx, q, func(e Event) bool {
 			if i := strings.LastIndex(e.ID, ":"); i >= 0 {
 				id, typ := e.ID[:i], e.ID[i+1:]
 				if out[id] == nil {

@@ -88,9 +88,10 @@ type streamReader struct {
 	// settled are receipts in the window whose tokens are in (or that expect
 	// none), by ID.
 	settled map[string]model.Receipt
-	// missedTo is the newest time (epoch ms) already reported missed: a
-	// window too busy to read whole is reported once, not every poll.
-	missedTo int64
+	// missedTo is the newest time (epoch ms) already reported missed, and
+	// prevNewest the newest receipt of the previous read: only what fell
+	// between two reads is missed, and it is reported once.
+	missedTo, prevNewest int64
 }
 
 // read returns the window's receipts, newest first, and how many requests
@@ -107,7 +108,7 @@ func (sr *streamReader) read(ctx context.Context) ([]model.Receipt, int, error) 
 		// The scan stopped at receiptScanCap: what's older in the window, the
 		// stream can't send. Event times are whole seconds, so the count can
 		// be short by the requests of the second the scan stopped in.
-		from, to := max(since, sr.missedTo), rs[len(rs)-1].TS
+		from, to := max(since, sr.missedTo, sr.prevNewest), rs[len(rs)-1].TS
 		if from < to {
 			rows, err := sr.s.Client.meterQuery(ctx, "llm_requests", time.UnixMilli(from), time.UnixMilli(to), nil, nil)
 			if err != nil {
@@ -118,6 +119,9 @@ func (sr *streamReader) read(ctx context.Context) ([]model.Receipt, int, error) 
 			}
 			sr.missedTo = to
 		}
+	}
+	if len(rs) > 0 {
+		sr.prevNewest = rs[0].TS
 	}
 	var open []model.Receipt
 	for _, r := range rs {

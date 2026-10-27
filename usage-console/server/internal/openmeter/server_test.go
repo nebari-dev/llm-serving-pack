@@ -736,3 +736,55 @@ func TestStreamReportsWhatItCouldNotRead(t *testing.T) {
 		t.Fatalf("reported %d dropped, want about 100", dropped)
 	}
 }
+
+// Busy but keeping up: when each poll's read overlaps the one before, the
+// requests between them were all read, and nothing is reported missed.
+func TestStreamDoesNotReportOverlapAsMissed(t *testing.T) {
+	f := &fakeOpenMeter{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	next := openStream(t, ctx, streamAPI(t, f).URL, "")
+	burst := func(prefix string, n int, newest time.Time, gap time.Duration) {
+		f.mu.Lock()
+		for i := range n {
+			f.events = append(f.events, event(fmt.Sprintf("%s%d", prefix, i), "llm.request", newest.Add(-time.Duration(i)*gap), alice("mock/small", "key-a1", "api_key")))
+		}
+		f.mu.Unlock()
+	}
+	// More than one read holds: the oldest 100 are missed.
+	burst("a", 5100, now.Add(-10*time.Second), 10*time.Millisecond)
+	dropped := 0
+	for received := 0; received < 5000; {
+		if r := next(); r.ID == "dropped" {
+			dropped += r.Status
+		} else {
+			received++
+		}
+	}
+	// The count follows the read's receipts.
+	for dropped == 0 {
+		if r := next(); r.ID == "dropped" {
+			dropped += r.Status
+		}
+	}
+	first := dropped
+	// 300 newer ones: the next read leaves out the window's oldest 300 (3s
+	// of the burst), but the read before already had them.
+	burst("b", 300, now, 10*time.Millisecond)
+	for received := 0; received < 300; {
+		if r := next(); r.ID == "dropped" {
+			dropped += r.Status
+		} else if strings.HasPrefix(r.ID, "b") {
+			received++
+		}
+	}
+	f.add(event("late", "llm.request", now.Add(time.Second), alice("mock/small", "key-a1", "api_key")))
+	for r := next(); r.ID != "late"; r = next() {
+		if r.ID == "dropped" {
+			dropped += r.Status
+		}
+	}
+	if first < 1 || dropped != first {
+		t.Fatalf("reported %d missed for the burst and %d more after it, want some and then none", first, dropped-first)
+	}
+}

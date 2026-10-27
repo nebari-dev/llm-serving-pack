@@ -344,10 +344,11 @@ cluster.
 Traffic's filters and time range are applied on the server. It reads only
 the request events in the range from OpenMeter, then the token counts of the
 ones that match. A rare filter over a long range stops after 5,000 requests,
-and "Load older" carries on from there. The live view reads every request of
-the last two minutes on each poll, shared by everyone watching. Above about
-40 requests a second it can't read them all; it then says how many it
-missed.
+and "Load older" carries on from there. The live view polls every 5 seconds,
+once for everyone watching, and reads up to 5,000 requests of the last two
+minutes. Consecutive reads overlap, so it keeps up until one 5-second
+interval holds more than 5,000 requests. Past that it says how many it
+missed, on every open view whatever its filters.
 
 ## Uninstall and reinstall
 
