@@ -71,6 +71,30 @@ spec:
     - {port: 9092, targetPort: 9092}
 ---
 {{- $ch := include "om.name" (dict "root" . "component" "clickhouse") }}
+# ClickHouse's own diagnostic logs have no expiry by default and grow until
+# their merges use the memory inserts need, which stops usage reaching
+# ClickHouse. Nothing in OpenMeter reads them: the noisiest are off, and the
+# query and error logs are kept a week. Usage itself (openmeter.om_events)
+# never expires.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ch }}-config
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+data:
+  system-logs.xml: |
+    <clickhouse>
+      <trace_log remove="1"/>
+      <text_log remove="1"/>
+      <part_log remove="1"/>
+      <metric_log remove="1"/>
+      <asynchronous_metric_log remove="1"/>
+      <processors_profile_log remove="1"/>
+      <query_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_log>
+      <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
+    </clickhouse>
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -108,8 +132,11 @@ spec:
             {{- toYaml .Values.clickhouse.resources | nindent 12 }}
           volumeMounts:
             - {name: data, mountPath: /var/lib/clickhouse}
-      {{- if not .Values.clickhouse.persistence.enabled }}
+            - {name: config, mountPath: /etc/clickhouse-server/config.d/system-logs.xml, subPath: system-logs.xml}
       volumes:
+        - name: config
+          configMap: {name: {{ $ch }}-config}
+      {{- if not .Values.clickhouse.persistence.enabled }}
         - name: data
           emptyDir: {}
       {{- end }}
