@@ -32,6 +32,10 @@ type idp struct {
 	mu      sync.Mutex
 	keys    map[string]*rsa.PrivateKey // kid -> key, as the JWKS publishes them
 	fetches int
+	// down makes the JWKS answer 503; hold, when set, makes it wait until
+	// closed.
+	down bool
+	hold chan struct{}
 }
 
 func newIdP(t *testing.T) *idp {
@@ -43,8 +47,18 @@ func newIdP(t *testing.T) *idp {
 	})
 	mux.HandleFunc("GET /realms/nebari/protocol/openid-connect/certs", func(w http.ResponseWriter, _ *http.Request) {
 		p.mu.Lock()
+		hold := p.hold
+		p.mu.Unlock()
+		if hold != nil {
+			<-hold
+		}
+		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.fetches++
+		if p.down {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
 		var keys []map[string]string
 		for kid, k := range p.keys {
 			keys = append(keys, map[string]string{
@@ -85,6 +99,7 @@ func (p *idp) claims() map[string]any {
 		"iat": now.Add(-time.Minute).Unix(), "exp": now.Add(4 * time.Minute).Unix(),
 		"name": "Alice Example", "given_name": "Alice", "family_name": "Example",
 		"preferred_username": "alice", "email": "alice@example.com",
+		"groups": []string{"/llm-usage-admins", "/team-a"},
 	}
 }
 
@@ -121,7 +136,7 @@ func TestVerifyAcceptsAKeycloakAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Name != "Alice Example" || c.Email != "alice@example.com" || c.PreferredUsername != "alice" || c.Subject != "u-1" {
+	if c.Name != "Alice Example" || c.Email != "alice@example.com" || c.PreferredUsername != "alice" || c.Subject != "u-1" || len(c.Groups) != 2 || c.Groups[0] != "/llm-usage-admins" {
 		t.Fatalf("claims %+v", c)
 	}
 }
@@ -277,4 +292,85 @@ func TestVerifyReadsKeysFromTheDiscoveryURL(t *testing.T) {
 func flipLow(c byte) byte {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	return alphabet[strings.IndexByte(alphabet, c)^1]
+}
+
+// A Keycloak outage when the keys are due a refresh doesn't lock everyone
+// out: tokens signed with a key already read still verify.
+func TestVerifyKeepsKnownKeysWhenARefreshFails(t *testing.T) {
+	p := newIdP(t)
+	clock := now
+	v := p.verifierAt(func() time.Time { return clock })
+	tok := func() string {
+		c := p.claims()
+		c["exp"] = clock.Add(time.Minute).Unix()
+		return sign(t, "k1", p.key("k1"), c)
+	}
+	if _, err := v.Verify(context.Background(), tok()); err != nil {
+		t.Fatal(err)
+	}
+
+	p.mu.Lock()
+	p.down = true
+	p.mu.Unlock()
+	clock = clock.Add(2 * time.Hour)
+
+	if _, err := v.Verify(context.Background(), tok()); err != nil {
+		t.Fatalf("known key refused during an outage: %v", err)
+	}
+}
+
+// A slow key refresh doesn't hold up requests whose key is already known.
+func TestVerifyDoesNotWaitForASlowRefresh(t *testing.T) {
+	p := newIdP(t)
+	clock := now
+	var clockMu sync.Mutex
+	v := p.verifierAt(func() time.Time { clockMu.Lock(); defer clockMu.Unlock(); return clock })
+	tok := func() string {
+		c := p.claims()
+		c["exp"] = now.Add(3 * time.Hour).Unix()
+		return sign(t, "k1", p.key("k1"), c)
+	}
+	if _, err := v.Verify(context.Background(), tok()); err != nil {
+		t.Fatal(err)
+	}
+	hold := make(chan struct{})
+	p.mu.Lock()
+	p.hold = hold
+	p.mu.Unlock()
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(hold) }) })
+	clockMu.Lock()
+	clock = clock.Add(2 * time.Hour)
+	clockMu.Unlock()
+
+	go v.Verify(context.Background(), tok()) // starts the refresh, which hangs
+	time.Sleep(50 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() { _, err := v.Verify(context.Background(), tok()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waited for the refresh")
+	}
+}
+
+// With Keycloak down from the start, requests in the next keysMinAge get
+// the same failure without each reading the keys again.
+func TestVerifyBacksOffAfterAFailedRead(t *testing.T) {
+	p := newIdP(t)
+	p.down = true
+	v := p.verifier()
+	tok := sign(t, "k1", p.key("k1"), p.claims())
+
+	for range 5 {
+		if _, err := v.Verify(context.Background(), tok); !errors.Is(err, oidc.ErrUnavailable) {
+			t.Fatalf("err %v, want unavailable", err)
+		}
+	}
+	if p.fetches != 1 {
+		t.Fatalf("read the keys %d times", p.fetches)
+	}
 }

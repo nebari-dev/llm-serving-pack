@@ -44,6 +44,9 @@ type Claims struct {
 	FamilyName        string `json:"family_name"`
 	PreferredUsername string `json:"preferred_username"`
 	Email             string `json:"email"`
+	// Groups are the person's Keycloak groups, as the operator's mapper
+	// writes them: full paths (/name).
+	Groups []string `json:"groups"`
 }
 
 // ErrInvalid is wrapped by every reason a token is refused.
@@ -55,10 +58,15 @@ var ErrUnavailable = errors.New("identity provider unavailable")
 
 // Verifier checks tokens. It is safe for concurrent use.
 type Verifier struct {
-	cfg     Config
-	mu      sync.Mutex
-	keys    map[string]*rsa.PublicKey
-	fetched time.Time
+	cfg  Config
+	mu   sync.Mutex
+	keys map[string]*rsa.PublicKey
+	// fetched is when keys were last read; tried, when a read last started.
+	fetched, tried time.Time
+	// refreshing is closed when the read in progress ends; nil when none is.
+	refreshing chan struct{}
+	// failed is why the last read failed, until one succeeds.
+	failed error
 }
 
 func NewVerifier(cfg Config) (*Verifier, error) {
@@ -166,24 +174,64 @@ func decodeSegment(s string, v any) error {
 
 // key returns the signing key kid names. The keys are read again when they
 // are older than keysMaxAge, or when kid is unknown and they were last read
-// over keysMinAge ago (Keycloak rotated its keys).
+// over keysMinAge ago (Keycloak rotated its keys). One read runs at a time,
+// outside the lock: a request whose key is already known never waits for
+// it, and a failed read keeps the keys it had and is retried at most every
+// keysMinAge.
 func (v *Verifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	age := v.cfg.Now().Sub(v.fetched)
-	_, known := v.keys[kid]
-	if v.keys == nil || age > keysMaxAge || (!known && age > keysMinAge) {
-		keys, err := v.fetchKeys(ctx)
-		if err != nil {
+	for {
+		v.mu.Lock()
+		now := v.cfg.Now()
+		k, known := v.keys[kid]
+		age := now.Sub(v.fetched)
+		due := v.keys == nil || age > keysMaxAge || (!known && age > keysMinAge)
+		if due && v.failed != nil && now.Sub(v.tried) < keysMinAge {
+			due = false // a read failed moments ago; don't hammer Keycloak
+		}
+		if !due || (known && v.refreshing != nil) {
+			failed := v.failed
+			v.mu.Unlock()
+			switch {
+			case known:
+				return k, nil
+			case failed != nil:
+				return nil, failed
+			}
+			return nil, fmt.Errorf("%w: unknown signing key %q", ErrInvalid, kid)
+		}
+		if wait := v.refreshing; wait != nil {
+			v.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: %v", ErrUnavailable, ctx.Err())
+			}
+		}
+		done := make(chan struct{})
+		v.refreshing, v.tried = done, now
+		v.mu.Unlock()
+
+		// Not tied to this request: others may be waiting on the read.
+		keys, err := v.fetchKeys(context.WithoutCancel(ctx))
+
+		v.mu.Lock()
+		if err == nil {
+			v.keys, v.fetched, v.failed = keys, v.cfg.Now(), nil
+		} else {
+			v.failed = err
+		}
+		v.refreshing = nil
+		close(done)
+		v.mu.Unlock()
+		if err != nil && !known {
 			return nil, err
 		}
-		v.keys, v.fetched = keys, v.cfg.Now()
+		if err != nil {
+			return k, nil
+		}
+		// The fresh keys decide, on the next pass.
 	}
-	k, ok := v.keys[kid]
-	if !ok {
-		return nil, fmt.Errorf("%w: unknown signing key %q", ErrInvalid, kid)
-	}
-	return k, nil
 }
 
 const (

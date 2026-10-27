@@ -36,7 +36,14 @@ type TokenVerifier interface {
 // "Authorization: Bearer", and Tokens checks it.
 type GatewayIdentity struct {
 	Tokens TokenVerifier
+	// Groups, when set, are the Keycloak groups whose members may use the
+	// console (any one of them). The gateway checks them too; this keeps the
+	// gate if a route reaches the console without that check.
+	Groups []string
 }
+
+// errForbidden is a signed-in caller outside the required groups.
+var errForbidden = errors.New("not in a group allowed to use the console")
 
 // gatewaySignOut is the gateway's OIDC logout path (the one the Nebari
 // operator sets on every NebariApp's SecurityPolicy): the gateway ends the
@@ -56,6 +63,9 @@ func (g GatewayIdentity) Caller(r *http.Request) (SessionActor, SessionAuth, err
 	if name == "" {
 		name = strings.TrimSpace(c.GivenName + " " + c.FamilyName)
 	}
+	if len(g.Groups) > 0 && !memberOfAny(c.Groups, g.Groups) {
+		return SessionActor{}, SessionAuth{}, errForbidden
+	}
 	email := c.Email
 	if email == "" {
 		email = c.PreferredUsername
@@ -63,15 +73,47 @@ func (g GatewayIdentity) Caller(r *http.Request) (SessionActor, SessionAuth, err
 	return SessionActor{Name: name, Email: email, Roles: []string{"viewer"}}, SessionAuth{Mode: "oidc", SignOutURL: gatewaySignOut}, nil
 }
 
+// memberOfAny says whether have holds one of want, comparing them as
+// Keycloak group paths: a leading "/" is added and empty segments dropped,
+// as the Nebari operator normalizes the groups it enforces.
+func memberOfAny(have, want []string) bool {
+	for _, h := range have {
+		for _, w := range want {
+			if p := groupPath(h); p != "" && p == groupPath(w) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func groupPath(g string) string {
+	var segs []string
+	for _, s := range strings.Split(strings.TrimSpace(g), "/") {
+		if s != "" {
+			segs = append(segs, s)
+		}
+	}
+	if len(segs) == 0 {
+		return ""
+	}
+	return "/" + strings.Join(segs, "/")
+}
+
 type callerKey struct{}
 
-// authenticated answers 401 for a request with no acceptable sign-in, and
-// 503 when sign-in cannot be checked; otherwise next sees the caller in the
+// authenticated answers 401 for a request with no acceptable sign-in, 403
+// for a caller outside the required groups, and 503 when sign-in cannot be
+// checked; otherwise next sees the caller in the
 // request's context.
 func (s *Server) authenticated(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, auth, err := s.Identity.Caller(r)
 		switch {
+		case errors.Is(err, errForbidden):
+			slog.Info("access refused", "path", r.URL.Path, "err", err)
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "ask an administrator to add you to the group that may see usage"}})
+			return
 		case errors.Is(err, oidc.ErrInvalid):
 			slog.Info("sign-in refused", "path", r.URL.Path, "err", err)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "unauthenticated", "message": "sign in again"}})

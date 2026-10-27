@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ func main() {
 	issuer := flag.String("oidc-issuer-url", os.Getenv("OIDC_ISSUER_URL"), "the issuer of the access tokens the gateway forwards ($OIDC_ISSUER_URL); empty: no sign-in (dev mode)")
 	discovery := flag.String("oidc-discovery-url", os.Getenv("OIDC_DISCOVERY_URL"), "where to read the issuer's discovery document and keys, if not the issuer URL ($OIDC_DISCOVERY_URL)")
 	clientID := flag.String("oidc-client-id", os.Getenv("OIDC_CLIENT_ID"), "the client the tokens must be issued to ($OIDC_CLIENT_ID)")
+	groups := flag.String("oidc-groups", os.Getenv("OIDC_GROUPS"), "comma-separated Keycloak groups whose members may use the console ($OIDC_GROUPS); empty: every signed-in person")
 	flag.Parse()
 
 	var identity openmeter.Identity = openmeter.DevIdentity{}
@@ -36,8 +38,14 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		identity = openmeter.GatewayIdentity{Tokens: v}
-		log.Printf("sign-in: tokens from %s issued to %s", *issuer, *clientID)
+		var required []string
+		for _, g := range strings.Split(*groups, ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				required = append(required, g)
+			}
+		}
+		identity = openmeter.GatewayIdentity{Tokens: v, Groups: required}
+		log.Printf("sign-in: tokens from %s issued to %s, groups %v", *issuer, *clientID, required)
 	} else {
 		log.Printf("sign-in: none configured (dev mode): every caller is the same viewer")
 	}

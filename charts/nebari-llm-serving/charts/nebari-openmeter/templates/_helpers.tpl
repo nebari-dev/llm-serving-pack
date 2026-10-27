@@ -108,8 +108,13 @@ client. Nothing (dev mode) otherwise.
   valueFrom: {secretKeyRef: {name: {{ $secret }}, key: issuer-url}}
 - name: OIDC_CLIENT_ID
   valueFrom: {secretKeyRef: {name: {{ $secret }}, key: client-id}}
+{{- else if .Values.nebariapp.enabled }}
+{{- fail "nebariapp.enabled exposes the console, which shows everyone's usage, so it needs sign-in: keep nebariapp.auth.enabled, enforceAtGateway, provisionClient and forwardAccessToken on, or set console.oidc.issuerURL and clientID" }}
 {{- end }}
 {{- with $o.discoveryURL }}
 - {name: OIDC_DISCOVERY_URL, value: {{ . | quote }}}
+{{- end }}
+{{- if and (or $o.issuerURL .Values.nebariapp.enabled) $a.groups }}
+- {name: OIDC_GROUPS, value: {{ join "," $a.groups | quote }}}
 {{- end }}
 {{- end -}}

@@ -99,3 +99,23 @@ func TestCallsNeedAValidToken(t *testing.T) {
 		}
 	}
 }
+
+// With groups required, only their members get in, whether Keycloak writes
+// group paths (/name) or names; everyone else signed in gets 403.
+func TestCallsNeedARequiredGroup(t *testing.T) {
+	om := (&fakeOpenMeter{}).server(t)
+	h := (&openmeter.Server{
+		Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now },
+		Identity: openmeter.GatewayIdentity{Tokens: tokens{
+			"t-path":  {Subject: "u-1", Groups: []string{"/team-a", "/llm-usage-admins"}},
+			"t-name":  {Subject: "u-2", Groups: []string{"llm-usage-admins"}},
+			"t-other": {Subject: "u-3", Groups: []string{"/team-a", "/llm-usage-admins/sub"}},
+			"t-none":  {Subject: "u-4"},
+		}, Groups: []string{"llm-usage-admins"}},
+	}).Handler()
+	for token, want := range map[string]int{"t-path": 200, "t-name": 200, "t-other": 403, "t-none": 403} {
+		if rec := call(h, "/session", "Bearer "+token); rec.Code != want {
+			t.Errorf("%s: %d %s, want %d", token, rec.Code, rec.Body, want)
+		}
+	}
+}
