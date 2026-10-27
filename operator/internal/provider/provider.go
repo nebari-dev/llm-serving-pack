@@ -23,6 +23,9 @@ type Resolved struct {
 	SchemaName    string
 	SchemaVersion string
 	SchemaPrefix  string
+	// CAConfigMapName names the ConfigMap of CAs the gateway trusts for the
+	// provider. Empty means the gateway's built-in public roots.
+	CAConfigMapName string
 	// SecurityPolicy contains the Envoy AI Gateway upstream auth settings.
 	// The shared builder supplies targetRefs, names, labels, and ownership.
 	SecurityPolicy map[string]interface{}
@@ -75,6 +78,12 @@ func Resolve(p llmv1alpha1.ProviderSpec) (*Resolved, error) {
 	}
 	if resolved.Port < 1 || resolved.Port > 65535 {
 		return nil, fmt.Errorf("spec.provider.port must be between 1 and 65535")
+	}
+	if p.TLS != nil {
+		if problems := validation.IsDNS1123Subdomain(p.TLS.CAConfigMapName); len(problems) > 0 {
+			return nil, fmt.Errorf("spec.provider.tls.caConfigMapName must be a ConfigMap name: %s", strings.Join(problems, "; "))
+		}
+		resolved.CAConfigMapName = p.TLS.CAConfigMapName
 	}
 	return resolved, nil
 }

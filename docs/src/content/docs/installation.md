@@ -1191,6 +1191,12 @@ Keycloak login screen and back to a (mostly empty) key-manager page
 for users in the `llm` group. There are no LLMModels yet; section 9
 changes that.
 
+### 8.3 Upgrading the pack
+
+To upgrade the pack later, follow [Upgrading](/upgrading/): the routine
+steps start from the Application in section 8.1, and some releases need
+extra steps listed on that page.
+
 ## 9. Apply your first LLMModel
 
 An `LLMModel` is the user-facing API of the pack: one CR per model

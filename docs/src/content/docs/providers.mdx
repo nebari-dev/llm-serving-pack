@@ -6,7 +6,9 @@ External providers use the same model declarations, API-key and JWT endpoints,
 and group access controls. A backend variant selects its native API, address,
 and upstream authentication. Existing OpenAI-compatible configurations remain
 valid without an explicit backend. [AWS Bedrock](/bedrock/) is the first
-non-OpenAI backend; other native backends are not enabled yet.
+non-OpenAI backend; other native backends are not enabled yet. Servers you run
+yourself, such as llama.cpp, use the OpenAI backend; see
+[Self-hosted servers](/self-hosted/) for certificates from a private CA.
 
 Bedrock requires `WorkloadIdentity`; omitting `provider.credential` selects it.
 Bedrock API-key authentication is not supported by this adapter.
@@ -29,7 +31,7 @@ The deployment targets Envoy Gateway 1.8.1 with AI Gateway 1.1 and Gateway API
 1.5.1. The operator emits AI Gateway `v1beta1` resources and uses `schema.prefix`
 for OpenAI-compatible paths. Existing `PassthroughModel.spec.provider.schemaVersion`
 settings retain their meaning; provider manifests do not need rewriting.
-See [gateway upgrades](/gateway-upgrades/) before changing an existing installation.
+See [Upgrading](/upgrading/) before changing an existing installation.
 
 The common code owns Kubernetes resources, model selection, routing, access
 control, and gateway verification. Provider-specific fields stay in their
