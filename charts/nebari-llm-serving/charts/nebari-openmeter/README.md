@@ -75,16 +75,19 @@ sets per-token USD rates for models with no public price.
   them all). When Redis reaches `redis.maxMemory` it evicts the ids closest
   to expiring. An event redelivered after its id is gone is counted again.
 - **No caps.** OpenMeter does not stop spend. Caps belong in the gateway.
-- **ClickHouse keeps only some of its own logs.** Its trace, text, part and
-  metric logs are off, and its query and error logs expire after 7 days, so
-  they can't grow until ClickHouse runs out of memory for inserts. Usage
-  events never expire. An install from before this change keeps the log
-  tables it already has, and ClickHouse keeps merging them, which can still
-  use up its memory and stop usage reaching it. Drop them once after
-  upgrading:
-  `kubectl -n <namespace> exec <release>-openmeter-clickhouse-0 -- clickhouse-client -q "DROP TABLE IF EXISTS system.trace_log"`
+- **ClickHouse keeps only some of its own logs.** Its trace, text, part,
+  metric and query metric logs are off, and its query and error logs expire
+  after 7 days, so they can't grow until ClickHouse runs out of memory for
+  inserts. Usage events never expire. An install from before this change
+  keeps the log tables it already has, and ClickHouse keeps merging them,
+  which can still use up its memory and stop usage reaching it. Drop them
+  once after upgrading:
+  `kubectl -n <namespace> exec <release>-openmeter-clickhouse-0 -- clickhouse-client -q "DROP TABLE IF EXISTS system.trace_log SYNC"`
   (and the same for `text_log`, `part_log`, `metric_log`,
-  `asynchronous_metric_log` and `processors_profile_log`).
+  `asynchronous_metric_log`, `processors_profile_log`, `query_metric_log`,
+  `query_log_0` and `error_log_0`). The `_0` tables are the old query and
+  error logs, renamed by the upgrade, and never expire. Keep `query_log` and
+  `error_log`: those are the new ones that expire.
 
 ## Uninstall and reinstall
 
