@@ -79,7 +79,9 @@ sets per-token USD rates for models with no public price.
   metric logs are off, and its query and error logs expire after 7 days, so
   they can't grow until ClickHouse runs out of memory for inserts. Usage
   events never expire. An install from before this change keeps the log
-  tables it already has; drop them by hand to free the space:
+  tables it already has, and ClickHouse keeps merging them, which can still
+  use up its memory and stop usage reaching it. Drop them once after
+  upgrading:
   `kubectl -n <namespace> exec <release>-openmeter-clickhouse-0 -- clickhouse-client -q "DROP TABLE IF EXISTS system.trace_log"`
   (and the same for `text_log`, `part_log`, `metric_log`,
   `asynchronous_metric_log` and `processors_profile_log`).
