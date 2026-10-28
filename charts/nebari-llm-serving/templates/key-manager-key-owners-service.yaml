@@ -1,0 +1,19 @@
+{{- if .Values.usage.enabled }}
+{{- $collector := printf "%s-usage-collector" (include "nebari-llm-serving.fullname" .) }}
+# Key-owner lookup (usage metering): a separate Service on the key-manager's
+# internal port, so only this port's NetworkPolicy has to name the collector.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $collector }}-key-owners
+  namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+  ports:
+    - name: key-owners
+      port: {{ .Values.usage.keyOwnerLookup.port }}
+      targetPort: key-owners
+{{- end }}

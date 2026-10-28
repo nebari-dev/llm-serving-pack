@@ -2,12 +2,15 @@ module github.com/nebari-dev/nebari-llm-serving-pack/key-manager
 
 go 1.25.8
 
-replace github.com/nebari-dev/nebari-llm-serving-pack/operator => ../operator
+replace (
+	github.com/nebari-dev/nebari-llm-serving-pack/operator => ../operator
+	github.com/nebari-dev/nebari-llm-serving-pack/shared => ../shared
+)
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/nebari-dev/nebari-llm-serving-pack/operator v0.0.0
-	golang.org/x/sync v0.18.0
+	github.com/nebari-dev/nebari-llm-serving-pack/shared v0.0.0
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
@@ -36,6 +39,7 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect

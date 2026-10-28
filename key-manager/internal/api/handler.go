@@ -17,7 +17,7 @@ type ModelLister interface {
 
 // KeyManager provides key CRUD for the handler.
 type KeyManager interface {
-	CreateKey(ctx context.Context, modelName, username, description string) (*secrets.CreateKeyResult, error)
+	CreateKey(ctx context.Context, modelName string, creator secrets.Creator, description string) (*secrets.CreateKeyResult, error)
 	ListKeys(ctx context.Context, modelName string) ([]secrets.KeyInfo, error)
 	ListKeysForUser(ctx context.Context, username string) ([]secrets.KeyInfo, error)
 	RevokeKey(ctx context.Context, modelName, clientID string) error
@@ -169,7 +169,7 @@ func (h *Handler) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.secrets.CreateKey(r.Context(), req.ModelName, user.Username, req.Description)
+	result, err := h.secrets.CreateKey(r.Context(), req.ModelName, secrets.Creator{Username: user.Username, Subject: user.Subject, Groups: user.Groups}, req.Description)
 	if err != nil {
 		h.logger.Error("createKey failed", "error", err, "user", user.Username, "model", req.ModelName)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

@@ -103,6 +103,40 @@ The React SPA served by nginx. It serves the SPA and a runtime `/config.json`, a
 | `frontend.keycloak.realm` | (chart default) | Keycloak realm the SPA authenticates against. |
 | `frontend.keycloak.clientId` | (chart default) | Public PKCE client id the SPA uses. |
 
+### Usage metering
+
+See [Usage metering](/usage/) for the whole pipeline.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `usage.enabled` | `false` | Meter every request's tokens with OpenMeter: the operator makes routes report token counts, the chart deploys the usage collector, and the key manager attaches API keys to their creators' OpenMeter customers. Needs Envoy AI Gateway 1.1 or newer. |
+| `usage.openmeter.url` | `""` | Base URL of your OpenMeter's API. Leave empty with `openmeter.enabled` to use the bundled one. |
+| `usage.openmeter.existingSecret` | `""` | Secret with a bearer token (key `token`) for an OpenMeter behind an authenticating proxy. |
+| `usage.keyOwnerLookup.port` | `8081` | Internal key-manager port answering "who owns this API key?" for the collector. A NetworkPolicy admits only the collector. |
+| `usage.customerSync.enabled` | `true` | Keep one OpenMeter customer per API-key creator, holding their subject and their keys' client IDs. |
+| `usage.customerSync.interval` | `30s` | How often the customer sync runs. |
+| `usage.collector.image.repository` | `ghcr.io/openmeterio/benthos-collector` | Collector image. |
+| `usage.collector.image.tag` | `v1.0.0-beta.234@sha256:...` | Collector image tag, pinned by digest. |
+| `usage.collector.port` | `4317` | OTLP (gRPC) port the gateway's access-log sink sends to. |
+| `usage.collector.resources` | requests `20m`/`64Mi`, limit `256Mi` | Collector resources. |
+| `usage.collector.networkPolicy.enabled` | `true` | Admit only the gateway namespaces to the collector's unauthenticated OTLP port. |
+
+### Bundled OpenMeter
+
+The `openmeter` values configure the `nebari-openmeter` subchart; every key under `openmeter` is the subchart's (`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`). The ones you set most:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `openmeter.enabled` | `false` | Install OpenMeter and the usage console with the pack. |
+| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: the pack's namespace (`<fullname>-system`; the chart's error names it) or another namespace that exists. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
+| `openmeter.modelResources` | `[{name: bedrock, provider: bedrock}]` | Model resources to price, each with the OpenMeter provider whose prices apply. |
+| `openmeter.prices` | `[]` | Manual prices (USD per token) for models no public price list has; stored under OpenMeter's form of the model ID. |
+| `openmeter.keepDataOnUninstall` | `true` | Keep the usage and billing data when the release is uninstalled. |
+| `openmeter.networkPolicy.enabled` | `true` | Restrict OpenMeter's API, stores and console to the pods that need them. |
+| `openmeter.nebariapp.enabled` | `false` | Expose the usage console through a `NebariApp` with Keycloak sign-in. |
+| `openmeter.nebariapp.hostname` | `""` | The console's hostname. Required with `nebariapp.enabled`. |
+| `openmeter.nebariapp.auth.groups` | `[llm-usage-admins]` | Keycloak groups whose members may open the console; the gateway and the console both check them. |
+
 ### Operator
 
 | Key | Default | Description |

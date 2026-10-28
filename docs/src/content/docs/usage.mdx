@@ -1,0 +1,392 @@
+---
+title: Usage metering
+---
+import Code from '../../components/ExampleCode.astro';
+import accessLogExample from '../../../../examples/usage-access-log.yaml?raw';
+
+The pack can meter every model request in [OpenMeter](https://github.com/openmeterio/openmeter)
+(Apache-2.0): who called, which model, how many tokens of each kind, and what
+that cost. OpenMeter stores the usage, prices tokens from its LLM price table,
+and provides customers, plans, entitlements and invoicing on top. The pack
+sends usage to an OpenMeter you point it at, or runs one itself together with
+a read-only usage console (`openmeter.enabled`).
+
+It is off by default.
+
+## Requirements
+
+- **Envoy AI Gateway 1.1 or newer.** Metering makes the operator declare
+  token costs on every route it generates (`llmRequestCosts`), including a
+  `ReasoningToken` cost. Envoy AI Gateway 0.5 rejects `ReasoningToken`, and
+  with it every route the operator writes, so turning `usage.enabled` on
+  against 0.5 takes down every model route, not only metering. Upgrade the
+  gateway first (see [Upgrading](/upgrading/#upgrade-an-installation-on-ai-gateway-05)).
+- For the bundled OpenMeter (`openmeter.enabled`), the CloudNativePG
+  operator, which Nebari installs on every cluster.
+
+## How a request becomes usage in OpenMeter
+
+1. With `usage.enabled`, the operator asks the Envoy AI Gateway to count
+   tokens on every route it generates (`llmRequestCosts`). The gateway stores
+   the counts with the request once the response has finished. This also
+   makes the gateway add `stream_options.include_usage` to streamed chat
+   completions, so each stream ends with one extra usage chunk; with
+   `usage.enabled` off, routes ask for no counts and streams are unchanged.
+2. The gateway writes one access-log entry per model request (the caller, the
+   model, the token counts, the status) and sends it over OTLP to the pack's
+   usage collector. You add this entry to your `EnvoyProxy` resource (below).
+3. The usage collector, OpenMeter's own collector running the pack's pipeline
+   (`charts/nebari-llm-serving/files/usage-collector.yaml`), turns each entry
+   into OpenMeter usage events and sends them to OpenMeter.
+4. For a request made with an API key, the collector asks the key manager who
+   minted the key. The key manager also keeps one OpenMeter customer per
+   person.
+
+No prompt or completion text is logged or sent. Every field is a header the
+gateway set, a token count, or request metadata.
+
+### Usage events
+
+Each request becomes one `llm.request` event and one `llm.tokens` event per
+token type that is not zero:
+
+| Event | `id` | Data |
+| --- | --- | --- |
+| `llm.request` | gateway request ID | model, model resource, access path, user, team, API key, whether usage was reported, status |
+| `llm.tokens` | request ID + `:` + token type | model, model resource, access path, user, team, API key, `token_type`, `tokens` |
+
+Token types are the ones OpenMeter's price table uses: `input` (uncached
+input), `cache_read`, `cache_write` and `output`. The gateway's input count
+already includes cached tokens, so the collector subtracts them; reasoning
+tokens are part of `output`.
+
+The event `source` is constant, so a redelivered access-log entry produces
+events OpenMeter has already seen, and OpenMeter drops the ones it still
+remembers (turn on its `sink.dedupe`). This is best effort, not a guarantee
+that each event is stored once: OpenMeter remembers ids in Redis for a
+limited time and Redis can lose or evict them (see below for the bundled
+OpenMeter).
+
+### Who a request is attributed to
+
+The event subject is the person's OIDC `sub`, and every event carries their
+username, their team (their first group starting with `team-`, or `none`) and
+the API key's client ID (`login` for a token):
+
+- **API key (external endpoint):** the gateway sets the key's client ID from
+  the key it matched, and the collector looks up who minted it from the key
+  manager's key-owner lookup (`sub`, username and groups recorded when the key
+  was minted). An `x-auth-*` header a caller sends here is ignored. A key
+  minted before this release has no recorded owner; its usage is billed to
+  the key's client ID. If the lookup keeps failing for 15 seconds (key
+  manager down or restarting), the usage is also billed to the key's client
+  ID, its events carry `owner_lookup: failed`, and the collector logs the
+  failure at `ERROR`.
+- **OIDC token (internal endpoint):** the verified token's `sub`, username and
+  groups.
+
+A key's team is the creator's team when they minted it; someone who changes
+teams keeps billing older keys to the old one until they mint new keys.
+
+The key manager also creates, for each key creator, an OpenMeter customer
+whose key is the creator's `sub` and whose subject keys are that `sub` plus
+the client ID of every key they minted. A subject key that another customer
+already holds is left on that customer, and the key manager logs a warning
+naming the key and the customer; move it in OpenMeter if the key's creator
+should be billed for it.
+
+If you bill organizations rather than people, turn the sync off
+(`usage.customerSync.enabled: false`) and assign subjects to your own
+customers: one subject can belong to only one customer.
+
+## Enable it
+
+With the bundled OpenMeter and usage console:
+
+```yaml
+usage:
+  enabled: true
+openmeter:
+  enabled: true
+  namespace: <fullname>-system   # where OpenMeter runs; required (see below)
+  modelResources:            # your model resources and the provider that prices them
+    - {name: bedrock, provider: bedrock}
+  nebariapp:                 # the console, behind Keycloak sign-in
+    enabled: true
+    hostname: usage.<your-domain>
+```
+
+`openmeter` deploys OpenMeter with Kafka, ClickHouse and Redis, and its
+Postgres as a CloudNativePG `Cluster`; it needs the CloudNativePG operator,
+which Nebari installs on every cluster. It creates the meters and a priced
+feature per model resource (see Set up OpenMeter below), and syncs public
+LLM prices daily. Changing a resource's `provider` later updates its
+feature on the next install or upgrade; OpenMeter prices usage when it is
+queried, from the feature as it is then, so that also re-prices the
+resource's past usage under the new provider. Every value under
+`openmeter` is the subchart's
+(`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
+
+The bundled OpenMeter runs in `openmeter.namespace`, which the chart
+requires: the pack's own namespace (`<fullname>-system`, where the collector
+and the key manager run; the chart's error names it), or another namespace
+that already exists. Until the key manager's Role is narrowed to the API-key
+Secrets, it can read every Secret in its namespace, OpenMeter's credentials
+included; a separate namespace keeps them apart.
+
+OpenMeter's API has no authentication. Only OpenMeter's own pods, the
+collector and the key manager may call it; with OpenMeter in another
+namespace, the chart adds a `NetworkPolicy` admitting those two pods from
+the pack's namespace.
+
+ClickHouse's password is made in the cluster: a pre-install and pre-upgrade
+hook (a `PreSync` hook under Argo CD) creates a Secret with a random password
+the first time and leaves it alone after that, so re-rendering the chart never
+changes it. To manage it yourself, set `openmeter.clickhouse.existingSecret`
+to a Secret with the password under `clickhouse-password`.
+
+The sink worker drops repeated events by the ids it keeps in Redis, for
+`openmeter.openmeter.dedupeExpiration` (32 days). That is best effort, within
+what Redis still remembers. Redis writes every id to an append-only file on
+its own volume (`openmeter.redis.persistence`, on by default), synced once a
+second, so a restart keeps them, but a crash can lose the last second of
+ids. When Redis is full (`openmeter.redis.maxMemory`) it evicts the ids
+closest to expiring rather than stopping the sink. An event redelivered after
+its id is gone is counted again.
+
+With an OpenMeter you run yourself:
+
+```yaml
+usage:
+  enabled: true
+  openmeter:
+    url: http://openmeter-api.openmeter.svc   # your OpenMeter API
+```
+
+Then tell the gateway to send its access log to the collector. Add the
+`settings` entry from this example to the `EnvoyProxy` your gateway already
+uses, and adjust the collector's Service name and namespace to your release:
+
+<Code code={accessLogExample} lang="yaml" title="examples/usage-access-log.yaml" />
+
+With `usage.enabled`, the operator adds a ClientTrafficPolicy named
+`llm-https-client-headers` (and `llm-internal-https-client-headers`) on the
+pack's listeners. It removes any `x-llm-client-id`, `x-auth-user`,
+`x-auth-subject` or `x-auth-groups` header a caller sends before
+authentication runs, and makes Envoy generate every request id.
+
+Envoy Gateway applies one ClientTrafficPolicy per listener: a policy on a
+listener replaces the Gateway-wide one there, with nothing merged. So if your
+Gateway has a Gateway-wide ClientTrafficPolicy (NIC ships one on
+`nebari-gateway` that sets `connection.bufferLimit: 50Mi`), the operator's
+listener policy starts from a copy of its settings and adds the header
+settings; it follows changes to your policy within seconds. Keep that limit
+on the Gateway-wide policy: the pack's listener shares port 443 with your
+other HTTPS listeners, and Envoy uses one connection buffer limit per port,
+so every policy on the port has to agree on it (Envoy's 32KiB default
+rejects larger chat requests with 413). If a ClientTrafficPolicy of yours
+targets one of the pack's listeners itself (`sectionName`), the two cannot
+both apply, so the operator removes its own and posts a Warning Event,
+reason `UsageHeadersNotProtected`, on the Gateway (`kubectl describe
+gateway`), and logs it as an error: caller-sent identity headers are not
+removed there, so callers can choose the identity their usage is billed
+under. Add `headers.earlyRequestHeaders.remove: [x-llm-client-id,
+x-auth-user, x-auth-subject, x-auth-groups]` and `headers.requestID:
+Generate` to that policy. The collector also ignores any request the
+gateway itself rejected with 401 or 403, so keep the `response_code_details`
+field from the example.
+
+Turning `usage.enabled` off leaves these two policies in place: the
+operator no longer manages them, and the chart drops its permission to.
+They keep the Gateway-wide settings they last copied and go on replacing
+the Gateway-wide policy on the pack's listeners, so a later change to that
+policy (such as its buffer limit) would not reach them. Delete them after
+turning metering off:
+
+```sh
+kubectl -n envoy-gateway-system delete clienttrafficpolicy \
+  llm-https-client-headers llm-internal-https-client-headers
+```
+
+(use the namespace of your Gateways, `platform.gateway.*.namespace`).
+
+The collector's OTLP port has no authentication. The chart renders a
+`NetworkPolicy` that admits only the gateway namespaces; on a cluster whose
+network plugin does not enforce `NetworkPolicy`, restrict it another way.
+
+## Set up OpenMeter
+
+The bundled OpenMeter is set up this way already. For your own, the pipeline
+expects two meters:
+
+```yaml
+meters:
+  - slug: llm_tokens
+    eventType: llm.tokens
+    aggregation: SUM
+    valueProperty: $.tokens
+    groupBy:
+      model: $.model
+      model_resource: $.model_resource
+      token_type: $.token_type
+      access_path: $.access_path
+      user: $.user
+      team: $.team
+      api_key: $.api_key
+  - slug: llm_requests
+    eventType: llm.request
+    aggregation: COUNT
+    groupBy:
+      model: $.model
+      model_resource: $.model_resource
+      usage_reported: $.usage_reported
+      response_code: $.response_code
+      access_path: $.access_path
+      user: $.user
+      team: $.team
+      api_key: $.api_key
+```
+
+To price tokens, run OpenMeter's LLM price sync (`openmeter-jobs llm-cost
+sync`) and create one feature per model resource with an LLM unit cost. The
+provider is fixed per feature because one `PassthroughModel` talks to one
+provider:
+
+```json
+POST /api/v3/openmeter/features
+{
+  "key": "bedrock_tokens",
+  "name": "Bedrock tokens",
+  "meter": {"id": "<llm_tokens meter id>", "filters": {"model_resource": {"eq": "bedrock"}}},
+  "unit_cost": {"type": "llm", "provider": "bedrock", "model_property": "model", "token_type_property": "token_type"}
+}
+```
+
+`POST /api/v3/openmeter/features/{id}/cost/query` then returns usage and cost
+per model and token type, and can be narrowed to one customer. Bedrock model
+IDs such as `us.anthropic.claude-haiku-4-5-20251001-v1:0` are matched to the
+price table by OpenMeter; set your own prices with
+`POST /api/v3/openmeter/llm-cost/overrides`.
+
+## What the numbers mean
+
+- Token counts are what the provider reported to the gateway.
+- `usage_reported=false` on an `llm.request` means the gateway had no token
+  counts: a failed request, or a streamed response the client cancelled part
+  way. Envoy AI Gateway 1.1 only learns the counts when the response
+  completes. The provider may still have charged for it.
+- A stream the client cancels after the last token but before the final
+  `usage` chunk is not billed: the client has the whole answer, the provider
+  generated (and may charge for) every token, but the gateway never saw the
+  counts, so there is one `llm.request` with `usage_reported=false` and no
+  `llm.tokens`. Nothing alerts on this yet; to watch for it, query the
+  `llm_requests` meter grouped by `usage_reported`.
+- Requests the gateway rejected before identifying a caller (a wrong API key,
+  a missing token) produce no events.
+- Streamed chat completions end with one extra `usage` chunk even when the
+  client did not ask for it. The gateway adds
+  `stream_options.include_usage=true` so that streams can be counted.
+- Costs follow OpenMeter's prices in effect now: OpenMeter prices past usage
+  at today's price, and replacing a manual price deletes the old one.
+
+Read the totals from OpenMeter's API: its meter queries
+(`GET /api/v1/meters/llm_requests/query?groupBy=user`, `groupBy=team`, ...)
+and the features' cost queries above, or in the usage console.
+
+## The usage console
+
+With `openmeter.enabled`, the usage console shows the usage read live from
+OpenMeter: an overview, every request (Traffic), spend by team, person,
+project (model resource), key, model or provider with a month-end projection,
+and each API key's owner and last day. It keeps no data of its own and is
+read-only: everyone who reaches it is a viewer. It is the Stargate gateway
+console (`usage-console/console`) on `openmeter-api`
+(`usage-console/server/cmd/openmeter-api`), cut down to the pages above. A
+receipt shows its request at today's price, so receipts add up to the spend
+totals.
+
+### Signing in
+
+With `openmeter.nebariapp.enabled`, the console runs behind a NebariApp at
+`openmeter.nebariapp.hostname`, and the gateway signs people in with Keycloak
+before they reach it (`auth.enforceAtGateway`). The Nebari operator makes a
+Keycloak client for the console and keeps its issuer URL and client ID in the
+Secret `<release>-openmeter-console-oidc-client`, which the console reads.
+
+- The gateway forwards each signed-in person's access token to the console
+  (`openmeter.nebariapp.auth.forwardAccessToken`, on by default).
+- The console checks the token itself: its signature against Keycloak's
+  published keys, the issuer, the client it was issued to, and its expiry.
+  The header shows that person's name and email; they are still a viewer.
+- A request without a valid token gets `401`, so the console's data can't be
+  read by going around the gateway; `503` means it could not read Keycloak's
+  keys. If Keycloak is down when the keys are due a refresh, the keys already
+  read keep working.
+- Sign out goes to the gateway's `/logout`, which ends the gateway session
+  and the Keycloak one.
+- Only members of the Keycloak groups in `openmeter.nebariapp.auth.groups`
+  may open the console, since it shows everyone's usage. The default is
+  `llm-usage-admins`, which the Nebari operator creates; add the people who
+  may see usage to it. The gateway checks the groups, and so does the
+  console, from the token's `groups` claim: anyone else signed in gets `403`.
+  An empty list lets everyone in the realm in.
+- `openmeter.console.oidc.issuerURL` and `clientID` set the issuer and client
+  by hand instead of the Secret; `discoveryURL` reads Keycloak's keys from
+  another address, such as an in-cluster one.
+
+With `openmeter.networkPolicy.enabled` (the default), the console's Service
+takes connections only from the gateway's Envoy proxies in
+`openmeter.networkPolicy.gatewayNamespace` (`envoy-gateway-system`), so other
+pods in the cluster can't call it. `kubectl port-forward` still reaches it.
+
+The chart refuses to render a NebariApp for the console without sign-in:
+with `openmeter.nebariapp.enabled`, keep `auth.enabled`, `enforceAtGateway`,
+`provisionClient` and `forwardAccessToken` on, or set
+`openmeter.console.oidc.issuerURL` and `clientID`. Without a NebariApp or an
+issuer, the console has no sign-in of its own and everyone who reaches it
+(through `kubectl port-forward`) is the same viewer. Use that only on a dev
+cluster.
+
+### Traffic
+
+Traffic's filters and time range are applied on the server. It reads only
+the request events in the range from OpenMeter, then the token counts of the
+ones that match. A rare filter over a long range stops after 5,000 requests,
+and "Load older" carries on from there. The live view polls every 5 seconds,
+once for everyone watching, and reads up to 5,000 requests of the last two
+minutes. Consecutive reads overlap, so it keeps up until one 5-second
+interval holds more than 5,000 requests. Past that it says how many it
+missed, on every open view whatever its filters.
+
+## Uninstall and reinstall
+
+With the bundled OpenMeter, `helm uninstall` (or deleting the Argo CD
+Application) keeps all of its data by default
+(`openmeter.keepDataOnUninstall: true`): the Postgres `Cluster` with the
+customers, features and prices, and the Kafka, ClickHouse and Redis volumes
+with the usage. Installing again under the same release name and namespace
+carries on from there. Set `openmeter.keepDataOnUninstall: false` before
+uninstalling to delete all of it with the release instead. Either way the
+usage and the billing setup go together, so a reinstall never finds usage
+events without the customers and prices they are billed with. The subchart's
+README lists what is kept and how to delete it by hand.
+
+## Delivery
+
+The collector acknowledges the gateway's batch only after OpenMeter accepted
+the events. The gateway itself sends each batch once and does not retry, so
+entries produced while the collector or OpenMeter is down are lost. The example
+keeps a second copy of every entry on the gateway's stdout; if container logs
+are shipped somewhere durable, that copy can be replayed; OpenMeter drops the
+events whose ids it still remembers (best effort, as above), so replay only
+the entries that were lost.
+
+## Try it locally
+
+```sh
+cd dev
+make setup                 # kind cluster + gateway
+make usage-e2e             # bundled OpenMeter and console, collector, alice and bob, traffic, per-person and per-team totals
+make usage-tracer          # http://127.0.0.1:18894: send one request, follow it step by step
+make test-usage-collector  # the collector pipeline's tests
+```

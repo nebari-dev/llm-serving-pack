@@ -39,6 +39,7 @@ export default defineConfig({
             { label: 'Provider Integrations', slug: 'providers' },
             { label: 'AWS Bedrock', slug: 'bedrock' },
             { label: 'Self-hosted Servers', slug: 'self-hosted' },
+            { label: 'Usage Metering', slug: 'usage' },
             { label: 'Installation', slug: 'installation' },
             { label: 'Upgrading', slug: 'upgrading' },
             { label: 'Local Development', slug: 'local-development' },

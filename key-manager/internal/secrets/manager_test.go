@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,16 @@ func sanitizedPrefix(raw string) string {
 // between this and production fails the tests below.
 func pairSuffix(rawUser, rawModel string) string {
 	return testShortHash(rawUser, rawModel)
+}
+
+// checkClientID fails t unless got is prefix followed by the 16-hex random
+// part every client ID ends with.
+func checkClientID(t *testing.T, got, prefix string) {
+	t.Helper()
+	suffix, ok := strings.CutPrefix(got, prefix)
+	if _, err := hex.DecodeString(suffix); !ok || len(suffix) != 16 || err != nil {
+		t.Errorf("client ID = %q, want %q followed by 16 random hex digits", got, prefix)
+	}
 }
 
 // testShortHash mirrors the production shortHash helper (128-bit-truncated
@@ -143,7 +155,7 @@ func TestCreateKey(t *testing.T) {
 				Build()
 
 			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), tc.modelName, tc.username, tc.description)
+			result, err := mgr.CreateKey(context.Background(), tc.modelName, secrets.Creator{Username: tc.username}, tc.description)
 			if err != nil {
 				t.Fatalf("CreateKey error: %v", err)
 			}
@@ -185,68 +197,21 @@ func TestCreateKey(t *testing.T) {
 }
 
 func TestCreateKey_ClientIDFormat(t *testing.T) {
-	tests := []struct {
-		name         string
-		username     string
-		existingKeys []string // clientIDs already in the secret for this user
-		wantClientID string
-	}{
-		{
-			name:         "first key for user is -1",
-			username:     "chuck",
-			existingKeys: []string{},
-			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
-		},
-		{
-			name:         "second key for user is -2",
-			username:     "chuck",
-			existingKeys: []string{"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1"},
-			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-2",
-		},
-		{
-			name:     "third key for user is -3",
-			username: "chuck",
-			existingKeys: []string{
-				"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
-				"user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-2",
-			},
-			wantClientID: "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-3",
-		},
+	prefix := "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-"
+	existing := prefix + "0123456789abcdef"
+	secret := makeSecret("my-model", testNamespace)
+	secret.Data = map[string][]byte{existing: []byte("sk-existingkey00000000000000000000")}
+	cm := makeConfigMap("my-model", testNamespace)
+	cm.Data = map[string]string{existing: `{"clientId":"` + existing + `","creator":"chuck","description":"","createdAt":"2024-01-01T00:00:00Z","modelName":"my-model","namespace":"llm-api-keys"}`}
+	fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(secret, cm).Build()
+
+	result, err := secrets.NewManager(fakeClient, testNamespace).CreateKey(context.Background(), "my-model", secrets.Creator{Username: "chuck"}, "test")
+	if err != nil {
+		t.Fatalf("CreateKey error: %v", err)
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			scheme := buildScheme(t)
-
-			// Build pre-existing secret data with existing keys
-			secretData := map[string][]byte{}
-			for _, k := range tc.existingKeys {
-				secretData[k] = []byte("sk-existingkey00000000000000000000")
-			}
-			cmData := map[string]string{}
-			for _, k := range tc.existingKeys {
-				cmData[k] = `{"clientId":"` + k + `","creator":"chuck","description":"","createdAt":"2024-01-01T00:00:00Z","modelName":"my-model","namespace":"llm-api-keys"}`
-			}
-
-			secret := makeSecret("my-model", testNamespace)
-			secret.Data = secretData
-			cm := makeConfigMap("my-model", testNamespace)
-			cm.Data = cmData
-
-			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithObjects(secret, cm).
-				Build()
-
-			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), "my-model", tc.username, "test")
-			if err != nil {
-				t.Fatalf("CreateKey error: %v", err)
-			}
-			if result.ClientID != tc.wantClientID {
-				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
-			}
-		})
+	checkClientID(t, result.ClientID, prefix)
+	if result.ClientID == existing {
+		t.Errorf("new key reused the existing client ID %q", existing)
 	}
 }
 
@@ -271,25 +236,19 @@ func TestCreateKey_ClientIDUniqueAcrossModels(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	a, err := mgr.CreateKey(context.Background(), "model-a", "chuck", "test")
+	a, err := mgr.CreateKey(context.Background(), "model-a", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey model-a: %v", err)
 	}
-	b, err := mgr.CreateKey(context.Background(), "model-b", "chuck", "test")
+	b, err := mgr.CreateKey(context.Background(), "model-b", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey model-b: %v", err)
 	}
 	if a.ClientID == b.ClientID {
 		t.Errorf("client IDs collide across models: model-a=%q model-b=%q (must be unique)", a.ClientID, b.ClientID)
 	}
-	wantA := "user-chuck-model-a-" + pairSuffix("chuck", "model-a") + "-1"
-	if a.ClientID != wantA {
-		t.Errorf("model-a clientID = %q, want %q", a.ClientID, wantA)
-	}
-	wantB := "user-chuck-model-b-" + pairSuffix("chuck", "model-b") + "-1"
-	if b.ClientID != wantB {
-		t.Errorf("model-b clientID = %q, want %q", b.ClientID, wantB)
-	}
+	checkClientID(t, a.ClientID, "user-chuck-model-a-"+pairSuffix("chuck", "model-a")+"-")
+	checkClientID(t, b.ClientID, "user-chuck-model-b-"+pairSuffix("chuck", "model-b")+"-")
 }
 
 // TestCreateKey_ClientIDUnambiguousBoundary: usernames and model names both
@@ -312,11 +271,11 @@ func TestCreateKey_ClientIDUnambiguousBoundary(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	a, err := mgr.CreateKey(context.Background(), "jane-chat", "mary", "test")
+	a, err := mgr.CreateKey(context.Background(), "jane-chat", secrets.Creator{Username: "mary"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey mary/jane-chat: %v", err)
 	}
-	b, err := mgr.CreateKey(context.Background(), "chat", "mary-jane", "test")
+	b, err := mgr.CreateKey(context.Background(), "chat", secrets.Creator{Username: "mary-jane"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey mary-jane/chat: %v", err)
 	}
@@ -325,11 +284,11 @@ func TestCreateKey_ClientIDUnambiguousBoundary(t *testing.T) {
 	}
 }
 
-// TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys: the sequence number must
-// not be derived from a bare count of existing keys. With keys {1,2,3},
-// revoking #2 leaves a count of 2, so a count-based mint would reuse sequence
-// 3 and silently overwrite the still-live key #3 (Secret value and ConfigMap
-// metadata), killing a credential the user believes is active.
+// TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys: minting after a revoke
+// must never take a live key's client ID, which would silently overwrite that
+// key (Secret value and ConfigMap metadata) and kill a credential the user
+// believes is active. A client ID numbered by a bare count of live keys did
+// exactly that: with keys {1,2,3}, revoking #2 made the next mint #3.
 func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	scheme := buildScheme(t)
 	fakeClient := fake.NewClientBuilder().
@@ -344,7 +303,7 @@ func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	mgr := secrets.NewManager(fakeClient, testNamespace)
 	minted := make([]*secrets.CreateKeyResult, 0, 3)
 	for range 3 {
-		r, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+		r, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "chuck"}, "test")
 		if err != nil {
 			t.Fatalf("CreateKey: %v", err)
 		}
@@ -356,7 +315,7 @@ func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	}
 	live := []*secrets.CreateKeyResult{minted[0], minted[2]}
 
-	fresh, err := mgr.CreateKey(ctx, "model-a", "chuck", "test")
+	fresh, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "chuck"}, "test")
 	if err != nil {
 		t.Fatalf("CreateKey after revoke: %v", err)
 	}
@@ -390,7 +349,7 @@ func TestCreateKey_EmptyUsername(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	_, err := mgr.CreateKey(context.Background(), "my-model", "", "test")
+	_, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: ""}, "test")
 	if err == nil {
 		t.Fatal("expected error for empty username, got nil")
 	}
@@ -408,7 +367,7 @@ func TestCreateKey_SecretNotFound(t *testing.T) {
 		Build()
 
 	mgr := secrets.NewManager(fakeClient, testNamespace)
-	_, err := mgr.CreateKey(context.Background(), "missing-model", "chuck", "test")
+	_, err := mgr.CreateKey(context.Background(), "missing-model", secrets.Creator{Username: "chuck"}, "test")
 	if err == nil {
 		t.Fatal("expected error when Secret does not exist, got nil")
 	}
@@ -541,7 +500,7 @@ func TestRevokeKey(t *testing.T) {
 		wantErrMsg string
 	}{
 		{
-			name:      "removes key from Secret and ConfigMap",
+			name:      "removes key from Secret and key listings",
 			modelName: "my-model",
 			clientID:  "user-chuck-1",
 			secretData: map[string][]byte{
@@ -602,14 +561,15 @@ func TestRevokeKey(t *testing.T) {
 				t.Errorf("expected clientID %q to be removed from Secret", tc.clientID)
 			}
 
-			// Verify removed from ConfigMap
-			updatedCM := &corev1.ConfigMap{}
-			cmKey := types.NamespacedName{Namespace: testNamespace, Name: tc.modelName + "-api-key-metadata"}
-			if err := fakeClient.Get(context.Background(), cmKey, updatedCM); err != nil {
-				t.Fatalf("Get ConfigMap after revoke: %v", err)
+			// Verify no longer listed (the ConfigMap keeps only its owner).
+			keys, err := mgr.ListKeys(context.Background(), tc.modelName)
+			if err != nil {
+				t.Fatalf("ListKeys after revoke: %v", err)
 			}
-			if _, ok := updatedCM.Data[tc.clientID]; ok {
-				t.Errorf("expected clientID %q to be removed from ConfigMap", tc.clientID)
+			for _, k := range keys {
+				if k.ClientID == tc.clientID {
+					t.Errorf("expected clientID %q to be no longer listed", tc.clientID)
+				}
 			}
 		})
 	}
@@ -617,70 +577,44 @@ func TestRevokeKey(t *testing.T) {
 
 func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 	tests := []struct {
-		name             string
-		username         string
-		wantClientID     string
-		wantCreatorRaw   string
-		existingDataKeys []string
+		name           string
+		username       string
+		wantPrefix     string
+		wantCreatorRaw string
 	}{
 		{
 			name:           "email username gets @ replaced with -at- and a hash suffix",
 			username:       "alice@example.com",
-			wantClientID:   "user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-1",
+			wantPrefix:     "user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-",
 			wantCreatorRaw: "alice@example.com",
 		},
 		{
 			name:           "plain alphanumeric username is unchanged",
 			username:       "chuck",
-			wantClientID:   "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-1",
+			wantPrefix:     "user-chuck-my-model-" + pairSuffix("chuck", "my-model") + "-",
 			wantCreatorRaw: "chuck",
-		},
-		{
-			name:             "sequence increments using sanitized prefix",
-			username:         "alice@example.com",
-			wantClientID:     "user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-2",
-			wantCreatorRaw:   "alice@example.com",
-			existingDataKeys: []string{"user-" + sanitizedPrefix("alice@example.com") + "-my-model-" + pairSuffix("alice@example.com", "my-model") + "-1"},
 		},
 		{
 			name:           "raw alice-at-example.com does NOT collide with alice@example.com",
 			username:       "alice-at-example.com",
-			wantClientID:   "user-alice-at-example.com-my-model-" + pairSuffix("alice-at-example.com", "my-model") + "-1", // already-valid username -> no sanitizer hash suffix
+			wantPrefix:     "user-alice-at-example.com-my-model-" + pairSuffix("alice-at-example.com", "my-model") + "-", // already-valid username -> no sanitizer hash suffix
 			wantCreatorRaw: "alice-at-example.com",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			scheme := buildScheme(t)
-
-			secretData := map[string][]byte{}
-			for _, k := range tc.existingDataKeys {
-				secretData[k] = []byte("sk-existingkey00000000000000000000")
-			}
-			cmData := map[string]string{}
-			for _, k := range tc.existingDataKeys {
-				cmData[k] = `{"clientId":"` + k + `","creator":"` + tc.username + `","description":"","createdAt":"2024-01-01T00:00:00Z","modelName":"my-model","namespace":"llm-api-keys"}`
-			}
-
-			secret := makeSecret("my-model", testNamespace)
-			secret.Data = secretData
-			cm := makeConfigMap("my-model", testNamespace)
-			cm.Data = cmData
-
 			fakeClient := fake.NewClientBuilder().
-				WithScheme(scheme).
-				WithObjects(secret, cm).
+				WithScheme(buildScheme(t)).
+				WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
 				Build()
 
 			mgr := secrets.NewManager(fakeClient, testNamespace)
-			result, err := mgr.CreateKey(context.Background(), "my-model", tc.username, "test")
+			result, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: tc.username}, "test")
 			if err != nil {
 				t.Fatalf("CreateKey error: %v", err)
 			}
-			if result.ClientID != tc.wantClientID {
-				t.Errorf("expected ClientID %q, got %q", tc.wantClientID, result.ClientID)
-			}
+			checkClientID(t, result.ClientID, tc.wantPrefix)
 
 			// Verify the data key landed in the Secret with the sanitized form.
 			updatedSecret := &corev1.Secret{}
@@ -688,8 +622,8 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 			if err := fakeClient.Get(context.Background(), secretKey, updatedSecret); err != nil {
 				t.Fatalf("Get Secret: %v", err)
 			}
-			if _, ok := updatedSecret.Data[tc.wantClientID]; !ok {
-				t.Errorf("expected sanitized clientID %q in Secret data, keys: %v", tc.wantClientID, mapKeys(updatedSecret.Data))
+			if _, ok := updatedSecret.Data[result.ClientID]; !ok {
+				t.Errorf("expected sanitized clientID %q in Secret data, keys: %v", result.ClientID, mapKeys(updatedSecret.Data))
 			}
 
 			// Verify Creator preserves the raw username (so ListKeysForUser
@@ -699,9 +633,9 @@ func TestCreateKey_SanitizesEmailUsername(t *testing.T) {
 			if err := fakeClient.Get(context.Background(), cmKey, updatedCM); err != nil {
 				t.Fatalf("Get ConfigMap: %v", err)
 			}
-			raw, ok := updatedCM.Data[tc.wantClientID]
+			raw, ok := updatedCM.Data[result.ClientID]
 			if !ok {
-				t.Fatalf("expected sanitized clientID %q in ConfigMap data", tc.wantClientID)
+				t.Fatalf("expected sanitized clientID %q in ConfigMap data", result.ClientID)
 			}
 			if !strings.Contains(raw, `"creator":"`+tc.wantCreatorRaw+`"`) {
 				t.Errorf("expected ConfigMap entry to record creator %q verbatim, got: %s", tc.wantCreatorRaw, raw)
@@ -742,7 +676,7 @@ func TestCreateKeyThenListKeys(t *testing.T) {
 	mgr := secrets.NewManager(fakeClient, testNamespace)
 
 	before := time.Now().Truncate(time.Second)
-	result, err := mgr.CreateKey(context.Background(), "my-model", "chuck", "integration test key")
+	result, err := mgr.CreateKey(context.Background(), "my-model", secrets.Creator{Username: "chuck"}, "integration test key")
 	after := time.Now().Add(time.Second)
 	if err != nil {
 		t.Fatalf("CreateKey error: %v", err)
@@ -774,5 +708,195 @@ func TestCreateKeyThenListKeys(t *testing.T) {
 	}
 	if key.CreatedAt.Before(before) || key.CreatedAt.After(after) {
 		t.Errorf("CreatedAt %v is outside the expected range [%v, %v]", key.CreatedAt, before, after)
+	}
+}
+
+// A username can be renamed and reused; the OIDC subject cannot. Usage made
+// with a key is attributed to its creator's subject, so the key has to
+// remember it.
+func TestCreateKey_RemembersCreatorSubject(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	created, err := mgr.CreateKey(context.Background(), "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice"}, "test")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	keys, err := mgr.ListAllKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeys: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ClientID != created.ClientID {
+		t.Fatalf("ListAllKeys = %+v, want the one key just created", keys)
+	}
+	if keys[0].Creator != "alice" || keys[0].CreatorSubject != "sub-alice" {
+		t.Errorf("key creator = %q subject = %q, want alice / sub-alice", keys[0].Creator, keys[0].CreatorSubject)
+	}
+}
+
+// Usage made with a key is reported per team as well as per person, and the
+// team comes from the creator's groups at the time they minted the key.
+func TestCreateKey_RemembersCreatorGroups(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	if _, err := mgr.CreateKey(context.Background(), "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice", Groups: []string{"llm-users", "team-a"}}, "test"); err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	keys, err := mgr.ListAllKeys(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeys: %v", err)
+	}
+	if len(keys) != 1 || strings.Join(keys[0].CreatorGroups, ",") != "llm-users,team-a" {
+		t.Errorf("key creator groups = %v, want [llm-users team-a]", keys)
+	}
+}
+
+// Usage records for a key's last requests can be processed after the key is
+// revoked, and after the key manager restarts. Revoking keeps who minted the
+// key in the metadata ConfigMap, so the owner can still be looked up, while
+// the key itself is gone from every key listing.
+func TestRevokeKey_KeepsWhoMintedTheKey(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("my-model", testNamespace), makeConfigMap("my-model", testNamespace)).
+		Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	ctx := context.Background()
+	created, err := mgr.CreateKey(ctx, "my-model",
+		secrets.Creator{Username: "alice", Subject: "sub-alice", Groups: []string{"team-a"}}, "notebook")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	if err := mgr.RevokeKey(ctx, "my-model", created.ClientID); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+
+	if keys, _ := mgr.ListKeys(ctx, "my-model"); len(keys) != 0 {
+		t.Errorf("ListKeys after revoke = %+v, want none", keys)
+	}
+	if keys, _ := mgr.ListAllKeys(ctx); len(keys) != 0 {
+		t.Errorf("ListAllKeys after revoke = %+v, want none", keys)
+	}
+	if keys, _ := mgr.ListKeysForUser(ctx, "alice"); len(keys) != 0 {
+		t.Errorf("ListKeysForUser after revoke = %+v, want none", keys)
+	}
+	all, err := mgr.ListAllKeysIncludingRevoked(ctx)
+	if err != nil {
+		t.Fatalf("ListAllKeysIncludingRevoked: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("ListAllKeysIncludingRevoked = %+v, want the revoked key", all)
+	}
+	k := all[0]
+	if k.ClientID != created.ClientID || k.Creator != "alice" || k.CreatorSubject != "sub-alice" ||
+		strings.Join(k.CreatorGroups, ",") != "team-a" || k.RevokedAt == nil {
+		t.Errorf("revoked key = %+v, want alice / sub-alice / [team-a] with a revoke time", k)
+	}
+	if k.Description != "" {
+		t.Errorf("revoked key keeps description %q, want it dropped", k.Description)
+	}
+	// A revoked key cannot be revoked twice.
+	if err := mgr.RevokeKey(ctx, "my-model", created.ClientID); err == nil {
+		t.Error("second RevokeKey succeeded, want an error")
+	}
+}
+
+// What a revoked key leaves behind is dropped once it is older than
+// RevokedKeyRetention, so the ConfigMap (at most 1 MiB) cannot fill up with
+// them and stop new keys being minted.
+func TestRevokeKey_DropsRevokedKeysPastRetention(t *testing.T) {
+	old := time.Now().Add(-secrets.RevokedKeyRetention - time.Hour).UTC().Format(time.RFC3339)
+	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	cm := makeConfigMap("my-model", testNamespace)
+	cm.Data = map[string]string{
+		"user-old-1":    `{"clientId":"user-old-1","creator":"old","revokedAt":"` + old + `"}`,
+		"user-recent-1": `{"clientId":"user-recent-1","creator":"recent","revokedAt":"` + recent + `"}`,
+		"user-live-1":   `{"clientId":"user-live-1","creator":"live"}`,
+	}
+	secret := makeSecret("my-model", testNamespace)
+	secret.Data = map[string][]byte{"user-live-1": []byte("sk-live")}
+	fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).WithObjects(secret, cm).Build()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+
+	if err := mgr.RevokeKey(context.Background(), "my-model", "user-live-1"); err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+
+	all, err := mgr.ListAllKeysIncludingRevoked(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllKeysIncludingRevoked: %v", err)
+	}
+	var ids []string
+	for _, k := range all {
+		ids = append(ids, k.ClientID)
+	}
+	slices.Sort(ids)
+	if strings.Join(ids, ",") != "user-live-1,user-recent-1" {
+		t.Errorf("keys left = %v, want user-live-1 (just revoked) and user-recent-1", ids)
+	}
+}
+
+// TestCreateKey_ClientIDIsNewAfterItsTombstoneIsDropped: a revoked key's
+// tombstone is dropped after RevokedKeyRetention, so nothing in the store
+// still names its client ID. A key minted after that must still get a new
+// one: usage already recorded under the old ID stays billed to its owner.
+func TestCreateKey_ClientIDIsNewAfterItsTombstoneIsDropped(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("model-a", testNamespace), makeConfigMap("model-a", testNamespace)).
+		Build()
+	ctx := context.Background()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	mint := func() string {
+		t.Helper()
+		r, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "alice"}, "test")
+		if err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if err := mgr.RevokeKey(ctx, "model-a", r.ClientID); err != nil {
+			t.Fatalf("RevokeKey %s: %v", r.ClientID, err)
+		}
+		return r.ClientID
+	}
+
+	old := mint()
+	// Age the tombstone past retention; the next revoke drops it.
+	cm := &corev1.ConfigMap{}
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "model-a-api-key-metadata", Namespace: testNamespace}, cm); err != nil {
+		t.Fatal(err)
+	}
+	var info secrets.KeyInfo
+	if err := json.Unmarshal([]byte(cm.Data[old]), &info); err != nil {
+		t.Fatal(err)
+	}
+	aged := time.Now().Add(-secrets.RevokedKeyRetention - 24*time.Hour)
+	info.RevokedAt = &aged
+	b, _ := json.Marshal(info)
+	cm.Data[old] = string(b)
+	if err := fakeClient.Update(ctx, cm); err != nil {
+		t.Fatal(err)
+	}
+	second := mint()
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "model-a-api-key-metadata", Namespace: testNamespace}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cm.Data[old]; ok {
+		t.Fatalf("tombstone for %s not dropped after retention", old)
+	}
+
+	if third := mint(); third == old || third == second {
+		t.Fatalf("client ID %q issued again after its tombstone was dropped", third)
 	}
 }

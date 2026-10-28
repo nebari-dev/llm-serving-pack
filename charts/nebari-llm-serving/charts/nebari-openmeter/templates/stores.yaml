@@ -1,0 +1,239 @@
+{{- $kafka := include "om.name" (dict "root" . "component" "kafka") }}
+{{- $creds := include "om.clickhouseSecret" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $kafka }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $kafka }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {fsGroup: 1000}
+      containers:
+        - name: kafka
+          image: {{ .Values.kafka.image }}
+          env:
+            - {name: CLUSTER_ID, value: {{ printf "%s-kafka" .Release.Name | sha256sum | trunc 22 | quote }}}
+            - {name: KAFKA_NODE_ID, value: "0"}
+            - {name: KAFKA_PROCESS_ROLES, value: "broker,controller"}
+            - {name: KAFKA_CONTROLLER_QUORUM_VOTERS, value: "0@localhost:9093"}
+            - {name: KAFKA_CONTROLLER_LISTENER_NAMES, value: CONTROLLER}
+            - {name: KAFKA_INTER_BROKER_LISTENER_NAME, value: INTERNAL}
+            - {name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP, value: "INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT"}
+            - {name: KAFKA_LISTENERS, value: "INTERNAL://0.0.0.0:9092,CONTROLLER://localhost:9093"}
+            - {name: KAFKA_ADVERTISED_LISTENERS, value: {{ printf "INTERNAL://%s:9092" $kafka | quote }}}
+            - {name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS, value: "0"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR, value: "1"}
+            - {name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR, value: "1"}
+            - {name: KAFKA_AUTO_CREATE_TOPICS_ENABLE, value: "false"}
+            - {name: KAFKA_LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS, value: "9223372036854775807"}
+            - {name: KAFKA_LOG_DIRS, value: /var/lib/kafka/data/logs}
+            - {name: KAFKA_HEAP_OPTS, value: "-Xms256m -Xmx384m"}
+          ports:
+            - containerPort: 9092
+          readinessProbe:
+            tcpSocket: {port: 9092}
+            periodSeconds: 5
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.kafka.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/kafka/data}
+      {{- if not .Values.kafka.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.kafka) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $kafka }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "kafka") | nindent 4 }}
+  ports:
+    - {port: 9092, targetPort: 9092}
+---
+{{- $ch := include "om.name" (dict "root" . "component" "clickhouse") }}
+# ClickHouse's own diagnostic logs have no expiry by default and grow until
+# their merges use the memory inserts need, which stops usage reaching
+# ClickHouse. Nothing in OpenMeter reads them: the noisiest are off, and the
+# query and error logs are kept a week. Usage itself (openmeter.om_events)
+# never expires.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ch }}-config
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+data:
+  system-logs.xml: |
+    <clickhouse>
+      <trace_log remove="1"/>
+      <text_log remove="1"/>
+      <part_log remove="1"/>
+      <metric_log remove="1"/>
+      <asynchronous_metric_log remove="1"/>
+      <processors_profile_log remove="1"/>
+      <query_metric_log remove="1"/>
+      <query_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_log>
+      <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $ch }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $ch }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: clickhouse
+          image: {{ .Values.clickhouse.image }}
+          env:
+            - {name: CLICKHOUSE_USER, value: default}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: {{ $creds }}, key: clickhouse-password}}
+            - {name: CLICKHOUSE_DB, value: openmeter}
+            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+          ports:
+            - containerPort: 9000
+            - containerPort: 8123
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.clickhouse.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/clickhouse}
+            - {name: config, mountPath: /etc/clickhouse-server/config.d/system-logs.xml, subPath: system-logs.xml}
+      volumes:
+        - name: config
+          configMap: {name: {{ $ch }}-config}
+      {{- if not .Values.clickhouse.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.clickhouse) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $ch }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "clickhouse") | nindent 4 }}
+  ports:
+    - {name: native, port: 9000, targetPort: 9000}
+    - {name: http, port: 8123, targetPort: 8123}
+---
+{{- $redis := include "om.name" (dict "root" . "component" "redis") }}
+# Redis holds the sink's recently stored event ids (deduplication). With
+# persistence it logs every write to an append-only file on its volume, so a
+# restart keeps them; see redis in values.yaml for what it still misses.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $redis }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $redis }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "om.selector" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999}
+      containers:
+        - name: redis
+          image: {{ .Values.redis.image }}
+          # Every dedupe key has a TTL (openmeter.dedupeExpiration). When
+          # Redis is full, volatile-ttl evicts the ids closest to expiring
+          # instead of refusing writes, which would stop the sink worker.
+          # appendonly: every write goes to /data/appendonlydir, synced each
+          # second; no RDB snapshots (--save "").
+          args:
+            - redis-server
+            - --maxmemory
+            - {{ .Values.redis.maxMemory | quote }}
+            - --maxmemory-policy
+            - volatile-ttl
+            - --save
+            - ""
+            - --appendonly
+            - {{ ternary "yes" "no" .Values.redis.persistence.enabled | quote }}
+            - --appendfsync
+            - everysec
+            - --dir
+            - /data
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            periodSeconds: 5
+          securityContext:
+            {{- include "om.securityContext" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      {{- if not .Values.redis.persistence.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+  {{- include "om.dataClaim" (dict "root" . "store" .Values.redis) | nindent 2 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $redis }}
+  namespace: {{ include "om.namespace" $ }}
+  labels:
+    {{- include "om.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "om.selector" (dict "root" . "component" "redis") | nindent 4 }}
+  ports:
+    - {port: 6379, targetPort: 6379}

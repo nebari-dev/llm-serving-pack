@@ -1,0 +1,35 @@
+{{- if .Values.openmeter.enabled }}
+{{- /* Checked whenever the bundled OpenMeter is on: it says where it goes. */}}
+{{- $omNamespace := include "nebari-llm-serving.openmeterNamespace" . }}
+{{- if and .Values.usage.enabled .Values.openmeter.networkPolicy.enabled (ne $omNamespace (include "nebari-llm-serving.operatorNamespace" .)) }}
+# The bundled OpenMeter runs in openmeter.namespace, but the usage collector
+# (ingest) and the key-manager (customer sync) run in the operator namespace.
+# The openmeter subchart's own policy admits labelled pods from its own
+# namespace only, so this one adds the same label in the operator namespace.
+# NetworkPolicies add up: OpenMeter's API stays closed to every other pod.
+# With OpenMeter in the operator namespace, the subchart's policy is enough.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "om.name" (dict "root" . "component" "api") }}-pack-clients
+  namespace: {{ $omNamespace }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "om.selector" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # One peer: both selectors must match (the label AND the namespace).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "nebari-llm-serving.operatorNamespace" . }}
+          podSelector:
+            matchLabels:
+              llm.nebari.dev/openmeter-client: "true"
+      ports:
+        - {port: 8888}
+{{- end }}
+{{- end }}

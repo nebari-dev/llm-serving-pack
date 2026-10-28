@@ -6,14 +6,19 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 // UserInfo holds the authenticated user's identity extracted from JWT claims.
 type UserInfo struct {
 	Username string
-	Name     string
-	Email    string
-	Groups   []string
+	// Subject is the token's "sub" claim: the user's stable identity. Empty
+	// for the injected dev-mode identity.
+	Subject string
+	Name    string
+	Email   string
+	Groups  []string
 }
 
 type contextKey string
@@ -27,13 +32,21 @@ func UserFromContext(ctx context.Context) (*UserInfo, bool) {
 	return user, ok && user != nil
 }
 
+// TokenValidator verifies a bearer token and returns its claims.
+// *oidc.Validator is the production implementation (Keycloak JWKS); the
+// middleware depends on this interface so tests can substitute a fake. The
+// context bounds any JWKS fetch the validation may trigger.
+type TokenValidator interface {
+	ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error)
+}
+
 // AuthConfig configures the auth middleware.
 type AuthConfig struct {
 	// GroupsClaim is the JWT claim containing groups (default: "groups").
 	GroupsClaim string
 	// Validator verifies bearer tokens against Keycloak's JWKS (signature,
 	// expiry, issuer). Required unless DevMode is true. Typed as an interface so
-	// tests can substitute a fake; production uses *JWTValidator.
+	// tests can substitute a fake; production uses *oidc.Validator.
 	Validator TokenValidator
 	// DevMode disables token handling and injects DevIdentity into every
 	// request. It exists so the UI can run on a local cluster that has no
@@ -79,7 +92,7 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 			claims, err := cfg.Validator.ValidateToken(r.Context(), token)
 			if err != nil {
 				// JWKS not fetched yet: transient, tell the client to retry.
-				if errors.Is(err, ErrNotReady) {
+				if errors.Is(err, oidc.ErrNotReady) {
 					w.Header().Set("Retry-After", "5")
 					http.Error(w, "auth not ready: "+err.Error(), http.StatusServiceUnavailable)
 					return
@@ -118,11 +131,13 @@ func userInfoFromClaims(claims map[string]interface{}, groupsClaim string) *User
 		// Fall back to the subject when preferred_username is absent.
 		username, _ = claims["sub"].(string)
 	}
+	subject, _ := claims["sub"].(string)
 	name, _ := claims["name"].(string)
 	email, _ := claims["email"].(string)
 
 	return &UserInfo{
 		Username: username,
+		Subject:  subject,
 		Name:     name,
 		Email:    email,
 		Groups:   extractGroups(claims, groupsClaim),

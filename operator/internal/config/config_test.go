@@ -46,6 +46,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"POD_NAMESPACE":                  "llm-serving",
 				"LLM_CLUSTER_ISSUER_NAME":        "my-issuer",
 				"LLM_MANAGE_SHARED_LISTENERS":    "false",
+				"LLM_USAGE_METERING_ENABLED":     "true",
 			},
 			wantErr: false,
 			wantConfig: &OperatorConfig{
@@ -63,6 +64,7 @@ func TestLoadFromEnv(t *testing.T) {
 				OperatorNamespace:     "llm-serving",
 				ClusterIssuerName:     "my-issuer",
 				ManageSharedListeners: false,
+				UsageMeteringEnabled:  true,
 			},
 		},
 		{
@@ -218,6 +220,7 @@ func TestLoadFromEnv(t *testing.T) {
 				"POD_NAMESPACE",
 				"LLM_CLUSTER_ISSUER_NAME",
 				"LLM_MANAGE_SHARED_LISTENERS",
+				"LLM_USAGE_METERING_ENABLED",
 			}
 			for _, v := range allVars {
 				t.Setenv(v, "")
@@ -289,6 +292,9 @@ func TestLoadFromEnv(t *testing.T) {
 			}
 			if got.ManageSharedListeners != tt.wantConfig.ManageSharedListeners {
 				t.Errorf("ManageSharedListeners = %v, want %v", got.ManageSharedListeners, tt.wantConfig.ManageSharedListeners)
+			}
+			if got.UsageMeteringEnabled != tt.wantConfig.UsageMeteringEnabled {
+				t.Errorf("UsageMeteringEnabled = %v, want %v", got.UsageMeteringEnabled, tt.wantConfig.UsageMeteringEnabled)
 			}
 		})
 	}

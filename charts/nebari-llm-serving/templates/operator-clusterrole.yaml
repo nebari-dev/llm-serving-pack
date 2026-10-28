@@ -54,6 +54,17 @@ rules:
   - apiGroups: ["gateway.envoyproxy.io"]
     resources: ["securitypolicies", "backends"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- if .Values.usage.enabled }}
+  # Usage metering: the policy that removes caller-sent identity headers on
+  # the pack's listeners before authentication runs.
+  - apiGroups: ["gateway.envoyproxy.io"]
+    resources: ["clienttrafficpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # A Warning Event on the Gateway when that policy cannot be applied.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  {{- end }}
   # Observe AI Gateway-owned routes before removing endpoint authentication.
   # get alone suffices: unstructured reads bypass the manager's cache, so no
   # informer needs list/watch (see PassthroughModelReconciler.removeEndpoint).

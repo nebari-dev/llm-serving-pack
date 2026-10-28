@@ -37,7 +37,7 @@ An optional key manager gives users a web UI to generate API keys for external a
 - Prefill/decode disaggregation
 - KV cache offloading
 - Multi-accelerator support (AMD, Intel, etc.) - NVIDIA only initially
-- Usage billing or cost chargeback
+- Invoicing or payment collection (usage metering and cost reporting are optional: `usage.enabled`, `openmeter.enabled`)
 - Scale-to-zero autoscaling
 - Per-key rate limiting or token quotas
 - API key expiration and group-change revocation (the periodic audit is scaffolded, but the userinfo lookup it depends on is a stub, so no key is revoked yet)
@@ -54,6 +54,8 @@ Installing the chart (pack install) deploys:
 2. **LLM operator** - a Go controller (kubebuilder/controller-runtime) that watches `LLMModel` CRs in its own namespace
 3. **Key manager** (conditional, `keyManager.enabled`) - a React SPA served by an nginx **frontend** image plus an API-only Go service, fronted by a `NebariApp` with SPA-managed Keycloak/OIDC auth
 4. **Envoy AI Gateway** (conditional, `envoyAIGateway.install`) - the controller and CRDs; when `false`, assumes pre-installed
+5. **Usage collector** (conditional, `usage.enabled`) - OpenMeter's collector, receiving the gateway's access log over OTLP and sending one usage event per request and token type to OpenMeter, billed to the API key's creator or the token's subject; see [Usage metering](/usage/)
+6. **Bundled OpenMeter** (conditional, `openmeter.enabled`) - OpenMeter (API, sink worker, Kafka, ClickHouse, Redis, a CloudNativePG Postgres) with the pack's meters, priced features and manual prices, and the read-only **usage console** behind its own `NebariApp`; installed into `openmeter.namespace`
 
 The chart creates the operator namespace and labels it `nebari.dev/managed=true` (gated on `createNamespace: true`, default on).
 
@@ -320,7 +322,7 @@ The auth model is **Model B - SPA-managed Keycloak** (no gateway cookie login, n
 
 1. The browser loads the SPA at `llm-keys.<baseDomain>`.
 2. `keycloak-js` performs a `login-required` PKCE (S256) redirect to Keycloak using a **public** client (provisioned by the operator via `spaClient.enabled: true`; no client secret), obtains an access token, and attaches `Authorization: Bearer <token>` on every `/api` call.
-3. nginx forwards the bearer to the key-manager, which **validates the JWT itself** against the Keycloak realm's JWKS: RSA signature, `exp` with 30s leeway, and an exact `iss` match (audience is not checked). Auth is not enforced at the gateway (`enforceAtGateway: false`).
+3. nginx forwards the bearer to the key-manager, which **validates the JWT itself** against the Keycloak realm's JWKS (the token validator in the shared Go module, `shared/oidc`, which the usage console uses too): RSA signature, a required `exp` with 30s leeway, an exact `iss` match, and `azp` pinned to the SPA's client when set (audience is not checked). Auth is not enforced at the gateway (`enforceAtGateway: false`).
 4. The key-manager reads identity and groups from the token claims, watches all `LLMModel` CRs, and filters to models where `access.groups` overlaps with the user's OIDC groups (or `access.public: true`). Users see only models they can access.
 5. The user creates a key for a model; the key-manager generates `sk-<random>`, writes the client ID and key value to that model's `<name>-api-keys` Secret in the operator namespace, and writes metadata to the corresponding ConfigMap.
 6. Envoy Gateway's pooled `apiKeyAuth` picks up the new Secret entry as soon as it syncs (authentication); separately, the operator - watching api-keys Secrets - re-renders the model's SecurityPolicy authorization allow-list to include the new client ID (authorization). A fresh key works once both land - typically seconds, within about a minute.
@@ -407,6 +409,15 @@ There is no gateway `SecurityPolicy`, no oauth2-proxy sidecar, no cookie login, 
 
 ---
 
+### UIs: key manager and usage console
+
+The pack's two UIs sign people in differently. Both use the same Keycloak realm, so one login covers both.
+
+- **Key manager (Model B, above):** JavaScript in the page (`keycloak-js`) sends the browser to Keycloak, keeps the token, and sends it on every API call; the gateway does not enforce sign-in.
+- **Usage console:** Nebari's standard gateway sign-in. The gateway sends the browser to Keycloak, keeps the session, and forwards the token (`forwardAccessToken: true`); the console's Go server checks it and the admin group, and serves the built SPA itself. No login code in the page and no separate nginx image.
+
+Moving the key manager to gateway sign-in would make the two consistent.
+
 ## Envoy AI Gateway
 
 Always used for both endpoints. The `envoyAIGateway.install` Helm value controls whether this pack installs the AI Gateway controller and CRDs, or assumes they are already present.
@@ -414,7 +425,7 @@ Always used for both endpoints. The `envoyAIGateway.install` Helm value controls
 - `install: true` - the pack deploys the Envoy AI Gateway controller and CRDs
 - `install: false` - the pack only creates `AIGatewayRoute` and `AIServiceBackend` resources; the operator checks for CRD existence at startup and logs a clear error if missing
 
-Both external and internal endpoints use `AIGatewayRoute`, giving both paths token counting, rate limiting, and protocol normalization. Usage data is available for future cost tracking on both paths.
+Both external and internal endpoints use `AIGatewayRoute`, giving both paths token counting, rate limiting, and protocol normalization. With `usage.enabled`, the routes also report each request's token counts for usage metering.
 
 ---
 
@@ -433,6 +444,8 @@ This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.
 **API-key Secrets**: live in the operator namespace alongside the SecurityPolicies that reference them. The `apiKeyAuth.credentialRefs` field carries no `namespace` field.
 
 **Operator namespace setup**: the chart provisions the namespace and applies `nebari.dev/managed=true` (gated on `createNamespace: true`, default on). Set `createNamespace: false` if ArgoCD `managedNamespaceMetadata`, a Terraform module, or another tool is responsible for creating and labelling the namespace.
+
+The bundled OpenMeter is the one exception that can be chosen: it runs in `openmeter.namespace`, which the chart requires with `openmeter.enabled`. Setting it to the pack's namespace keeps every component in one namespace. Until the key manager's Role is narrowed to the API-key Secrets ([#215](https://github.com/nebari-dev/llm-serving-pack/issues/215)), it can read every Secret in that namespace, OpenMeter's database and ClickHouse credentials included; a separate namespace keeps them apart, with a NetworkPolicy admitting the collector and key manager across.
 
 ---
 

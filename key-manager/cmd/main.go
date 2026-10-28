@@ -23,6 +23,7 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/audit"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 func main() {
@@ -103,6 +104,9 @@ func main() {
 		}
 	}()
 
+	startCustomerSync(ctx, secretsMgr, logger)
+	startIdentityLookup(ctx, secretsMgr, logger)
+
 	// 7. Start audit if userinfo URL is configured.
 	if oidcUserinfoURL != "" {
 		lookup := makeUserinfoLookup(oidcUserinfoURL)
@@ -123,7 +127,7 @@ func main() {
 		GroupsClaim: groupsClaim,
 		DevMode:     devMode,
 	}
-	var validator *api.JWTValidator
+	var validator *oidc.Validator
 	if devMode {
 		authConfig.DevIdentity = api.UserInfo{
 			Username: devUser,
@@ -137,9 +141,18 @@ func main() {
 		if keycloakURL == "" {
 			log.Fatal("LLM_KEYCLOAK_URL is required unless LLM_DEV_MODE=true")
 		}
-		validator = api.NewJWTValidator(keycloakURL, keycloakRealm, logger)
-		validator.SetIssuerURL(keycloakIssuerURL)
-		validator.SetExpectedClientID(keycloakSPAClientID)
+		// Keys come from the in-cluster Keycloak URL; tokens carry the external
+		// one (LLM_KEYCLOAK_ISSUER_URL) as their issuer when the two differ.
+		issuerBase := keycloakIssuerURL
+		if issuerBase == "" {
+			issuerBase = keycloakURL
+		}
+		validator = oidc.New(oidc.Config{
+			KeysURL:  strings.TrimSuffix(keycloakURL, "/") + "/realms/" + keycloakRealm + "/protocol/openid-connect/certs",
+			Issuer:   strings.TrimSuffix(issuerBase, "/") + "/realms/" + keycloakRealm,
+			ClientID: keycloakSPAClientID,
+			Logger:   logger,
+		})
 		authConfig.Validator = validator
 		if keycloakSPAClientID == "" {
 			logger.Warn("LLM_KEYCLOAK_SPA_CLIENT_ID not set: accepting tokens from any client in the realm (azp is not pinned)")

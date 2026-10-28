@@ -1,0 +1,156 @@
+package openmeter_test
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/openmeter-setup/internal/openmeter"
+)
+
+// Bootstrap gives each model resource a priced feature over the tokens
+// meter, and sets the manual prices; run again (every upgrade), it changes
+// nothing that is already so.
+func TestBootstrapIsIdempotent(t *testing.T) {
+	f := &fakeOpenMeter{features: []map[string]any{feature("f-mock", "mock-provider", "mock")}}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{
+		Resources: []openmeter.Resource{{Name: "mock-provider", Provider: "mock"}, {Name: "bedrock", Provider: "bedrock"}},
+		Prices:    []openmeter.ManualPrice{{Provider: "mock", Model: "mock/small", Pricing: map[string]string{"input_per_token": "0.001", "output_per_token": "0.002"}}},
+	}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 2 {
+		t.Fatalf("created %+v", f.created)
+	}
+	feat, ov := f.created[0], f.created[1]
+	if feat["_kind"] != "feature" || feat["key"] != "bedrock_tokens" || feat["meter"].(map[string]any)["id"] != "m-tok" ||
+		feat["meter"].(map[string]any)["filters"].(map[string]any)["model_resource"].(map[string]any)["eq"] != "bedrock" ||
+		feat["unit_cost"].(map[string]any)["provider"] != "bedrock" || feat["unit_cost"].(map[string]any)["token_type_property"] != "token_type" {
+		t.Fatalf("feature %+v", feat)
+	}
+	if ov["_kind"] != "override" || ov["provider"] != "mock" || ov["model_id"] != "mock/small" || ov["pricing"].(map[string]any)["input_per_token"] != "0.001" {
+		t.Fatalf("override %+v", ov)
+	}
+}
+
+// OpenMeter stores prices as decimals and lists them in canonical form, so a
+// price written as 3e-6 or 0.0000030 is the price it lists as 0.000003, and
+// a rate left out is the one it lists as "0". Neither makes a new override.
+func TestBootstrapComparesPricesAsNumbers(t *testing.T) {
+	f := &fakeOpenMeter{}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Prices: []openmeter.ManualPrice{{Provider: "mock", Model: "mock/small",
+		Pricing: map[string]string{"input_per_token": "3e-6", "output_per_token": "0.0000150"}}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 1 {
+		t.Fatalf("created %d overrides, want 1: %+v", len(f.created), f.created)
+	}
+}
+
+// OpenMeter pages its lists. With more features and prices than fit one
+// page, the ones on later pages are still found and not created again.
+func TestBootstrapReadsEveryPage(t *testing.T) {
+	f := &fakeOpenMeter{}
+	cfg := openmeter.BootstrapConfig{}
+	for i := range 150 {
+		name := fmt.Sprintf("resource-%03d", i)
+		f.features = append(f.features, feature("f-"+name, name, "bedrock"))
+		f.overrides = append(f.overrides, map[string]any{"provider": map[string]any{"id": "mock"}, "model": map[string]any{"id": name},
+			"pricing": map[string]any{"input_per_token": "0.001", "output_per_token": "0.002", "cache_read_per_token": "0", "cache_write_per_token": "0", "reasoning_per_token": "0"}})
+	}
+	cfg.Resources = []openmeter.Resource{{Name: "resource-149", Provider: "bedrock"}}
+	cfg.Prices = []openmeter.ManualPrice{{Provider: "mock", Model: "resource-149", Pricing: map[string]string{"input_per_token": "0.001", "output_per_token": "0.002"}}}
+	c := openmeter.NewClient(f.server(t).URL, "")
+
+	if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.created) != 0 {
+		t.Fatalf("created %+v, want nothing: all of it is on page 2", f.created)
+	}
+}
+
+// The meters list is paged too (20 a page by default): the tokens meter is
+// found wherever it is.
+func TestBootstrapFindsTheTokensMeterOnALaterPage(t *testing.T) {
+	f := &fakeOpenMeter{}
+	for i := range 120 {
+		f.meters = append(f.meters, map[string]any{"id": fmt.Sprintf("m-%d", i), "key": fmt.Sprintf("other_%d", i)})
+	}
+	f.meters = append(f.meters, map[string]any{"id": "m-tok", "key": "llm_tokens"})
+	c := openmeter.NewClient(f.server(t).URL, "")
+
+	err := openmeter.Bootstrap(context.Background(), c, openmeter.BootstrapConfig{Resources: []openmeter.Resource{{Name: "new", Provider: "bedrock"}}}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(f.created) != 1 || f.created[0]["meter"].(map[string]any)["id"] != "m-tok" {
+		t.Fatalf("created %+v, want one feature over m-tok", f.created)
+	}
+}
+
+// A resource whose provider changed in the values gets its existing feature's
+// unit cost updated to the new provider, once.
+func TestBootstrapUpdatesAFeaturesProvider(t *testing.T) {
+	f := &fakeOpenMeter{features: []map[string]any{feature("f-chat", "chat", "openai")}}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Resources: []openmeter.Resource{{Name: "chat", Provider: "bedrock"}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 0 {
+		t.Errorf("created %+v, want the existing feature updated instead", f.created)
+	}
+	if len(f.patched) != 1 {
+		t.Fatalf("patched %+v, want one update", f.patched)
+	}
+	uc := f.patched[0]["unit_cost"].(map[string]any)
+	if f.patched[0]["_id"] != "f-chat" || uc["type"] != "llm" || uc["provider"] != "bedrock" || uc["model_property"] != "model" || uc["token_type_property"] != "token_type" {
+		t.Fatalf("patch %+v, want f-chat's unit cost priced under bedrock", f.patched[0])
+	}
+}
+
+// OpenMeter stores a manual price as sent but looks prices up under its
+// canonical IDs (lowercase, provider aliases, dots between digits as
+// hyphens), so a price for the model as the gateway names it must be stored
+// in canonical form, once.
+func TestBootstrapStoresPricesUnderOpenMeterIDs(t *testing.T) {
+	f := &fakeOpenMeter{}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Prices: []openmeter.ManualPrice{{
+		Provider: "VLLM", Model: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4",
+		Pricing: map[string]string{"input_per_token": "0.0000001", "output_per_token": "0.0000004"},
+	}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 1 {
+		t.Fatalf("created %+v, want one price", f.created)
+	}
+	if p := f.created[0]; p["provider"] != "vllm" || p["model_id"] != "qwen/qwen3-5-35b-a3b-gptq-int4" {
+		t.Fatalf("price stored as %v/%v, want vllm/qwen/qwen3-5-35b-a3b-gptq-int4", p["provider"], p["model_id"])
+	}
+}

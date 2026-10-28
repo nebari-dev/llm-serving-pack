@@ -8,6 +8,9 @@ on:
       - "key-manager/**"
       - "frontend/**"
       - "model-downloader/**"
+      - "usage-console/**"
+      - "openmeter-setup/**"
+      - "shared/**"
       - ".github/workflows/build-images.yaml"
       # The release workflow pins images to sha-<release-commit>, so the
       # release commit (a Chart.yaml bump) must produce images with that
@@ -21,6 +24,9 @@ on:
       - "key-manager/**"
       - "frontend/**"
       - "model-downloader/**"
+      - "usage-console/**"
+      - "openmeter-setup/**"
+      - "shared/**"
   workflow_dispatch:
 
 # Each job grants id-token + attestations so the reusable pack-build-image
@@ -35,7 +41,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
     with:
       image: operator
       context: operator/
@@ -50,7 +56,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
     with:
       image: model-downloader
       context: model-downloader/
@@ -65,7 +71,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
     with:
       image: key-manager
       context: "."
@@ -81,10 +87,44 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@v1
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
     with:
       image: frontend
       context: frontend/
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+
+  # The read-only usage console and openmeter-api (the openmeter subchart).
+  usage-console:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
+    with:
+      image: usage-console
+      context: "."
+      dockerfile: usage-console/Dockerfile
+      push: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+
+  # The openmeter subchart's setup Jobs (bootstrap, ClickHouse password).
+  openmeter-setup:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: nebari-dev/.github/.github/workflows/pack-build-image.yaml@ddc8bd9f17cf1d6844bc2b5fb52825ed70f1a688 # v1
+    with:
+      image: openmeter-setup
+      context: "."
+      dockerfile: openmeter-setup/Dockerfile
       push: ${{ github.event_name != 'pull_request' }}
     secrets:
       QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}

@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usage tracer</title>
+<script>
+  // Resolve the theme before first paint: an explicit choice wins, otherwise follow the OS.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("theme"); } catch (e) {}
+    if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t;
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Cascadia+Code:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'Cascadia Code', ui-monospace, Menlo, monospace;
+    --bg: #f6f5f1; --panel: #ffffff; --line: #e2dfd6; --text: #1b1f27; --muted: #5d6470;
+    --accent: #2f5bd3; --accent-ink: #ffffff; --accent-bg: #e8eefc; --ok: #1f7a4d; --ok-bg: #e5f3ea; --wait: #8a5b00; --wait-bg: #fbf0d9; --err: #b3261e;
+    --tile: #f1efe9; --inline-code: #ece9e1; --step-border: #3a3f4b;
+    /* controls: shadcn/ui neutral tokens */
+    --sh-bg: #ffffff; --sh-fg: #0a0a0a; --sh-primary: #171717; --sh-primary-fg: #fafafa;
+    --sh-muted: #ecebe6; --sh-muted-fg: #6b6b6b; --sh-border: #e5e5e5; --sh-input: #d9d7d0; --sh-ring: rgba(161, 161, 161, 0.5);
+    --sh-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fafafa' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+    /* command: a terminal; output: a lighter well */
+    --term-bg: #1b1f27; --term-text: #e7e9ee; --term-line: #1b1f27; --term-head: #9aa3b2; --term-rule: #2f3542;
+    --out-bg: #f7f6f2;
+    --t-cmd: #7aa2ff; --t-flag: #e5c07b; --t-str: #98c379; --t-op: #c678dd; --t-prompt: #6b7280;
+    --j-key: #2f5bd3; --j-str: #1f7a4d; --j-num: #b35c00; --j-lit: #8e3fb0; --j-punct: #8a909b;
+  }
+  /* data-theme is set before first paint: the visitor's choice, else the OS. */
+  :root[data-theme="dark"] {
+    --bg: #0f1115; --panel: #181b22; --line: #3a4150; --text: #f1f3f7; --muted: #c2c9d6;
+    --accent: #8fb0ff; --accent-ink: #0f1115; --accent-bg: #22305a; --ok: #7ee2a8; --ok-bg: #173a26; --wait: #ffd27a; --wait-bg: #3d3011; --err: #ff9b92;
+    --tile: #2c323e; --inline-code: #2a303b; --step-border: #8a93a6;
+    --sh-bg: #0a0a0a; --sh-fg: #fafafa; --sh-primary: #e5e5e5; --sh-primary-fg: #171717;
+    --sh-muted: #262626; --sh-muted-fg: #a1a1a1; --sh-border: rgba(255, 255, 255, 0.1); --sh-input: rgba(255, 255, 255, 0.15); --sh-ring: rgba(115, 115, 115, 0.5);
+    --sh-check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23171717' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+    --term-bg: #07080b; --term-line: #3a4150; --term-head: #b4bccb; --term-rule: #3a4150;
+    --out-bg: #12151b;
+    --t-prompt: #8a92a0;
+    --j-key: #8fb0ff; --j-str: #a5d68a; --j-num: #ffb27a; --j-lit: #dba8f5; --j-punct: #8a92a0;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--font-sans); }
+  .wrap { max-width: 1560px; margin: 0 auto; padding: 0 32px; }
+  @media (max-width: 860px) { .wrap { padding: 0 16px; } }
+  header { padding: 28px 0 4px; }
+  header h1 { margin: 0 0 6px; font-size: 24px; font-weight: 600; }
+  .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 6px; }
+  .title-row h1 { margin: 0; }
+  /* theme toggle: one icon button, moon in light mode, sun in dark */
+  .theme-btn { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text); cursor: pointer; transition: color 0.15s, background 0.15s; }
+  .theme-btn:hover { background: var(--sh-muted); }
+  .theme-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
+  .theme-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .theme-btn .sun { display: none; }
+  [data-theme="dark"] .theme-btn .sun { display: block; }
+  [data-theme="dark"] .theme-btn .moon { display: none; }
+  header p { margin: 0; color: var(--muted); max-width: 980px; }
+  code.ic { font: 0.9em var(--font-mono); background: var(--inline-code); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+  h2.section { margin: 28px 0 4px; font-size: 18px; font-weight: 600; }
+  p.section { margin: 0 0 14px; color: var(--muted); max-width: 980px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; }
+
+  /* the form, one row across the top */
+  .form { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; }
+  .form label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  /* segmented choices: shadcn Tabs list */
+  .seg { display: inline-flex; align-items: center; height: 36px; padding: 3px; gap: 2px; border-radius: 10px; background: var(--sh-muted); }
+  .seg button { height: 100%; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--sh-muted-fg); font: 500 14px var(--font-sans); cursor: pointer; white-space: nowrap; transition: color 0.15s, background 0.15s, box-shadow 0.15s; }
+  .seg button:hover { color: var(--sh-fg); }
+  .seg button[aria-pressed="true"] { background: var(--sh-bg); color: var(--sh-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06); }
+  [data-theme="dark"] .seg button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); border-color: var(--sh-input); box-shadow: none; }
+  .seg button:focus-visible, .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
+  .seg code { font: 13px var(--font-mono); }
+  /* checkbox: shadcn Checkbox */
+  .form label.check { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; font-weight: 500; height: 36px; cursor: pointer; }
+  .check input { appearance: none; margin: 0; width: 16px; height: 16px; flex: none; border: 1px solid var(--sh-input); border-radius: 4px; background: var(--sh-bg) center / 12px no-repeat; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
+  .check input:checked { background-color: var(--sh-primary); border-color: var(--sh-primary); background-image: var(--sh-check); }
+  .check input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sh-ring); }
+  /* primary button: shadcn Button */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--sh-primary); color: var(--sh-primary-fg); font: 500 14px var(--font-sans); white-space: nowrap; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); transition: opacity 0.15s, transform 0.05s; }
+  .btn:hover { opacity: 0.9; }
+  .btn:active { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.5; pointer-events: none; }
+  .btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .result { flex-basis: 100%; font-size: 13px; color: var(--muted); }
+  .result strong { color: var(--text); font-family: var(--font-mono); font-weight: 600; }
+
+  /* logos */
+  .logo { flex: none; display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 9px; background: var(--tile); border: 1px solid var(--line); }
+  .logo svg, .logo img { width: 24px; height: 24px; display: block; }
+  .logo.sm { width: 26px; height: 26px; border-radius: 6px; }
+  .logo.sm svg, .logo.sm img { width: 16px; height: 16px; }
+  .logo.dark { background: #151515; border-color: #151515; }
+
+  /* the request path, left to right */
+  .flow { position: relative; display: flex; align-items: stretch; gap: 0; padding: 22px 20px 20px; }
+  .node { flex: 1 1 0; min-width: 0; display: flex; gap: 12px; align-items: flex-start; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); position: relative; z-index: 1; }
+  .node h3 { margin: 0; font-size: 15px; font-weight: 600; }
+  .node p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .node.lit { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  .link { flex: 0 0 220px; display: grid; align-content: center; gap: 4px; padding: 0 12px; text-align: center; font-size: 12px; color: var(--muted); }
+  .link .arrow { font: 600 13px var(--font-mono); color: var(--text); }
+  .link .arrow.back { color: var(--ok); }
+  .packet { position: absolute; z-index: 2; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-bg); opacity: 0; pointer-events: none; }
+  .packet.back { background: var(--ok); box-shadow: 0 0 0 4px var(--ok-bg); }
+  .flow-status { padding: 0 20px 16px; font-size: 13px; color: var(--muted); }
+  .flow-status strong { color: var(--text); font-family: var(--font-mono); }
+  @media (max-width: 1100px) { .flow { flex-direction: column; } .link { flex-basis: auto; padding: 10px 0; } }
+
+  /* the metering path, top to bottom */
+  .journey { position: relative; }
+  .item { position: relative; padding-left: 46px; }
+  .item::before { content: ""; position: absolute; left: 15px; top: 0; bottom: 0; width: 2px; background: var(--line); }
+  .item.lit::before { background: var(--ok); }
+  .item:first-child::before { top: 26px; }
+  .item:last-child::before { bottom: calc(100% - 26px); }
+  .dot { position: absolute; left: 6px; top: 22px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); background: var(--panel); z-index: 1; }
+  .stage.found .dot { border-color: var(--ok); background: var(--ok); }
+  .stage.waiting .dot { border-color: var(--wait); }
+  .stage.error .dot { border-color: var(--err); }
+  .stage { padding-top: 6px; padding-bottom: 6px; }
+  .stage .panel { padding: 16px 20px; border: 1.5px solid var(--step-border); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06); }
+  .panel.flow-panel { border: 1.5px solid var(--step-border); }
+  .stage-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .stage-title { display: flex; gap: 12px; align-items: center; }
+  .stage h3 { margin: 0; font-size: 16px; font-weight: 600; }
+  .stage .what { margin: 10px 0 4px; color: var(--muted); font-size: 14px; max-width: 1100px; }
+  .stage .what a { color: var(--accent); }
+  .pill { font: 600 12px var(--font-mono); padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .found .pill { color: var(--ok); background: var(--ok-bg); }
+  .waiting .pill, .idle .pill { color: var(--wait); background: var(--wait-bg); }
+  .error .pill { color: var(--err); background: var(--wait-bg); }
+
+  /* what happens between two steps */
+  .hop { padding-top: 8px; padding-bottom: 8px; }
+  .hop-body { display: flex; gap: 12px; align-items: flex-start; padding: 10px 14px; border: 1.5px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13.5px; max-width: 1180px; }
+  .hop-logos { display: flex; gap: 6px; }
+  .hop-proto { font: 600 12.5px/1.6 var(--font-mono); color: var(--text); }
+  .hop-proto .tag { display: inline-block; margin-left: 8px; font: 600 11px/1.6 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; padding: 0 8px; border-radius: 999px; }
+  .hop.now .hop-body { border-style: solid; border-color: var(--wait); background: var(--wait-bg); color: var(--text); }
+  .hop.now .tag { color: var(--wait); background: var(--panel); }
+  .hop.done .tag { color: var(--ok); background: var(--ok-bg); }
+  .hop.first .hop-body { border-color: var(--accent); }
+
+  .arrowhead { position: absolute; left: 9px; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-top: 11px solid var(--ok); z-index: 2; opacity: 0; pointer-events: none; }
+
+  /* a labelled block: the command we ran, or what came back */
+  .block { margin-top: 10px; border-radius: 8px; overflow: hidden; }
+  .block-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 12px; font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; }
+  .block { position: relative; }
+  /* copy: shadcn ghost icon button inside the code block */
+  .copy { position: absolute; top: 6px; right: 8px; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--term-head); cursor: pointer; transition: color 0.15s, background 0.15s; }
+  .copy:hover { background: rgba(255, 255, 255, 0.1); color: var(--term-text); }
+  .copy:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(161, 161, 161, 0.5); }
+  .copy svg { width: 16px; height: 16px; display: block; }
+  .cmd-block .code { padding-right: 52px; }
+  .code { margin: 0; padding: 10px 14px 12px; font: 13px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cmd-block { background: var(--term-bg); border: 1px solid var(--term-line); color: var(--term-text); }
+  .cmd-block .block-head { color: var(--term-head); border-bottom: 1px solid var(--term-rule); }
+  .out-block { background: var(--out-bg); border: 1px solid var(--line); }
+  .out-block .block-head { color: var(--muted); border-bottom: 1px solid var(--line); }
+  .out-block .code { max-height: 360px; overflow-y: auto; }
+  .t-prompt { color: var(--t-prompt); user-select: none; }
+  .t-cmd { color: var(--t-cmd); font-weight: 600; }
+  .t-flag { color: var(--t-flag); }
+  .t-str { color: var(--t-str); }
+  .t-op { color: var(--t-op); font-weight: 600; }
+  .j-key { color: var(--j-key); }
+  .j-str { color: var(--j-str); }
+  .j-num { color: var(--j-num); }
+  .j-lit { color: var(--j-lit); font-weight: 600; }
+  .j-punct { color: var(--j-punct); }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font: 12.5px/1.55 var(--font-mono); }
+  th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.04em; text-transform: uppercase; }
+  td { white-space: nowrap; }
+  td:last-child { white-space: normal; overflow-wrap: anywhere; min-width: 240px; }
+  /* the collector: record in, steps, events out */
+  .xform { display: grid; grid-template-columns: minmax(0, 1fr) 28px minmax(0, 1.1fr) 28px minmax(0, 1fr); gap: 0; align-items: start; margin-top: 12px; }
+  .xform .to { align-self: center; text-align: center; font: 600 18px var(--font-mono); color: var(--muted); }
+  .xcol { min-width: 0; }
+  .xcol .code { max-height: 520px; overflow-y: auto; }
+  .xsteps { display: grid; gap: 10px; padding: 12px 14px; }
+  .xstep { font-size: 13.5px; color: var(--text); }
+  .xstep b { display: block; font: 600 12.5px var(--font-mono); color: var(--muted); margin-bottom: 2px; }
+  .xstep strong { font: 600 13px var(--font-mono); }
+  .xstep .block { margin: 6px 0; }
+  .xstep .cmd-block .code { margin: 0; background: transparent; border: 0; border-radius: 0; padding: 8px 44px 8px 10px; }
+  .xstep .code { padding: 6px 10px; margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .xwait { padding: 12px 14px; margin: 0; color: var(--muted); font-size: 13.5px; }
+  .xevents { display: grid; gap: 8px; padding: 8px; }
+  .xevents .code { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+  @media (max-width: 1100px) { .xform { grid-template-columns: minmax(0, 1fr); } .xform .to { transform: rotate(90deg); padding: 4px 0; } }
+  /* expanders, GitHub style: a one-line summary, click to see the rest */
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary .chev { display: inline-block; width: 12px; margin-right: 6px; color: var(--muted); transition: transform 0.15s; }
+  details[open] > summary .chev { transform: rotate(90deg); }
+  .runs { margin: 8px 0 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--out-bg); }
+  .runs > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 12px; font-size: 13px; color: var(--muted); }
+  .runs > summary b { font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .runs > summary .sum { font: 12.5px var(--font-mono); color: var(--text); }
+  .runs-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+  .runs-body p { margin: 6px 0 0; font-size: 13.5px; color: var(--text); }
+  .runs-body table td:last-child { min-width: 0; }
+  .runs-body .cmd-block { margin-top: 0; }
+  .node .runs { margin-top: 8px; }
+  .node .runs > summary { padding: 5px 8px; font-size: 12px; }
+  .out-block > summary { display: flex; align-items: center; padding: 6px 12px; font: 600 11px/1.4 var(--font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .out-block[open] > summary { border-bottom: 1px solid var(--line); }
+  .out-block > summary .hint { margin-left: 8px; font: 500 12px var(--font-mono); letter-spacing: 0; text-transform: none; color: var(--muted); }
+  .ev { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+  .ev > summary { padding: 6px 10px; font: 12.5px var(--font-mono); color: var(--text); }
+  .ev > summary .t { color: var(--j-key); font-weight: 600; }
+  .ev .code { border-top: 1px solid var(--line); }
+  td details > summary { font: 12.5px var(--font-mono); color: var(--j-key); }
+  td details .code { padding: 6px 0 0; }
+  /* the identifiers followed through every step */
+  mark.id { cursor: help; background: transparent; color: inherit; border-radius: 4px; padding: 1px 5px; margin: 0 1px; box-shadow: inset 0 0 0 1.5px var(--idc); background-color: color-mix(in srgb, var(--idc) 12%, transparent); }
+  .id-rid { --idc: #2f5bd3; } .id-subject { --idc: #9b3fc4; } .id-key { --idc: #c46a00; } .id-user { --idc: #1f8a55; } .id-team { --idc: #0f8a99; }
+  [data-theme="dark"] .id-rid { --idc: #8fb0ff; } [data-theme="dark"] .id-subject { --idc: #d19af0; } [data-theme="dark"] .id-key { --idc: #ffb35c; } [data-theme="dark"] .id-user { --idc: #7ee2a8; } [data-theme="dark"] .id-team { --idc: #5fd6e4; }
+  .tip { position: fixed; z-index: 50; white-space: nowrap; padding: 6px 10px; border-radius: 8px; background: #171717; color: #fafafa; font: 12.5px/1.5 var(--font-sans); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); pointer-events: none; }
+  [data-theme="dark"] .tip { background: #fafafa; color: #171717; }
+  .tip code { font: 12px var(--font-mono); overflow-wrap: anywhere; }
+  .legend { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 16px; }
+  .legend h3 { margin: 0; font-size: 14px; font-weight: 600; }
+  .legend ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px 20px; }
+  .legend li { font-size: 13px; color: var(--muted); }
+  .legend li mark { font: 600 12.5px var(--font-mono); margin-right: 6px; }
+  .legend li .v { display: block; margin-top: 2px; font: 12px var(--font-mono); color: var(--text); overflow-wrap: anywhere; }
+  /* JSON never wraps: it scrolls sideways */
+  .out-block .code, .xcol .code, .ev .code, .more .code, .xstep .code { white-space: pre; overflow-wrap: normal; overflow-x: auto; }
+  .more { border-top: 1px dashed var(--line); }
+  .jv .full, .jv:has(> .more[open]) .brief { display: none; }
+  .jv:has(> .more[open]) .full { display: block; }
+  .more .when-open, .more[open] .when-closed { display: none; }
+  .more[open] .when-open { display: inline; }
+  .more > summary, .cmdfold > summary { padding: 6px 12px; font: 500 12.5px var(--font-sans); color: var(--accent); }
+  .cmdfold { margin-top: 10px; }
+  .cmdfold > summary { padding: 2px 0; }
+  .cmdfold > summary code { font: 12.5px var(--font-mono); color: var(--muted); margin-right: 6px; }
+  .cmdfold[open] > summary { margin-bottom: -4px; }
+  .inline-more { display: inline; }
+  .inline-more > summary { display: inline; color: var(--accent); font-size: 0.95em; }
+  .inline-more[open] { display: block; margin-top: 4px; }
+  .inline-more[open] > summary { display: none; }
+  .legend li { display: flex; align-items: center; gap: 8px; }
+  .legend li .v { display: inline; margin: 0; }
+  .note { color: var(--err); font: 13px/1.5 var(--font-mono); margin-top: 8px; }
+
+  .links { margin: 24px 0 48px; display: grid; gap: 10px; }
+  .links h2 { margin: 0; font-size: 16px; font-weight: 600; }
+  .links .row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; font-size: 14px; color: var(--muted); }
+  .links a { font: 13.5px var(--font-mono); color: var(--accent); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="title-row"><h1>Usage tracer</h1><button id="theme-toggle" type="button" class="theme-btn" aria-label="Toggle light and dark mode"><svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button></div>
+  <p>Send one request on the dev cluster and follow it through metering.</p>
+</header>
+
+<section class="panel form" aria-label="Send a request">
+  <label>Person
+    <div class="seg" data-name="person"><button aria-pressed="true" data-v="alice">alice · team-a</button><button data-v="bob">bob · team-b</button></div>
+  </label>
+  <label>Signed in with
+    <div class="seg" data-name="path"><button aria-pressed="true" data-v="key">API key</button><button data-v="login">Keycloak login</button></div>
+  </label>
+  <label>Model
+    <div class="seg" data-name="model"><button aria-pressed="true" data-v="mock/small"><code>mock/small</code></button><button data-v="mock/large"><code>mock/large</code></button></div>
+  </label>
+  <label class="check"><input type="checkbox" id="cancel"> Cancel the stream after 1 second</label>
+  <button class="btn" id="send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span>Send request</span></button>
+  <div class="result" id="result">The first API-key send mints a key, so it's slower.</div>
+</section>
+
+<h2 class="section">1. The request</h2>
+<p class="section">No metering on this path.</p>
+<section class="panel flow-panel" style="padding:0">
+  <div class="flow" id="flow">
+    <div class="node" data-node="client"><span class="logo" data-icon="terminal"></span><div><h3>Your machine</h3><p><code class="ic">curl</code> via port-forward</p></div></div>
+    <div class="link"><span class="arrow">HTTPS →</span><span id="link-auth">OpenAI chat, API key</span><span class="arrow back">← response</span></div>
+    <div class="node" data-node="gateway"><span class="logo" data-icon="envoyproxy"></span><div><h3>Envoy gateway</h3><p id="gw-text">Checks the key or token; <code class="ic">ext_proc</code> counts tokens.</p><div data-runs="gateway"></div></div></div>
+    <div class="link"><span class="arrow">HTTP →</span><span>chat request</span><span class="arrow back">← reply with <code class="ic">usage</code></span></div>
+    <div class="node" data-node="model"><span class="logo" data-icon="kubernetes"></span><div><h3>The model</h3><p><code class="ic">mock-provider</code>, a stand-in</p><div data-runs="model"></div></div></div>
+    <span class="packet" id="packet"></span>
+  </div>
+  <div class="flow-status" id="flow-status">Not sent yet.</div>
+</section>
+
+<h2 class="section">2. Metering, after the response</h2>
+<p class="section">Times: when the tracer first saw it there.</p>
+<section class="panel legend" id="legend" hidden></section>
+<div class="tip" id="tip" hidden></div>
+<section class="journey" id="journey" aria-live="polite"></section>
+
+<section class="panel links" id="links" hidden>
+  <h2>Come back to this request</h2>
+  <div class="row">This trace: <a id="link-trace" href="#"></a></div>
+  <div class="row" id="row-console" hidden>In the usage console: <a id="link-console" href="#" target="_blank" rel="noopener"></a></div>
+</section>
+</div>
+
+<script>
+// Logos: Simple Icons 16.33.0 (CC0), OpenMeter assets/logo.png at 238f0b7, CloudEvents icon from cncf/artwork at b4b5989.
+const ICONS = {"envoyproxy": {"d": "m23.351 7.593-7.068-4.379a1.034 1.034 0 0 0-.84-.117c-.02.01-.052.021-.074.032L8.471 6.105a.695.695 0 0 0-.435.68l.17 7.355c.01.298.191.595.478.765l7.068 4.38c.255.159.574.201.84.116.02-.01.053-.021.074-.032l6.898-2.976a.705.705 0 0 0 .436-.68l-.17-7.355c-.011-.297-.192-.584-.479-.765m-7.185 10.044-6.143-3.805-.149-6.388 5.995-2.583 6.143 3.805.149 6.388zm.011-6.027a.832.832 0 0 0-.414-.67l-5.06-3.135-.159.064.032 1.52 4.007 2.487.095 4.06 1.53.946.086-.032zm-6.058 7.132L5.41 15.83l-.116-4.89 2.146-.924-.042-1.69-3.327 1.435a.611.611 0 0 0-.382.595l.138 5.74c0 .265.16.52.414.67l5.516 3.422c.224.138.5.18.734.106a.15.15 0 0 1 .064-.021l3.252-1.403-1.616-1zm-2.615-6.1-1.52-.947.032 1.446 1.52.946zm2.19 5.059-.032-1.414-1.329-.83c-.021-.01-.042-.031-.053-.042l.032 1.425zm-4.751 1.902-3.476-2.158-.085-3.613 1.7-.734-.031-1.445-2.72 1.17a.527.527 0 0 0-.33.51l.106 4.336c0 .223.138.446.35.574l4.167 2.582a.822.822 0 0 0 .627.096c.021-.01.043-.01.064-.021l2.561-1.106-1.392-.86Z", "hex": "AC6199"}, "apachekafka": {"d": "M9.71 2.136a1.43 1.43 0 0 0-2.047 0h-.007a1.48 1.48 0 0 0-.421 1.042c0 .41.161.777.422 1.039l.007.007c.257.264.616.426 1.019.426.404 0 .766-.162 1.027-.426l.003-.007c.261-.262.421-.629.421-1.039 0-.408-.159-.777-.421-1.042H9.71zM8.683 22.295c.404 0 .766-.167 1.027-.429l.003-.008c.261-.261.421-.631.421-1.036 0-.41-.159-.778-.421-1.044H9.71a1.42 1.42 0 0 0-1.027-.432 1.4 1.4 0 0 0-1.02.432h-.007c-.26.266-.422.634-.422 1.044 0 .406.161.775.422 1.036l.007.008c.258.262.617.429 1.02.429zm7.89-4.462c.359-.096.683-.33.882-.684l.027-.052a1.47 1.47 0 0 0 .114-1.067 1.454 1.454 0 0 0-.675-.896l-.021-.014a1.425 1.425 0 0 0-1.078-.132c-.36.091-.684.335-.881.686-.2.349-.241.75-.146 1.119.099.363.33.691.675.896h.002c.346.203.737.239 1.101.144zm-6.405-7.342a2.083 2.083 0 0 0-1.485-.627c-.58 0-1.103.242-1.482.627-.378.385-.612.916-.612 1.507s.233 1.124.612 1.514a2.08 2.08 0 0 0 2.967 0c.379-.39.612-.923.612-1.514s-.233-1.122-.612-1.507zm-.835-2.51c.843.141 1.6.552 2.178 1.144h.004c.092.093.182.196.265.299l1.446-.851a3.176 3.176 0 0 1-.047-1.808 3.149 3.149 0 0 1 1.456-1.926l.025-.016a3.062 3.062 0 0 1 2.345-.306c.77.21 1.465.721 1.898 1.482v.002c.431.757.518 1.626.313 2.408a3.145 3.145 0 0 1-1.456 1.928l-.198.118h-.02a3.095 3.095 0 0 1-2.154.201 3.127 3.127 0 0 1-1.514-.944l-1.444.848a4.162 4.162 0 0 1 0 2.879l1.444.846c.413-.47.939-.789 1.514-.944a3.041 3.041 0 0 1 2.371.319l.048.023v.002a3.17 3.17 0 0 1 1.408 1.906 3.215 3.215 0 0 1-.313 2.405l-.026.053-.003-.005a3.147 3.147 0 0 1-1.867 1.436 3.096 3.096 0 0 1-2.371-.318v-.006a3.156 3.156 0 0 1-1.456-1.927 3.175 3.175 0 0 1 .047-1.805l-1.446-.848a3.905 3.905 0 0 1-.265.294l-.004.005a3.938 3.938 0 0 1-2.178 1.138v1.699a3.09 3.09 0 0 1 1.56.862l.002.004c.565.572.914 1.368.914 2.243 0 .873-.35 1.664-.914 2.239l-.002.009a3.1 3.1 0 0 1-2.21.931 3.1 3.1 0 0 1-2.206-.93h-.002v-.009a3.186 3.186 0 0 1-.916-2.239c0-.875.35-1.672.916-2.243v-.004h.002a3.1 3.1 0 0 1 1.558-.862v-1.699a3.926 3.926 0 0 1-2.176-1.138l-.006-.005a4.098 4.098 0 0 1-1.173-2.874c0-1.122.452-2.136 1.173-2.872h.006a3.947 3.947 0 0 1 2.176-1.144V6.289a3.137 3.137 0 0 1-1.558-.864h-.002v-.004a3.192 3.192 0 0 1-.916-2.243c0-.871.35-1.669.916-2.243l.002-.002A3.084 3.084 0 0 1 8.683 0c.861 0 1.641.355 2.21.932v.002h.002c.565.574.914 1.372.914 2.243 0 .876-.35 1.667-.914 2.243l-.002.005a3.142 3.142 0 0 1-1.56.864v1.692zm8.121-1.129l-.012-.019a1.452 1.452 0 0 0-.87-.668 1.43 1.43 0 0 0-1.103.146h.002c-.347.2-.58.529-.677.896-.095.365-.054.768.146 1.119l.007.009c.2.347.519.579.874.673.357.103.755.059 1.098-.144l.019-.009a1.47 1.47 0 0 0 .657-.885 1.493 1.493 0 0 0-.141-1.118", "hex": "231F20"}, "clickhouse": {"d": "M21.333 10H24v4h-2.667ZM16 1.335h2.667v21.33H16Zm-5.333 0h2.666v21.33h-2.666ZM0 22.665V1.335h2.667v21.33zm5.333-21.33H8v21.33H5.333Z", "hex": "FFCC01"}, "opentelemetry": {"d": "M12.6974 13.1173c-1.0224 1.0224-1.0224 2.68 0 3.7024 1.0224 1.0224 2.68 1.0224 3.7024 0 1.0224-1.0223 1.0224-2.68 0-3.7024-1.0223-1.0223-2.68-1.0223-3.7024 0zm2.7677 2.7701c-.5063.5063-1.3267.5063-1.833 0s-.5063-1.3266 0-1.833c.5063-.5062 1.3267-.5062 1.833 0 .5063.504.5063 1.3267 0 1.833zM16.356.2355l-1.6041 1.6042c-.314.314-.314.83 0 1.144L21.015 9.247c.314.314.83.314 1.144 0l1.6042-1.6041c.314-.314.314-.83 0-1.144L17.4976.2354c-.314-.314-.8276-.314-1.1416 0zM5.1173 20.734c.2848-.2848.2848-.7497 0-1.0345l-.8155-.8155c-.2848-.2848-.7497-.2848-1.0345 0l-1.6845 1.6845-.0024.0024-.4625-.4625c-.2556-.2556-.6718-.2556-.925 0-.2556.2556-.2556.6718 0 .925l2.775 2.775c.2556.2556.6718.2556.925 0 .2532-.2556.2556-.6718 0-.925l-.4625-.4625.0024-.0024zm8.4856-15.893-3.5637 3.5637c-.3164.3164-.3164.8374 0 1.1538l2.2006 2.2005c1.5554-1.1197 3.7365-.981 5.1361.4187l1.7819-1.7818c.3164-.3165.3164-.8374 0-1.1538l-4.401-4.401c-.3165-.319-.8374-.319-1.1539 0zm-2.2881 7.8455-1.2999-1.2999c-.3043-.3043-.8033-.3043-1.1076 0l-4.5836 4.586c-.3042.3043-.3042.8033 0 1.1076l2.5973 2.5973c.3043.3043.8033.3043 1.1076 0l2.9478-2.9527c-.6231-1.2877-.5112-2.8431.3384-4.0383z", "hex": "000000"}, "kubernetes": {"d": "M10.204 14.35l.007.01-.999 2.413a5.171 5.171 0 0 1-2.075-2.597l2.578-.437.004.005a.44.44 0 0 1 .484.606zm-.833-2.129a.44.44 0 0 0 .173-.756l.002-.011L7.585 9.7a5.143 5.143 0 0 0-.73 3.255l2.514-.725.002-.009zm1.145-1.98a.44.44 0 0 0 .699-.337l.01-.005.15-2.62a5.144 5.144 0 0 0-3.01 1.442l2.147 1.523.004-.002zm.76 2.75l.723.349.722-.347.18-.78-.5-.623h-.804l-.5.623.179.779zm1.5-3.095a.44.44 0 0 0 .7.336l.008.003 2.134-1.513a5.188 5.188 0 0 0-2.992-1.442l.148 2.615.002.001zm10.876 5.97l-5.773 7.181a1.6 1.6 0 0 1-1.248.594l-9.261.003a1.6 1.6 0 0 1-1.247-.596l-5.776-7.18a1.583 1.583 0 0 1-.307-1.34L2.1 5.573c.108-.47.425-.864.863-1.073L11.305.513a1.606 1.606 0 0 1 1.385 0l8.345 3.985c.438.209.755.604.863 1.073l2.062 8.955c.108.47-.005.963-.308 1.34zm-3.289-2.057c-.042-.01-.103-.026-.145-.034-.174-.033-.315-.025-.479-.038-.35-.037-.638-.067-.895-.148-.105-.04-.18-.165-.216-.216l-.201-.059a6.45 6.45 0 0 0-.105-2.332 6.465 6.465 0 0 0-.936-2.163c.052-.047.15-.133.177-.159.008-.09.001-.183.094-.282.197-.185.444-.338.743-.522.142-.084.273-.137.415-.242.032-.024.076-.062.11-.089.24-.191.295-.52.123-.736-.172-.216-.506-.236-.745-.045-.034.027-.08.062-.111.088-.134.116-.217.23-.33.35-.246.25-.45.458-.673.609-.097.056-.239.037-.303.033l-.19.135a6.545 6.545 0 0 0-4.146-2.003l-.012-.223c-.065-.062-.143-.115-.163-.25-.022-.268.015-.557.057-.905.023-.163.061-.298.068-.475.001-.04-.001-.099-.001-.142 0-.306-.224-.555-.5-.555-.275 0-.499.249-.499.555l.001.014c0 .041-.002.092 0 .128.006.177.044.312.067.475.042.348.078.637.056.906a.545.545 0 0 1-.162.258l-.012.211a6.424 6.424 0 0 0-4.166 2.003 8.373 8.373 0 0 1-.18-.128c-.09.012-.18.04-.297-.029-.223-.15-.427-.358-.673-.608-.113-.12-.195-.234-.329-.349-.03-.026-.077-.062-.111-.088a.594.594 0 0 0-.348-.132.481.481 0 0 0-.398.176c-.172.216-.117.546.123.737l.007.005.104.083c.142.105.272.159.414.242.299.185.546.338.743.522.076.082.09.226.1.288l.16.143a6.462 6.462 0 0 0-1.02 4.506l-.208.06c-.055.072-.133.184-.215.217-.257.081-.546.11-.895.147-.164.014-.305.006-.48.039-.037.007-.09.02-.133.03l-.004.002-.007.002c-.295.071-.484.342-.423.608.061.267.349.429.645.365l.007-.001.01-.003.129-.029c.17-.046.294-.113.448-.172.33-.118.604-.217.87-.256.112-.009.23.069.288.101l.217-.037a6.5 6.5 0 0 0 2.88 3.596l-.09.218c.033.084.069.199.044.282-.097.252-.263.517-.452.813-.091.136-.185.242-.268.399-.02.037-.045.095-.064.134-.128.275-.034.591.213.71.248.12.556-.007.69-.282v-.002c.02-.039.046-.09.062-.127.07-.162.094-.301.144-.458.132-.332.205-.68.387-.897.05-.06.13-.082.215-.105l.113-.205a6.453 6.453 0 0 0 4.609.012l.106.192c.086.028.18.042.256.155.136.232.229.507.342.84.05.156.074.295.145.457.016.037.043.09.062.129.133.276.442.402.69.282.247-.118.341-.435.213-.71-.02-.039-.045-.096-.065-.134-.083-.156-.177-.261-.268-.398-.19-.296-.346-.541-.443-.793-.04-.13.007-.21.038-.294-.018-.022-.059-.144-.083-.202a6.499 6.499 0 0 0 2.88-3.622c.064.01.176.03.213.038.075-.05.144-.114.28-.104.266.039.54.138.87.256.154.06.277.128.448.173.036.01.088.019.13.028l.009.003.007.001c.297.064.584-.098.645-.365.06-.266-.128-.537-.423-.608zM16.4 9.701l-1.95 1.746v.005a.44.44 0 0 0 .173.757l.003.01 2.526.728a5.199 5.199 0 0 0-.108-1.674A5.208 5.208 0 0 0 16.4 9.7zm-4.013 5.325a.437.437 0 0 0-.404-.232.44.44 0 0 0-.372.233h-.002l-1.268 2.292a5.164 5.164 0 0 0 3.326.003l-1.27-2.296h-.01zm1.888-1.293a.44.44 0 0 0-.27.036.44.44 0 0 0-.214.572l-.003.004 1.01 2.438a5.15 5.15 0 0 0 2.081-2.615l-2.6-.44-.004.005z", "hex": "326CE5"}, "keycloak": {"d": "m18.742 1.182-12.493.002C4.155 4.784 2.079 8.393 0 12.002c2.071 3.612 4.162 7.214 6.252 10.816l12.49-.004 3.089-5.404h2.158v-.002H24L23.996 6.59h-2.168zM8.327 4.792h2.081l1.04 1.8-3.12 5.413 3.117 5.403-1.035 1.81H8.327a2047.566 2047.566 0 0 0-4.168-7.204C5.547 9.606 6.937 7.2 8.327 4.792Zm6.241 0 2.086.003c1.393 2.405 2.78 4.813 4.166 7.222l-4.167 7.2h-2.08c-.382-.562-1.038-1.808-1.038-1.808l3.123-5.405-3.124-5.413z", "hex": "4D4D4D"}, "redis": {"d": "M22.71 13.145c-1.66 2.092-3.452 4.483-7.038 4.483-3.203 0-4.397-2.825-4.48-5.12.701 1.484 2.073 2.685 4.214 2.63 4.117-.133 6.94-3.852 6.94-7.239 0-4.05-3.022-6.972-8.268-6.972-3.752 0-8.4 1.428-11.455 3.685C2.59 6.937 3.885 9.958 4.35 9.626c2.648-1.904 4.748-3.13 6.784-3.744C8.12 9.244.886 17.05 0 18.425c.1 1.261 1.66 4.648 2.424 4.648.232 0 .431-.133.664-.365a100.49 100.49 0 0 0 5.54-6.765c.222 3.104 1.748 6.898 6.014 6.898 3.819 0 7.604-2.756 9.33-8.965.2-.764-.73-1.361-1.261-.73zm-4.349-5.013c0 1.959-1.926 2.922-3.685 2.922-.941 0-1.664-.247-2.235-.568 1.051-1.592 2.092-3.225 3.21-4.973 1.972.334 2.71 1.43 2.71 2.619z", "hex": "FF4438"}, "openmeter": {"img": "data:image/png;base64,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"}, "cloudevents": {"img": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHJvbGU9ImltZyIgdmlld0JveD0iLTIuNzggNTQuMjIgMzY1LjU2IDI0NS41NiI+PHN0eWxlPnN2ZyB7ZW5hYmxlLWJhY2tncm91bmQ6bmV3IDAgMCAzNjAgMzYwfTwvc3R5bGU+PHN0eWxlPi5zdDB7ZmlsbDojNGRjZWYzfTwvc3R5bGU+PGcgaWQ9ImNsb3VkZXZlbnRzLXRyYW5zcGFyZW50LWljb24iPjxnIGlkPSJpY29uIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSg0OCA2OSkiPjxwYXRoIGlkPSJGaWxsLTEiIGQ9Ik0yMTkuMjQ2IDE5OC4zNDFjMjYuNTcyLjAwMSA1NS40NDMtMTcuNDk3IDYxLjkzMy00My40NjYgNy40NTEtMjkuODItMTAuMDEzLTYwLjU1MS0zOS4zMTEtNjkuMTM1LTUuNjA2LTEuNjQyLTExLjM2Mi0yLjE3Ni0xNy4xODQtMi4xNjctOC41NTcuMDE0LTE3LjExNC4wMDQtMjUuOTAyLjAwNC41OTgtMjEuODYtNy4xMTYtMzkuOTAyLTI0LjQwNS01My4zMzYtMTEuMDI0LTguNTY3LTIzLjcxNi0xMi41NzUtMzcuNjA3LTEyLjEyOC0xNS43MzYuNTA2LTI5LjMyNSA2LjQ1Mi00MC40ODcgMTcuNjVDODUuMTUgNDYuOTMgNzkuMzM5IDYwLjU5MyA3OC4yODYgNzYuMDA2bC0yNC4wOC04LjMxNUM1Ni4zNSA0MS4wODkgNzcuODQ2IDQuMzQ1IDExOS41MTMtNS4zYzQ3LjUyOS0xMS4wMDMgOTEuNTc2IDIwLjAyMiAxMDEuOTEzIDYzLjY2MiAzLjk1MSAwIDguMDYxLS4zODkgMTIuMDc3LjA2MkMyNjUuNzY3IDYyLjA0MyAyODguNjUgNzkgMzAxLjQwNSAxMDguODFjMTUuNzYgMzYuODM1IDIuMzcxIDgwLjIxOC0zMC41NCAxMDEuNzk1LTEzLjY4IDguOTctMzUuMjc4IDEzLjM1OC01MS41NTYgMTMuMzk1IiBjbGFzcz0ic3QwIi8+PHBhdGggaWQ9IkZpbGwtMyIgZD0iTTIwMC4xNSAyMjMuODVzLTM5LjA0LjI4OS03MS4xNy4wNjVjLTMzLjc5LS4yMzUtNjEuMDUzLTIxLjkyMS02OS40NzMtNTEuNDAyLTcuMzEyLTI1LjYtMS40NDQtNDguNTMzIDE2LjEyMy02OC40NzQgMTEuMTc4LTEyLjY4NyAyNS4wNDQtMjAuODIgNDEuODE4LTIzLjcxMSAyOC4yODItNC44NzYgNTYuNzQ4IDcuNzU0IDcxLjk4MiAzMi4wMSA5LjgzNSAxNS42NTkgMTMuNTIgMzIuNjg1IDEwLjg4MiA1MS4wMy0uMTY1IDEuMTQ4LS40MzMgMS43NTctMS43OTQgMS43NTQtMjIuODE5LS4wMzgtNDUuNjM3LS4wMjgtNjguNDU2LS4wMzQtLjMyMSAwLS42NDItLjA3LTEuMTM0LS4xMjctLjA0LS42ODYtLjEwNy0xLjMyNC0uMTA4LTEuOTY0LS4wMDctNy4wMzItLjAwOC0xNC4wNjUtLjAwMi0yMS4wOTguMDAyLTIuODU0LjMxNC0zLjE1MiAzLjIyMi0zLjE1Mmg0MS4yMTljLS4zNjMtMS4xMy0uNTg0LTIuMDctLjk1Ni0yLjk0NC02Ljc1NS0xNS44ODUtMTguNjQtMjUuNzYtMzUuNjQ3LTI4LjU5LTE3LjA1LTIuODQtMzEuOTM5IDIuMjA3LTQzLjE0IDE1LjUyMS0xNy4yMjUgMjAuNDc2LTExLjgzMiA1My4wODYgMTAuNzc2IDY3LjgyMSA3Ljc4NyA1LjA3NiAxNi4zIDcuNTk2IDI1LjYxNyA3LjU4NyAzMS44LS4wMzIgNzAuMTc4LS4wMDcgNzAuMTc4LS4wMDdsLjA2NCAyNS43MTQiIGNsYXNzPSJzdDAiLz48cGF0aCBpZD0iRmlsbC00IiBkPSJNNDUuMDY2IDE5Mi41MTRsMTUuNzY1IDE5Ljk0MmMtMjEuNzgyIDEzLjcwOC01OC41IDE0LjI0LTg0LjEwMi0xMS43MDItMjUuODQ0LTI2LjE4OC0yNy40NTMtNjguMjI3LTMuNTQtOTYuNTEyIDI0LjI1LTI4LjY4NCA2Mi43ODctMzAuNzkzIDg3LjY5NS0xNS42N2wtMTUuODE3IDE5Ljk2NGMtMTIuMzE1LTUuMzQtMjUuMjEyLTUuNTIyLTM3Ljk2OC41MjQtOC41NzUgNC4wNjUtMTUuMTk4IDEwLjM2MS0xOS44OTMgMTguNjU3LTkuNzIgMTcuMTc4LTcuNTQ1IDM4LjQ3IDUuNDMzIDUzLjMwMyAxMi4zMzcgMTQuMSAzMi45ODQgMjAuMTUgNTIuNDI3IDExLjQ5NCIgY2xhc3M9InN0MCIvPjwvZz48L2c+PC9zdmc+"}};
+// Glyphs for the parts without a logo of their own.
+const GLYPHS = {
+  terminal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2.5"/><path d="m7 9 3 3-3 3M12.5 15H17"/></svg>',
+  console: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="17" rx="2.5"/><path d="M2.5 8.5h19M7 17v-4M12 17v-6M17 17v-2"/></svg>',
+};
+// Logos that are one dark colour are drawn in the text colour, so they show in dark mode too.
+const MONO = new Set(["apachekafka", "opentelemetry", "keycloak"]);
+function icon(name, size = "") {
+  const g = GLYPHS[name], ic = ICONS[name];
+  let inner = "", cls = "logo " + size;
+  if (g) inner = g;
+  else if (ic.img) inner = `<img alt="" src="${ic.img}">`;
+  else inner = `<svg viewBox="0 0 24 24" fill="${MONO.has(name) ? "currentColor" : "#" + ic.hex}"><path d="${ic.d}"/></svg>`;
+  if (name === "clickhouse") cls += " dark";
+  return `<span class="${cls.trim()}" title="${esc(TITLES[name] || name)}">${inner}</span>`;
+}
+const TITLES = { envoyproxy: "Envoy", apachekafka: "Apache Kafka", clickhouse: "ClickHouse", opentelemetry: "OpenTelemetry", kubernetes: "Kubernetes", keycloak: "Keycloak", redis: "Redis", openmeter: "OpenMeter", cloudevents: "CloudEvents", terminal: "Your machine", console: "Usage console" };
+const c = (s) => `<code class="ic">${s}</code>`;
+
+// The metering path: [hop into the step, then the step]. A hop says what moves between two steps and how.
+const STEPS = [
+  // what and hop text: a string, or [shown, behind "more"].
+  { key: "gateway", title: "Gateway access log", logos: ["envoyproxy"],
+    what: [`From the gateway pod's ${c("stdout")}.`, `Envoy flushes this copy every 10 s, so it often shows up after the collector's.`],
+    hop: { logos: ["envoyproxy"], proto: "Envoy, after the response", first: true,
+      text: [`Written to ${c("stdout")} and sent to the collector. Can't slow the request.`, `Not logged: 401 (bad key), 400 (body not JSON). Logged with no tokens: 404, 403, cut streams.`] } },
+  { key: "collector", title: "Usage collector", logos: ["openmeter"],
+    what: [`Turns the record into usage events. Stores nothing.`, `Pipeline: ${c("files/usage-collector.yaml")}. Its events are shown as Kafka stored them.`],
+    hop: { logos: ["opentelemetry"], proto: "OTLP/gRPC → :4317",
+      text: [`Batched for up to 1 s. No retry.`, `If the collector is down, the record is lost.`] } },
+  { key: "kafka", title: `Kafka ${c("om_default_events")}`, logos: ["apachekafka"],
+    what: [`First durable copy.`, `The time is about 8 s late: the tracer's consumer waits for 8 quiet seconds.`],
+    hop: { logos: ["cloudevents"], proto: "HTTP POST /api/v1/events (CloudEvents)",
+      text: [`Batched: 100 events or 1 s.`, `An API key is resolved to its owner first. The API answers once Kafka has the events.`] } },
+  { key: "clickhouse", title: `ClickHouse ${c("openmeter.om_events")}`, logos: ["clickhouse"],
+    what: `Totals and costs are computed from here.`,
+    hop: { logos: ["apachekafka", "redis", "clickhouse"], proto: "sink worker: Kafka → ClickHouse :9000",
+      text: `Repeated event ids are dropped (Redis).` } },
+  { key: "openmeter", title: "OpenMeter events API", logos: ["openmeter"],
+    what: `One ${c("llm.request")}, plus one ${c("llm.tokens")} per token type.`,
+    hop: { logos: ["openmeter", "clickhouse"], proto: "HTTP GET /api/v1/events",
+      text: `Read back from ClickHouse. Nothing moves.` } },
+  { key: "console", title: "Usage console", logos: ["console"],
+    what: `The priced receipt.`,
+    hop: { logos: ["openmeter"], proto: "HTTP GET /api/v2/events",
+      text: `Joins the request and token events.` } },
+];
+
+// Theme toggle: an explicit choice wins and is remembered; until then, follow the OS.
+document.getElementById("theme-toggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch {}
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+  try { if (localStorage.getItem("theme")) return; } catch {}
+  document.documentElement.dataset.theme = e.matches ? "dark" : "light";
+});
+const choice = {};
+document.querySelectorAll(".form .seg").forEach((seg) => {
+  choice[seg.dataset.name] = seg.querySelector("[aria-pressed=true]").dataset.v;
+  seg.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    seg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    choice[seg.dataset.name] = b.dataset.v;
+    if (seg.dataset.name === "path") setAuthText(b.dataset.v);
+  });
+});
+function setAuthText(path) {
+  document.getElementById("link-auth").textContent = path === "login"
+    ? "OpenAI chat, Keycloak token"
+    : "OpenAI chat, API key";
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
+document.querySelectorAll("[data-icon]").forEach((el) => { el.outerHTML = icon(el.dataset.icon); });
+
+// ---- the identifiers followed through every step ----
+let IDS = [], ID_RE = null;
+function setIds(t) {
+  const rec = t?.stages?.gateway?.found ? t.stages.gateway.data : {};
+  const owner = t?.stages?.collector?.data?.owner || {};
+  let groups = owner.groups || [];
+  if (!groups.length && rec.auth_groups) { try { groups = JSON.parse(atob(rec.auth_groups)); } catch {} }
+  const ids = [
+    ["rid", t?.requestId], ["subject", rec.auth_subject || owner.subject], ["key", rec.client_id || owner.clientId],
+    ["user", t?.person], ["team", groups.filter((g) => g.startsWith("team-")).sort()[0]],
+  ].filter(([, v]) => v);
+  const sig = JSON.stringify(ids);
+  if (sig === JSON.stringify(IDS)) return;
+  IDS = ids;
+  const sorted = [...ids].sort((a, b) => b[1].length - a[1].length);
+  ID_RE = sorted.length ? new RegExp(sorted.map(([, v]) => esc(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g") : null;
+  renderLegend();
+}
+// Box every followed value inside already-escaped text.
+function markIds(html) {
+  if (!ID_RE) return html;
+  return html.replace(ID_RE, (v) => {
+    const hit = IDS.find(([, x]) => esc(x) === v);
+    return hit ? `<mark class="id id-${hit[0]}">${v}</mark>` : v;
+  });
+}
+// Where each followed value first appears, in the gateway's record of the request.
+function origin(kind) {
+  const viaKey = lastTrace?.path === "key";
+  return {
+    rid: "request_id",
+    subject: viaKey ? "key owner's subject" : "auth_subject",
+    key: "client_id",
+    user: viaKey ? "key owner's username" : "auth_user",
+    team: viaKey ? "key owner's groups" : "auth_groups",
+  }[kind];
+}
+const ID_ABOUT = {
+  rid: ["request id", "Envoy's id for the request. It becomes the event id in OpenMeter (token events add :input, :output, …), which is how a repeat is dropped."],
+  subject: ["subject", "Who is billed: the person's Keycloak subject. OpenMeter's customer is matched on it."],
+  key: ["API key", "The key's client id, or login for a Keycloak request. Usage can be totalled per key."],
+  user: ["person", "The Keycloak username, for totals per person."],
+  team: ["team", "The person's first team- group, for totals per team."],
+};
+function renderLegend() {
+  const el = document.getElementById("legend");
+  if (!IDS.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = `<h3>Followed through every step</h3><ul>${IDS.map(([k, v]) => `<li title="${esc(ID_ABOUT[k][1])}"><mark class="id id-${k}">${esc(ID_ABOUT[k][0])}</mark><span class="v">${esc(v)}</span></li>`).join("")}</ul>`;
+}
+
+// ---- highlighting: wrap each regex match in a span chosen by classify(match) ----
+function highlight(text, re, classify) {
+  let out = "", last = 0;
+  for (const m of text.matchAll(re)) {
+    out += markIds(esc(text.slice(last, m.index)));
+    const cls = classify(m);
+    out += cls ? `<span class="${cls}">${markIds(esc(m[0]))}</span>` : markIds(esc(m[0]));
+    last = m.index + m[0].length;
+  }
+  return out + markIds(esc(text.slice(last)));
+}
+const JSON_TOKENS = /"(?:\\.|[^"\\])*"|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}\[\],:]/g;
+function hlJSON(text) {
+  return highlight(text, JSON_TOKENS, (m) => {
+    const s = m[0];
+    if (s[0] === '"' && text.slice(m.index + s.length).trimStart()[0] === ":") return "j-key";
+    if (s[0] === '"') return "j-str";
+    if (/^[a-z]/.test(s)) return "j-lit";
+    if (/^[-\d]/.test(s)) return "j-num";
+    return "j-punct";
+  });
+}
+// Shell: the program at the start or after a pipe, flags, quoted strings, pipes and &.
+const SHELL_TOKENS = /'[^']*'|"(?:\\.|[^"\\])*"|\|\||&&|[|&]|(?<=\s)--?[\w.-]+(?:=\S*)?|\S+/g;
+function hlShell(text) {
+  let expectCmd = true;
+  return highlight(text, SHELL_TOKENS, (m) => {
+    const s = m[0];
+    if (/^(\|\||&&|[|&])$/.test(s)) { expectCmd = true; return "t-op"; }
+    if (s[0] === "'" || s[0] === '"') { expectCmd = false; return "t-str"; }
+    if (/^--?[\w.-]/.test(s)) return "t-flag";
+    if (expectCmd) { expectCmd = false; return "t-cmd"; }
+    return "";
+  });
+}
+function cell(v) {
+  if (v !== null && typeof v === "object") {
+    const keys = Object.keys(v);
+    return `<details><summary>${CHEV}{ ${keys.length} fields }</summary><pre class="code">${hlJSON(JSON.stringify(v, null, 2))}</pre></details>`;
+  }
+  if (typeof v === "number" || typeof v === "boolean" || v === null) return hlJSON(String(v));
+  return markIds(esc(v));
+}
+function table(rows) {
+  if (!rows.length) return "";
+  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  return `<div class="scroll"><table><tr>${cols.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${cols.map((k) => `<td>${cell(r[k])}</td>`).join("")}</tr>`).join("")}</table></div>`;
+}
+const CLIPBOARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>';
+const COPIED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const CHEV = '<span class="chev">▸</span>';
+// An output block that folds. key keeps it open or closed across re-renders.
+const fold = (key, label, inner, open, hint = "") =>
+  `<details class="block out-block" data-k="${key}" ${open ? "open" : ""}><summary>${CHEV}${label}${hint ? `<span class="hint">${esc(hint)}</span>` : ""}</summary>${inner}</details>`;
+function keepOpen(root, renderFn) {
+  const state = {};
+  root.querySelectorAll("details[data-k]").forEach((d) => (state[d.dataset.k] = d.open));
+  renderFn();
+  root.querySelectorAll("details[data-k]").forEach((d) => { if (d.dataset.k in state) d.open = state[d.dataset.k]; });
+}
+
+// Only what the journey needs is shown; everything else sits behind a fold.
+const IMPORTANT = {
+  record: ["request_id", "auth_subject", "auth_user", "client_id", "model", "response_code", "input_tokens", "cached_input_tokens", "output_tokens"],
+  owner: ["subject", "username", "groups"],
+  event: ["id", "type", "subject", "data"],
+  eventData: ["user", "team", "api_key", "model", "token_type", "tokens", "response_code", "usage_reported"],
+  receipt: ["actor", "team", "keyId", "resolvedModel", "inputTokens", "cachedInputTokens", "outputTokens", "costUsd", "verdict"],
+};
+const COLUMNS = { kafka: ["offset", "id", "type"], clickhouse: ["type", "id", "subject", "data"], openmeter: ["type", "id", "subject", "user", "team", "api_key", "token_type", "tokens"] };
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o && k in o).map((k) => [k, o[k]]));
+// JSON with only the important fields; the toggle swaps the same block to all of them.
+function jsonView(obj, keys, k, dataKeys) {
+  const short = pick(obj, keys);
+  if (dataKeys && short.data && typeof short.data === "object") short.data = pick(short.data, dataKeys);
+  const full = JSON.stringify(obj, null, 2), brief = JSON.stringify(short, null, 2);
+  if (full === brief) return `<pre class="code">${hlJSON(full)}</pre>`;
+  return `<div class="jv"><pre class="code brief">${hlJSON(brief)}</pre><pre class="code full">${hlJSON(full)}</pre>
+    <details class="more" data-k="${k}"><summary>${CHEV}<span class="when-closed">Show all fields</span><span class="when-open">Show fewer fields</span></summary></details></div>`;
+}
+// A table with the important columns; the toggle swaps the same table to all of them.
+function tableView(rows, cols, k) {
+  if (!cols) return table(rows);
+  const all = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const brief = table(rows.map((r) => pick(r, cols)));
+  if (all.length <= cols.length) return brief;
+  return `<div class="jv"><div class="brief">${brief}</div><div class="full">${table(rows)}</div>
+    <details class="more" data-k="${k}"><summary>${CHEV}<span class="when-closed">Show all ${all.length} columns</span><span class="when-open">Show fewer columns</span></summary></details></div>`;
+}
+// A command, folded to its program name.
+function cmdView(cmd, k) {
+  const prog = cmd.split(" ")[0];
+  return `<details class="cmdfold" data-k="${k}"><summary>${CHEV}<code>$ ${esc(prog)} …</code>the command</summary>${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(cmd)}</pre>`, cmd)}</details>`;
+}
+// The first sentence, with the rest behind "more".
+function brief(text, k) {
+  if (!Array.isArray(text)) return text;
+  return `${text[0]} <details class="inline-more" data-k="${k}"><summary>more</summary>${text[1]}</details>`;
+}
+
+// How each part runs, read live from the cluster by the tracer.
+let COMP = null;
+const RUNS = { gateway: ["gateway"], model: ["model"], collector: ["collector", "key-manager"], kafka: ["kafka"],
+  clickhouse: ["sink-worker", "redis", "clickhouse"], openmeter: ["openmeter-api", "postgres"], console: ["console"] };
+const NAMES = { gateway: "Envoy gateway", model: "Model", collector: "Usage collector", "key-manager": "Key manager", kafka: "Kafka",
+  "sink-worker": "Sink worker", redis: "Redis", clickhouse: "ClickHouse", "openmeter-api": "OpenMeter API", postgres: "Postgres", console: "Usage console" };
+const shortImage = (img) => img.split("@")[0].split("/").pop();
+function runsView(where, small = false) {
+  if (!COMP) return "";
+  return (RUNS[where] || []).map((name) => {
+    const comp = COMP[name]; if (!comp) return "";
+    const pods = comp.pods, w = pods[0];
+    const workloads = [...new Set(pods.map((x) => `${x.kind} ${x.workload}`))];
+    const kinds = workloads.length > 1 ? `${workloads.length} ${w.kind}s` : w ? w.kind : "";
+    const sum = small ? "" : w ? `${kinds} · ${pods.length} pod${pods.length === 1 ? "" : "s"}` : "no pods running";
+    const rows = pods.flatMap((pod) => pod.containers.map((x) => ({ pod: pod.pod, container: x.name, image: x.image.split("@")[0] + (x.image.includes("@sha256:") ? " (pinned by digest)" : ""), runs: x.run || "(image default)", ports: x.ports.join(", ") || "-", ready: x.ready ? "yes" : "no", restarts: x.restarts, volumes: pod.volumes.join(", ") || "-" })));
+    return `<details class="runs" data-k="runs-${where}-${name}"><summary>${CHEV}<b>How ${esc(NAMES[name])} runs</b>${sum ? `<span class="sum">${esc(sum)}</span>` : ""}</summary>
+      <div class="runs-body"><p>${esc(comp.about)}</p>${table(rows)}${block("cmd-block", "", `<pre class="code"><span class="t-prompt">$ </span>${hlShell(comp.command)}</pre>`, comp.command)}</div></details>`;
+  }).join("");
+}
+async function loadComponents() {
+  try {
+    const r = await fetch("/api/components");
+    if (!r.ok) return;
+    COMP = await r.json();
+    document.querySelectorAll("[data-runs]").forEach((el) => keepOpen(el, () => { el.innerHTML = runsView(el.dataset.runs, true); }));
+    lastJSON = ""; render(lastTrace);
+  } catch {}
+}
+const block = (kind, label, inner, copy) =>
+  `<div class="block ${kind}">${label ? `<div class="block-head"><span>${label}</span></div>` : ""}${inner}${copy ? `<button class="copy" data-copy="${esc(copy)}" title="Copy the command" aria-label="Copy the command">${CLIPBOARD}</button>` : ""}</div>`;
+
+// ---- the metering timeline ----
+let lastJSON = "", seen = new Set();
+let lastTrace = null;
+function render(trace) {
+  lastTrace = trace;
+  setIds(trace);
+  const json = JSON.stringify(trace);
+  if (json === lastJSON) return;
+  lastJSON = json;
+  const st = (k) => trace?.stages?.[k];
+  const found = (k) => !!st(k)?.found;
+  const html = [];
+  STEPS.forEach((step, i) => {
+    const prevFound = i === 0 ? !!trace?.status : found(STEPS[i - 1].key);
+    const h = step.hop, done = found(step.key), now = trace && prevFound && !done;
+    html.push(`<div class="item hop ${h.first ? "first" : ""} ${done ? "done lit" : now ? "now" : ""}"><div class="hop-body"><div class="hop-logos">${h.logos.map((n) => icon(n, "sm")).join("")}</div><div><div class="hop-proto">${esc(h.proto)}${done ? `<span class="tag">done</span>` : now ? `<span class="tag">happening now</span>` : ""}</div><div>${brief(h.text, `hop-${step.key}`)}</div></div></div></div>`);
+    const s = st(step.key);
+    const cls = !trace ? "idle" : s?.found ? "found" : s?.error ? "error" : "waiting";
+    const pill = !trace ? "not sent" : s?.found ? `seen ${(s.afterMs / 1000).toFixed(1)} s after send` : s?.error ? "error, retrying" : s?.waiting ? `waiting for ${s.waiting}` : "looking…";
+    let body = "";
+    if (s?.command && step.key !== "collector") body += cmdView(s.command, `cmd-${step.key}`);
+    if (s?.found && step.key === "collector") {
+      body += collectorView(trace);
+    } else if (s?.found) {
+      const d = step.key === "kafka" ? s.data.map(({ event, ...row }) => row) : s.data;
+      const inner = Array.isArray(d) ? tableView(d, COLUMNS[step.key], `cols-${step.key}`)
+        : jsonView(d, step.key === "gateway" ? IMPORTANT.record : step.key === "console" ? IMPORTANT.receipt : Object.keys(d), `all-${step.key}`);
+      body += fold(`out-${step.key}`, "Output", inner, true, Array.isArray(d) ? `${d.length} row${d.length === 1 ? "" : "s"}` : "");
+    }
+    if (s?.error) body += `<div class="note">${esc(s.error)}</div>`;
+    html.push(`<article class="item stage ${cls} ${done && (i === STEPS.length - 1 || found(STEPS[i + 1].key)) ? "lit" : ""}" data-key="${step.key}"><span class="dot"></span><div class="panel"><div class="stage-head"><div class="stage-title">${step.logos.map((n) => icon(n)).join("")}<h3>${i + 1} · ${step.title}</h3></div><span class="pill">${pill}</span></div><div class="what">${brief(step.what, `what-${step.key}`)}</div>${runsView(step.key)}${body}</div></article>`);
+  });
+  const journey = document.getElementById("journey");
+  keepOpen(journey, () => { journey.innerHTML = html.join("") + `<span class="arrowhead" id="arrowhead"></span>`; });
+  // An arrow runs down the line to each step the moment it finds the request.
+  const fresh = trace ? STEPS.map((s) => s.key).filter((k) => found(k) && !seen.has(k)) : [];
+  fresh.forEach((k) => seen.add(k));
+  if (fresh.length) arrowTo(fresh[fresh.length - 1]);
+  showLinks(trace);
+}
+// What the collector did with this request: the record in, its three steps with this request's values, the events out.
+function collectorView(t) {
+  const rec = t.stages.gateway?.found ? t.stages.gateway.data : null;
+  const owner = t.stages.collector.data.owner;
+  const kafka = t.stages.kafka?.found ? t.stages.kafka.data : null;
+  const recCol = rec ? jsonView(rec, IMPORTANT.record, "all-x-record")
+    : `<p class="xwait">The collector has its copy already; the tracer shows the gateway's ${c("stdout")} copy, which Envoy writes out every 10 seconds.</p>`;
+  const r = rec || {};
+  const routeName = (r.route || "").split("/")[2] || "";
+  const apiKey = routeName.endsWith("-external");
+  let groups = [];
+  if (!apiKey && r.auth_groups) { try { groups = JSON.parse(atob(r.auth_groups)); } catch { groups = String(r.auth_groups).split(","); } }
+  if (owner) groups = owner.groups || [];
+  const team = groups.filter((g) => g.startsWith("team-")).sort()[0] || "none";
+  const n = (v) => (v == null ? 0 : Number(v));
+  const input = r.input_tokens == null ? null : Math.max(n(r.input_tokens) - n(r.cached_input_tokens) - n(r.cache_creation_input_tokens), 0);
+  const steps = [
+    `<div class="xstep"><b>1 · normalize</b>${rec ? `Route ${c(apiKey ? "…-external" : "…-internal")}: ${apiKey ? "API key" : "Keycloak token"}.` : "Keeps model requests with a known caller."} ${brief(["", `The operator gives each model two routes: ${c("-external")} on the public gateway, which takes API keys, and ${c("-internal")} on the internal gateway, which takes Keycloak logins. The route says which check passed, so which caller fields can be trusted. A record with no caller or request id is dropped.`], "why-route")}</div>`,
+    apiKey
+      ? `<div class="xstep"><b>2 · identify</b>Asks the key manager who owns the key:${owner ? jsonView(owner, IMPORTANT.owner, "all-x-owner") : ""}${t.stages.collector.command ? cmdView(t.stages.collector.command, "cmd-collector") : ""}</div>`
+      : `<div class="xstep"><b>2 · identify</b>Uses the token's user and groups. No lookup.</div>`,
+    `<div class="xstep"><b>3 · events</b>${c("llm.request")} + one ${c("llm.tokens")} per token type.${rec && input != null ? ` Input: ${n(r.input_tokens)} − ${n(r.cached_input_tokens)} cached${n(r.cache_creation_input_tokens) ? ` − ${n(r.cache_creation_input_tokens)} cache write` : ""} = <strong>${input}</strong>.` : rec ? " No tokens reported." : ""} Team: ${c(esc(team))}.</div>`,
+  ];
+  const readable = (ev) => { try { return { ...ev, data: typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data }; } catch { return ev; } };
+  const evLine = (ev) => { const d = readable(ev).data || {}; return ev.type === "llm.tokens" ? `${d.token_type} · ${d.tokens} tokens` : `status ${d.response_code} · usage reported: ${d.usage_reported}`; };
+  const evCol = kafka ? `<div class="xevents">${kafka.map((m, i) => `<details class="ev" data-k="ev-${i}"><summary>${CHEV}<span class="t">${esc(m.event.type)}</span> · ${esc(evLine(m.event))}</summary>${jsonView(readable(m.event), IMPORTANT.event, `all-ev-${i}`, IMPORTANT.eventData)}</details>`).join("")}</div>`
+    : `<p class="xwait">These appear once Kafka has them (step 3).</p>`;
+  return `<div class="xform">
+    <div class="xcol">${fold("x-record", "Record in · from the gateway", recCol, true)}</div><div class="to">→</div>
+    <div class="xcol">${fold("x-steps", "What the collector does", `<div class="xsteps">${steps.join("")}</div>`, true)}</div><div class="to">→</div>
+    <div class="xcol">${fold("x-events", kafka ? `Events out · ${kafka.length} CloudEvents` : "Events out", evCol, true, kafka ? "as stored in Kafka" : "")}</div></div>`;
+}
+function arrowTo(key) {
+  const journey = document.getElementById("journey");
+  const idx = STEPS.findIndex((s) => s.key === key);
+  const dotY = (k) => { const d = journey.querySelector(`[data-key="${k}"] .dot`); return d.getBoundingClientRect().top - journey.getBoundingClientRect().top + 4; };
+  const from = idx === 0 ? 0 : dotY(STEPS[idx - 1].key) + 20, to = dotY(key) - 12;
+  const a = document.getElementById("arrowhead");
+  a.animate([{ top: `${from}px`, opacity: 1 }, { top: `${to}px`, opacity: 1 }, { top: `${to}px`, opacity: 0 }], { duration: 1100, easing: "ease-in-out" });
+}
+function showLinks(trace) {
+  const links = document.getElementById("links");
+  if (!trace) { links.hidden = true; return; }
+  links.hidden = false;
+  const url = `${location.origin}/#trace=${currentTrace}`;
+  Object.assign(document.getElementById("link-trace"), { href: url, textContent: url });
+  const rc = document.getElementById("row-console");
+  rc.hidden = !trace.consoleUrl;
+  if (trace.consoleUrl) Object.assign(document.getElementById("link-console"), { href: trace.consoleUrl, textContent: trace.consoleUrl });
+}
+document.getElementById("journey").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-copy]"); if (!b) return;
+  navigator.clipboard?.writeText(b.dataset.copy).then(() => { b.innerHTML = COPIED; setTimeout(() => (b.innerHTML = CLIPBOARD), 1200); });
+});
+
+// ---- the request path: a dot goes from your machine to the model and back ----
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function nodeCentre(name) {
+  const flow = document.getElementById("flow"), n = flow.querySelector(`[data-node="${name}"]`);
+  const f = flow.getBoundingClientRect(), r = n.getBoundingClientRect();
+  return { x: r.left - f.left + r.width / 2, y: r.top - f.top + r.height / 2 };
+}
+function light(name) { document.querySelectorAll(".node").forEach((n) => n.classList.toggle("lit", n.dataset.node === name)); }
+async function move(from, to, back) {
+  const p = document.getElementById("packet"), a = nodeCentre(from), b = nodeCentre(to);
+  p.classList.toggle("back", back);
+  await p.animate([{ left: `${a.x}px`, top: `${a.y}px`, opacity: 1 }, { left: `${b.x}px`, top: `${b.y}px`, opacity: 1 }], { duration: 800, easing: "ease-in-out" }).finished;
+  light(to);
+}
+async function playRequest(t) {
+  const status = document.getElementById("flow-status");
+  status.innerHTML = `Replaying…`;
+  light("client");
+  await move("client", "gateway", false);
+  if (t.status === "403") { status.innerHTML = `HTTP <strong>403</strong>: refused, metered as blocked`; await move("gateway", "client", true); }
+  else {
+    await move("gateway", "model", false); await sleep(250);
+    await move("model", "gateway", true);
+    await move("gateway", "client", true);
+    const u = t.usage ? `${t.usage.prompt_tokens} in, ${t.usage.completion_tokens} out` : "stream cut, no usage";
+    status.innerHTML = `HTTP <strong>${esc(t.status)}</strong> in <strong>${t.tookMs} ms</strong> · ${esc(u)}`;
+  }
+  document.getElementById("packet").style.opacity = 0;
+  light(null);
+}
+
+let timer = null, currentTrace = null;
+async function follow(id, replay) {
+  currentTrace = id; seen = new Set(); lastJSON = "";
+  const out = document.getElementById("result"), btn = document.getElementById("send");
+  const started = Date.now();
+  let played = !replay;
+  const tick = async () => {
+    const r = await fetch(`/api/trace/${id}`);
+    if (!r.ok) { out.textContent = `Trace ${id} isn't known to this tracer (it keeps traces only while it runs).`; btn.disabled = false; return; }
+    const t = await r.json();
+    out.innerHTML = `${esc(t.person)} · ${t.path === "login" ? "Keycloak login" : "API key"} · ${c(esc(t.model))} · HTTP <strong>${esc(t.status)}</strong>${t.attempts.length > 1 ? ` after ${t.attempts.length} attempts (${esc(t.attempts.join(", "))})` : ""}${t.requestId ? ` · request id <strong>${esc(t.requestId)}</strong>` : ""}`;
+    if (!played) { played = true; await playRequest(t); }
+    render(t);
+    const done = STEPS.every((s) => t.stages[s.key]?.found);
+    if (!done && Date.now() - started < 120000) timer = setTimeout(tick, 1500); else btn.disabled = false;
+  };
+  tick();
+}
+document.getElementById("send").addEventListener("click", async () => {
+  const btn = document.getElementById("send"), out = document.getElementById("result");
+  clearTimeout(timer); btn.disabled = true; out.textContent = "Signing in and sending…"; render(null);
+  document.getElementById("flow-status").textContent = "Signing in…";
+  try {
+    const r = await fetch("/api/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...choice, cancel: document.getElementById("cancel").checked }) });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error);
+    history.replaceState(null, "", `#trace=${j.trace}`);
+    follow(j.trace, true);
+  } catch (e) { out.textContent = `Could not send: ${e.message}`; btn.disabled = false; }
+});
+// Hover a boxed value: where it came from in the request, and what it is called here.
+document.addEventListener("mouseover", (e) => {
+  const mk = e.target.closest("mark.id"), tip = document.getElementById("tip");
+  if (!mk) { tip.hidden = true; return; }
+  const kind = mk.className.match(/id-(\w+)/)[1];
+  const field = origin(kind);
+  tip.innerHTML = `Originally <code>${esc(field)}</code>`;
+  tip.hidden = false;
+  const r = mk.getBoundingClientRect(), w = tip.offsetWidth;
+  tip.style.left = `${Math.max(12, Math.min(r.left, innerWidth - w - 12))}px`;
+  tip.style.top = `${r.bottom + 8 + tip.offsetHeight > innerHeight ? r.top - tip.offsetHeight - 8 : r.bottom + 8}px`;
+});
+render(null);
+loadComponents();
+const m = location.hash.match(/^#trace=(\d+)$/);
+if (m) follow(m[1], true);
+</script>
+</body>
+</html>

@@ -1,0 +1,208 @@
+# Usage collector pipeline (OpenMeter's Benthos-based collector).
+#
+# Input:  the gateway's access log, one OTLP log record per model request, in
+#         the format of examples/usage-access-log.yaml (the record attributes
+#         are the access-log fields, as strings).
+# Output: OpenMeter usage events (CloudEvents), sent to OPENMETER_URL.
+#
+# Steps:
+#   1. normalize  - read the entry; drop it unless it is a model request with
+#                   an authenticated caller that the gateway let through.
+#   2. identify   - for an API-key request, ask the key-manager who minted the
+#                   key (KEY_OWNER_URL); for a token request, use the verified
+#                   token's subject and groups from the gateway. If the
+#                   lookup keeps failing, the usage is billed to the key and
+#                   its events carry `owner_lookup: failed`.
+#   3. events     - one `llm.request` event, id = <request id>, plus one
+#                   `llm.tokens` event per non-zero token type,
+#                   id = <request id>:<type>. OpenMeter drops, on a
+#                   best-effort basis, an event whose (source, id) it has
+#                   already seen within its dedupe window, so a redelivered
+#                   access-log entry is normally counted once.
+#
+# Subject (who is billed) is the person's OIDC subject. Every event also
+# carries the person's username, their team (the first group starting with
+# TEAM_GROUP_PREFIX, default "team-") and the API key's client ID (or "login"),
+# so usage can be totalled per person, team, key and model. An x-auth-* header a
+# caller sends on the external endpoint is never read: on that endpoint only
+# the API key, set by the gateway, identifies the caller.
+#
+# Token types match OpenMeter's LLM price table: input, cache_read,
+# cache_write, output. The gateway's input count includes cache reads and
+# cache writes for every provider (Envoy AI Gateway v1.1.0 adds them for
+# Anthropic and AWS Bedrock, whose own input count excludes them), so `input`
+# here is the uncached remainder. The
+# output count already includes reasoning tokens, which are not emitted
+# separately (they would be charged twice).
+
+input:
+  otel_log:
+    address: "${OTLP_LISTEN_ADDRESS:0.0.0.0:4317}"
+    timeout: 30s
+
+pipeline:
+  processors:
+    - label: normalize
+      mapping: |
+        # Envoy writes "-" (stdout) or leaves the attribute out (OTLP) when a
+        # value is unset.
+        let val = this.record.attributes.or({}).map_each(kv -> if kv.value == null || kv.value.string() == "-" { deleted() } else { kv.value.string() })
+
+        # Envoy route name: httproute/<namespace>/<route>/rule/<n>/match/<n>/<host>.
+        # The operator names a model's routes <model>-external and <model>-internal
+        # (ModelRouteName), in the pack's namespace. The access log covers every
+        # route on the Gateway, so a route elsewhere with such a name is not ours.
+        let route = $val.route.or("").split("/")
+        let route_ns = if $route.length() > 1 { $route.index(1) } else { "" }
+        let route_name = if $route.length() > 2 && $route_ns == env("PACK_NAMESPACE").or("") { $route.index(2) } else { "" }
+        let access_path = if $route_name.has_suffix("-external") { "api_key" } else if $route_name.has_suffix("-internal") { "jwt" } else { "" }
+        let caller = match $access_path {
+          "api_key" => $val.client_id.or("")
+          "jwt" => $val.auth_subject.or("")
+          _ => ""
+        }
+        let request_id = $val.request_id.or("")
+        # A 401 or 403 the gateway answered itself (API key, token or access
+        # check failed) never reached the model, and its identity headers are
+        # whatever the caller sent. Only the model's own 401/403 is
+        # "via_upstream". Without that field (an older access-log format) a
+        # 401 or 403 is taken as the gateway's.
+        let rejected = ["401", "403"].contains($val.response_code.or("")) && $val.response_code_details.or("") != "via_upstream"
+
+        if $access_path == "" || $caller == "" || $request_id == "" || $rejected {
+          # Not a model endpoint, or rejected before the caller was verified.
+          root = deleted()
+        } else {
+          root = {
+            "request_id": $request_id,
+            "start_time": $val.start_time,
+            "access_path": $access_path,
+            "model": $val.model.or(""),
+            "model_resource": $route_name.trim_suffix("-external").trim_suffix("-internal"),
+            "client_id": if $access_path == "api_key" { $val.client_id } else { "login" },
+            # Only the internal endpoint's x-auth-* headers come from a
+            # verified token.
+            "subject": if $access_path == "jwt" { $val.auth_subject } else { "" },
+            "username": if $access_path == "jwt" { $val.auth_user.or("") } else { "" },
+            # Envoy Gateway forwards an array claim as base64-encoded JSON
+            # (["llm-users","team-a"]); a plain comma-separated value also works.
+            "groups": if $access_path == "jwt" { $val.auth_groups.or("").decode("base64").string().parse_json().catch($val.auth_groups.or("").split(",").map_each(g -> g.trim()).filter(g -> g != "")) } else { [] },
+            "input_tokens": $val.input_tokens.number().catch(null),
+            "cache_read": $val.cached_input_tokens.number().catch(0),
+            "cache_write": $val.cache_creation_input_tokens.number().catch(0),
+            "output_tokens": $val.output_tokens.number().catch(null),
+            "response_code": $val.response_code.or(""),
+            "response_flags": $val.response_flags.or(""),
+            "duration_ms": $val.duration_ms.number().catch(null),
+          }
+        }
+
+    - label: identify
+      branch:
+        # Only API-key requests need the lookup; the result is merged back.
+        request_map: 'root = if this.access_path == "api_key" { this.client_id } else { deleted() }'
+        processors:
+          # One OTLP export carries many records and must finish inside the
+          # input's 30s timeout, or Envoy drops the whole export. So the
+          # records' lookups run in parallel, and each one gives up after at
+          # most 3 attempts of 3s with 0.5s and 1s waits between them
+          # (about 10.5s); a record that still has no answer is billed to its
+          # key and marked below. A 404 is an answer, not a failure: the key
+          # manager has no such key.
+          - http:
+              url: '${KEY_OWNER_URL}/internal/v1/key-owners/${! content() }'
+              verb: GET
+              parallel: true
+              timeout: 3s
+              retries: 2
+              retry_period: 500ms
+              max_retry_backoff: 1s
+              successful_on: [404]
+          - catch:
+              # Still failing: bill the key, mark the events and log it, so
+              # the gap is visible. OpenMeter keeps the first event with an
+              # id, so a later replay cannot correct them.
+              - log:
+                  level: ERROR
+                  message: "key-owner lookup failed for ${! content() }; its usage is billed to the key and marked owner_lookup=failed: ${! error() }"
+              - mapping: |
+                  meta http_status_code = deleted()
+                  root = {"owner_lookup": "failed"}
+          - mapping: |
+              # Unknown key: bill the key itself.
+              root = if @http_status_code == 404 { {} } else { this }
+        result_map: |
+          root.subject = this.subject.or(deleted())
+          root.username = this.username.or(deleted())
+          root.groups = this.groups.or(deleted())
+          root.owner_lookup = this.owner_lookup.or(deleted())
+
+    - label: events
+      mapping: |
+        let prefix = "${TEAM_GROUP_PREFIX:team-}"
+        let team = this.groups.or([]).filter(g -> g.has_prefix($prefix)).sort().index(0).catch("none")
+        let subject = if this.subject.or("") != "" { this.subject } else { this.client_id }
+        let common = {
+          "model": this.model,
+          "model_resource": this.model_resource,
+          "access_path": this.access_path,
+          "user": this.username.or(""),
+          "team": $team,
+          "api_key": this.client_id,
+        }.merge(if this.owner_lookup != null { {"owner_lookup": this.owner_lookup} } else { {} })
+        let event = {
+          "specversion": "1.0",
+          "source": "nebari-llm-gateway",
+          "subject": $subject,
+          "time": this.start_time,
+        }
+        let input = this.input_tokens
+        let output = this.output_tokens
+        let request_event = $event.merge({
+          "id": this.request_id,
+          "type": "llm.request",
+          "data": $common.merge({
+            "usage_reported": ($input != null || $output != null).string(),
+            "response_code": this.response_code,
+            "response_flags": this.response_flags,
+            "duration_ms": this.duration_ms,
+          }),
+        })
+        let tokens = {
+          "input": if $input != null { [$input - this.cache_read - this.cache_write, 0].max() } else { 0 },
+          "cache_read": this.cache_read,
+          "cache_write": this.cache_write,
+          "output": $output.or(0),
+        }
+        let request_id = this.request_id
+        let token_events = $tokens.key_values().filter(kv -> kv.value > 0).sort_by(kv -> kv.key).map_each(kv -> $event.merge({
+          "id": "%s:%s".format($request_id, kv.key),
+          "type": "llm.tokens",
+          "data": $common.merge({"token_type": kv.key, "tokens": kv.value}),
+        }))
+        root = [$request_event].concat($token_events)
+
+    - unarchive:
+        format: json_array
+
+    - catch:
+        - log:
+            level: ERROR
+            message: "dropping access-log entry that could not be mapped: ${! error() }"
+        - mapping: root = deleted()
+
+output:
+  openmeter:
+    url: "${OPENMETER_URL}"
+    token: "${OPENMETER_TOKEN:}"
+    batching:
+      count: 100
+      period: 1s
+
+logger:
+  level: "${LOG_LEVEL:INFO}"
+  format: json
+
+http:
+  enabled: true
+  address: 0.0.0.0:4195

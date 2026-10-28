@@ -1,4 +1,7 @@
-package api
+// Package oidc checks OIDC access tokens (Keycloak's) for the pack's Go
+// services: the key manager and the usage console verify bearer tokens the
+// same way, against the provider's published keys.
+package oidc
 
 import (
 	"context"
@@ -11,6 +14,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,8 +24,8 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Defaults for the JWKS fetch retry/poll cadence, applied by NewJWTValidator.
-// The live values are per-instance fields on JWTValidator (not package globals),
+// Defaults for the JWKS fetch retry/poll cadence, applied by New.
+// The live values are per-instance fields on Validator (not package globals),
 // so tests can tune them without racing under t.Parallel().
 const (
 	// defaultRetryMaxAttempts and defaultRetryInitialBackoff control the *active*
@@ -58,7 +62,7 @@ const clockLeeway = 30 * time.Second
 // a token bearing an unrecognized `kid`. It exists purely to cap outbound load
 // on Keycloak: because the gateway runs enforceAtGateway:false and nginx
 // forwards Authorization as-is, an unauthenticated caller can send forged tokens
-// with arbitrary `kid`s — this code runs *before* signature verification — and
+// with arbitrary `kid`s (this code runs *before* signature verification), and
 // each cache miss would otherwise fan out into a 10s HTTP GET to Keycloak's
 // /certs. singleflight collapses concurrent misses into one in-flight fetch, and
 // this cooldown bounds the sustained refresh rate so request volume can't drive
@@ -87,41 +91,31 @@ type jwks struct {
 	Keys []jwk `json:"keys"`
 }
 
-// TokenValidator verifies a bearer token and returns its claims. *JWTValidator
-// is the production implementation (Keycloak JWKS); the middleware depends on
-// this interface rather than the concrete type so tests can substitute a fake.
-// The context bounds any JWKS fetch the validation may trigger.
-type TokenValidator interface {
-	ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error)
-}
-
-// JWTValidator validates bearer tokens minted by Keycloak against the realm's
-// JWKS. Under Model B (SPA-managed Keycloak) there is no gateway JWT
-// enforcement, so the key-manager verifies the token itself: RSA signature,
-// expiry (with clockLeeway), and issuer.
+// Validator checks bearer tokens against the provider's JWKS: RSA signature,
+// expiry (with clockLeeway, and required), the exact issuer, and optionally
+// the client the token was issued to.
 //
 // The initial JWKS fetch runs asynchronously in a background goroutine started
-// by NewJWTValidator so process startup does not block on Keycloak being
-// reachable (avoids CrashLoopBackOff when Keycloak is slow to come up). While
-// ready is false, ValidateToken returns ErrNotReady, which the auth middleware
-// surfaces as 503 Service Unavailable — distinct from a bad token (401).
-type JWTValidator struct {
-	logger      *slog.Logger
-	keycloakURL string
-	// issuerURL validates the `iss` claim. It defaults to keycloakURL but is
-	// overridden with SetIssuerURL when the external Keycloak URL (embedded in
-	// tokens as `iss`) differs from the internal cluster URL used for JWKS
-	// fetching.
-	issuerURL string
-	realm     string
-	// expectedClientID, when non-empty, pins the token's `azp` (authorized party)
-	// claim to a specific Keycloak client. The `nebari` realm is shared across all
-	// Nebari apps, so `iss` alone would accept a token minted for any client in
-	// the realm; pinning `azp` restricts acceptance to tokens obtained by the
-	// key-manager's own SPA client. Empty disables the check (see SetExpectedClientID).
-	expectedClientID string
-	publicKeys       map[string]*rsa.PublicKey
-	keysMu           sync.RWMutex
+// by New so process startup does not block on the provider being reachable
+// (avoids CrashLoopBackOff when Keycloak is slow to come up). While ready is
+// false, ValidateToken returns ErrNotReady, which callers surface as 503
+// Service Unavailable, distinct from a bad token (401).
+type Validator struct {
+	logger *slog.Logger
+	// keysURL is the JWKS URL; when empty, each fetch reads jwks_uri from
+	// discoveryURL's OIDC discovery document.
+	keysURL      string
+	discoveryURL string
+	// issuer is the exact `iss` a token must carry.
+	issuer string
+	// clientID, when non-empty, pins the token to one client: its `azp`
+	// (authorized party) must be clientID, or with acceptAudience, `aud` may
+	// name it instead. A Keycloak realm is shared across apps, so `iss` alone
+	// would accept a token minted for any client in the realm.
+	clientID       string
+	acceptAudience bool
+	publicKeys     map[string]*rsa.PublicKey
+	keysMu         sync.RWMutex
 	// refreshGroup collapses concurrent JWKS refreshes (periodic re-fetch and
 	// unknown-kid re-fetch) into a single in-flight outbound request.
 	refreshGroup singleflight.Group
@@ -133,7 +127,7 @@ type JWTValidator struct {
 	// because the writer runs on the background init goroutine while readers
 	// run on every request-handling goroutine.
 	ready atomic.Bool
-	// Retry/poll cadence, defaulted in NewJWTValidator from the default* consts.
+	// Retry/poll cadence, defaulted in New from the default* consts.
 	// Instance fields rather than package globals so parallel tests can tune them
 	// without racing. retryDelay is the sleep between active retries (swapped for a
 	// no-op in tests).
@@ -153,22 +147,40 @@ type JWTValidator struct {
 	stopOnce sync.Once
 }
 
-// NewJWTValidator creates a validator and returns immediately; the initial
-// JWKS fetch runs on a background goroutine. It first runs retryMaxAttempts
-// active attempts with exponential backoff, then falls back to a
-// slowPollInterval cadence and keeps trying indefinitely. Ready() flips to true
-// the moment any fetch succeeds.
-func NewJWTValidator(keycloakURL, realm string, logger *slog.Logger) *JWTValidator {
+// Config is what a Validator checks tokens against.
+type Config struct {
+	// KeysURL is the provider's JWKS URL. Leave empty to read it from the
+	// OIDC discovery document at DiscoveryURL (on every fetch).
+	KeysURL      string
+	DiscoveryURL string
+	// Issuer is the exact `iss` tokens must carry. Required.
+	Issuer string
+	// ClientID, when set, must be the token's `azp`; with AcceptAudience, a
+	// token whose `aud` names it is accepted too. Empty: any client.
+	ClientID       string
+	AcceptAudience bool
+	// Logger defaults to slog.Default().
+	Logger *slog.Logger
+}
+
+// New creates a validator and returns immediately; the initial JWKS fetch
+// runs on a background goroutine. It first runs retryMaxAttempts active
+// attempts with exponential backoff, then falls back to a slowPollInterval
+// cadence and keeps trying indefinitely. Ready() flips to true the moment any
+// fetch succeeds.
+func New(cfg Config) *Validator {
+	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	cleanURL := strings.TrimSuffix(keycloakURL, "/")
 	baseCtx, cancel := context.WithCancel(context.Background())
-	v := &JWTValidator{
+	v := &Validator{
 		logger:              logger,
-		keycloakURL:         cleanURL,
-		issuerURL:           cleanURL, // default; override with SetIssuerURL if needed
-		realm:               realm,
+		keysURL:             cfg.KeysURL,
+		discoveryURL:        strings.TrimSuffix(cfg.DiscoveryURL, "/"),
+		issuer:              cfg.Issuer,
+		clientID:            cfg.ClientID,
+		acceptAudience:      cfg.AcceptAudience,
 		publicKeys:          make(map[string]*rsa.PublicKey),
 		retryMaxAttempts:    defaultRetryMaxAttempts,
 		retryInitialBackoff: defaultRetryInitialBackoff,
@@ -184,31 +196,14 @@ func NewJWTValidator(keycloakURL, realm string, logger *slog.Logger) *JWTValidat
 	go v.initLoop()
 
 	logger.Info("JWT validator created; initial JWKS fetch running in background",
-		"keycloakURL", cleanURL, "realm", realm)
+		"issuer", cfg.Issuer, "keysURL", cfg.KeysURL, "discoveryURL", cfg.DiscoveryURL)
 	return v
-}
-
-// SetIssuerURL overrides the URL used to validate the token's `iss` claim. Use
-// it when the external Keycloak URL (written into tokens as `iss`) differs from
-// the internal cluster URL used for JWKS fetching. An empty string is a no-op.
-func (v *JWTValidator) SetIssuerURL(url string) {
-	if url == "" {
-		return
-	}
-	v.issuerURL = strings.TrimSuffix(url, "/")
-}
-
-// SetExpectedClientID pins the accepted token's `azp` claim to clientID. Use it
-// to reject tokens minted for other clients in a shared Keycloak realm. An empty
-// string is a no-op, leaving the `azp` check disabled (issuer-only validation).
-func (v *JWTValidator) SetExpectedClientID(clientID string) {
-	v.expectedClientID = clientID
 }
 
 // initLoop drives the validator's background goroutine: it first brings the
 // validator online (initialFetch), then keeps the JWKS fresh on a steady cadence
 // (refreshLoop). It exits, closing doneCh, only when Stop() is called.
-func (v *JWTValidator) initLoop() {
+func (v *Validator) initLoop() {
 	defer close(v.doneCh)
 	if v.initialFetch() {
 		v.refreshLoop()
@@ -219,7 +214,7 @@ func (v *JWTValidator) initLoop() {
 // back to a slow poll if all active attempts fail. It returns true as soon as a
 // fetch succeeds (marking the validator ready), or false if Stop() is called
 // before that happens.
-func (v *JWTValidator) initialFetch() bool {
+func (v *Validator) initialFetch() bool {
 	backoff := v.retryInitialBackoff
 	for attempt := 1; attempt <= v.retryMaxAttempts; attempt++ {
 		if v.stopped() {
@@ -232,7 +227,7 @@ func (v *JWTValidator) initialFetch() bool {
 		} else {
 			v.logger.Warn("failed to fetch Keycloak public keys, retrying",
 				"attempt", attempt, "maxRetries", v.retryMaxAttempts, "backoff", backoff, "error", err,
-				"hint", "verify LLM_KEYCLOAK_URL is correct — Keycloak 17+ does not use /auth as a context root")
+				"hint", "check the provider URL: Keycloak 17+ does not use /auth as a context root")
 		}
 		if attempt < v.retryMaxAttempts {
 			v.retryDelay(backoff)
@@ -266,7 +261,7 @@ func (v *JWTValidator) initialFetch() bool {
 // use in the meantime, so a transient Keycloak outage never fails validation
 // (fail-open on stale keys). The unknown-kid path in ValidateToken remains the
 // fast trigger for a rotation that lands between ticks.
-func (v *JWTValidator) refreshLoop() {
+func (v *Validator) refreshLoop() {
 	ticker := time.NewTicker(v.keyRefreshInterval)
 	defer ticker.Stop()
 	for {
@@ -281,7 +276,7 @@ func (v *JWTValidator) refreshLoop() {
 	}
 }
 
-func (v *JWTValidator) stopped() bool {
+func (v *Validator) stopped() bool {
 	select {
 	case <-v.stopCh:
 		return true
@@ -291,13 +286,13 @@ func (v *JWTValidator) stopped() bool {
 }
 
 // Ready reports whether the initial JWKS fetch has succeeded.
-func (v *JWTValidator) Ready() bool {
+func (v *Validator) Ready() bool {
 	return v.ready.Load()
 }
 
 // Stop signals the background init goroutine to exit and waits for it. Safe to
 // call multiple times, including concurrently.
-func (v *JWTValidator) Stop() {
+func (v *Validator) Stop() {
 	v.stopOnce.Do(func() {
 		close(v.stopCh)
 		v.cancel()
@@ -312,7 +307,7 @@ func (v *JWTValidator) Stop() {
 // on any JWKS fetch triggered by an unknown `kid` (the fetch itself runs on the
 // validator's lifetime context so one cancelled request can't abort a fetch
 // shared with others).
-func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error) {
+func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (map[string]interface{}, error) {
 	if !v.ready.Load() {
 		return nil, ErrNotReady
 	}
@@ -337,7 +332,7 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (m
 			return publicKey, nil
 		}
 
-		// Key not cached — Keycloak may have rotated keys. Trigger a rate-limited,
+		// Key not cached: Keycloak may have rotated keys. Trigger a rate-limited,
 		// de-duplicated refresh, then re-check the cache regardless of the refresh
 		// outcome. A concurrent burst with the same freshly-rotated kid all funnels
 		// through the one in-flight fetch (singleflight) and finds the key here; a
@@ -353,7 +348,7 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (m
 			return nil, fmt.Errorf("unknown key ID: %s (not found after key refresh)", kid)
 		}
 		return publicKey, nil
-	}, jwt.WithLeeway(clockLeeway))
+	}, jwt.WithLeeway(clockLeeway), jwt.WithExpirationRequired())
 	if err != nil {
 		return nil, fmt.Errorf("token validation failed: %w", err)
 	}
@@ -362,20 +357,19 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (m
 	}
 
 	// Expiry is already enforced by ParseWithClaims (with clockLeeway); the issuer
-	// and (optionally) the authorized party are checked manually here.
-	expectedIssuer := fmt.Sprintf("%s/realms/%s", v.issuerURL, v.realm)
-	if iss, _ := claims["iss"].(string); iss != expectedIssuer {
-		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", expectedIssuer, iss)
+	// and (optionally) the client are checked here.
+	if iss, _ := claims["iss"].(string); iss != v.issuer {
+		return nil, fmt.Errorf("invalid issuer: expected %s, got %s", v.issuer, iss)
 	}
 
-	// The `nebari` realm is shared across all Nebari apps, so `iss` alone accepts
-	// a token minted for any client in the realm. When expectedClientID is set,
-	// pin `azp` to reject tokens obtained by other clients. Public PKCE clients
-	// are not placed in `aud` by Keycloak, so `azp` — not `aud` — is the claim
-	// that identifies the client that obtained the token.
-	if v.expectedClientID != "" {
-		if azp, _ := claims["azp"].(string); azp != v.expectedClientID {
-			return nil, fmt.Errorf("invalid azp: expected %s, got %s", v.expectedClientID, azp)
+	// Public PKCE clients are not placed in `aud` by Keycloak, so `azp` is the
+	// claim that identifies the client that obtained the token. A service
+	// whose tokens name it as audience can accept that too (acceptAudience).
+	if v.clientID != "" {
+		azp, _ := claims["azp"].(string)
+		aud, _ := claims.GetAudience()
+		if azp != v.clientID && (!v.acceptAudience || !slices.Contains(aud, v.clientID)) {
+			return nil, fmt.Errorf("token issued to %q, not %s", azp, v.clientID)
 		}
 	}
 
@@ -388,7 +382,7 @@ func (v *JWTValidator) ValidateToken(ctx context.Context, tokenString string) (m
 // runs on the validator's lifetime context; ctx only bounds how long this caller
 // waits for the shared result, so a cancelled request abandons its wait without
 // aborting a fetch other in-flight requests are sharing.
-func (v *JWTValidator) refreshKeys(ctx context.Context) error {
+func (v *Validator) refreshKeys(ctx context.Context) error {
 	ch := v.refreshGroup.DoChan("certs", func() (interface{}, error) {
 		return nil, v.fetchPublicKeys(v.baseCtx)
 	})
@@ -415,7 +409,7 @@ func (v *JWTValidator) refreshKeys(ctx context.Context) error {
 // even though the key they need is being fetched right then. The rate bound is
 // unchanged: once a fetch has occurred, callbacks within the window return early
 // without an outbound call, so request volume still cannot drive fetch volume.
-func (v *JWTValidator) refreshForUnknownKID(ctx context.Context) error {
+func (v *Validator) refreshForUnknownKID(ctx context.Context) error {
 	ch := v.refreshGroup.DoChan("certs", func() (interface{}, error) {
 		now := time.Now().UnixNano()
 		last := v.lastKIDRefresh.Load()
@@ -435,11 +429,17 @@ func (v *JWTValidator) refreshForUnknownKID(ctx context.Context) error {
 	}
 }
 
-func (v *JWTValidator) fetchPublicKeys(ctx context.Context) error {
-	certsURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", v.keycloakURL, v.realm)
-
+func (v *Validator) fetchPublicKeys(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
+	certsURL := v.keysURL
+	if certsURL == "" {
+		var err error
+		if certsURL, err = v.discoverKeysURL(ctx); err != nil {
+			return err
+		}
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certsURL, nil)
 	if err != nil {
@@ -491,6 +491,32 @@ func (v *JWTValidator) fetchPublicKeys(ctx context.Context) error {
 
 	v.logger.Info("Keycloak public keys refreshed", "count", len(keys))
 	return nil
+}
+
+// discoverKeysURL reads jwks_uri from the provider's OIDC discovery document.
+func (v *Validator) discoverKeysURL(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.discoveryURL+"/.well-known/openid-configuration", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create discovery request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to read discovery: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to read discovery: status %d", resp.StatusCode)
+	}
+	var disc struct {
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJWKSBytes)).Decode(&disc); err != nil {
+		return "", fmt.Errorf("failed to decode discovery: %w", err)
+	}
+	if disc.JWKSURI == "" {
+		return "", errors.New("discovery has no jwks_uri")
+	}
+	return disc.JWKSURI, nil
 }
 
 // parseRSAPublicKey rebuilds an RSA public key from a JWK's base64url modulus
