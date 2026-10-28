@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -334,34 +335,6 @@ func TestCreateKey_RevokeThenMintDoesNotTouchLiveKeys(t *testing.T) {
 	}
 	if _, ok := secret.Data[fresh.ClientID]; !ok {
 		t.Errorf("freshly minted clientID %q missing from Secret", fresh.ClientID)
-	}
-}
-
-// TestCreateKey_RevokedClientIDIsNeverReissued: usage records and OpenMeter
-// customers name a key by its client ID, so a client ID must name one key for
-// good. If a revoked key's client ID were handed to the next key minted, the
-// new key's usage would be billed to whoever held the old one.
-func TestCreateKey_RevokedClientIDIsNeverReissued(t *testing.T) {
-	fakeClient := fake.NewClientBuilder().
-		WithScheme(buildScheme(t)).
-		WithObjects(makeSecret("model-a", testNamespace), makeConfigMap("model-a", testNamespace)).
-		Build()
-	ctx := context.Background()
-	mgr := secrets.NewManager(fakeClient, testNamespace)
-
-	issued := map[string]bool{}
-	for range 3 {
-		r, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "chuck"}, "test")
-		if err != nil {
-			t.Fatalf("CreateKey: %v", err)
-		}
-		if issued[r.ClientID] {
-			t.Fatalf("client ID %q was issued again after its key was revoked", r.ClientID)
-		}
-		issued[r.ClientID] = true
-		if err := mgr.RevokeKey(ctx, "model-a", r.ClientID); err != nil {
-			t.Fatalf("RevokeKey %s: %v", r.ClientID, err)
-		}
 	}
 }
 
@@ -872,5 +845,58 @@ func TestRevokeKey_DropsRevokedKeysPastRetention(t *testing.T) {
 	slices.Sort(ids)
 	if strings.Join(ids, ",") != "user-live-1,user-recent-1" {
 		t.Errorf("keys left = %v, want user-live-1 (just revoked) and user-recent-1", ids)
+	}
+}
+
+// TestCreateKey_ClientIDIsNewAfterItsTombstoneIsDropped: a revoked key's
+// tombstone is dropped after RevokedKeyRetention, so nothing in the store
+// still names its client ID. A key minted after that must still get a new
+// one: usage already recorded under the old ID stays billed to its owner.
+func TestCreateKey_ClientIDIsNewAfterItsTombstoneIsDropped(t *testing.T) {
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(buildScheme(t)).
+		WithObjects(makeSecret("model-a", testNamespace), makeConfigMap("model-a", testNamespace)).
+		Build()
+	ctx := context.Background()
+	mgr := secrets.NewManager(fakeClient, testNamespace)
+	mint := func() string {
+		t.Helper()
+		r, err := mgr.CreateKey(ctx, "model-a", secrets.Creator{Username: "alice"}, "test")
+		if err != nil {
+			t.Fatalf("CreateKey: %v", err)
+		}
+		if err := mgr.RevokeKey(ctx, "model-a", r.ClientID); err != nil {
+			t.Fatalf("RevokeKey %s: %v", r.ClientID, err)
+		}
+		return r.ClientID
+	}
+
+	old := mint()
+	// Age the tombstone past retention; the next revoke drops it.
+	cm := &corev1.ConfigMap{}
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "model-a-api-key-metadata", Namespace: testNamespace}, cm); err != nil {
+		t.Fatal(err)
+	}
+	var info secrets.KeyInfo
+	if err := json.Unmarshal([]byte(cm.Data[old]), &info); err != nil {
+		t.Fatal(err)
+	}
+	aged := time.Now().Add(-secrets.RevokedKeyRetention - 24*time.Hour)
+	info.RevokedAt = &aged
+	b, _ := json.Marshal(info)
+	cm.Data[old] = string(b)
+	if err := fakeClient.Update(ctx, cm); err != nil {
+		t.Fatal(err)
+	}
+	second := mint()
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: "model-a-api-key-metadata", Namespace: testNamespace}, cm); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cm.Data[old]; ok {
+		t.Fatalf("tombstone for %s not dropped after retention", old)
+	}
+
+	if third := mint(); third == old || third == second {
+		t.Fatalf("client ID %q issued again after its tombstone was dropped", third)
 	}
 }

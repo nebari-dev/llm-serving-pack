@@ -214,3 +214,22 @@ func TestKeyRevokedBeforeARestartStillNamesItsOwner(t *testing.T) {
 		t.Errorf("lookup of a key revoked before the restart = %d %+v, want 200 with alice / sub-alice / [team-a]", code, owner)
 	}
 }
+
+// A key minted while the key store is being read, and looked up before that
+// read ends, is still found: the read began before the key existed, so the
+// lookup can't take its answer from it.
+func TestKeyMintedDuringARead(t *testing.T) {
+	keys := &fakeKeys{delay: 200 * time.Millisecond}
+	api := lookupAPI(keys)
+	done := make(chan struct{})
+	go func() { getOwner(t, api, "user-nobody-1"); close(done) }() // starts a read
+	time.Sleep(50 * time.Millisecond)
+
+	keys.add(secrets.KeyInfo{ClientID: "user-bob-model-1", Creator: "bob", CreatorSubject: "sub-bob"})
+	code, owner := getOwner(t, api, "user-bob-model-1")
+	<-done
+
+	if code != http.StatusOK || owner.Subject != "sub-bob" {
+		t.Errorf("lookup of a key minted during a read = %d %+v, want 200 with sub-bob", code, owner)
+	}
+}

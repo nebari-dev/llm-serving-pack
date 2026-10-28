@@ -46,7 +46,7 @@ type Handler struct {
 	owners map[string]Owner // every key seen in the key store, revoked or not
 
 	refreshMu   sync.Mutex // held while reading the key store
-	lastRefresh time.Time  // when the last read finished
+	lastRefresh time.Time  // when the last read started
 	minInterval time.Duration
 }
 
@@ -90,8 +90,10 @@ func (h *Handler) owner(ctx context.Context, clientID string) (Owner, bool, erro
 		case <-time.After(wait):
 		}
 	}
-	keys, err := h.keys.ListAllKeysIncludingRevoked(ctx)
+	// When the read starts, not when it ends: a key minted during the read
+	// may be missing from it, so a lookup that arrived meanwhile reads again.
 	h.lastRefresh = time.Now()
+	keys, err := h.keys.ListAllKeysIncludingRevoked(ctx)
 	if err != nil {
 		return Owner{}, false, err
 	}
