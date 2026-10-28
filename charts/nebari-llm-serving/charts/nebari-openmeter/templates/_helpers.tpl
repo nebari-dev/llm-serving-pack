@@ -15,6 +15,14 @@ is the name plus a hash and must fit 63).
 {{- printf "%s-%s" $prefix .component -}}
 {{- end -}}
 
+{{/*
+The namespace every resource of the subchart goes in: namespace, or the
+release namespace when it is empty.
+*/}}
+{{- define "om.namespace" -}}
+{{- .Values.namespace | default .Release.Namespace -}}
+{{- end -}}
+
 {{- define "om.labels" -}}
 app.kubernetes.io/name: nebari-openmeter
 app.kubernetes.io/instance: {{ .Release.Name }}

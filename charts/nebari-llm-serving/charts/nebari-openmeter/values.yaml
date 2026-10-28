@@ -1,3 +1,8 @@
+# namespace - where every resource of this chart goes; empty: the release
+# namespace. As part of the LLM serving pack, the pack sets it from
+# openmeter.namespace. The namespace must exist.
+namespace: ""
+
 # OpenMeter: the API (ingests usage events, answers queries) and the sink
 # worker (moves events from Kafka into ClickHouse). Same image for both.
 openmeter:

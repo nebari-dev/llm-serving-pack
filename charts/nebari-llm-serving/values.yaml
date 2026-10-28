@@ -180,12 +180,21 @@ keyManager:
 # OpenMeter, the usage store, and the read-only usage console (Stargate's
 # console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
 # default. With it on, usage.openmeter.url can stay empty: the collector and
-# the key-manager use the bundled OpenMeter. It runs in the release
-# namespace; with usage.enabled this chart admits the collector and the
-# key-manager (operator namespace) to its API, and no other pod. Every value
-# under openmeter is the subchart's; see charts/nebari-openmeter/values.yaml.
+# the key-manager use the bundled OpenMeter. It runs in openmeter.namespace;
+# with usage.enabled the collector and the key-manager (operator namespace)
+# may call its API, and no other pod. Every value under openmeter is the
+# subchart's; see charts/nebari-openmeter/values.yaml.
 openmeter:
   enabled: false
+  # namespace - where the bundled OpenMeter runs; required with
+  # openmeter.enabled. The pack's own namespace (<fullname>-system, which the
+  # chart creates) keeps every pack component in one namespace; the chart's
+  # error names it. Until the key-manager's Role is narrowed to the API-key
+  # Secrets (#215), it can read every Secret in that namespace, OpenMeter's
+  # database and ClickHouse credentials included; another namespace (which
+  # must exist) keeps them apart, with a NetworkPolicy admitting the
+  # collector and key-manager across.
+  namespace: ""
   # The image of the subchart's setup Jobs (openmeter-setup/); the release
   # workflow pins it.
   setup:
