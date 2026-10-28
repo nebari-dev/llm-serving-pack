@@ -108,6 +108,7 @@ usage:
   enabled: true
 openmeter:
   enabled: true
+  namespace: <fullname>-system   # where OpenMeter runs; required (see below)
   modelResources:            # your model resources and the provider that prices them
     - {name: bedrock, provider: bedrock}
   nebariapp:                 # the console, behind Keycloak sign-in
@@ -126,10 +127,17 @@ resource's past usage under the new provider. Every value under
 `openmeter` is the subchart's
 (`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
 
-OpenMeter's API has no authentication. The bundled OpenMeter runs in the
-release namespace, while the collector and the key manager run in the
-operator namespace (`<fullname>-system`); the chart's `NetworkPolicy` admits
-those two pods to the API from there, and no other pod outside OpenMeter.
+The bundled OpenMeter runs in `openmeter.namespace`, which the chart
+requires: the pack's own namespace (`<fullname>-system`, where the collector
+and the key manager run; the chart's error names it), or another namespace
+that already exists. Until the key manager's Role is narrowed to the API-key
+Secrets, it can read every Secret in its namespace, OpenMeter's credentials
+included; a separate namespace keeps them apart.
+
+OpenMeter's API has no authentication. Only OpenMeter's own pods, the
+collector and the key manager may call it; with OpenMeter in another
+namespace, the chart adds a `NetworkPolicy` admitting those two pods from
+the pack's namespace.
 
 ClickHouse's password is made in the cluster: a pre-install and pre-upgrade
 hook (a `PreSync` hook under Argo CD) creates a Secret with a random password
