@@ -368,7 +368,7 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (map[
 	if v.clientID != "" {
 		azp, _ := claims["azp"].(string)
 		aud, _ := claims.GetAudience()
-		if azp != v.clientID && !(v.acceptAudience && slices.Contains(aud, v.clientID)) {
+		if azp != v.clientID && (!v.acceptAudience || !slices.Contains(aud, v.clientID)) {
 			return nil, fmt.Errorf("token issued to %q, not %s", azp, v.clientID)
 		}
 	}
