@@ -83,7 +83,9 @@ gateway's `/logout`, which ends the gateway session and Keycloak's. The
 console answers 401 to a request without a valid token, so its data can't be
 read around the gateway. `nebariapp.auth.groups` limits the console to
 members of those Keycloak groups. `console.oidc` sets the issuer and client
-by hand; see `values.yaml`.
+by hand; see `values.yaml`. The chart won't render the console with no
+sign-in unless `console.devMode` is set (dev clusters only), and
+`console.enabled: false` leaves it out.
 
 ## Known limits
 

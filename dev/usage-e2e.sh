@@ -88,7 +88,7 @@ $HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$OM_NS" --create-namespace
 helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
   --set fullnameOverride=llm-operator --set platform.baseDomain=local \
   --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
-  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.namespace="$OM_NS" --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev \
+  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.namespace="$OM_NS" --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev --set openmeter.console.enabled=false \
   | $KUBECTL apply -f - >/dev/null
 # A rebuilt image under the same tag needs new pods.
 $KUBECTL -n "$OM_NS" rollout restart deploy/${OM_RELEASE}-openmeter-console >/dev/null

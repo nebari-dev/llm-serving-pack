@@ -26,31 +26,18 @@ func main() {
 	addr := flag.String("addr", ":8080", "listen address")
 	omURL := flag.String("openmeter-url", cmp.Or(os.Getenv("OPENMETER_URL"), "http://localhost:8888"), "OpenMeter's API ($OPENMETER_URL); its token, if any, is $OPENMETER_TOKEN")
 	consoleDir := flag.String("console-dir", "", "the built console (console/dist) to serve; empty serves the API only")
-	issuer := flag.String("oidc-issuer-url", os.Getenv("OIDC_ISSUER_URL"), "the issuer of the access tokens the gateway forwards ($OIDC_ISSUER_URL); empty: no sign-in (dev mode)")
+	issuer := flag.String("oidc-issuer-url", os.Getenv("OIDC_ISSUER_URL"), "the issuer of the access tokens the gateway forwards ($OIDC_ISSUER_URL); required unless -dev")
 	discovery := flag.String("oidc-discovery-url", os.Getenv("OIDC_DISCOVERY_URL"), "where to read the issuer's discovery document and keys, if not the issuer URL ($OIDC_DISCOVERY_URL)")
-	clientID := flag.String("oidc-client-id", os.Getenv("OIDC_CLIENT_ID"), "the client the tokens must be issued to ($OIDC_CLIENT_ID)")
+	clientID := flag.String("oidc-client-id", os.Getenv("OIDC_CLIENT_ID"), "the client the tokens must be issued to ($OIDC_CLIENT_ID); required with -oidc-issuer-url")
 	groups := flag.String("oidc-groups", os.Getenv("OIDC_GROUPS"), "comma-separated Keycloak groups whose members may use the console ($OIDC_GROUPS); empty: every signed-in person")
+	dev := flag.Bool("dev", os.Getenv("CONSOLE_DEV_MODE") == "true", "no sign-in: every caller is the same viewer ($CONSOLE_DEV_MODE=true); for a dev cluster only")
 	flag.Parse()
 
-	var identity openmeter.Identity = openmeter.DevIdentity{}
-	if *issuer != "" {
-		keys := *discovery
-		if keys == "" {
-			keys = *issuer
-		}
-		v := oidc.New(oidc.Config{DiscoveryURL: keys, Issuer: *issuer, ClientID: *clientID, AcceptAudience: true})
-		defer v.Stop()
-		var required []string
-		for _, g := range strings.Split(*groups, ",") {
-			if g = strings.TrimSpace(g); g != "" {
-				required = append(required, g)
-			}
-		}
-		identity = openmeter.GatewayIdentity{Tokens: v, Groups: required}
-		log.Printf("sign-in: tokens from %s issued to %s, groups %v", *issuer, *clientID, required)
-	} else {
-		log.Printf("sign-in: none configured (dev mode): every caller is the same viewer")
+	identity, stopIdentity, err := newIdentity(*issuer, *discovery, *clientID, *groups, *dev)
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer stopIdentity()
 
 	// The console calls its tenant "demo" (API_BASE in console/src/data/catalog.ts).
 	s := &openmeter.Server{Client: openmeter.NewClient(*omURL, os.Getenv("OPENMETER_TOKEN")), Tenant: "demo", Now: time.Now, Identity: identity}
@@ -74,6 +61,36 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// newIdentity is how the console checks who is calling. The console shows
+// everyone's usage, so it refuses to start without sign-in unless dev is set,
+// and refuses an issuer without a client ID (any client in the realm would do).
+func newIdentity(issuer, discovery, clientID, groups string, dev bool) (openmeter.Identity, func(), error) {
+	switch {
+	case dev && issuer != "":
+		return nil, nil, errors.New("set either -dev ($CONSOLE_DEV_MODE) or -oidc-issuer-url ($OIDC_ISSUER_URL), not both")
+	case dev:
+		log.Printf("sign-in: none (dev mode): every caller is the same viewer; never use this in a real deployment")
+		return openmeter.DevIdentity{}, func() {}, nil
+	case issuer == "":
+		return nil, nil, errors.New("-oidc-issuer-url ($OIDC_ISSUER_URL) is required unless -dev ($CONSOLE_DEV_MODE=true): the console shows everyone's usage")
+	case clientID == "":
+		return nil, nil, errors.New("-oidc-client-id ($OIDC_CLIENT_ID) is required with -oidc-issuer-url")
+	}
+	keys := discovery
+	if keys == "" {
+		keys = issuer
+	}
+	v := oidc.New(oidc.Config{DiscoveryURL: keys, Issuer: issuer, ClientID: clientID, AcceptAudience: true})
+	var required []string
+	for _, g := range strings.Split(groups, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			required = append(required, g)
+		}
+	}
+	log.Printf("sign-in: tokens from %s issued to %s, groups %v", issuer, clientID, required)
+	return openmeter.GatewayIdentity{Tokens: v, Groups: required}, v.Stop, nil
 }
 
 // console serves the built console's files, and index.html for any other

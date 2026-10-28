@@ -102,7 +102,8 @@ volumeClaimTemplates:
 The console's token check: OIDC_ISSUER_URL and OIDC_CLIENT_ID from
 console.oidc, or else, when the NebariApp's gateway sign-in forwards access
 tokens, from the Secret the Nebari operator makes for the console's Keycloak
-client. Nothing (dev mode) otherwise.
+client, or CONSOLE_DEV_MODE with console.devMode. Fails to render otherwise:
+the console shows everyone's usage.
 */}}
 {{- define "om.consoleOIDCEnv" -}}
 {{- $o := .Values.console.oidc -}}
@@ -118,6 +119,10 @@ client. Nothing (dev mode) otherwise.
   valueFrom: {secretKeyRef: {name: {{ $secret }}, key: client-id}}
 {{- else if .Values.nebariapp.enabled }}
 {{- fail "nebariapp.enabled exposes the console, which shows everyone's usage, so it needs sign-in: keep nebariapp.auth.enabled, enforceAtGateway, provisionClient and forwardAccessToken on, or set console.oidc.issuerURL and clientID" }}
+{{- else if .Values.console.devMode }}
+- {name: CONSOLE_DEV_MODE, value: "true"}
+{{- else }}
+{{- fail "the usage console shows everyone's usage, so it needs sign-in: set nebariapp.enabled (with its gateway sign-in) or console.oidc.issuerURL and clientID; on a dev cluster, console.devMode; or set console.enabled=false to leave the console out" }}
 {{- end }}
 {{- with $o.discoveryURL }}
 - {name: OIDC_DISCOVERY_URL, value: {{ . | quote }}}

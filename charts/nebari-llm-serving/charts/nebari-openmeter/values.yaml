@@ -47,8 +47,15 @@ priceSync:
   schedule: "17 3 * * *"
 
 # The read-only usage console (Stargate's console on openmeter-api,
-# usage-console/ in this repository).
+# usage-console/ in this repository). It shows everyone's usage, so the chart
+# refuses to render it without sign-in: turn on nebariapp (with its gateway
+# sign-in), set console.oidc, or, on a dev cluster only, set devMode. Set
+# enabled to false to install OpenMeter without the console.
 console:
+  enabled: true
+  # devMode runs the console with no sign-in: everyone who reaches it is the
+  # same viewer. Never enable it in a real deployment.
+  devMode: false
   image:
     repository: ghcr.io/nebari-dev/llm-serving-pack/usage-console
     tag: ""
@@ -62,8 +69,7 @@ console:
   # these empty: the console reads the issuer and its client ID from the
   # Secret the Nebari operator makes for its Keycloak client
   # (<release>-openmeter-console-oidc-client). Set issuerURL (with clientID)
-  # to use another client or issuer. With neither, the console has no
-  # sign-in of its own (dev mode: everyone is the same viewer).
+  # to use another client or issuer.
   oidc:
     issuerURL: ""
     clientID: ""

@@ -342,10 +342,12 @@ pods in the cluster can't call it. `kubectl port-forward` still reaches it.
 The chart refuses to render a NebariApp for the console without sign-in:
 with `openmeter.nebariapp.enabled`, keep `auth.enabled`, `enforceAtGateway`,
 `provisionClient` and `forwardAccessToken` on, or set
-`openmeter.console.oidc.issuerURL` and `clientID`. Without a NebariApp or an
-issuer, the console has no sign-in of its own and everyone who reaches it
-(through `kubectl port-forward`) is the same viewer. Use that only on a dev
-cluster.
+`openmeter.console.oidc.issuerURL` and `clientID`. It also refuses to render
+the console with neither: set `openmeter.console.enabled: false` to install
+OpenMeter without it. On a dev cluster, `openmeter.console.devMode: true` runs
+the console with no sign-in, and everyone who reaches it (through
+`kubectl port-forward`) is the same viewer. The console itself refuses to
+start without an issuer and client ID unless it runs in dev mode.
 
 ### Traffic
 
