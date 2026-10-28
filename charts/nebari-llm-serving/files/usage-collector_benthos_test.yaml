@@ -102,7 +102,7 @@ tests:
     output_batches:
       - - json_contains: {id: req-3, type: llm.request, subject: sub-alice, data: {usage_reported: "false", response_flags: DR}}
 
-  - name: Requests with no authenticated caller, and other routes, are dropped
+  - name: Requests with no authenticated caller, and other routes (also ones named like the pack's in another namespace), are dropped
     target_processors: /pipeline/processors
     input_batch:
       - content: |
@@ -117,6 +117,11 @@ tests:
           {"record": {"attributes": {"request_id": "req-other", "start_time": "2026-01-15T10:00:03Z",
             "route": "httproute/apps/dashboard/rule/0/match/0/example_com",
             "client_id": "user-alice-bedrock-0123-1", "model": "m", "response_code": "200"}}}
+      - content: |
+          {"record": {"attributes": {"request_id": "req-other-ns", "start_time": "2026-01-15T10:00:03Z",
+            "route": "httproute/apps/sneaky-internal/rule/0/match/0/example_com",
+            "auth_user": "mallory", "auth_subject": "sub-mallory", "model": "m",
+            "input_tokens": "3", "output_tokens": "2", "response_code": "200"}}}
     output_batches: []
 
   - name: A request the gateway's auth layer rejected is never billed, whatever identity headers it carries

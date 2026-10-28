@@ -147,7 +147,7 @@ usage-tracer: ## Web page that sends one request and follows it through the gate
 	python3 usage-tracer/server.py
 
 test-usage-collector: ## Run the usage collector pipeline tests in the pinned collector image
-	docker run --rm -e OPENMETER_URL=http://unused -v "$(CURDIR)/../charts/nebari-llm-serving/files:/t:ro" \
+	docker run --rm -e OPENMETER_URL=http://unused -e PACK_NAMESPACE=llm-system -v "$(CURDIR)/../charts/nebari-llm-serving/files:/t:ro" \
 		$(USAGE_COLLECTOR_IMAGE) test /t/usage-collector.yaml
 
 logs-operator: ## Tail operator logs

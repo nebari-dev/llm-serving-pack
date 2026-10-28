@@ -49,9 +49,12 @@ pipeline:
         let val = this.record.attributes.or({}).map_each(kv -> if kv.value == null || kv.value.string() == "-" { deleted() } else { kv.value.string() })
 
         # Envoy route name: httproute/<namespace>/<route>/rule/<n>/match/<n>/<host>.
-        # The operator names a model's routes <model>-external and <model>-internal.
+        # The operator names a model's routes <model>-external and <model>-internal
+        # (ModelRouteName), in the pack's namespace. The access log covers every
+        # route on the Gateway, so a route elsewhere with such a name is not ours.
         let route = $val.route.or("").split("/")
-        let route_name = if $route.length() > 2 { $route.index(2) } else { "" }
+        let route_ns = if $route.length() > 1 { $route.index(1) } else { "" }
+        let route_name = if $route.length() > 2 && $route_ns == env("PACK_NAMESPACE").or("") { $route.index(2) } else { "" }
         let access_path = if $route_name.has_suffix("-external") { "api_key" } else if $route_name.has_suffix("-internal") { "jwt" } else { "" }
         let caller = match $access_path {
           "api_key" => $val.client_id.or("")

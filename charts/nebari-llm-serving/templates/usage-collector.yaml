@@ -50,6 +50,9 @@ spec:
           env:
             - name: OTLP_LISTEN_ADDRESS
               value: "0.0.0.0:{{ .Values.usage.collector.port }}"
+            # Only routes in this namespace are the pack's (files/usage-collector.yaml).
+            - name: PACK_NAMESPACE
+              value: {{ $ns | quote }}
             - name: KEY_OWNER_URL
               value: "http://{{ $name }}-key-owners.{{ $ns }}.svc:{{ .Values.usage.keyOwnerLookup.port }}"
             - name: OPENMETER_URL
