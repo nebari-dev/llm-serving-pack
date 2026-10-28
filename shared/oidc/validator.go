@@ -51,6 +51,12 @@ const (
 // reachable yet" from "your token is bad" (401).
 var ErrNotReady = errors.New("jwt validator: initial JWKS fetch not yet complete")
 
+// ErrKeysUnavailable is returned by ValidateToken when a token's `kid` is not
+// cached and the JWKS cannot be fetched (Keycloak unreachable, for example
+// mid key rotation). Like ErrNotReady, callers should surface it as 503: the
+// token may be fine, and signing in again would not help.
+var ErrKeysUnavailable = errors.New("jwt validator: signing keys cannot be fetched")
+
 // clockLeeway is the tolerance applied when validating the "exp" claim. A few
 // seconds may elapse between the SPA minting the token and the request reaching
 // the key-manager through nginx; without leeway, small clock drift causes
@@ -123,6 +129,10 @@ type Validator struct {
 	// refresh attempt, used to enforce unknownKIDCooldown. Atomic because it is
 	// read and written from every request-handling goroutine.
 	lastKIDRefresh atomic.Int64
+	// fetchFailed is whether the most recent JWKS fetch failed, so a token
+	// with an unknown kid during an outage is told apart from a forged one
+	// even while the cooldown suppresses another fetch.
+	fetchFailed atomic.Bool
 	// ready flips to true once the first JWKS fetch succeeds. It is atomic
 	// because the writer runs on the background init goroutine while readers
 	// run on every request-handling goroutine.
@@ -302,8 +312,9 @@ func (v *Validator) Stop() {
 
 // ValidateToken verifies a bearer token's RSA signature, expiry (with
 // clockLeeway) and issuer, returning the verified claims. It returns
-// ErrNotReady if the initial JWKS fetch has not yet completed; the caller
-// should surface that as 503 Service Unavailable. ctx cancels the caller's wait
+// ErrNotReady if the initial JWKS fetch has not yet completed, or
+// ErrKeysUnavailable if the token's key is not cached and the JWKS cannot be
+// fetched; the caller should surface either as 503 Service Unavailable. ctx cancels the caller's wait
 // on any JWKS fetch triggered by an unknown `kid` (the fetch itself runs on the
 // validator's lifetime context so one cancelled request can't abort a fetch
 // shared with others).
@@ -344,6 +355,9 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenString string) (map[
 		v.keysMu.RLock()
 		publicKey, exists = v.publicKeys[kid]
 		v.keysMu.RUnlock()
+		if !exists && v.fetchFailed.Load() {
+			return nil, fmt.Errorf("unknown key ID %s: %w", kid, ErrKeysUnavailable)
+		}
 		if !exists {
 			return nil, fmt.Errorf("unknown key ID: %s (not found after key refresh)", kid)
 		}
@@ -429,7 +443,8 @@ func (v *Validator) refreshForUnknownKID(ctx context.Context) error {
 	}
 }
 
-func (v *Validator) fetchPublicKeys(ctx context.Context) error {
+func (v *Validator) fetchPublicKeys(ctx context.Context) (err error) {
+	defer func() { v.fetchFailed.Store(err != nil) }()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 

@@ -92,7 +92,7 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 			claims, err := cfg.Validator.ValidateToken(r.Context(), token)
 			if err != nil {
 				// JWKS not fetched yet: transient, tell the client to retry.
-				if errors.Is(err, oidc.ErrNotReady) {
+				if errors.Is(err, oidc.ErrNotReady) || errors.Is(err, oidc.ErrKeysUnavailable) {
 					w.Header().Set("Retry-After", "5")
 					http.Error(w, "auth not ready: "+err.Error(), http.StatusServiceUnavailable)
 					return
