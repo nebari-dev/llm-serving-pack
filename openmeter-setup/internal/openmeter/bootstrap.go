@@ -107,6 +107,13 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 		return err
 	}
 	for _, p := range cfg.Prices {
+		// OpenMeter stores a price as sent but looks prices up under its
+		// canonical IDs, so a price stored any other way never applies.
+		provider, model := openmeterapi.NormalizeModelID(p.Provider, p.Model)
+		if provider != p.Provider || model != p.Model {
+			log.Printf("bootstrap: price for %s/%s is stored as %s/%s, the IDs OpenMeter looks prices up under", p.Provider, p.Model, provider, model)
+		}
+		p.Provider, p.Model = provider, model
 		if hasPrice(ov, p) {
 			continue
 		}

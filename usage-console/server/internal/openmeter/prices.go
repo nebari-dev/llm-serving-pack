@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -151,7 +150,7 @@ func (p *pricer) price(ctx context.Context, provider, model string) (*Price, err
 	if provider == "" {
 		return nil, nil
 	}
-	provider, model = strings.ToLower(strings.TrimSpace(provider)), canonicalModel(model)
+	provider, model = openmeterapi.NormalizeModelID(provider, model)
 	k := [2]string{provider, model}
 	p.mu.Lock()
 	defer p.mu.Unlock()

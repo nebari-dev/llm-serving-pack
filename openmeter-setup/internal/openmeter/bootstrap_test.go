@@ -128,3 +128,29 @@ func TestBootstrapUpdatesAFeaturesProvider(t *testing.T) {
 		t.Fatalf("patch %+v, want f-chat's unit cost priced under bedrock", f.patched[0])
 	}
 }
+
+// OpenMeter stores a manual price as sent but looks prices up under its
+// canonical IDs (lowercase, provider aliases, dots between digits as
+// hyphens), so a price for the model as the gateway names it must be stored
+// in canonical form, once.
+func TestBootstrapStoresPricesUnderOpenMeterIDs(t *testing.T) {
+	f := &fakeOpenMeter{}
+	c := openmeter.NewClient(f.server(t).URL, "")
+	cfg := openmeter.BootstrapConfig{Prices: []openmeter.ManualPrice{{
+		Provider: "VLLM", Model: "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4",
+		Pricing: map[string]string{"input_per_token": "0.0000001", "output_per_token": "0.0000004"},
+	}}}
+
+	for range 2 {
+		if err := openmeter.Bootstrap(context.Background(), c, cfg, time.Now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(f.created) != 1 {
+		t.Fatalf("created %+v, want one price", f.created)
+	}
+	if p := f.created[0]; p["provider"] != "vllm" || p["model_id"] != "qwen/qwen3-5-35b-a3b-gptq-int4" {
+		t.Fatalf("price stored as %v/%v, want vllm/qwen/qwen3-5-35b-a3b-gptq-int4", p["provider"], p["model_id"])
+	}
+}

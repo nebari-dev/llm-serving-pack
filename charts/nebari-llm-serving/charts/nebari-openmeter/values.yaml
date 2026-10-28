@@ -32,7 +32,10 @@ modelResources:
 # Manual prices (USD per token) for models no public price list has, such as
 # self-hosted ones. Keys as OpenMeter's pricing: input_per_token,
 # output_per_token, cache_read_per_token, cache_write_per_token,
-# reasoning_per_token.
+# reasoning_per_token. Give the model as the gateway names it; the setup Job
+# stores the price under OpenMeter's form of the ID (lowercase, dots between
+# digits as hyphens: Qwen/Qwen3.5-35B becomes qwen/qwen3-5-35b), which is the
+# one OpenMeter looks prices up under.
 prices: []
 #  - provider: vllm
 #    model: qwen3-32b
