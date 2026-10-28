@@ -173,7 +173,7 @@ keyManager:
 #     and sends one OpenMeter usage event per request and token type;
 #   - the key-manager attaches every API key to its creator's OpenMeter
 #     customer, so usage made with a key is attributed to the person.
-# OpenMeter itself is not part of this chart; point openmeter.url at yours. The
+# Point usage.openmeter.url at your OpenMeter, or set openmeter.enabled. The
 # gateway also has to send its access log to the collector: see
 # examples/usage-access-log.yaml and the Usage metering docs.
 
