@@ -1,9 +1,7 @@
 package openmeter
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -84,7 +82,7 @@ func (c *Client) meterQuery(ctx context.Context, slug string, from, to time.Time
 	var out struct {
 		Data []meterRow `json:"data"`
 	}
-	return out.Data, c.get(ctx, "/api/v1/meters/"+slug+"/query", q, &out)
+	return out.Data, c.Get(ctx, "/api/v1/meters/"+slug+"/query", q, &out)
 }
 
 func (c *Client) costQuery(ctx context.Context, featureID string, from, to time.Time, w *window) ([]costRow, error) {
@@ -92,19 +90,10 @@ func (c *Client) costQuery(ctx context.Context, featureID string, from, to time.
 	if w != nil {
 		body["granularity"] = w.cost
 	}
-	b, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/v3/openmeter/features/"+url.PathEscape(featureID)+"/cost/query", bytes.NewReader(b))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
 	var out struct {
 		Data []costRow `json:"data"`
 	}
-	return out.Data, c.do(req, &out)
+	return out.Data, c.Do(ctx, http.MethodPost, "/api/v3/openmeter/features/"+url.PathEscape(featureID)+"/cost/query", nil, body, &out)
 }
 
 // usage is [from, to) as cells, in windows of w (nil: one window). Cost and

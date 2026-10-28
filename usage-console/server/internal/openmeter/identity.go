@@ -3,18 +3,18 @@ package openmeter
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/oidc"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 // Identity says who is calling the console.
 type Identity interface {
 	// Caller returns the person making r, and how they signed in. An error
-	// wrapping oidc.ErrInvalid means r has no acceptable sign-in.
+	// wrapping oidc.ErrNotReady means sign-in cannot be checked yet; any
+	// other, that r has no acceptable sign-in.
 	Caller(r *http.Request) (SessionActor, SessionAuth, error)
 }
 
@@ -26,9 +26,10 @@ func (DevIdentity) Caller(*http.Request) (SessionActor, SessionAuth, error) {
 	return SessionActor{Email: "viewer", Roles: []string{"viewer"}}, SessionAuth{Mode: "dev"}, nil
 }
 
-// TokenVerifier checks an access token and returns its claims.
+// TokenVerifier checks an access token and returns its claims
+// (*oidc.Validator).
 type TokenVerifier interface {
-	Verify(ctx context.Context, raw string) (oidc.Claims, error)
+	ValidateToken(ctx context.Context, raw string) (map[string]any, error)
 }
 
 // GatewayIdentity is for a console behind the Nebari gateway's sign-in: the
@@ -53,24 +54,45 @@ const gatewaySignOut = "/logout"
 func (g GatewayIdentity) Caller(r *http.Request) (SessionActor, SessionAuth, error) {
 	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || raw == "" {
-		return SessionActor{}, SessionAuth{}, fmt.Errorf("%w: no bearer token", oidc.ErrInvalid)
+		return SessionActor{}, SessionAuth{}, errors.New("no bearer token")
 	}
-	c, err := g.Tokens.Verify(r.Context(), raw)
+	c, err := g.Tokens.ValidateToken(r.Context(), raw)
 	if err != nil {
 		return SessionActor{}, SessionAuth{}, err
 	}
-	name := c.Name
+	name := claim(c, "name")
 	if name == "" {
-		name = strings.TrimSpace(c.GivenName + " " + c.FamilyName)
+		name = strings.TrimSpace(claim(c, "given_name") + " " + claim(c, "family_name"))
 	}
-	if len(g.Groups) > 0 && !memberOfAny(c.Groups, g.Groups) {
+	if len(g.Groups) > 0 && !memberOfAny(groupsOf(c), g.Groups) {
 		return SessionActor{}, SessionAuth{}, errForbidden
 	}
-	email := c.Email
+	email := claim(c, "email")
 	if email == "" {
-		email = c.PreferredUsername
+		email = claim(c, "preferred_username")
 	}
 	return SessionActor{Name: name, Email: email, Roles: []string{"viewer"}}, SessionAuth{Mode: "oidc", SignOutURL: gatewaySignOut}, nil
+}
+
+func claim(c map[string]any, name string) string {
+	s, _ := c[name].(string)
+	return s
+}
+
+// groupsOf is the token's groups claim, as the operator's mapper writes it.
+func groupsOf(c map[string]any) []string {
+	var out []string
+	switch gs := c["groups"].(type) {
+	case []string:
+		out = gs
+	case []any:
+		for _, g := range gs {
+			if s, ok := g.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }
 
 // memberOfAny says whether have holds one of want, comparing them as
@@ -110,17 +132,18 @@ func (s *Server) authenticated(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, auth, err := s.Identity.Caller(r)
 		switch {
+		case err == nil:
 		case errors.Is(err, errForbidden):
 			slog.Info("access refused", "path", r.URL.Path, "err", err)
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "ask an administrator to add you to the group that may see usage"}})
 			return
-		case errors.Is(err, oidc.ErrInvalid):
-			slog.Info("sign-in refused", "path", r.URL.Path, "err", err)
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "unauthenticated", "message": "sign in again"}})
-			return
-		case err != nil:
+		case errors.Is(err, oidc.ErrNotReady):
 			slog.Error("sign-in cannot be checked", "path", r.URL.Path, "err", err)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "identity_unavailable", "message": "sign-in cannot be checked right now"}})
+			return
+		default:
+			slog.Info("sign-in refused", "path", r.URL.Path, "err", err)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "unauthenticated", "message": "sign in again"}})
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, Session{Actor: actor, Auth: auth})))

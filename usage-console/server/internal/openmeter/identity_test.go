@@ -9,21 +9,21 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/oidc"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 // tokens stands in for the OIDC verifier: the tokens it accepts, and the
 // claims each carries. Any other token is invalid.
-type tokens map[string]oidc.Claims
+type tokens map[string]map[string]any
 
-func (ts tokens) Verify(_ context.Context, raw string) (oidc.Claims, error) {
+func (ts tokens) ValidateToken(_ context.Context, raw string) (map[string]any, error) {
 	if raw == "keycloak-down" {
-		return oidc.Claims{}, fmt.Errorf("%w: connection refused", oidc.ErrUnavailable)
+		return nil, oidc.ErrNotReady
 	}
 	c, ok := ts[raw]
 	if !ok {
-		return oidc.Claims{}, fmt.Errorf("%w: bad signature", oidc.ErrInvalid)
+		return nil, fmt.Errorf("token validation failed: bad signature")
 	}
 	return c, nil
 }
@@ -50,7 +50,7 @@ func call(h http.Handler, path, authorization string) *httptest.ResponseRecorder
 // Behind the gateway, the session is the person Keycloak signed in, read
 // from the access token the gateway forwards; sign-out is the gateway's.
 func TestSessionIsTheSignedInPerson(t *testing.T) {
-	h := signedInAPI(t, tokens{"t-alice": {Subject: "u-1", Name: "Alice Example", PreferredUsername: "alice", Email: "alice@example.com"}})
+	h := signedInAPI(t, tokens{"t-alice": {"sub": "u-1", "name": "Alice Example", "preferred_username": "alice", "email": "alice@example.com"}})
 
 	rec := call(h, "/session", "Bearer t-alice")
 
@@ -70,7 +70,7 @@ func TestSessionIsTheSignedInPerson(t *testing.T) {
 // A token without name or email still names the person: given and family
 // name, and the username.
 func TestSessionFallsBackToOtherNameClaims(t *testing.T) {
-	h := signedInAPI(t, tokens{"t-bob": {Subject: "u-2", GivenName: "Bob", FamilyName: "Example", PreferredUsername: "bob"}})
+	h := signedInAPI(t, tokens{"t-bob": {"sub": "u-2", "given_name": "Bob", "family_name": "Example", "preferred_username": "bob"}})
 
 	var s openmeter.Session
 	json.Unmarshal(call(h, "/session", "Bearer t-bob").Body.Bytes(), &s)
@@ -85,7 +85,7 @@ func TestSessionFallsBackToOtherNameClaims(t *testing.T) {
 // the gateway. An unreachable Keycloak is the console's problem, not the
 // caller's.
 func TestCallsNeedAValidToken(t *testing.T) {
-	h := signedInAPI(t, tokens{"t-alice": {Subject: "u-1", Email: "alice@example.com"}})
+	h := signedInAPI(t, tokens{"t-alice": {"sub": "u-1", "email": "alice@example.com"}})
 	for _, path := range []string{"/session", "/teams", "/receipts", "/stream/traffic"} {
 		for auth, want := range map[string]int{
 			"":                     http.StatusUnauthorized,
@@ -107,10 +107,10 @@ func TestCallsNeedARequiredGroup(t *testing.T) {
 	h := (&openmeter.Server{
 		Client: openmeter.NewClient(om.URL, ""), Tenant: "demo", Now: func() time.Time { return now },
 		Identity: openmeter.GatewayIdentity{Tokens: tokens{
-			"t-path":  {Subject: "u-1", Groups: []string{"/team-a", "/llm-usage-admins"}},
-			"t-name":  {Subject: "u-2", Groups: []string{"llm-usage-admins"}},
-			"t-other": {Subject: "u-3", Groups: []string{"/team-a", "/llm-usage-admins/sub"}},
-			"t-none":  {Subject: "u-4"},
+			"t-path":  {"sub": "u-1", "groups": []string{"/team-a", "/llm-usage-admins"}},
+			"t-name":  {"sub": "u-2", "groups": []string{"llm-usage-admins"}},
+			"t-other": {"sub": "u-3", "groups": []string{"/team-a", "/llm-usage-admins/sub"}},
+			"t-none":  {"sub": "u-4"},
 		}, Groups: []string{"llm-usage-admins"}},
 	}).Handler()
 	for token, want := range map[string]int{"t-path": 200, "t-name": 200, "t-other": 403, "t-none": 403} {

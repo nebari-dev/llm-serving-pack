@@ -1,7 +1,8 @@
-package api
+package oidc
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,41 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+const (
+	testIssuer = "https://keycloak.example.com/realms/nebari"
+	testKID    = "test-key-1"
+)
+
+// newTestValidator returns a Validator preloaded with pub under testKID and
+// marked ready, so tests validate signed tokens without any network fetch.
+func newTestValidator(t *testing.T, pub *rsa.PublicKey) *Validator {
+	t.Helper()
+	v := &Validator{
+		logger:     slog.Default(),
+		issuer:     testIssuer,
+		publicKeys: map[string]*rsa.PublicKey{testKID: pub},
+		baseCtx:    context.Background(),
+	}
+	v.ready.Store(true)
+	return v
+}
+
+// signToken signs claims as an RS256 JWT with testKID. iss/exp are filled with
+// valid defaults unless already present.
+func signToken(t *testing.T, priv *rsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	return signTokenWithKID(t, priv, testKID, claims)
+}
+
+func genKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	return key
+}
 
 // writeJWKS encodes pub as a single-key JWKS under kid, matching the shape the
 // validator's fetchPublicKeys expects from Keycloak's /certs endpoint.
@@ -38,10 +74,12 @@ func writeJWKS(t *testing.T, w http.ResponseWriter, kid string, pub *rsa.PublicK
 func signTokenWithKID(t *testing.T, priv *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
 	t.Helper()
 	if _, ok := claims["iss"]; !ok {
-		claims["iss"] = testIssuer + "/realms/" + testRealm
+		claims["iss"] = testIssuer
 	}
-	if _, ok := claims["exp"]; !ok {
+	if v, ok := claims["exp"]; !ok {
 		claims["exp"] = time.Now().Add(5 * time.Minute).Unix()
+	} else if v == nil {
+		delete(claims, "exp") // a token with no expiry at all
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	tok.Header["kid"] = kid
@@ -67,13 +105,12 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	v := &JWTValidator{
-		logger:      slog.Default(),
-		keycloakURL: srv.URL,
-		issuerURL:   testIssuer,
-		realm:       testRealm,
-		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
-		baseCtx:     context.Background(),
+	v := &Validator{
+		logger:     slog.Default(),
+		keysURL:    srv.URL,
+		issuer:     testIssuer,
+		publicKeys: map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
+		baseCtx:    context.Background(),
 	}
 	v.ready.Store(true)
 
@@ -113,7 +150,7 @@ func TestUnknownKIDRefreshIsRateLimited(t *testing.T) {
 // TestRotatedKIDResolvesForConcurrentBurst is the rotation counterpart to
 // TestUnknownKIDRefreshIsRateLimited. When Keycloak has rotated to a new signing
 // key, a concurrent burst of legitimate requests bearing the new kid must all
-// validate off a single shared JWKS fetch — none may be spuriously 401'd by the
+// validate off a single shared JWKS fetch; none may be spuriously 401'd by the
 // cooldown gate. This is the case the SPA hits on the first page load after a
 // rotation, firing /api/me, /api/models and /api/keys concurrently with the same
 // fresh token. The rate bound (exactly one outbound fetch) must still hold.
@@ -130,13 +167,12 @@ func TestRotatedKIDResolvesForConcurrentBurst(t *testing.T) {
 	defer srv.Close()
 
 	// Validator starts holding only the pre-rotation key, under testKID.
-	v := &JWTValidator{
-		logger:      slog.Default(),
-		keycloakURL: srv.URL,
-		issuerURL:   testIssuer,
-		realm:       testRealm,
-		publicKeys:  map[string]*rsa.PublicKey{testKID: &oldPriv.PublicKey},
-		baseCtx:     context.Background(),
+	v := &Validator{
+		logger:     slog.Default(),
+		keysURL:    srv.URL,
+		issuer:     testIssuer,
+		publicKeys: map[string]*rsa.PublicKey{testKID: &oldPriv.PublicKey},
+		baseCtx:    context.Background(),
 	}
 	v.ready.Store(true)
 
@@ -185,7 +221,7 @@ func TestAzpValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newTestValidator(t, &priv.PublicKey)
-			v.SetExpectedClientID(tc.expectedClientID)
+			v.clientID = tc.expectedClientID
 
 			claims := jwt.MapClaims{"preferred_username": "alice"}
 			if tc.azp != nil {
@@ -215,13 +251,12 @@ func TestKnownKIDNeverRefetches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	v := &JWTValidator{
-		logger:      slog.Default(),
-		keycloakURL: srv.URL,
-		issuerURL:   testIssuer,
-		realm:       testRealm,
-		publicKeys:  map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
-		baseCtx:     context.Background(),
+	v := &Validator{
+		logger:     slog.Default(),
+		keysURL:    srv.URL,
+		issuer:     testIssuer,
+		publicKeys: map[string]*rsa.PublicKey{testKID: &priv.PublicKey},
+		baseCtx:    context.Background(),
 	}
 	v.ready.Store(true)
 
@@ -250,11 +285,10 @@ func TestInitialFetchRetriesThenSucceeds(t *testing.T) {
 	defer srv.Close()
 
 	var delays int
-	v := &JWTValidator{
+	v := &Validator{
 		logger:              slog.Default(),
-		keycloakURL:         srv.URL,
-		issuerURL:           testIssuer,
-		realm:               testRealm,
+		keysURL:             srv.URL,
+		issuer:              testIssuer,
 		publicKeys:          map[string]*rsa.PublicKey{},
 		retryMaxAttempts:    5,
 		retryInitialBackoff: time.Millisecond,
@@ -292,11 +326,10 @@ func TestInitialFetchFallsBackToSlowPoll(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	v := &JWTValidator{
+	v := &Validator{
 		logger:              slog.Default(),
-		keycloakURL:         srv.URL,
-		issuerURL:           testIssuer,
-		realm:               testRealm,
+		keysURL:             srv.URL,
+		issuer:              testIssuer,
 		publicKeys:          map[string]*rsa.PublicKey{},
 		retryMaxAttempts:    2,
 		retryInitialBackoff: time.Millisecond,
@@ -311,5 +344,87 @@ func TestInitialFetchFallsBackToSlowPoll(t *testing.T) {
 	}
 	if !v.Ready() {
 		t.Error("validator should be ready after a slow-poll success")
+	}
+}
+
+// With acceptAudience, a token whose aud names the client is accepted even
+// when another client obtained it; without, only azp counts.
+func TestClientInAudience(t *testing.T) {
+	priv := genKey(t)
+	tok := signToken(t, priv, jwt.MapClaims{"azp": "gateway", "aud": []string{"account", "usage-console"}})
+	for _, accept := range []bool{true, false} {
+		v := newTestValidator(t, &priv.PublicKey)
+		v.clientID, v.acceptAudience = "usage-console", accept
+		if _, err := v.ValidateToken(context.Background(), tok); (err == nil) != accept {
+			t.Errorf("acceptAudience=%v: err %v", accept, err)
+		}
+	}
+}
+
+// Without a keys URL, the keys come from the provider's discovery document.
+func TestKeysFromDiscovery(t *testing.T) {
+	priv := genKey(t)
+	mux := http.NewServeMux()
+	var srv *httptest.Server
+	mux.HandleFunc("GET /realms/nebari/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]string{"jwks_uri": srv.URL + "/certs"}); err != nil {
+			t.Error(err)
+		}
+	})
+	mux.HandleFunc("GET /certs", func(w http.ResponseWriter, _ *http.Request) { writeJWKS(t, w, testKID, &priv.PublicKey) })
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	v := New(Config{DiscoveryURL: srv.URL + "/realms/nebari/", Issuer: testIssuer})
+	defer v.Stop()
+	for deadline := time.Now().Add(5 * time.Second); !v.Ready(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never ready")
+		}
+	}
+	if _, err := v.ValidateToken(context.Background(), signToken(t, priv, jwt.MapClaims{})); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Tokens refused: each differs from a good one in one way.
+func TestValidateTokenRefuses(t *testing.T) {
+	priv, other := genKey(t), genKey(t)
+	v := newTestValidator(t, &priv.PublicKey)
+	hs := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"iss": testIssuer, "exp": time.Now().Add(time.Minute).Unix()})
+	hs.Header["kid"] = testKID
+	hsTok, _ := hs.SignedString([]byte("secret"))
+	noExp := jwt.MapClaims{"exp": nil}
+	for name, tok := range map[string]string{
+		"expired":       signToken(t, priv, jwt.MapClaims{"exp": time.Now().Add(-time.Hour).Unix()}),
+		"no expiry":     signToken(t, priv, noExp),
+		"not yet valid": signToken(t, priv, jwt.MapClaims{"nbf": time.Now().Add(time.Hour).Unix()}),
+		"other issuer":  signToken(t, priv, jwt.MapClaims{"iss": "https://keycloak.example.com/realms/other"}),
+		"other key":     signToken(t, other, jwt.MapClaims{}),
+		"HMAC":          hsTok,
+		"not a JWT":     "abc",
+	} {
+		if _, err := v.ValidateToken(context.Background(), tok); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// A failed background refresh keeps the keys already read: a Keycloak
+// outage doesn't lock everyone out.
+func TestFailedRefreshKeepsKnownKeys(t *testing.T) {
+	priv := genKey(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	v := newTestValidator(t, &priv.PublicKey)
+	v.keysURL = srv.URL
+
+	if err := v.refreshKeys(context.Background()); err == nil {
+		t.Fatal("refresh against a down provider succeeded")
+	}
+	if _, err := v.ValidateToken(context.Background(), signToken(t, priv, jwt.MapClaims{})); err != nil {
+		t.Fatalf("known key refused after a failed refresh: %v", err)
 	}
 }

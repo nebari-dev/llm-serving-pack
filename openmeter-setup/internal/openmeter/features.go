@@ -2,6 +2,8 @@ package openmeter
 
 import (
 	"context"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
 )
 
 // Price is one OpenMeter LLM price row, as the manual overrides list them.
@@ -40,9 +42,9 @@ type UnitCost struct {
 }
 
 func (c *Client) Features(ctx context.Context) ([]Feature, error) {
-	return listAll[Feature](ctx, c, "/api/v3/openmeter/features")
+	return openmeterapi.ListAll[Feature](ctx, c.Client, "/api/v3/openmeter/features", nil)
 }
 
 func (c *Client) Overrides(ctx context.Context) ([]Price, error) {
-	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/overrides")
+	return openmeterapi.ListAll[Price](ctx, c.Client, "/api/v3/openmeter/llm-cost/overrides", nil)
 }

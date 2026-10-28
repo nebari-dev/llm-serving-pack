@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/oidc"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
@@ -34,10 +34,12 @@ func main() {
 
 	var identity openmeter.Identity = openmeter.DevIdentity{}
 	if *issuer != "" {
-		v, err := oidc.NewVerifier(oidc.Config{Issuer: *issuer, DiscoveryURL: *discovery, ClientID: *clientID})
-		if err != nil {
-			log.Fatal(err)
+		keys := *discovery
+		if keys == "" {
+			keys = *issuer
 		}
+		v := oidc.New(oidc.Config{DiscoveryURL: keys, Issuer: *issuer, ClientID: *clientID, AcceptAudience: true})
+		defer v.Stop()
 		var required []string
 		for _, g := range strings.Split(*groups, ",") {
 			if g = strings.TrimSpace(g); g != "" {

@@ -96,6 +96,29 @@ jobs:
         working-directory: openmeter-setup
         run: go test ./...
 
+  test-shared:
+    name: Test shared Go module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: shared/go.mod
+          cache: false
+
+      - name: Check module tidiness
+        working-directory: shared
+        run: go mod tidy -diff
+
+      - name: Vet
+        working-directory: shared
+        run: go vet ./...
+
+      - name: Run tests
+        working-directory: shared
+        run: go test -race ./...
+
   test-usage-console:
     name: Test usage console
     runs-on: ubuntu-latest

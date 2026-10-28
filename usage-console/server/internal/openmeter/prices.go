@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
 )
 
 // Price is one OpenMeter LLM price row: a manual override or a synced price.
@@ -36,15 +38,15 @@ type Feature struct {
 }
 
 func (c *Client) Features(ctx context.Context) ([]Feature, error) {
-	return listAll[Feature](ctx, c, "/api/v3/openmeter/features", nil)
+	return openmeterapi.ListAll[Feature](ctx, c.Client, "/api/v3/openmeter/features", nil)
 }
 
 func (c *Client) Overrides(ctx context.Context) ([]Price, error) {
-	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/overrides", nil)
+	return openmeterapi.ListAll[Price](ctx, c.Client, "/api/v3/openmeter/llm-cost/overrides", nil)
 }
 
 func (c *Client) Prices(ctx context.Context, provider, model string) ([]Price, error) {
-	return listAll[Price](ctx, c, "/api/v3/openmeter/llm-cost/prices", url.Values{"filter[provider][eq]": {provider}, "filter[model_id][eq]": {model}})
+	return openmeterapi.ListAll[Price](ctx, c.Client, "/api/v3/openmeter/llm-cost/prices", url.Values{"filter[provider][eq]": {provider}, "filter[model_id][eq]": {model}})
 }
 
 // tokenRate names each collector token type's rate in OpenMeter's pricing.

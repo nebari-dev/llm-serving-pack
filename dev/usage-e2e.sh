@@ -57,8 +57,8 @@ fi
 # --- 1. pack, dev Keycloak and its two people -----------------------------------------
 step "building and loading images, deploying the operator, key-manager and Keycloak"
 make build-images >/dev/null
-docker build -q -t openmeter-setup:dev ../openmeter-setup >/dev/null
-docker build -q -t usage-console:dev ../usage-console >/dev/null
+docker build -q -f ../openmeter-setup/Dockerfile -t openmeter-setup:dev .. >/dev/null
+docker build -q -f ../usage-console/Dockerfile -t usage-console:dev .. >/dev/null
 make load-images >/dev/null
 kind load docker-image openmeter-setup:dev --name "$CLUSTER_NAME" >/dev/null
 kind load docker-image usage-console:dev --name "$CLUSTER_NAME" >/dev/null

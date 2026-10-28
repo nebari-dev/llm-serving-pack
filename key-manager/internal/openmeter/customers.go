@@ -10,20 +10,18 @@
 package openmeter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
 )
 
 // customer is a new OpenMeter v1 customer, as the sync creates it.
@@ -81,76 +79,30 @@ func (c storedCustomer) setSubjectKeys(keys []string) error {
 	return err
 }
 
-// errNotFound is returned when OpenMeter has no customer with the given key.
-var errNotFound = errors.New("customer not found")
-
 // Client talks to the OpenMeter API.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
+	*openmeterapi.Client
 }
 
 // NewClient returns a Client for the OpenMeter API at baseURL. token is sent
 // as a bearer token when non-empty (OpenMeter's open-source server has no
 // authentication; a proxy in front of it may).
 func NewClient(baseURL, token string, httpClient *http.Client) *Client {
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	return &Client{baseURL: strings.TrimSuffix(baseURL, "/"), token: token, http: httpClient}
-}
-
-func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
-	var reader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reader = bytes.NewReader(b)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusNotFound {
-		return errNotFound
-	}
-	if resp.StatusCode >= 300 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(msg)))
-	}
-	if out == nil {
-		return nil
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return &Client{openmeterapi.New(baseURL, token, httpClient)}
 }
 
 func (c *Client) getCustomer(ctx context.Context, key string) (storedCustomer, error) {
 	var out storedCustomer
-	err := c.do(ctx, http.MethodGet, "/api/v1/customers/"+url.PathEscape(key), nil, &out)
+	err := c.Get(ctx, "/api/v1/customers/"+url.PathEscape(key), nil, &out)
 	return out, err
 }
 
 func (c *Client) createCustomer(ctx context.Context, cust customer) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/customers", cust, nil)
+	return c.Do(ctx, http.MethodPost, "/api/v1/customers", nil, cust, nil)
 }
 
 func (c *Client) replaceCustomer(ctx context.Context, key string, cust storedCustomer) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/customers/"+url.PathEscape(key), cust, nil)
+	return c.Do(ctx, http.MethodPut, "/api/v1/customers/"+url.PathEscape(key), nil, cust, nil)
 }
 
 // customersWithSubjectKey returns the customers holding subjectKey, by key
@@ -165,7 +117,7 @@ func (c *Client) customersWithSubjectKey(ctx context.Context, subjectKey string)
 			Items      []storedCustomer `json:"items"`
 		}
 		q := url.Values{"subject": {subjectKey}, "page": {strconv.Itoa(page)}, "pageSize": {"100"}}
-		if err := c.do(ctx, http.MethodGet, "/api/v1/customers?"+q.Encode(), nil, &resp); err != nil {
+		if err := c.Get(ctx, "/api/v1/customers", q, &resp); err != nil {
 			return nil, err
 		}
 		for _, item := range resp.Items {
@@ -274,7 +226,7 @@ func (s *CustomerSync) Sync(ctx context.Context) error {
 // conflicts each one another customer holds instead of adding it.
 func (s *CustomerSync) syncOwner(ctx context.Context, subject string, o *owner, conflicts map[string]string) error {
 	existing, err := s.client.getCustomer(ctx, subject)
-	isNew := errors.Is(err, errNotFound)
+	isNew := errors.Is(err, openmeterapi.ErrNotFound)
 	if err != nil && !isNew {
 		return err
 	}

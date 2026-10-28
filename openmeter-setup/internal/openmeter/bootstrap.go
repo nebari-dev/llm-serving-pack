@@ -1,9 +1,7 @@
 package openmeter
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"maps"
@@ -12,6 +10,8 @@ import (
 	"net/url"
 	"regexp"
 	"time"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
 )
 
 // BootstrapConfig is what the pack sets up in OpenMeter: a priced feature
@@ -47,7 +47,7 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 		ID  string `json:"id"`
 		Key string `json:"key"`
 	}
-	meters, err := listAll[meter](ctx, c, "/api/v3/openmeter/meters")
+	meters, err := openmeterapi.ListAll[meter](ctx, c.Client, "/api/v3/openmeter/meters", nil)
 	if err != nil {
 		return err
 	}
@@ -81,14 +81,14 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 			// usage the resource recorded under the old provider.
 			log.Printf("feature %s (%s): unit cost %+v differs from the values' %+v; updating it, which re-prices this resource's past usage too",
 				f.Key, r.Name, f.UnitCost, want)
-			if err := c.patch(ctx, "/api/v3/openmeter/features/"+url.PathEscape(f.ID), map[string]any{"unit_cost": want}); err != nil {
+			if err := c.Do(ctx, http.MethodPatch, "/api/v3/openmeter/features/"+url.PathEscape(f.ID), nil, map[string]any{"unit_cost": want}, nil); err != nil {
 				return fmt.Errorf("feature for %s: %w", r.Name, err)
 			}
 		}
 		if len(have[r.Name]) > 0 {
 			continue
 		}
-		err := c.post(ctx, "/api/v3/openmeter/features", map[string]any{
+		err := c.Do(ctx, http.MethodPost, "/api/v3/openmeter/features", nil, map[string]any{
 			"key":  featureKey(r.Name),
 			"name": r.Name + " tokens",
 			"meter": map[string]any{
@@ -96,7 +96,7 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 				"filters": map[string]any{"model_resource": map[string]string{"eq": r.Name}},
 			},
 			"unit_cost": want,
-		})
+		}, nil)
 		if err != nil {
 			return fmt.Errorf("feature for %s: %w", r.Name, err)
 		}
@@ -110,10 +110,10 @@ func Bootstrap(ctx context.Context, c *Client, cfg BootstrapConfig, now func() t
 		if hasPrice(ov, p) {
 			continue
 		}
-		err := c.post(ctx, "/api/v3/openmeter/llm-cost/overrides", map[string]any{
+		err := c.Do(ctx, http.MethodPost, "/api/v3/openmeter/llm-cost/overrides", nil, map[string]any{
 			"provider": p.Provider, "model_id": p.Model, "pricing": p.Pricing, "currency": "USD",
 			"effective_from": now().UTC().Format(time.RFC3339),
-		})
+		}, nil)
 		if err != nil {
 			return fmt.Errorf("price for %s/%s: %w", p.Provider, p.Model, err)
 		}
@@ -177,26 +177,4 @@ func featureKey(resource string) string {
 // token type.
 func llmUnitCost(provider string) UnitCost {
 	return UnitCost{Type: "llm", Provider: provider, ModelProperty: "model", TokenTypeProperty: "token_type"}
-}
-
-func (c *Client) post(ctx context.Context, path string, body any) error {
-	return c.send(ctx, http.MethodPost, path, body)
-}
-
-func (c *Client) patch(ctx context.Context, path string, body any) error {
-	return c.send(ctx, http.MethodPatch, path, body)
-}
-
-func (c *Client) send(ctx context.Context, method, path string, body any) error {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	var out any
-	return c.do(req, &out)
 }

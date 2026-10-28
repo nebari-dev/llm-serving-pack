@@ -1,4 +1,4 @@
-# Build context must be the repository root so both modules are available.
+# Build context must be the repository root so the modules it uses are available.
 # Usage: docker build -f key-manager/Dockerfile -t key-manager:dev .
 
 FROM golang:1.24 AS builder
@@ -12,8 +12,10 @@ WORKDIR /workspace
 COPY operator/go.mod operator/go.sum operator/
 COPY key-manager/go.mod key-manager/go.sum key-manager/
 
-# Copy the operator API package that the key-manager depends on via replace.
+# Copy the operator API package and the shared module that the key-manager
+# depends on via replace.
 COPY operator/api/ operator/api/
+COPY shared/ shared/
 
 # Download dependencies before copying source to maximise layer cache hits.
 WORKDIR /workspace/key-manager
