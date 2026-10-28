@@ -38,6 +38,33 @@ prices: []
 priceSync:
   schedule: "17 3 * * *"
 
+# The read-only usage console (Stargate's console on openmeter-api,
+# usage-console/ in this repository).
+console:
+  image:
+    repository: ghcr.io/nebari-dev/llm-serving-pack/usage-console
+    tag: ""
+    digest: ""
+  replicas: 1
+  resources:
+    requests: {cpu: 20m, memory: 32Mi}
+    limits: {memory: 128Mi}
+  # Whose access tokens the console accepts, to show who is signed in. With
+  # the NebariApp's gateway sign-in on and forwardAccessToken true, leave
+  # these empty: the console reads the issuer and its client ID from the
+  # Secret the Nebari operator makes for its Keycloak client
+  # (<release>-openmeter-console-oidc-client). Set issuerURL (with clientID)
+  # to use another client or issuer. With neither, the console has no
+  # sign-in of its own (dev mode: everyone is the same viewer).
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    # discoveryURL - where to read the issuer's discovery document and keys
+    # when the console can't reach issuerURL (an in-cluster Keycloak address,
+    # such as http://keycloak-keycloakx-http.keycloak.svc:8080/realms/nebari).
+    # Empty: issuerURL, or the Secret's issuer URL.
+    discoveryURL: ""
+
 # openmeter-setup (openmeter-setup/ in this repository): the image the
 # bootstrap Job (features and prices) and the ClickHouse password hook run.
 setup:
@@ -116,7 +143,7 @@ redis:
     limits: {memory: 384Mi}
 
 # Who may call OpenMeter's API, which has no authentication of its own:
-# the bootstrap job, pods in this namespace with one of these
+# the console, the bootstrap job, pods in this namespace with one of these
 # label sets, and pods in these namespaces. As part of the LLM serving pack,
 # the usage collector and the key-manager carry
 # llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
@@ -130,3 +157,30 @@ networkPolicy:
   apiClientPodLabels:
     - llm.nebari.dev/openmeter-client: "true"
   apiClientNamespaces: []
+  # gatewayNamespace - where Envoy Gateway runs the gateway's proxies; the
+  # console takes connections from those only.
+  gatewayNamespace: envoy-gateway-system
+
+# Routing, TLS and Keycloak sign-in for the console through the Nebari
+# operator. auth.enforceAtGateway signs people in before they reach it.
+nebariapp:
+  enabled: false
+  # hostname: usage.nebari.example.com
+  gateway: public
+  auth:
+    enabled: true
+    enforceAtGateway: true
+    provisionClient: true
+    # forwardAccessToken - the gateway passes the signed-in person's Keycloak
+    # access token to the console, which checks it and shows who they are.
+    forwardAccessToken: true
+    # groups - only members of these Keycloak groups may open the console,
+    # which shows every person's and team's usage. The Nebari operator
+    # creates the groups; add the people who may see usage to them. Empty:
+    # every user in the realm.
+    groups: [llm-usage-admins]
+  landingPage:
+    enabled: true
+    displayName: LLM usage
+    description: Tokens and cost of every model request, by team, person and API key.
+    category: AI
