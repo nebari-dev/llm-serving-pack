@@ -72,11 +72,19 @@ openmeter.enabled.
 {{/*
 The bundled OpenMeter's namespace: openmeter.namespace, which the subchart
 installs into. Required: a subchart cannot be handed the pack's computed
-namespace, and the release namespace is wherever helm happened to run.
+namespace, and the release namespace is wherever helm happened to run. It
+must not be the pack's namespace: the subchart's pre-install hook would run
+before the chart creates that namespace, uninstalling would delete the data
+keepDataOnUninstall keeps, and the key-manager can read every Secret there
+(#215), OpenMeter's credentials included.
 */}}
 {{- define "nebari-llm-serving.openmeterNamespace" -}}
+{{- $pack := include "nebari-llm-serving.operatorNamespace" . -}}
 {{- if not .Values.openmeter.namespace -}}
-{{- fail (printf "openmeter.enabled needs openmeter.namespace: the pack's namespace, %s, or another namespace that exists" (include "nebari-llm-serving.operatorNamespace" .)) -}}
+{{- fail (printf "openmeter.enabled needs openmeter.namespace: a namespace that exists, other than the pack's namespace (%s)" $pack) -}}
+{{- end -}}
+{{- if eq .Values.openmeter.namespace $pack -}}
+{{- fail (printf "openmeter.namespace must not be the pack's namespace (%s): create another namespace for OpenMeter, such as usage-openmeter" $pack) -}}
 {{- end -}}
 {{- .Values.openmeter.namespace -}}
 {{- end }}
