@@ -113,7 +113,7 @@ clickhouse:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {memory: 2Gi}
   # A Secret you manage with ClickHouse's password under clickhouse-password.
-  # Empty: a pre-install/pre-upgrade hook (an Argo CD PreSync hook) creates
+  # Empty: a Job (an ordinary resource, not a hook) creates
   # <release>-openmeter-clickhouse-password once, with a random password,
   # and leaves it as it is after that. Changing the password in your own
   # Secret takes a restart of ClickHouse, the OpenMeter API and the sink

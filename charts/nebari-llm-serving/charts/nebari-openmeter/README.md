@@ -17,9 +17,10 @@ The chart (`nebari-openmeter`) deploys:
   with an append-only file) and Postgres, on persistent volumes. All are
   pinned upstream images.
   Postgres's credentials come from CloudNativePG. ClickHouse's password is
-  `clickhouse.existingSecret`, or a Secret a pre-install/pre-upgrade hook
-  (Argo CD `PreSync`) creates once with a random password and never changes,
-  so it stays put when Argo CD re-renders the chart.
+  `clickhouse.existingSecret`, or a Secret a Job creates once with a random
+  password and never changes, so it stays put when Argo CD re-renders the
+  chart. The Job is an ordinary resource, not a hook, so the chart can
+  install into a namespace created in the same release.
 - **The meters** the collector feeds (`llm_requests`, `llm_tokens`), a
   priced feature per model resource, manual prices for models no public price
   list has, and OpenMeter's public price sync after install and daily.

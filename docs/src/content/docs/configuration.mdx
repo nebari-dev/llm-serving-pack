@@ -128,7 +128,7 @@ The `openmeter` values configure the `nebari-openmeter` subchart; every key unde
 | Key | Default | Description |
 |-----|---------|-------------|
 | `openmeter.enabled` | `false` | Install OpenMeter and the usage console with the pack. |
-| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: a namespace that exists, other than the pack's namespace (`<fullname>-system`), which the chart refuses. Label it `nebari.dev/managed=true` for the usage console's `NebariApp`. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
+| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: the pack's namespace (`<fullname>-system`; the chart's error names it) or another namespace that exists, labelled `nebari.dev/managed=true` for the usage console's `NebariApp`. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
 | `openmeter.modelResources` | `[{name: bedrock, provider: bedrock}]` | Model resources to price, each with the OpenMeter provider whose prices apply. |
 | `openmeter.prices` | `[]` | Manual prices (USD per token) for models no public price list has; stored under OpenMeter's form of the model ID. |
 | `openmeter.keepDataOnUninstall` | `true` | Keep the usage and billing data when the release is uninstalled. |

@@ -445,7 +445,7 @@ This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.
 
 **Operator namespace setup**: the chart provisions the namespace and applies `nebari.dev/managed=true` (gated on `createNamespace: true`, default on). Set `createNamespace: false` if ArgoCD `managedNamespaceMetadata`, a Terraform module, or another tool is responsible for creating and labelling the namespace.
 
-The bundled OpenMeter is the one exception: it runs in `openmeter.namespace`, which the chart requires with `openmeter.enabled` and which must not be the pack's namespace. Until the key manager's Role is narrowed to the API-key Secrets ([#215](https://github.com/nebari-dev/llm-serving-pack/issues/215)), it can read every Secret in its namespace, OpenMeter's database and ClickHouse credentials included. Uninstalling the pack also deletes its namespace, with any data `openmeter.keepDataOnUninstall` kept. A NetworkPolicy admits the collector and key manager across.
+The bundled OpenMeter is the one exception that can be chosen: it runs in `openmeter.namespace`, which the chart requires with `openmeter.enabled`. Setting it to the pack's namespace keeps every component in one namespace. Uninstalling then leaves that namespace in place while `openmeter.keepDataOnUninstall` is on, since deleting it would delete the data. Until the key manager's Role is narrowed to the API-key Secrets ([#215](https://github.com/nebari-dev/llm-serving-pack/issues/215)), it can read every Secret in that namespace, OpenMeter's database and ClickHouse credentials included; a separate namespace keeps them apart, with a NetworkPolicy admitting the collector and key manager across.
 
 ---
 
