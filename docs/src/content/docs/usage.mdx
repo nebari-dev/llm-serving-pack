@@ -132,17 +132,27 @@ requires: the pack's own namespace (`<fullname>-system`, where the collector
 and the key manager run; the chart's error names it), or another namespace
 that already exists. Until the key manager's Role is narrowed to the API-key
 Secrets, it can read every Secret in its namespace, OpenMeter's credentials
-included; a separate namespace keeps them apart.
+included; a separate namespace keeps them apart. Create a separate namespace
+first; the usage console's `NebariApp` also needs the label the Nebari
+operator looks for:
+
+```sh
+kubectl create namespace usage-openmeter
+kubectl label namespace usage-openmeter nebari.dev/managed=true
+```
+
+Under Argo CD, the Application's project must allow that namespace as a
+destination.
 
 OpenMeter's API has no authentication. Only OpenMeter's own pods, the
 collector and the key manager may call it; with OpenMeter in another
 namespace, the chart adds a `NetworkPolicy` admitting those two pods from
 the pack's namespace.
 
-ClickHouse's password is made in the cluster: a pre-install and pre-upgrade
-hook (a `PreSync` hook under Argo CD) creates a Secret with a random password
-the first time and leaves it alone after that, so re-rendering the chart never
-changes it. To manage it yourself, set `openmeter.clickhouse.existingSecret`
+ClickHouse's password is made in the cluster: a Job creates a Secret with a
+random password the first time and leaves it alone after that, so
+re-rendering the chart never changes it. ClickHouse and OpenMeter wait for
+the Secret before they start. To manage it yourself, set `openmeter.clickhouse.existingSecret`
 to a Secret with the password under `clickhouse-password`.
 
 The sink worker drops repeated events by the ids it keeps in Redis, for
@@ -342,10 +352,12 @@ pods in the cluster can't call it. `kubectl port-forward` still reaches it.
 The chart refuses to render a NebariApp for the console without sign-in:
 with `openmeter.nebariapp.enabled`, keep `auth.enabled`, `enforceAtGateway`,
 `provisionClient` and `forwardAccessToken` on, or set
-`openmeter.console.oidc.issuerURL` and `clientID`. Without a NebariApp or an
-issuer, the console has no sign-in of its own and everyone who reaches it
-(through `kubectl port-forward`) is the same viewer. Use that only on a dev
-cluster.
+`openmeter.console.oidc.issuerURL` and `clientID`. It also refuses to render
+the console with neither: set `openmeter.console.enabled: false` to install
+OpenMeter without it. On a dev cluster, `openmeter.console.devMode: true` runs
+the console with no sign-in, and everyone who reaches it (through
+`kubectl port-forward`) is the same viewer. The console itself refuses to
+start without an issuer and client ID unless it runs in dev mode.
 
 ### Traffic
 
@@ -364,8 +376,9 @@ With the bundled OpenMeter, `helm uninstall` (or deleting the Argo CD
 Application) keeps all of its data by default
 (`openmeter.keepDataOnUninstall: true`): the Postgres `Cluster` with the
 customers, features and prices, and the Kafka, ClickHouse and Redis volumes
-with the usage. Installing again under the same release name and namespace
-carries on from there. Set `openmeter.keepDataOnUninstall: false` before
+with the usage. With OpenMeter in the pack's namespace, the namespace stays
+too, since deleting it would delete the data. Installing again under the same
+release name and `openmeter.namespace` carries on from there. Set `openmeter.keepDataOnUninstall: false` before
 uninstalling to delete all of it with the release instead. Either way the
 usage and the billing setup go together, so a reinstall never finds usage
 events without the customers and prices they are billed with. The subchart's

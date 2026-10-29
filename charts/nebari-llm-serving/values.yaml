@@ -187,13 +187,13 @@ keyManager:
 openmeter:
   enabled: false
   # namespace - where the bundled OpenMeter runs; required with
-  # openmeter.enabled. The pack's own namespace (<fullname>-system, which the
-  # chart creates) keeps every pack component in one namespace; the chart's
-  # error names it. Until the key-manager's Role is narrowed to the API-key
-  # Secrets (#215), it can read every Secret in that namespace, OpenMeter's
-  # database and ClickHouse credentials included; another namespace (which
-  # must exist) keeps them apart, with a NetworkPolicy admitting the
-  # collector and key-manager across.
+  # openmeter.enabled. Either the pack's own (<fullname>-system), or another
+  # namespace that exists. In the pack's namespace, the key-manager can read
+  # OpenMeter's credentials until #215, and with keepDataOnUninstall,
+  # uninstalling leaves the namespace in place to keep the data. In another
+  # namespace, a NetworkPolicy admits the collector and the key-manager
+  # across; for the usage console's NebariApp, label it
+  # nebari.dev/managed=true.
   namespace: ""
   # The image of the subchart's setup Jobs (openmeter-setup/); the release
   # workflow pins it.

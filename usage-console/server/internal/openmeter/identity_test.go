@@ -21,6 +21,10 @@ func (ts tokens) ValidateToken(_ context.Context, raw string) (map[string]any, e
 	if raw == "keycloak-down" {
 		return nil, oidc.ErrNotReady
 	}
+	if raw == "keys-unavailable" {
+		// As the validator wraps it, mid key rotation with Keycloak down.
+		return nil, fmt.Errorf("token validation failed: %w", oidc.ErrKeysUnavailable)
+	}
 	c, ok := ts[raw]
 	if !ok {
 		return nil, fmt.Errorf("token validation failed: bad signature")
@@ -88,10 +92,11 @@ func TestCallsNeedAValidToken(t *testing.T) {
 	h := signedInAPI(t, tokens{"t-alice": {"sub": "u-1", "email": "alice@example.com"}})
 	for _, path := range []string{"/session", "/teams", "/receipts", "/stream/traffic"} {
 		for auth, want := range map[string]int{
-			"":                     http.StatusUnauthorized,
-			"Bearer not-a-token":   http.StatusUnauthorized,
-			"Basic dDphbGljZQ==":   http.StatusUnauthorized,
-			"Bearer keycloak-down": http.StatusServiceUnavailable,
+			"":                        http.StatusUnauthorized,
+			"Bearer not-a-token":      http.StatusUnauthorized,
+			"Basic dDphbGljZQ==":      http.StatusUnauthorized,
+			"Bearer keycloak-down":    http.StatusServiceUnavailable,
+			"Bearer keys-unavailable": http.StatusServiceUnavailable,
 		} {
 			if rec := call(h, path, auth); rec.Code != want {
 				t.Errorf("GET %s with %q: %d %s, want %d", path, auth, rec.Code, rec.Body, want)

@@ -17,9 +17,10 @@ The chart (`nebari-openmeter`) deploys:
   with an append-only file) and Postgres, on persistent volumes. All are
   pinned upstream images.
   Postgres's credentials come from CloudNativePG. ClickHouse's password is
-  `clickhouse.existingSecret`, or a Secret a pre-install/pre-upgrade hook
-  (Argo CD `PreSync`) creates once with a random password and never changes,
-  so it stays put when Argo CD re-renders the chart.
+  `clickhouse.existingSecret`, or a Secret a Job creates once with a random
+  password and never changes, so it stays put when Argo CD re-renders the
+  chart. The Job is an ordinary resource, not a hook, so the chart can
+  install into a namespace created in the same release.
 - **The meters** the collector feeds (`llm_requests`, `llm_tokens`), a
   priced feature per model resource, manual prices for models no public price
   list has, and OpenMeter's public price sync after install and daily.
@@ -83,7 +84,9 @@ gateway's `/logout`, which ends the gateway session and Keycloak's. The
 console answers 401 to a request without a valid token, so its data can't be
 read around the gateway. `nebariapp.auth.groups` limits the console to
 members of those Keycloak groups. `console.oidc` sets the issuer and client
-by hand; see `values.yaml`.
+by hand; see `values.yaml`. The chart won't render the console with no
+sign-in unless `console.devMode` is set (dev clusters only), and
+`console.enabled: false` leaves it out.
 
 ## Known limits
 

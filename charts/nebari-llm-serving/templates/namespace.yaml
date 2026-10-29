@@ -18,4 +18,11 @@ metadata:
   labels:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}
     nebari.dev/managed: "true"
+  {{- if and (include "nebari-llm-serving.openmeterInPackNamespace" .) .Values.openmeter.keepDataOnUninstall }}
+  # The bundled OpenMeter's retained data lives here, and deleting the
+  # namespace would delete it, so uninstalling leaves the namespace.
+  annotations:
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Delete=false
+  {{- end }}
 {{- end }}

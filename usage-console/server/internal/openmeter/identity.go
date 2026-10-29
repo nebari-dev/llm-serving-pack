@@ -13,8 +13,9 @@ import (
 // Identity says who is calling the console.
 type Identity interface {
 	// Caller returns the person making r, and how they signed in. An error
-	// wrapping oidc.ErrNotReady means sign-in cannot be checked yet; any
-	// other, that r has no acceptable sign-in.
+	// wrapping oidc.ErrNotReady or oidc.ErrKeysUnavailable means sign-in
+	// cannot be checked right now; any other, that r has no acceptable
+	// sign-in.
 	Caller(r *http.Request) (SessionActor, SessionAuth, error)
 }
 
@@ -137,7 +138,7 @@ func (s *Server) authenticated(next http.HandlerFunc) http.HandlerFunc {
 			slog.Info("access refused", "path", r.URL.Path, "err", err)
 			writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "forbidden", "message": "ask an administrator to add you to the group that may see usage"}})
 			return
-		case errors.Is(err, oidc.ErrNotReady):
+		case errors.Is(err, oidc.ErrNotReady), errors.Is(err, oidc.ErrKeysUnavailable):
 			slog.Error("sign-in cannot be checked", "path", r.URL.Path, "err", err)
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "identity_unavailable", "message": "sign-in cannot be checked right now"}})
 			return

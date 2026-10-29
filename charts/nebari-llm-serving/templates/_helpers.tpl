@@ -80,3 +80,14 @@ namespace, and the release namespace is wherever helm happened to run.
 {{- end -}}
 {{- .Values.openmeter.namespace -}}
 {{- end }}
+
+{{/*
+Whether the bundled OpenMeter shares the pack's namespace. Uninstalling the
+pack then has to leave the namespace alone for keepDataOnUninstall to keep
+anything, since deleting a namespace deletes everything in it.
+*/}}
+{{- define "nebari-llm-serving.openmeterInPackNamespace" -}}
+{{- if and .Values.openmeter.enabled (eq (include "nebari-llm-serving.openmeterNamespace" .) (include "nebari-llm-serving.operatorNamespace" .)) -}}
+true
+{{- end -}}
+{{- end }}

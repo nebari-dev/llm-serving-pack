@@ -85,11 +85,15 @@ $HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$OM_NS" --create-namespace
   -f manifests/usage-openmeter-values.yaml --wait --timeout 10m
 # The admission a chart install (openmeter.enabled) renders for the collector
 # and key-manager in the operator namespace, from the chart's own template.
-helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
-  --set fullnameOverride=llm-operator --set platform.baseDomain=local \
-  --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
-  --set usage.enabled=true --set openmeter.enabled=true --set openmeter.namespace="$OM_NS" --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev \
-  | $KUBECTL apply -f - >/dev/null
+# With OpenMeter in that namespace (OM_NAMESPACE=$NS), the subchart's own
+# policy admits them and the chart renders none.
+if [[ "$OM_NS" != "$NS" ]]; then
+  helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
+    --set fullnameOverride=llm-operator --set platform.baseDomain=local \
+    --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
+    --set usage.enabled=true --set openmeter.enabled=true --set openmeter.namespace="$OM_NS" --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev --set openmeter.console.enabled=false \
+    | $KUBECTL apply -f - >/dev/null
+fi
 # A rebuilt image under the same tag needs new pods.
 $KUBECTL -n "$OM_NS" rollout restart deploy/${OM_RELEASE}-openmeter-console >/dev/null
 $KUBECTL -n "$OM_NS" rollout status deploy/${OM_RELEASE}-openmeter-console --timeout=120s >/dev/null

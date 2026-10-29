@@ -128,11 +128,14 @@ The `openmeter` values configure the `nebari-openmeter` subchart; every key unde
 | Key | Default | Description |
 |-----|---------|-------------|
 | `openmeter.enabled` | `false` | Install OpenMeter and the usage console with the pack. |
-| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: the pack's namespace (`<fullname>-system`; the chart's error names it) or another namespace that exists. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
+| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: the pack's namespace (`<fullname>-system`; the chart's error names it) or another namespace that exists, labelled `nebari.dev/managed=true` for the usage console's `NebariApp`. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
 | `openmeter.modelResources` | `[{name: bedrock, provider: bedrock}]` | Model resources to price, each with the OpenMeter provider whose prices apply. |
 | `openmeter.prices` | `[]` | Manual prices (USD per token) for models no public price list has; stored under OpenMeter's form of the model ID. |
 | `openmeter.keepDataOnUninstall` | `true` | Keep the usage and billing data when the release is uninstalled. |
 | `openmeter.networkPolicy.enabled` | `true` | Restrict OpenMeter's API, stores and console to the pods that need them. |
+| `openmeter.console.enabled` | `true` | Install the usage console. It needs sign-in (`nebariapp.enabled` or `console.oidc`) or `console.devMode`, or the chart won't render. |
+| `openmeter.console.devMode` | `false` | Run the console with no sign-in: everyone who reaches it is the same viewer. Dev clusters only. |
+| `openmeter.console.oidc.issuerURL` / `clientID` | `""` | Set the issuer and client of the access tokens the console accepts, when not using the `NebariApp`'s client. |
 | `openmeter.nebariapp.enabled` | `false` | Expose the usage console through a `NebariApp` with Keycloak sign-in. |
 | `openmeter.nebariapp.hostname` | `""` | The console's hostname. Required with `nebariapp.enabled`. |
 | `openmeter.nebariapp.auth.groups` | `[llm-usage-admins]` | Keycloak groups whose members may open the console; the gateway and the console both check them. |
