@@ -174,11 +174,11 @@ describe('troubleshooting', () => {
 });
 
 describe('manifest reconciliation (NIC source of truth)', () => {
-  it('argocd-application.yaml uses the published OCI chart (0.1.2) + NIC clusterIssuer + longhorn', () => {
+  it('argocd-application.yaml uses the published OCI chart (0.1.4) + NIC clusterIssuer + longhorn', () => {
     const m = readExample('argocd-application.yaml');
     expect(m).toMatch(/repoURL:\s*quay\.io\/nebari\/charts\b/);
     expect(m).toMatch(/chart:\s*nebari-llm-serving\b/);
-    expect(m).toMatch(/targetRevision:\s*"0\.1\.2"/);
+    expect(m).toMatch(/targetRevision:\s*"0\.1\.4"/);
     expect(m).toMatch(/clusterIssuer:\s*letsencrypt-issuer\b/);
     expect(m).toMatch(/storageClassName:\s*longhorn\b/);
     expect(m).not.toMatch(/path:\s*charts\/nebari-llm-serving\b/);

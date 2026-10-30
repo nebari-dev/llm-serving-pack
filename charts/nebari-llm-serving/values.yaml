@@ -1,3 +1,12 @@
+global:
+  # namespace - the pack's namespace, where the operator, the key-manager and
+  # the usage collector run, and the bundled OpenMeter unless
+  # openmeter.namespace is set. Empty: <release>-nebari-llm-serving-system.
+  # Under Argo CD, the Application's destination.namespace must match it.
+  # Upgrading from 0.1.4 or earlier with fullnameOverride or nameOverride
+  # set: set this to your current namespace first (see Upgrading).
+  namespace: ""
+
 # createNamespace controls whether the chart provisions the operator's own
 # namespace and labels it `nebari.dev/managed=true` (required by the
 # validating webhook). Set to false when something else owns the namespace
@@ -186,14 +195,16 @@ keyManager:
 # subchart's; see charts/nebari-openmeter/values.yaml.
 openmeter:
   enabled: false
-  # namespace - where the bundled OpenMeter runs; required with
-  # openmeter.enabled. Either the pack's own (<fullname>-system), or another
-  # namespace that exists. In the pack's namespace, the key-manager can read
-  # OpenMeter's credentials until #215, and with keepDataOnUninstall,
-  # uninstalling leaves the namespace in place to keep the data. In another
-  # namespace, a NetworkPolicy admits the collector and the key-manager
-  # across; for the usage console's NebariApp, label it
-  # nebari.dev/managed=true.
+  # Set by the pack, not by you: tells the subchart to default to the pack's
+  # namespace.
+  inPack: true
+  # namespace - where the bundled OpenMeter runs. Empty: the pack's namespace
+  # (global.namespace). There, the key-manager can read OpenMeter's
+  # credentials until #215, and uninstalling deletes the namespace with the
+  # data, so keepDataOnUninstall keeps nothing while the chart creates it.
+  # Another namespace must exist first; a NetworkPolicy admits the
+  # collector and the key-manager across, and for the usage console's
+  # NebariApp, label it nebari.dev/managed=true.
   namespace: ""
   # The image of the subchart's setup Jobs (openmeter-setup/); the release
   # workflow pins it.

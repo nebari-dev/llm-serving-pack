@@ -16,11 +16,18 @@ is the name plus a hash and must fit 63).
 {{- end -}}
 
 {{/*
-The namespace every resource of the subchart goes in: namespace, or the
-release namespace when it is empty.
+The namespace every resource of the subchart goes in: namespace; else, as
+part of the pack (inPack), the pack's namespace from the pack's own helper;
+else the release namespace.
 */}}
 {{- define "om.namespace" -}}
-{{- .Values.namespace | default .Release.Namespace -}}
+{{- if .Values.namespace -}}
+{{ .Values.namespace }}
+{{- else if .Values.inPack -}}
+{{ include "nebari-llm-serving.operatorNamespace" . }}
+{{- else -}}
+{{ .Release.Namespace }}
+{{- end -}}
 {{- end -}}
 
 {{- define "om.labels" -}}

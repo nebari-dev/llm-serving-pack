@@ -1,7 +1,10 @@
 # namespace - where every resource of this chart goes; empty: the release
-# namespace. As part of the LLM serving pack, the pack sets it from
-# openmeter.namespace. The namespace must exist.
+# namespace, or as part of the LLM serving pack, the pack's namespace. The
+# namespace must exist.
 namespace: ""
+# inPack - set by the LLM serving pack: an empty namespace means the pack's
+# namespace (global.namespace), not the release namespace.
+inPack: false
 
 # OpenMeter: the API (ingests usage events, answers queries) and the sink
 # worker (moves events from Kafka into ClickHouse). Same image for both.
@@ -80,7 +83,7 @@ console:
     discoveryURL: ""
 
 # openmeter-setup (openmeter-setup/ in this repository): the image the
-# bootstrap Job (features and prices) and the ClickHouse password hook run.
+# bootstrap Job (features and prices) and the ClickHouse password Job run.
 setup:
   image:
     repository: ghcr.io/nebari-dev/llm-serving-pack/openmeter-setup
@@ -160,9 +163,9 @@ redis:
 # the console, the bootstrap job, pods in this namespace with one of these
 # label sets, and pods in these namespaces. As part of the LLM serving pack,
 # the usage collector and the key-manager carry
-# llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
-# (<fullname>-system), not this one; the serving pack's chart adds a policy
-# admitting that label from that namespace only
+# llm.nebari.dev/openmeter-client: "true" and run in the pack's namespace
+# (global.namespace). When that isn't this one, the serving pack's chart adds
+# a policy admitting that label from that namespace only
 # (templates/openmeter-networkpolicy.yaml), so nothing needs setting here.
 # Installed on its own, admit the clients' namespace with a policy of your
 # own, or list it under apiClientNamespaces (which admits every pod in it).

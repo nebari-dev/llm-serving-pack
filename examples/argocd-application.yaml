@@ -6,6 +6,12 @@
 #
 # Replace all placeholder values (your-cluster, your-org, etc.) with your
 # actual configuration before applying.
+#
+# The chart creates and labels the pack's namespace (createNamespace, on by
+# default), so deleting this Application deletes the namespace with
+# everything in it. destination.namespace and global.namespace must match.
+# With the bundled OpenMeter and data that should outlive the Application,
+# see argocd-application-openmeter.yaml, where Argo CD owns the namespace.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -27,10 +33,14 @@ spec:
     # and key-manager image tags, so pinning the chart pins the images too.
     - repoURL: quay.io/nebari/charts
       chart: nebari-llm-serving
-      targetRevision: "0.1.2"
+      targetRevision: "0.1.4"
       helm:
         releaseName: nebari-llm-serving
         values: |
+          global:
+            # The pack's namespace; must match destination.namespace.
+            namespace: nebari-llm-serving-system
+
           platform:
             baseDomain: "your-cluster.example.com"
             gateway:
@@ -71,6 +81,13 @@ spec:
               issuerURL: "https://keycloak.your-cluster.example.com/realms/nebari"
               groupsClaim: groups
 
+          frontend:
+            keycloak:
+              # The Keycloak the key-manager UI signs in with, as the
+              # browser reaches it.
+              url: "https://keycloak.your-cluster.example.com"
+              realm: nebari
+
           keyManager:
             enabled: true
             # nebariApp exposes the key-manager UI through the nebari-operator
@@ -97,18 +114,15 @@ spec:
     namespace: nebari-llm-serving-system
 
   syncPolicy:
-    # The NebariApp operator requires nebari.dev/managed=true on any namespace
-    # it reconciles resources into. Let ArgoCD manage that label on the
-    # destination namespace so it's set on first sync.
-    managedNamespaceMetadata:
-      labels:
-        nebari.dev/managed: "true"
+    # No CreateNamespace or managedNamespaceMetadata: the chart's own
+    # Namespace (createNamespace) creates the destination namespace with the
+    # nebari.dev/managed=true label the NebariApp operator needs, and takes
+    # precedence over both.
     automated:
       prune: true
       selfHeal: true
       allowEmpty: false
     syncOptions:
-      - CreateNamespace=true
       - ServerSideApply=true
       # The NebariApp CRD is installed by nebari-operator. ArgoCD dry-runs
       # all resources before syncing, so it may report NebariApp as missing

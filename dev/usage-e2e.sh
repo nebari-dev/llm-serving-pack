@@ -89,7 +89,7 @@ $HELM upgrade --install "$OM_RELEASE" "$OM_CHART" -n "$OM_NS" --create-namespace
 # policy admits them and the chart renders none.
 if [[ "$OM_NS" != "$NS" ]]; then
   helm template "$OM_RELEASE" ../charts/nebari-llm-serving -n "$OM_NS" -s templates/openmeter-networkpolicy.yaml \
-    --set fullnameOverride=llm-operator --set platform.baseDomain=local \
+    --set fullnameOverride=llm-operator --set global.namespace="$NS" --set platform.baseDomain=local \
     --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
     --set usage.enabled=true --set openmeter.enabled=true --set openmeter.namespace="$OM_NS" --set openmeter.setup.image.tag=dev --set openmeter.console.image.tag=dev --set openmeter.console.enabled=false \
     | $KUBECTL apply -f - >/dev/null
@@ -109,7 +109,7 @@ $KUBECTL -n "$NS" rollout status deploy/llm-operator --timeout=120s >/dev/null
 $KUBECTL -n "$NS" rollout status deploy/llm-key-manager --timeout=180s >/dev/null
 $KUBECTL apply -f manifests/usage-key-owners-service.yaml >/dev/null
 helm template dev ../charts/nebari-llm-serving -n "$NS" -s templates/usage-collector.yaml \
-  --set fullnameOverride=llm-operator --set platform.baseDomain=local \
+  --set fullnameOverride=llm-operator --set global.namespace="$NS" --set platform.baseDomain=local \
   --set auth.oidc.issuerURL=unused --set keyManager.nebariApp.enabled=false --set frontend.enabled=false \
   --set usage.enabled=true --set usage.openmeter.url="$OPENMETER_URL" \
   --set usage.collector.networkPolicy.enabled=false \

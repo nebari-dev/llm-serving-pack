@@ -79,6 +79,43 @@ the separate AI Gateway CRD chart. The pack does not install those controllers.
 
 Newest first. A release with no entry needs only the routine steps.
 
+### Upgrading from 0.1.4 or earlier: the pack's namespace
+
+The pack's namespace no longer follows `fullnameOverride` or `nameOverride`.
+It is `global.namespace`, or `<release>-nebari-llm-serving-system` when that
+is empty. Those two values now name resources only.
+
+If neither was set, nothing changes. If either was set, your namespace was
+named after it (`<fullnameOverride>-system`, or
+`<release>-<nameOverride>-system`). **Set `global.namespace` to that
+namespace before upgrading.** Without it, the upgrade renders a Namespace
+with a new name, and Helm (or Argo CD with automated prune) deletes the old
+one, with the `LLMModel`s, the API keys and the provider Secrets in it.
+
+Find the current namespace from the Namespace the chart created, which
+carries the release name (under Argo CD, the Application's `releaseName`):
+
+```bash
+kubectl get namespace -l app.kubernetes.io/instance=<release>,nebari.dev/managed=true
+```
+
+Then add it to your values, alongside the overrides you already set:
+
+```yaml
+global:
+  namespace: llm-operator-system   # the namespace found above
+```
+
+Check the result before upgrading. The rendered Namespace must keep its
+current name:
+
+```bash
+helm template <release> oci://quay.io/nebari/charts/nebari-llm-serving \
+  --version <version> -f <your-values>.yaml | grep -A3 '^kind: Namespace'
+```
+
+Under Argo CD, `destination.namespace` must match `global.namespace`.
+
 ### Upgrading from 0.1.4 or earlier: Envoy AI Gateway 1.1
 
 Releases after 0.1.4 emit `aigateway.envoyproxy.io/v1beta1` resources and target

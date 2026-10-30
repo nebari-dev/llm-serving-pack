@@ -127,6 +127,14 @@ Application, does with the data. Both settings keep the usage and the billing
 setup together, so a reinstall never finds usage events without the
 customers, features and prices that go with them.
 
+It keeps data only in a namespace that outlives the release. As part of the
+LLM serving pack, OpenMeter runs in the pack's namespace by default, and if
+the pack's chart created that namespace (`createNamespace: true`),
+uninstalling the pack deletes it with everything in it, kept data included.
+Put OpenMeter in a namespace you created (`openmeter.namespace`), or let
+something else create the pack's namespace (`createNamespace: false`; see
+`examples/argocd-application-openmeter.yaml`).
+
 - **`true` (the default): keep everything.** The Postgres `Cluster` carries
   `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options:
   Delete=false`, so it stays, with its volume (customers, features, prices).
@@ -143,7 +151,7 @@ customers, features and prices that go with them.
 
 Keeping is the default because the usage is what you bill from: losing it
 should take a deliberate step. In both cases the ClickHouse password Secret
-(`<release>-openmeter-clickhouse-password`, made by a hook, not by the
+(`<release>-openmeter-clickhouse-password`, made by a Job, not by the
 release) stays. A reinstall reuses it, which is what kept ClickHouse data
 needs; a fresh ClickHouse takes it as its new password.
 

@@ -1,0 +1,10 @@
+{{- if and (include "nebari-llm-serving.openmeterInChartNamespace" .) .Values.openmeter.keepDataOnUninstall }}
+WARNING: openmeter.keepDataOnUninstall is on, but it can't keep anything here.
+
+The bundled OpenMeter runs in {{ include "nebari-llm-serving.operatorNamespace" . }}, which this chart
+creates, and uninstalling deletes that namespace with the usage and billing
+data in it. To keep the data across an uninstall, put OpenMeter in a namespace
+that outlives the release: set openmeter.namespace to one you create, or set
+createNamespace=false and create the pack's namespace yourself. See "Uninstall
+and reinstall" in the usage docs.
+{{- end }}

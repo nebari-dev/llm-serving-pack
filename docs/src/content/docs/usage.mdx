@@ -108,7 +108,6 @@ usage:
   enabled: true
 openmeter:
   enabled: true
-  namespace: <fullname>-system   # where OpenMeter runs; required (see below)
   modelResources:            # your model resources and the provider that prices them
     - {name: bedrock, provider: bedrock}
   nebariapp:                 # the console, behind Keycloak sign-in
@@ -127,19 +126,20 @@ resource's past usage under the new provider. Every value under
 `openmeter` is the subchart's
 (`charts/nebari-llm-serving/charts/nebari-openmeter/values.yaml`).
 
-The bundled OpenMeter runs in `openmeter.namespace`, which the chart
-requires: the pack's own namespace (`<fullname>-system`, where the collector
-and the key manager run; the chart's error names it), or another namespace
-that already exists. Until the key manager's Role is narrowed to the API-key
+The bundled OpenMeter runs in the pack's namespace (`global.namespace`,
+where the collector and the key manager run), or in `openmeter.namespace`
+when that is set. Until the key manager's Role is narrowed to the API-key
 Secrets, it can read every Secret in its namespace, OpenMeter's credentials
-included; a separate namespace keeps them apart. Create a separate namespace
-first; the usage console's `NebariApp` also needs the label the Nebari
-operator looks for:
+included; a separate namespace keeps them apart. To use a separate
+namespace, create it first; the usage console's `NebariApp` also needs the
+label the Nebari operator looks for:
 
 ```sh
 kubectl create namespace usage-openmeter
 kubectl label namespace usage-openmeter nebari.dev/managed=true
 ```
+
+and set `openmeter.namespace: usage-openmeter`.
 
 Under Argo CD, the Application's project must allow that namespace as a
 destination.
@@ -372,17 +372,31 @@ missed, on every open view whatever its filters.
 
 ## Uninstall and reinstall
 
-With the bundled OpenMeter, `helm uninstall` (or deleting the Argo CD
-Application) keeps all of its data by default
-(`openmeter.keepDataOnUninstall: true`): the Postgres `Cluster` with the
-customers, features and prices, and the Kafka, ClickHouse and Redis volumes
-with the usage. With OpenMeter in the pack's namespace, the namespace stays
-too, since deleting it would delete the data. Installing again under the same
-release name and `openmeter.namespace` carries on from there. Set `openmeter.keepDataOnUninstall: false` before
-uninstalling to delete all of it with the release instead. Either way the
-usage and the billing setup go together, so a reinstall never finds usage
-events without the customers and prices they are billed with. The subchart's
-README lists what is kept and how to delete it by hand.
+If the chart created the pack's namespace (`createNamespace: true`, the
+default), uninstalling the pack deletes that namespace and everything in it:
+the models, the API keys and, in the default layout, OpenMeter and all of
+its data. `openmeter.keepDataOnUninstall` can't keep anything there; `helm
+install` prints a warning when it is on in that layout.
+
+`openmeter.keepDataOnUninstall: true` (the default) keeps OpenMeter's data
+when its namespace outlives the release:
+
+- **A separate namespace** (`openmeter.namespace`), which you created.
+- **The pack's namespace, created by something else**: `createNamespace:
+  false`, with the namespace made by Argo CD, Terraform or `kubectl`. Under
+  Argo CD, `examples/argocd-application-openmeter.yaml` shows this: the
+  Application creates and labels the namespace, and Argo CD doesn't delete a
+  namespace it created that way when the Application is deleted.
+
+Then `helm uninstall` (or deleting the Argo CD Application) keeps the
+Postgres `Cluster` with the customers, features and prices, and the Kafka,
+ClickHouse and Redis volumes with the usage. Installing again under the same
+release name and namespace carries on from there. Set
+`openmeter.keepDataOnUninstall: false` before uninstalling to delete all of
+it with the release instead. Either way the usage and the billing setup go
+together, so a reinstall never finds usage events without the customers and
+prices they are billed with. The subchart's README lists what is kept and how
+to delete it by hand.
 
 ## Delivery
 
