@@ -1,0 +1,13 @@
+# chart-render-values.yaml - the smallest values file the chart renders with.
+#
+# The chart's own defaults leave two values empty that are required, so
+# `helm template` on the defaults alone fails. scripts/diff-default-render.sh
+# renders the chart with this file and nothing else, so its output is the
+# "default render". Set only what the chart requires here: anything more
+# hides a change to a default.
+frontend:
+  keycloak:
+    url: "https://keycloak.example.com"
+keyManager:
+  nebariApp:
+    hostname: "llm-keys.example.com"
