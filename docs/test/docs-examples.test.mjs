@@ -195,11 +195,11 @@ describe('manifest reconciliation (NIC source of truth)', () => {
     expect(m).not.toMatch(/oci:\/\//);
     expect(m).toMatch(/repoURL:\s*docker\.io\/envoyproxy\b/);
   });
-  it('installation.md installs the pack from the published OCI chart (0.1.2)', () => {
+  it('installation.md installs the pack from the published OCI chart (0.1.4)', () => {
     const page = readPage('installation.md');
     expect(page).toMatch(/repoURL:\s*quay\.io\/nebari\/charts\b/);
     expect(page).toMatch(/chart:\s*nebari-llm-serving\b/);
-    expect(page).toMatch(/targetRevision:\s*"0\.1\.2"/);
+    expect(page).toMatch(/targetRevision:\s*"0\.1\.4"/);
     expect(page).not.toMatch(/path:\s*charts\/nebari-llm-serving\b/);
     expect(page).not.toMatch(/targetRevision:\s*v0\.1\.0-alpha\.9\b/);
   });

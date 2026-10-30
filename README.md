@@ -47,7 +47,7 @@ spec:
     # Source 1: LLM serving pack Helm chart
     - repoURL: quay.io/nebari/charts
       chart: nebari-llm-serving
-      targetRevision: "0.1.2"
+      targetRevision: "0.1.4"
       helm:
         releaseName: nebari-llm-serving
         values: |
@@ -79,8 +79,14 @@ spec:
               issuerURL: "https://keycloak.your-cluster.example.com/realms/nebari"
               groupsClaim: groups
 
+          frontend:
+            keycloak:
+              url: "https://keycloak.your-cluster.example.com"
+
           keyManager:
             enabled: true
+            nebariApp:
+              hostname: "llm-keys.your-cluster.example.com"
 
     # Source 2: LLMModel CRs from your cluster config repo
     - repoURL: https://github.com/your-org/your-cluster-config.git
