@@ -1,13 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createStore, Provider as JotaiProvider } from "jotai";
-import type { ReactNode } from "react";
+import { createStore } from "jotai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { THEME_STORAGE_KEY } from "@/app/theme";
-import { ThemeProvider } from "@/hooks/theme-provider";
 import { dialogAtom } from "@/store/dialogAtoms";
+import { TestProviders } from "@/test/render";
 import { CreateKeyDialog } from "./CreateKeyDialog";
 
 const models = [
@@ -47,17 +45,13 @@ function renderOpen() {
   store.set(dialogAtom, { type: "create" });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <JotaiProvider store={store}>
-          <ThemeProvider storageKey={THEME_STORAGE_KEY}>{children}</ThemeProvider>
-        </JotaiProvider>
-      </QueryClientProvider>
-    );
-  }
-
-  return render(<CreateKeyDialog />, { wrapper: Wrapper });
+  return render(<CreateKeyDialog />, {
+    wrapper: ({ children }) => (
+      <TestProviders queryClient={queryClient} store={store}>
+        {children}
+      </TestProviders>
+    ),
+  });
 }
 
 afterEach(() => {
