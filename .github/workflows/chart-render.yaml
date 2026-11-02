@@ -1,0 +1,58 @@
+name: Chart default render
+
+# Fails when a PR changes what the chart renders with only its required
+# values set, which is what every existing install gets on upgrade. Optional
+# features must leave that render unchanged while they are off. When the change
+# is intended (a bug fix, a version bump, a new default), add the
+# default-render-change label and the check passes with the diff in its summary.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - "charts/**"
+      - "scripts/chart-render-values.yaml"
+      - "scripts/diff-default-render.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  default-render:
+    name: Default render matches base
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Diff default render against base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          ACCEPTED: ${{ contains(github.event.pull_request.labels.*.name, 'default-render-change') }}
+        run: |
+          rc=0
+          bash scripts/diff-default-render.sh "$BASE_SHA" > render.diff || rc=$?
+          cat render.diff
+          {
+            echo "## Default render"
+            echo
+            if [ "$rc" -eq 0 ]; then
+              echo "Unchanged against the base branch."
+            else
+              echo '```diff'
+              head -n 1000 render.diff
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -eq 2 ]; then
+            exit 2
+          fi
+          if [ "$rc" -eq 1 ] && [ "$ACCEPTED" != "true" ]; then
+            echo "::error::The default render changed, so every existing install changes on upgrade. If that is intended, add the default-render-change label. If not, gate the change behind a value that is off by default."
+            exit 1
+          fi

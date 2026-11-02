@@ -72,3 +72,6 @@ jobs:
 
       - name: Lint chart
         run: helm lint charts/nebari-llm-serving/
+
+      - name: Render examples against the chart
+        run: bash scripts/check-examples-render.sh

@@ -1052,7 +1052,7 @@ spec:
   source:
     repoURL: quay.io/nebari/charts
     chart: nebari-llm-serving
-    targetRevision: "0.1.2"
+    targetRevision: "0.1.4"
     helm:
       releaseName: nebari-llm-serving
       values: |
@@ -1083,6 +1083,9 @@ spec:
           oidc:
             issuerURL: "https://keycloak.<baseDomain>/realms/nebari"
             groupsClaim: groups
+        frontend:
+          keycloak:
+            url: "https://keycloak.<baseDomain>"
         keyManager:
           enabled: true
           nebariApp:
