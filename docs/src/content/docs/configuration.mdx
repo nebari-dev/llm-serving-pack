@@ -26,7 +26,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `global.namespace` | `""` | The pack's namespace, where the operator, the key manager, the usage collector and, by default, the bundled OpenMeter run. Empty: `<release>-nebari-llm-serving-system`. Under Argo CD, the Application's `destination.namespace` must match. `fullnameOverride` and `nameOverride` don't change it; see [Upgrading](/upgrading/). |
+| `global.namespace` | `""` | The pack's namespace, where the operator, the key manager, the usage collector and, by default, the bundled OpenMeter run. Empty: `<release>-nebari-llm-serving-system`, or `<release>-system` when the release name contains `nebari-llm-serving`. Under Argo CD, the Application's `destination.namespace` must match. `fullnameOverride` and `nameOverride` don't change it; see [Upgrading](/upgrading/). |
 | `createNamespace` | `true` | Whether the chart provisions the pack's namespace and labels it `nebari.dev/managed=true`. Uninstalling the pack then deletes the namespace and everything in it. Set to `false` when something else owns the namespace (ArgoCD, Terraform, etc.). |
 | `platform.baseDomain` | `""` | **Required.** Base domain for the Nebari deployment (e.g. `your-cluster.example.com`). |
 | `platform.gateway.external.name` | `nebari-gateway` | Name of the external Envoy Gateway resource. |

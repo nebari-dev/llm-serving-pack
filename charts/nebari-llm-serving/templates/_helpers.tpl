@@ -50,9 +50,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{/*
 The pack's namespace, where the operator and key manager run:
-global.namespace, else <release>-nebari-llm-serving-system. It reads only
-.Release and .Values.global, which every chart in the release sees, so the
-bundled OpenMeter subchart calls this same helper. Not derived from
+global.namespace, else <release>-nebari-llm-serving-system, or
+<release>-system when the release name contains nebari-llm-serving. It reads
+only .Release and .Values.global, which every chart in the release sees, so
+the bundled OpenMeter subchart calls this same helper. Not derived from
 fullnameOverride or nameOverride: those name resources, not the namespace.
 */}}
 {{- define "nebari-llm-serving.operatorNamespace" -}}

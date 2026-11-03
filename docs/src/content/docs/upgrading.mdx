@@ -82,13 +82,14 @@ Newest first. A release with no entry needs only the routine steps.
 ### Upgrading from 0.1.4 or earlier: the pack's namespace
 
 The pack's namespace no longer follows `fullnameOverride` or `nameOverride`.
-It is `global.namespace`, or `<release>-nebari-llm-serving-system` when that
-is empty. Those two values now name resources only.
+It is `global.namespace`, or, when that is empty,
+`<release>-nebari-llm-serving-system` (`<release>-system` when the release
+name contains `nebari-llm-serving`). Those two values now name resources only.
 
 If neither was set, nothing changes. If either was set, your namespace was
-named after it (`<fullnameOverride>-system`, or
-`<release>-<nameOverride>-system`). **Set `global.namespace` to that
-namespace before upgrading.** Without it, the upgrade renders a Namespace
+named after it. **Set `global.namespace` to that namespace before
+upgrading,** using the name the command below finds rather than working it
+out from the override. Without it, the upgrade renders a Namespace
 with a new name, and Helm (or Argo CD with automated prune) deletes the old
 one, with the `LLMModel`s, the API keys and the provider Secrets in it.
 

@@ -1,5 +1,4 @@
 {{- if .Values.openmeter.enabled }}
-{{- /* Checked whenever the bundled OpenMeter is on: it says where it goes. */}}
 {{- $omNamespace := include "nebari-llm-serving.openmeterNamespace" . }}
 {{- if and .Values.usage.enabled .Values.openmeter.networkPolicy.enabled (ne $omNamespace (include "nebari-llm-serving.operatorNamespace" .)) }}
 # The bundled OpenMeter runs in openmeter.namespace, but the usage collector
