@@ -12,7 +12,8 @@ vendored in `src/components/ui/` (left as the registry ships them).
 ```bash
 npm ci --ignore-scripts
 npm run dev                  # http://localhost:5173 on seeded mock data
-npm run dev:api              # against openmeter-api on :8080 (or $CONSOLE_API)
+npm run dev:api              # against openmeter-api on :8080 (or $CONSOLE_API);
+                             # run it with -dev to skip sign-in locally
 VITE_DATA=api npm run build  # what the image builds
 npm test
 npm run lint

@@ -140,6 +140,7 @@ func (s *Server) authenticated(next http.HandlerFunc) http.HandlerFunc {
 			return
 		case errors.Is(err, oidc.ErrNotReady), errors.Is(err, oidc.ErrKeysUnavailable):
 			slog.Error("sign-in cannot be checked", "path", r.URL.Path, "err", err)
+			w.Header().Set("Retry-After", "5")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "identity_unavailable", "message": "sign-in cannot be checked right now"}})
 			return
 		default:

@@ -35,9 +35,11 @@ The chart (`nebari-openmeter`) deploys:
 ## Install
 
 As part of the LLM serving pack, turn it on with `openmeter.enabled: true`
-(and `usage.enabled: true`). It then runs in the release namespace, and the
-serving pack's chart adds a `NetworkPolicy` that admits the usage collector
-and the key-manager, which run in the operator namespace, to OpenMeter's API.
+(and `usage.enabled: true`). It then runs in the pack's namespace
+(`global.namespace`), alongside the usage collector and the key-manager, or in
+`namespace` when that is set. In a separate namespace, the serving pack's
+chart adds a `NetworkPolicy` that admits the collector and the key-manager
+across to OpenMeter's API.
 
 On its own:
 
@@ -152,7 +154,8 @@ something else create the pack's namespace (`createNamespace: false`; see
 Keeping is the default because the usage is what you bill from: losing it
 should take a deliberate step. In both cases the ClickHouse password Secret
 (`<release>-openmeter-clickhouse-password`, made by a Job, not by the
-release) stays. A reinstall reuses it, which is what kept ClickHouse data
+release) stays, unless its namespace is deleted with the release. A reinstall
+reuses it, which is what kept ClickHouse data
 needs; a fresh ClickHouse takes it as its new password.
 
 To delete kept data by hand, after `helm uninstall`:

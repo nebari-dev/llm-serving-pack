@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,8 +99,14 @@ func TestCallsNeedAValidToken(t *testing.T) {
 			"Bearer keycloak-down":    http.StatusServiceUnavailable,
 			"Bearer keys-unavailable": http.StatusServiceUnavailable,
 		} {
-			if rec := call(h, path, auth); rec.Code != want {
+			rec := call(h, path, auth)
+			if rec.Code != want {
 				t.Errorf("GET %s with %q: %d %s, want %d", path, auth, rec.Code, rec.Body, want)
+			}
+			if want == http.StatusServiceUnavailable {
+				if !strings.Contains(rec.Body.String(), `"code":"identity_unavailable"`) || rec.Header().Get("Retry-After") == "" {
+					t.Errorf("GET %s with %q: %s, Retry-After %q; want identity_unavailable and a Retry-After", path, auth, rec.Body, rec.Header().Get("Retry-After"))
+				}
 			}
 		}
 	}

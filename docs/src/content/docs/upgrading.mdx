@@ -100,6 +100,10 @@ carries the release name (under Argo CD, the Application's `releaseName`):
 kubectl get namespace -l app.kubernetes.io/instance=<release>,nebari.dev/managed=true
 ```
 
+If Argo CD tracks resources by label (the default before Argo CD 3.0), that
+label holds the Application's name instead of `releaseName`; look up the
+Application's name, or list `kubectl get namespace -l nebari.dev/managed=true`.
+
 Then add it to your values, alongside the overrides you already set:
 
 ```yaml

@@ -24,6 +24,9 @@ else the release namespace.
 {{- if .Values.namespace -}}
 {{ .Values.namespace }}
 {{- else if .Values.inPack -}}
+{{- if not (hasKey (.Values.global | default dict) "namespace") -}}
+{{- fail "inPack is set by the LLM serving pack; installed on its own, leave it false" -}}
+{{- end -}}
 {{ include "nebari-llm-serving.operatorNamespace" . }}
 {{- else -}}
 {{ .Release.Namespace }}

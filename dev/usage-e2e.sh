@@ -31,8 +31,9 @@ GW_NS=envoy-gateway-system
 KC_URL=http://keycloak.keycloak.svc.cluster.local:8080
 # The openmeter subchart, installed on its own here because the dev cluster
 # runs the pack from manifests; in a chart install it is openmeter.enabled.
-# Like a chart install, it runs in its own namespace, away from the collector
-# and key-manager, with the chart's policy admitting them across namespaces.
+# It runs in its own namespace by default, away from the collector and
+# key-manager, with the chart's policy admitting them across namespaces;
+# OM_NAMESPACE=llm-operator-system tests the chart's default, one namespace.
 OM_RELEASE=usage
 OM_NS="${OM_NAMESPACE:-usage-openmeter}"
 OM_CHART=../charts/nebari-llm-serving/charts/nebari-openmeter

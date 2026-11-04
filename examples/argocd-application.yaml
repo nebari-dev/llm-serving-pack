@@ -38,7 +38,9 @@ spec:
         releaseName: nebari-llm-serving
         values: |
           global:
-            # The pack's namespace; must match destination.namespace.
+            # The pack's namespace; must match destination.namespace. Read
+            # from the first chart release after 0.1.4; with 0.1.4 this is
+            # already the namespace for releaseName nebari-llm-serving.
             namespace: nebari-llm-serving-system
 
           platform:
