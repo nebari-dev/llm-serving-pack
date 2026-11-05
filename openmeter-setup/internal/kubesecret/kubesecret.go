@@ -1,6 +1,7 @@
 // Package kubesecret creates a Secret holding a random password, once: if a
 // Secret of that name already exists it is left as it is. The chart runs it
-// in a Job, so the password is made in the cluster rather than in the chart, where Argo CD's rendering would make a new one each time.
+// in a Job, so the password is made in the cluster rather than in the chart,
+// where Argo CD's rendering would make a new one each time.
 package kubesecret
 
 import (
