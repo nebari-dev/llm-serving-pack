@@ -163,6 +163,10 @@ func buildAIGatewayRoute(
 								"name":  poolName,
 							},
 						},
+						// owned_by on /v1/models is the hosting-origin
+						// contract: in-cluster served models report
+						// self-hosted (see api/v1alpha1 HostingOrigin).
+						"modelsOwnedBy": string(llmv1alpha1.OriginSelfHosted),
 						// Without an explicit timeout the AI Gateway controller
 						// renders HTTPRoutes with `request: 60s`, which long or
 						// CPU-bound generations exceed - streams die mid-token.

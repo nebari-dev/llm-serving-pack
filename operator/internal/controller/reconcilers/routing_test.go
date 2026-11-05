@@ -578,3 +578,53 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 		})
 	}
 }
+
+// firstRule returns the first rule map of the given AIGatewayRoute.
+func firstRule(t *testing.T, route *unstructured.Unstructured) map[string]interface{} {
+	t.Helper()
+	if route == nil {
+		t.Fatal("expected route to be non-nil")
+	}
+	spec, _ := route.Object["spec"].(map[string]interface{})
+	rules, _ := spec["rules"].([]interface{})
+	if len(rules) == 0 {
+		t.Fatalf("expected at least one rule, got %v", spec["rules"])
+	}
+	rule, ok := rules[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected rule to be a map, got %T", rules[0])
+	}
+	return rule
+}
+
+// Served models report the self-hosted origin on /v1/models: owned_by is the
+// hosting-origin contract shared with the PassthroughModel path, where the
+// backend type (e.g. "bedrock") is reported instead.
+func TestServedModelReportsSelfHostedOrigin(t *testing.T) {
+	model := &llmv1alpha1.LLMModel{
+		ObjectMeta: metav1.ObjectMeta{Name: "qwen", Namespace: "ns"},
+	}
+	cfg := &config.OperatorConfig{
+		BaseDomain:          "example.com",
+		ExternalGatewayName: "nebari-gateway",
+		ExternalGatewayNS:   "envoy-gateway-system",
+		InternalGatewayName: "nebari-gateway",
+		InternalGatewayNS:   "envoy-gateway-system",
+	}
+	res, err := BuildRoutingResources(model, cfg)
+	if err != nil {
+		t.Fatalf("BuildRoutingResources: %v", err)
+	}
+	for name, route := range map[string]*unstructured.Unstructured{
+		"external": res.ExternalRoute,
+		"internal": res.InternalRoute,
+	} {
+		if route == nil {
+			continue
+		}
+		rule := firstRule(t, route)
+		if rule["modelsOwnedBy"] != string(llmv1alpha1.OriginSelfHosted) {
+			t.Errorf("%s modelsOwnedBy = %v, want %q", name, rule["modelsOwnedBy"], llmv1alpha1.OriginSelfHosted)
+		}
+	}
+}
