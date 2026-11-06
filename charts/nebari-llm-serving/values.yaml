@@ -1,3 +1,13 @@
+global:
+  # namespace - the pack's namespace, where the operator, the key-manager and
+  # the usage collector run, and the bundled OpenMeter unless
+  # openmeter.namespace is set. Empty: <release>-nebari-llm-serving-system, or
+  # <release>-system when the release name contains nebari-llm-serving.
+  # Under Argo CD, the Application's destination.namespace must match it.
+  # Upgrading from 0.1.4 or earlier with fullnameOverride or nameOverride
+  # set: set this to your current namespace first (see Upgrading).
+  namespace: ""
+
 # createNamespace controls whether the chart provisions the operator's own
 # namespace and labels it `nebari.dev/managed=true` (required by the
 # validating webhook). Set to false when something else owns the namespace
@@ -180,20 +190,23 @@ keyManager:
 # OpenMeter, the usage store, and the read-only usage console (Stargate's
 # console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
 # default. With it on, usage.openmeter.url can stay empty: the collector and
-# the key-manager use the bundled OpenMeter. It runs in openmeter.namespace;
-# with usage.enabled the collector and the key-manager (operator namespace)
-# may call its API, and no other pod. Every value under openmeter is the
-# subchart's; see charts/nebari-openmeter/values.yaml.
+# the key-manager use the bundled OpenMeter. It runs in the pack's namespace,
+# or openmeter.namespace when set; with usage.enabled the collector and the
+# key-manager (operator namespace) may call its API, and no other pod. Every
+# value under openmeter is the subchart's; see
+# charts/nebari-openmeter/values.yaml.
 openmeter:
   enabled: false
-  # namespace - where the bundled OpenMeter runs; required with
-  # openmeter.enabled. The pack's own namespace (<fullname>-system, which the
-  # chart creates) keeps every pack component in one namespace; the chart's
-  # error names it. Until the key-manager's Role is narrowed to the API-key
-  # Secrets (#215), it can read every Secret in that namespace, OpenMeter's
-  # database and ClickHouse credentials included; another namespace (which
-  # must exist) keeps them apart, with a NetworkPolicy admitting the
-  # collector and key-manager across.
+  # Set by the pack, not by you: tells the subchart to default to the pack's
+  # namespace.
+  inPack: true
+  # namespace - where the bundled OpenMeter runs. Empty: the pack's namespace
+  # (global.namespace). There, the key-manager can read OpenMeter's
+  # credentials until #215, and uninstalling deletes the namespace with the
+  # data, so keepDataOnUninstall keeps nothing while the chart creates it.
+  # Another namespace must exist first; a NetworkPolicy admits the
+  # collector and the key-manager across, and for the usage console's
+  # NebariApp, label it nebari.dev/managed=true.
   namespace: ""
   # The image of the subchart's setup Jobs (openmeter-setup/); the release
   # workflow pins it.

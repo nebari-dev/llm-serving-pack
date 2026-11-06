@@ -1,8 +1,9 @@
 {{- if .Values.networkPolicy.enabled }}
 # OpenMeter's API has no authentication: only the console, the bootstrap
 # job, pods in this namespace with one of apiClientPodLabels, and the listed
-# namespaces may call it. As a subchart of the LLM serving pack, the parent
-# chart adds a second policy for its clients in the operator namespace.
+# namespaces may call it. As a subchart of the LLM serving pack in a
+# namespace of its own, the parent chart adds a second policy for its
+# clients in the operator namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -35,6 +36,7 @@ spec:
         {{- end }}
       ports:
         - {port: 8888}
+{{- if .Values.console.enabled }}
 ---
 # The console shows everyone's usage: it takes connections from the
 # gateway's Envoy proxies only, which sign people in first (NebariApp).
@@ -61,6 +63,7 @@ spec:
               app.kubernetes.io/name: envoy
       ports:
         - {port: 8080}
+{{- end }}
 ---
 # The stores take connections from OpenMeter's own pods only.
 apiVersion: networking.k8s.io/v1

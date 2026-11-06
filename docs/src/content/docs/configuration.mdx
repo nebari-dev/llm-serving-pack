@@ -26,7 +26,8 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `createNamespace` | `true` | Whether the chart provisions the operator namespace and labels it `nebari.dev/managed=true`. Set to `false` when something else owns the namespace (ArgoCD, Terraform, etc.). |
+| `global.namespace` | `""` | The pack's namespace, where the operator, the key manager, the usage collector and, by default, the bundled OpenMeter run. Empty: `<release>-nebari-llm-serving-system`, or `<release>-system` when the release name contains `nebari-llm-serving`. Under Argo CD, the Application's `destination.namespace` must match. `fullnameOverride` and `nameOverride` don't change it; see [Upgrading](/upgrading/). |
+| `createNamespace` | `true` | Whether the chart provisions the pack's namespace and labels it `nebari.dev/managed=true`. Uninstalling the pack then deletes the namespace and everything in it. Set to `false` when something else owns the namespace (ArgoCD, Terraform, etc.). |
 | `platform.baseDomain` | `""` | **Required.** Base domain for the Nebari deployment (e.g. `your-cluster.example.com`). |
 | `platform.gateway.external.name` | `nebari-gateway` | Name of the external Envoy Gateway resource. |
 | `platform.gateway.external.namespace` | `envoy-gateway-system` | Namespace of the external Envoy Gateway. |
@@ -128,11 +129,14 @@ The `openmeter` values configure the `nebari-openmeter` subchart; every key unde
 | Key | Default | Description |
 |-----|---------|-------------|
 | `openmeter.enabled` | `false` | Install OpenMeter and the usage console with the pack. |
-| `openmeter.namespace` | `""` | **Required with `openmeter.enabled`.** Where OpenMeter runs: the pack's namespace (`<fullname>-system`; the chart's error names it) or another namespace that exists. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
+| `openmeter.namespace` | `""` | Where OpenMeter runs. Empty: the pack's namespace (`global.namespace`). Otherwise a namespace that exists, labelled `nebari.dev/managed=true` for the usage console's `NebariApp`. See [Single-namespace deployment model](/architecture/#single-namespace-deployment-model). |
 | `openmeter.modelResources` | `[{name: bedrock, provider: bedrock}]` | Model resources to price, each with the OpenMeter provider whose prices apply. |
 | `openmeter.prices` | `[]` | Manual prices (USD per token) for models no public price list has; stored under OpenMeter's form of the model ID. |
-| `openmeter.keepDataOnUninstall` | `true` | Keep the usage and billing data when the release is uninstalled. |
+| `openmeter.keepDataOnUninstall` | `true` | Keep the usage and billing data when the release is uninstalled. Only takes effect when OpenMeter's namespace outlives the release: a separate `openmeter.namespace`, or `createNamespace: false`. A namespace the chart created is deleted with everything in it. See [Uninstall and reinstall](/usage/#uninstall-and-reinstall). |
 | `openmeter.networkPolicy.enabled` | `true` | Restrict OpenMeter's API, stores and console to the pods that need them. |
+| `openmeter.console.enabled` | `true` | Install the usage console. It needs sign-in (`nebariapp.enabled` or `console.oidc`) or `console.devMode`, or the chart won't render. |
+| `openmeter.console.devMode` | `false` | Run the console with no sign-in: everyone who reaches it is the same viewer. Dev clusters only. |
+| `openmeter.console.oidc.issuerURL` / `clientID` | `""` | Set the issuer and client of the access tokens the console accepts, when not using the `NebariApp`'s client. |
 | `openmeter.nebariapp.enabled` | `false` | Expose the usage console through a `NebariApp` with Keycloak sign-in. |
 | `openmeter.nebariapp.hostname` | `""` | The console's hostname. Required with `nebariapp.enabled`. |
 | `openmeter.nebariapp.auth.groups` | `[llm-usage-admins]` | Keycloak groups whose members may open the console; the gateway and the console both check them. |

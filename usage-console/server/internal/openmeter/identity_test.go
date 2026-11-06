@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,10 @@ type tokens map[string]map[string]any
 func (ts tokens) ValidateToken(_ context.Context, raw string) (map[string]any, error) {
 	if raw == "keycloak-down" {
 		return nil, oidc.ErrNotReady
+	}
+	if raw == "keys-unavailable" {
+		// As the validator wraps it, mid key rotation with Keycloak down.
+		return nil, fmt.Errorf("token validation failed: %w", oidc.ErrKeysUnavailable)
 	}
 	c, ok := ts[raw]
 	if !ok {
@@ -88,13 +93,20 @@ func TestCallsNeedAValidToken(t *testing.T) {
 	h := signedInAPI(t, tokens{"t-alice": {"sub": "u-1", "email": "alice@example.com"}})
 	for _, path := range []string{"/session", "/teams", "/receipts", "/stream/traffic"} {
 		for auth, want := range map[string]int{
-			"":                     http.StatusUnauthorized,
-			"Bearer not-a-token":   http.StatusUnauthorized,
-			"Basic dDphbGljZQ==":   http.StatusUnauthorized,
-			"Bearer keycloak-down": http.StatusServiceUnavailable,
+			"":                        http.StatusUnauthorized,
+			"Bearer not-a-token":      http.StatusUnauthorized,
+			"Basic dDphbGljZQ==":      http.StatusUnauthorized,
+			"Bearer keycloak-down":    http.StatusServiceUnavailable,
+			"Bearer keys-unavailable": http.StatusServiceUnavailable,
 		} {
-			if rec := call(h, path, auth); rec.Code != want {
+			rec := call(h, path, auth)
+			if rec.Code != want {
 				t.Errorf("GET %s with %q: %d %s, want %d", path, auth, rec.Code, rec.Body, want)
+			}
+			if want == http.StatusServiceUnavailable {
+				if !strings.Contains(rec.Body.String(), `"code":"identity_unavailable"`) || rec.Header().Get("Retry-After") == "" {
+					t.Errorf("GET %s with %q: %s, Retry-After %q; want identity_unavailable and a Retry-After", path, auth, rec.Body, rec.Header().Get("Retry-After"))
+				}
 			}
 		}
 	}

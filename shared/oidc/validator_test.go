@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -426,5 +427,43 @@ func TestFailedRefreshKeepsKnownKeys(t *testing.T) {
 	}
 	if _, err := v.ValidateToken(context.Background(), signToken(t, priv, jwt.MapClaims{})); err != nil {
 		t.Fatalf("known key refused after a failed refresh: %v", err)
+	}
+}
+
+// TestUnknownKIDWhileKeysUnavailable: a token signed with a key the validator
+// hasn't cached, while the JWKS can't be fetched (Keycloak down mid rotation),
+// is ErrKeysUnavailable, so callers answer 503 rather than 401 "sign in
+// again". It stays so while the cooldown suppresses refetches, and goes back
+// to an ordinary refusal once a fetch succeeds without the key.
+func TestUnknownKIDWhileKeysUnavailable(t *testing.T) {
+	priv := genKey(t)
+	var down atomic.Bool
+	down.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		writeJWKS(t, w, testKID, &priv.PublicKey)
+	}))
+	defer srv.Close()
+	v := newTestValidator(t, &priv.PublicKey)
+	v.keysURL = srv.URL
+	rotated := signTokenWithKID(t, priv, "rotated-kid", jwt.MapClaims{})
+
+	for _, when := range []string{"first attempt", "inside the cooldown"} {
+		if _, err := v.ValidateToken(context.Background(), rotated); !errors.Is(err, ErrKeysUnavailable) {
+			t.Fatalf("%s: got %v, want ErrKeysUnavailable", when, err)
+		}
+	}
+
+	down.Store(false)
+	v.lastKIDRefresh.Store(0)
+	_, err := v.ValidateToken(context.Background(), rotated)
+	if err == nil || errors.Is(err, ErrKeysUnavailable) {
+		t.Fatalf("after a good fetch without the key: got %v, want an ordinary refusal", err)
+	}
+	if _, err := v.ValidateToken(context.Background(), signToken(t, priv, jwt.MapClaims{})); err != nil {
+		t.Fatalf("known key refused: %v", err)
 	}
 }

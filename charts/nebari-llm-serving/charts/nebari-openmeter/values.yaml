@@ -1,7 +1,10 @@
 # namespace - where every resource of this chart goes; empty: the release
-# namespace. As part of the LLM serving pack, the pack sets it from
-# openmeter.namespace. The namespace must exist.
+# namespace, or as part of the LLM serving pack, the pack's namespace. The
+# namespace must exist.
 namespace: ""
+# inPack - set by the LLM serving pack: an empty namespace means the pack's
+# namespace (global.namespace), not the release namespace.
+inPack: false
 
 # OpenMeter: the API (ingests usage events, answers queries) and the sink
 # worker (moves events from Kafka into ClickHouse). Same image for both.
@@ -47,8 +50,15 @@ priceSync:
   schedule: "17 3 * * *"
 
 # The read-only usage console (Stargate's console on openmeter-api,
-# usage-console/ in this repository).
+# usage-console/ in this repository). It shows everyone's usage, so the chart
+# refuses to render it without sign-in: turn on nebariapp (with its gateway
+# sign-in), set console.oidc, or, on a dev cluster only, set devMode. Set
+# enabled to false to install OpenMeter without the console.
 console:
+  enabled: true
+  # devMode runs the console with no sign-in: everyone who reaches it is the
+  # same viewer. Never enable it in a real deployment.
+  devMode: false
   image:
     repository: ghcr.io/nebari-dev/llm-serving-pack/usage-console
     tag: ""
@@ -62,8 +72,7 @@ console:
   # these empty: the console reads the issuer and its client ID from the
   # Secret the Nebari operator makes for its Keycloak client
   # (<release>-openmeter-console-oidc-client). Set issuerURL (with clientID)
-  # to use another client or issuer. With neither, the console has no
-  # sign-in of its own (dev mode: everyone is the same viewer).
+  # to use another client or issuer.
   oidc:
     issuerURL: ""
     clientID: ""
@@ -74,7 +83,7 @@ console:
     discoveryURL: ""
 
 # openmeter-setup (openmeter-setup/ in this repository): the image the
-# bootstrap Job (features and prices) and the ClickHouse password hook run.
+# bootstrap Job (features and prices) and the ClickHouse password Job run.
 setup:
   image:
     repository: ghcr.io/nebari-dev/llm-serving-pack/openmeter-setup
@@ -107,7 +116,7 @@ clickhouse:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {memory: 2Gi}
   # A Secret you manage with ClickHouse's password under clickhouse-password.
-  # Empty: a pre-install/pre-upgrade hook (an Argo CD PreSync hook) creates
+  # Empty: a Job (an ordinary resource, not a hook) creates
   # <release>-openmeter-clickhouse-password once, with a random password,
   # and leaves it as it is after that. Changing the password in your own
   # Secret takes a restart of ClickHouse, the OpenMeter API and the sink
@@ -154,9 +163,9 @@ redis:
 # the console, the bootstrap job, pods in this namespace with one of these
 # label sets, and pods in these namespaces. As part of the LLM serving pack,
 # the usage collector and the key-manager carry
-# llm.nebari.dev/openmeter-client: "true" but run in the operator namespace
-# (<fullname>-system), not this one; the serving pack's chart adds a policy
-# admitting that label from that namespace only
+# llm.nebari.dev/openmeter-client: "true" and run in the pack's namespace
+# (global.namespace). When that isn't this one, the serving pack's chart adds
+# a policy admitting that label from that namespace only
 # (templates/openmeter-networkpolicy.yaml), so nothing needs setting here.
 # Installed on its own, admit the clients' namespace with a policy of your
 # own, or list it under apiClientNamespaces (which admits every pod in it).

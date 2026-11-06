@@ -49,10 +49,23 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Operator namespace (the namespace where the operator and key manager run)
+The pack's namespace, where the operator and key manager run:
+global.namespace, else <release>-nebari-llm-serving-system, or
+<release>-system when the release name contains nebari-llm-serving. It reads
+only .Release and .Values.global, which every chart in the release sees, so
+the bundled OpenMeter subchart calls this same helper. Not derived from
+fullnameOverride or nameOverride: those name resources, not the namespace.
 */}}
 {{- define "nebari-llm-serving.operatorNamespace" -}}
-{{- printf "%s-system" (include "nebari-llm-serving.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- with (.Values.global).namespace -}}
+{{ . }}
+{{- else -}}
+{{- $full := .Release.Name -}}
+{{- if not (contains "nebari-llm-serving" .Release.Name) -}}
+{{- $full = printf "%s-nebari-llm-serving" .Release.Name -}}
+{{- end -}}
+{{- printf "%s-system" ($full | trunc 63 | trimSuffix "-") | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end }}
 
 {{/*
@@ -70,13 +83,19 @@ openmeter.enabled.
 {{- end }}
 
 {{/*
-The bundled OpenMeter's namespace: openmeter.namespace, which the subchart
-installs into. Required: a subchart cannot be handed the pack's computed
-namespace, and the release namespace is wherever helm happened to run.
+The bundled OpenMeter's namespace: openmeter.namespace, else the pack's.
 */}}
 {{- define "nebari-llm-serving.openmeterNamespace" -}}
-{{- if not .Values.openmeter.namespace -}}
-{{- fail (printf "openmeter.enabled needs openmeter.namespace: the pack's namespace, %s, or another namespace that exists" (include "nebari-llm-serving.operatorNamespace" .)) -}}
+{{- .Values.openmeter.namespace | default (include "nebari-llm-serving.operatorNamespace" .) -}}
+{{- end }}
+
+{{/*
+Whether the bundled OpenMeter is in the namespace this chart creates.
+Uninstalling deletes that namespace, so keepDataOnUninstall can't keep
+anything there (NOTES.txt says so).
+*/}}
+{{- define "nebari-llm-serving.openmeterInChartNamespace" -}}
+{{- if and .Values.openmeter.enabled .Values.createNamespace (eq (include "nebari-llm-serving.openmeterNamespace" .) (include "nebari-llm-serving.operatorNamespace" .)) -}}
+true
 {{- end -}}
-{{- .Values.openmeter.namespace -}}
 {{- end }}

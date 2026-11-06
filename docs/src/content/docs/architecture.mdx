@@ -55,7 +55,7 @@ Installing the chart (pack install) deploys:
 3. **Key manager** (conditional, `keyManager.enabled`) - a React SPA served by an nginx **frontend** image plus an API-only Go service, fronted by a `NebariApp` with SPA-managed Keycloak/OIDC auth
 4. **Envoy AI Gateway** (conditional, `envoyAIGateway.install`) - the controller and CRDs; when `false`, assumes pre-installed
 5. **Usage collector** (conditional, `usage.enabled`) - OpenMeter's collector, receiving the gateway's access log over OTLP and sending one usage event per request and token type to OpenMeter, billed to the API key's creator or the token's subject; see [Usage metering](/usage/)
-6. **Bundled OpenMeter** (conditional, `openmeter.enabled`) - OpenMeter (API, sink worker, Kafka, ClickHouse, Redis, a CloudNativePG Postgres) with the pack's meters, priced features and manual prices, and the read-only **usage console** behind its own `NebariApp`; installed into `openmeter.namespace`
+6. **Bundled OpenMeter** (conditional, `openmeter.enabled`) - OpenMeter (API, sink worker, Kafka, ClickHouse, Redis, a CloudNativePG Postgres) with the pack's meters, priced features and manual prices, and the read-only **usage console** behind its own `NebariApp`; installed into the pack's namespace, or `openmeter.namespace` when set
 
 The chart creates the operator namespace and labels it `nebari.dev/managed=true` (gated on `createNamespace: true`, default on).
 
@@ -443,9 +443,9 @@ This restriction exists because Envoy Gateway's `SecurityPolicy.spec.apiKeyAuth.
 
 **API-key Secrets**: live in the operator namespace alongside the SecurityPolicies that reference them. The `apiKeyAuth.credentialRefs` field carries no `namespace` field.
 
-**Operator namespace setup**: the chart provisions the namespace and applies `nebari.dev/managed=true` (gated on `createNamespace: true`, default on). Set `createNamespace: false` if ArgoCD `managedNamespaceMetadata`, a Terraform module, or another tool is responsible for creating and labelling the namespace.
+**Operator namespace setup**: the namespace is `global.namespace`, or, when that is empty, `<release>-nebari-llm-serving-system` (`<release>-system` when the release name contains `nebari-llm-serving`); `fullnameOverride` and `nameOverride` name resources, not the namespace. The chart provisions the namespace and applies `nebari.dev/managed=true` (gated on `createNamespace: true`, default on), and uninstalling deletes it with everything in it. Set `createNamespace: false` if ArgoCD `managedNamespaceMetadata`, a Terraform module, or another tool is responsible for creating and labelling the namespace.
 
-The bundled OpenMeter is the one exception that can be chosen: it runs in `openmeter.namespace`, which the chart requires with `openmeter.enabled`. Setting it to the pack's namespace keeps every component in one namespace. Until the key manager's Role is narrowed to the API-key Secrets ([#215](https://github.com/nebari-dev/llm-serving-pack/issues/215)), it can read every Secret in that namespace, OpenMeter's database and ClickHouse credentials included; a separate namespace keeps them apart, with a NetworkPolicy admitting the collector and key manager across.
+The bundled OpenMeter runs in the pack's namespace by default, keeping every component in one namespace. It is the one exception that can be chosen: `openmeter.namespace` moves it to another namespace. Its `keepDataOnUninstall` only keeps data in a namespace that outlives the release, so not in a namespace the chart created. Until the key manager's Role is narrowed to the API-key Secrets ([#215](https://github.com/nebari-dev/llm-serving-pack/issues/215)), it can read every Secret in that namespace, OpenMeter's database and ClickHouse credentials included; a separate namespace keeps them apart, with a NetworkPolicy admitting the collector and key manager across.
 
 ---
 

@@ -91,10 +91,11 @@ func AuthMiddleware(cfg AuthConfig) func(http.Handler) http.Handler {
 
 			claims, err := cfg.Validator.ValidateToken(r.Context(), token)
 			if err != nil {
-				// JWKS not fetched yet: transient, tell the client to retry.
-				if errors.Is(err, oidc.ErrNotReady) {
+				// Keycloak's signing keys not fetched yet, or a token's key
+				// can't be fetched: transient, tell the client to retry.
+				if errors.Is(err, oidc.ErrNotReady) || errors.Is(err, oidc.ErrKeysUnavailable) {
 					w.Header().Set("Retry-After", "5")
-					http.Error(w, "auth not ready: "+err.Error(), http.StatusServiceUnavailable)
+					http.Error(w, "auth unavailable: "+err.Error(), http.StatusServiceUnavailable)
 					return
 				}
 				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)

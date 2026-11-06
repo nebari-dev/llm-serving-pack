@@ -17,6 +17,9 @@ setup:
   image: {repository: docker.io/library/openmeter-setup, tag: dev}
 console:
   image: {repository: docker.io/library/usage-console, tag: dev}
+  # No gateway sign-in on the kind cluster; the script reads the console
+  # through a port-forward.
+  devMode: true
 kafka: {persistence: {size: 2Gi}}
 clickhouse: {persistence: {size: 2Gi}}
 postgres: {storage: {size: 1Gi}}

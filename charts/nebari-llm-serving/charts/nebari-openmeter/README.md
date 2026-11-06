@@ -17,9 +17,10 @@ The chart (`nebari-openmeter`) deploys:
   with an append-only file) and Postgres, on persistent volumes. All are
   pinned upstream images.
   Postgres's credentials come from CloudNativePG. ClickHouse's password is
-  `clickhouse.existingSecret`, or a Secret a pre-install/pre-upgrade hook
-  (Argo CD `PreSync`) creates once with a random password and never changes,
-  so it stays put when Argo CD re-renders the chart.
+  `clickhouse.existingSecret`, or a Secret a Job creates once with a random
+  password and never changes, so it stays put when Argo CD re-renders the
+  chart. The Job is an ordinary resource, not a hook, so the chart can
+  install into a namespace created in the same release.
 - **The meters** the collector feeds (`llm_requests`, `llm_tokens`), a
   priced feature per model resource, manual prices for models no public price
   list has, and OpenMeter's public price sync after install and daily.
@@ -34,9 +35,11 @@ The chart (`nebari-openmeter`) deploys:
 ## Install
 
 As part of the LLM serving pack, turn it on with `openmeter.enabled: true`
-(and `usage.enabled: true`). It then runs in the release namespace, and the
-serving pack's chart adds a `NetworkPolicy` that admits the usage collector
-and the key-manager, which run in the operator namespace, to OpenMeter's API.
+(and `usage.enabled: true`). It then runs in the pack's namespace
+(`global.namespace`), alongside the usage collector and the key-manager, or in
+`namespace` when that is set. In a separate namespace, the serving pack's
+chart adds a `NetworkPolicy` that admits the collector and the key-manager
+across to OpenMeter's API.
 
 On its own:
 
@@ -83,7 +86,9 @@ gateway's `/logout`, which ends the gateway session and Keycloak's. The
 console answers 401 to a request without a valid token, so its data can't be
 read around the gateway. `nebariapp.auth.groups` limits the console to
 members of those Keycloak groups. `console.oidc` sets the issuer and client
-by hand; see `values.yaml`.
+by hand; see `values.yaml`. The chart won't render the console with no
+sign-in unless `console.devMode` is set (dev clusters only), and
+`console.enabled: false` leaves it out.
 
 ## Known limits
 
@@ -124,6 +129,14 @@ Application, does with the data. Both settings keep the usage and the billing
 setup together, so a reinstall never finds usage events without the
 customers, features and prices that go with them.
 
+It keeps data only in a namespace that outlives the release. As part of the
+LLM serving pack, OpenMeter runs in the pack's namespace by default, and if
+the pack's chart created that namespace (`createNamespace: true`),
+uninstalling the pack deletes it with everything in it, kept data included.
+Put OpenMeter in a namespace you created (`openmeter.namespace`), or let
+something else create the pack's namespace (`createNamespace: false`; see
+`examples/argocd-application-openmeter.yaml`).
+
 - **`true` (the default): keep everything.** The Postgres `Cluster` carries
   `helm.sh/resource-policy: keep` and `argocd.argoproj.io/sync-options:
   Delete=false`, so it stays, with its volume (customers, features, prices).
@@ -140,8 +153,9 @@ customers, features and prices that go with them.
 
 Keeping is the default because the usage is what you bill from: losing it
 should take a deliberate step. In both cases the ClickHouse password Secret
-(`<release>-openmeter-clickhouse-password`, made by a hook, not by the
-release) stays. A reinstall reuses it, which is what kept ClickHouse data
+(`<release>-openmeter-clickhouse-password`, made by a Job, not by the
+release) stays, unless its namespace is deleted with the release. A reinstall
+reuses it, which is what kept ClickHouse data
 needs; a fresh ClickHouse takes it as its new password.
 
 To delete kept data by hand, after `helm uninstall`:

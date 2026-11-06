@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -248,6 +249,33 @@ func TestAuthMiddlewareNotReady(t *testing.T) {
 	handler := AuthMiddleware(AuthConfig{Validator: v})(handlerThatChecksUser(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
 	req.Header.Set("Authorization", "Bearer "+signToken(t, priv, jwt.MapClaims{"preferred_username": "alice"}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected Retry-After header on 503")
+	}
+}
+
+// keysUnavailableValidator fails every token the way the validator does when
+// a token's key isn't cached and the JWKS can't be fetched.
+type keysUnavailableValidator struct{}
+
+func (keysUnavailableValidator) ValidateToken(context.Context, string) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("unknown key ID rotated-kid: %w", oidc.ErrKeysUnavailable)
+}
+
+// TestAuthMiddlewareKeysUnavailable checks that a token whose key can't be
+// fetched (Keycloak down mid key rotation) gets a 503 with Retry-After, not a
+// 401 that would send the client to sign in again.
+func TestAuthMiddlewareKeysUnavailable(t *testing.T) {
+	handler := AuthMiddleware(AuthConfig{Validator: keysUnavailableValidator{}})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer some.signed.token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

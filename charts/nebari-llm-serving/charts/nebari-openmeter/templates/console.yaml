@@ -1,3 +1,4 @@
+{{- if .Values.console.enabled }}
 {{- $console := include "om.name" (dict "root" . "component" "console") }}
 apiVersion: apps/v1
 kind: Deployment
@@ -92,4 +93,5 @@ spec:
   {{- end }}
   {{- end }}
   gateway: {{ .Values.nebariapp.gateway }}
+{{- end }}
 {{- end }}
