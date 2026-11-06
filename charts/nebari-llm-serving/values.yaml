@@ -59,8 +59,10 @@ auth:
     # when the nebari-operator provisions the OIDC client with auth enabled.
     issuerURL: ""
     # existingSecret - name of the Secret containing the "issuer-url" key.
-    # Defaults to "<release-fullname>-oidc-client", which matches the secret
-    # the nebari-operator creates when a NebariApp has auth.enabled: true.
+    # Defaults to "<release-fullname>-key-manager-oidc-client", the secret the
+    # nebari-operator creates for the key-manager's NebariApp
+    # (keyManager.nebariApp.enabled). Set this, or issuerURL, when that
+    # NebariApp is off.
     existingSecret: ""
     groupsClaim: groups
     audience: ""
