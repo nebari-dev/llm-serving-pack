@@ -11,6 +11,14 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
+// DefaultPassthroughRequestTimeout is applied to generated route rules when
+// the spec leaves endpoints.requestTimeout empty (CRs created before the field
+// existed, or unit-built objects that never pass through API defaulting).
+// Matches the CRD default. Tighter than LLMModel's DefaultRequestTimeout:
+// hosted providers answer quickly, and a self-hosted server that needs longer
+// sets the field.
+const DefaultPassthroughRequestTimeout = "120s"
+
 // PassthroughResources holds every resource generated for a PassthroughModel.
 // Provider plumbing (Backend, BackendTLSPolicy, AIServiceBackend,
 // BackendSecurityPolicy) connects the gateway to the external provider; the
@@ -280,6 +288,11 @@ func buildPassthroughRoute(
 		"value": hostname,
 	}
 
+	requestTimeout := pm.Spec.Endpoints.RequestTimeout
+	if requestTimeout == "" {
+		requestTimeout = DefaultPassthroughRequestTimeout
+	}
+
 	rules := []interface{}{}
 
 	if len(pm.Spec.Models.Declared) > 0 {
@@ -298,7 +311,7 @@ func buildPassthroughRoute(
 		declared := map[string]interface{}{
 			"matches":     matches,
 			"backendRefs": passthroughBackendRefs(pm),
-			"timeouts":    map[string]interface{}{"request": "120s"},
+			"timeouts":    map[string]interface{}{"request": requestTimeout},
 		}
 		declared["modelsOwnedBy"] = pm.Name
 		rules = append(rules, declared)
@@ -314,7 +327,7 @@ func buildPassthroughRoute(
 				},
 			},
 			"backendRefs": passthroughBackendRefs(pm),
-			"timeouts":    map[string]interface{}{"request": "120s"},
+			"timeouts":    map[string]interface{}{"request": requestTimeout},
 		})
 	}
 
