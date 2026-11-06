@@ -11,26 +11,32 @@ This section covers the workflows in `.github/workflows/` relevant to CI and rel
 
 **Triggers:** push to `main`, pull requests targeting `main`.
 
-Runs three parallel jobs:
+Runs eight parallel jobs:
 
 | Job | Component | Command |
 |-----|-----------|---------|
+| `test-provider-tools` | `dev/providers/` | `python -m unittest discover` |
 | `test-operator` | `operator/` | `make test` |
 | `test-key-manager` | `key-manager/` | `go test ./...` |
+| `test-shared` | `shared/` | `go test -race ./...` |
+| `test-usage-console` | `usage-console/` | `go test ./...` in `server/`; `npm run build`, `npm test` and `npm run lint` in `console/` |
+| `test-openmeter-setup` | `openmeter-setup/` | `go test ./...` |
+| `test-usage-collector` | `dev/` | `make test-usage-collector` (the collector pipeline's tests, run in the pinned collector image) |
 | `test-frontend` | `frontend/` | `npm test` (vitest) |
 
-The two Go jobs set up Go from the component's own `go.mod`/`go.sum`, so each component pins its Go version independently. The `test-frontend` job runs on Node with the `frontend/` npm lockfile.
+The Go jobs set up Go from each module's own `go.mod`, so each module pins its Go version independently. The `key-manager`, `shared`, `usage-console` and `openmeter-setup` jobs also fail on an untidy module (`go mod tidy -diff`), and all but `key-manager` run `go vet`. The `test-frontend` job runs on Node with the `frontend/` npm lockfile.
 
 ### Lint (`lint.yaml`)
 
 **Triggers:** push to `main`, pull requests targeting `main`.
 
-Runs four parallel jobs:
+Runs five parallel jobs:
 
 | Job | Component | Tool |
 |-----|-----------|------|
 | `lint-operator` | `operator/` | `golangci-lint` v2.4.0 |
 | `lint-key-manager` | `key-manager/` | `golangci-lint` v2.4.0 |
+| `lint-shared` | `shared/` | `golangci-lint` v2.4.0 |
 | `lint-frontend` | `frontend/` | `biome` (`npm run check`) |
 | `lint-helm` | `charts/nebari-llm-serving/` | `helm lint` |
 
@@ -38,11 +44,11 @@ The Helm lint job runs `helm lint charts/nebari-llm-serving/` against the chart 
 
 ### Build Images (`build-images.yaml`)
 
-**Triggers:** push to `main` touching `operator/`, `key-manager/`, `frontend/`, `model-downloader/`, the workflow file itself, or `charts/nebari-llm-serving/Chart.yaml`; pull requests touching those same component paths (builds the image but does not push it; chart-only PRs do not trigger a build); manual `workflow_dispatch`.
+**Triggers:** push to `main` touching `operator/`, `key-manager/`, `frontend/`, `model-downloader/`, `usage-console/`, `openmeter-setup/`, `shared/`, the workflow file itself, or `charts/nebari-llm-serving/Chart.yaml`; pull requests touching those same component paths (builds the image but does not push it; chart-only PRs do not trigger a build); manual `workflow_dispatch`.
 
-The `Chart.yaml` path is in the push trigger for a specific reason: a release is cut by bumping `version` in that file (see [Releasing](#releasing)), and the release workflow pins the release commit's images to `sha-<that commit>`. Triggering a build on the same push that cuts the release ensures those shas exist.
+The `Chart.yaml` path is in the push trigger for a specific reason: a release is cut by bumping `version` in that file (see [Releasing](#releasing)), and the release workflow pins the release commit's images to `sha-<that commit>`. Triggering a build on the same push that cuts the release ensures those shas exist. `shared/` is in both triggers because the key-manager, usage-console and openmeter-setup images build from the repo root and compile the `shared` Go module into their binaries.
 
-Each of the four images (operator, model-downloader, key-manager, frontend - React SPA served by nginx) has its own job in `build-images.yaml`, and each job is a one-line call into the shared `pack-build-image.yaml` workflow, passing the image name, build context, and Dockerfile path. The shared workflow does the actual work: it builds with Docker Buildx and, on a push, pushes the image to two registries:
+Each of the six images (operator, model-downloader, key-manager, frontend - React SPA served by nginx, usage-console and openmeter-setup) has its own job in `build-images.yaml`, and each job is a one-line call into the shared `pack-build-image.yaml` workflow, passing the image name, build context, and Dockerfile path. The shared workflow does the actual work: it builds with Docker Buildx and, on a push, pushes the image to two registries:
 
 | Image | Build context | Dockerfile |
 |-------|--------------|------------|
@@ -50,6 +56,8 @@ Each of the four images (operator, model-downloader, key-manager, frontend - Rea
 | `model-downloader` | `model-downloader/` | `model-downloader/Dockerfile` |
 | `key-manager` | `.` (repo root) | `key-manager/Dockerfile` |
 | `frontend` | `frontend/` | `frontend/Dockerfile` |
+| `usage-console` | `.` (repo root) | `usage-console/Dockerfile` |
+| `openmeter-setup` | `.` (repo root) | `openmeter-setup/Dockerfile` |
 
 - GitHub Container Registry, as `ghcr.io/nebari-dev/llm-serving-pack/<image>`
 - Quay, as `quay.io/nebari/llm-serving-pack-<image>`
@@ -65,13 +73,13 @@ Pull request builds always run with pushing disabled, so a PR proves the image b
 
 Authentication uses the workflow's automatic `GITHUB_TOKEN` for GHCR (`packages: write`) and a `QUAY_TOKEN` secret plus a `QUAY_USERNAME` repository variable for Quay.
 
-Nothing here produces a version-numbered tag. On `main`, the chart's `values.yaml` hardcodes `tag: "latest"` for the operator, key-manager, frontend, and model-downloader images - that is deliberate, and covered in [Chart Versioning](#chart-versioning) and [Releasing](#releasing) below.
+Nothing here produces a version-numbered tag. On `main`, the chart's `values.yaml` hardcodes `tag: "latest"` for the operator, key-manager, frontend, and model-downloader images, and leaves `openmeter.setup.image.tag` and `openmeter.console.image.tag` empty. The chart refuses to render with `openmeter.enabled` until those two are set. Both are deliberate, and covered in [Chart Versioning](#chart-versioning) and [Releasing](#releasing) below.
 
 ### Release Chart (`release.yaml`)
 
 **Triggers:** push to `main` that touches `charts/nebari-llm-serving/Chart.yaml`.
 
-This is the workflow that actually cuts a release. It is a thin caller of the shared `pack-release.yaml` workflow: `release.yaml` just tells it which chart to package (`charts/nebari-llm-serving`), what to call it (`nebari-llm-serving`), and which `values.yaml` keys hold image tags that need to be pinned (`operator.image.tag`, `keyManager.image.tag`, `frontend.image.tag`, `modelDownloader.image.tag`). The full mechanics of what the shared workflow does are described in [Releasing](#releasing) below.
+This is the workflow that actually cuts a release. It is a thin caller of the shared `pack-release.yaml` workflow: `release.yaml` just tells it which chart to package (`charts/nebari-llm-serving`), what to call it (`nebari-llm-serving`), and which `values.yaml` keys hold image tags that need to be pinned (`operator.image.tag`, `keyManager.image.tag`, `frontend.image.tag`, `modelDownloader.image.tag`, `openmeter.setup.image.tag`, `openmeter.console.image.tag`). The full mechanics of what the shared workflow does are described in [Releasing](#releasing) below.
 
 ### Docs (`docs.yml`)
 
@@ -95,7 +103,7 @@ A single job uses `actions/add-to-project` to automatically add newly opened iss
 
 ## Container Images
 
-The four images built by `build-images.yaml` and their roles in the pack:
+The six images built by `build-images.yaml` and their roles in the pack:
 
 | Image | Purpose |
 |-------|---------|
@@ -103,8 +111,10 @@ The four images built by `build-images.yaml` and their roles in the pack:
 | `ghcr.io/nebari-dev/llm-serving-pack/model-downloader` | Init container that downloads model weights into a PVC before the serving pod starts |
 | `ghcr.io/nebari-dev/llm-serving-pack/key-manager` | Key manager REST API for managing per-user API keys |
 | `ghcr.io/nebari-dev/llm-serving-pack/frontend` | LLM serving pack React UI (nginx) - serves the SPA and proxies `/api` to the key-manager |
+| `ghcr.io/nebari-dev/llm-serving-pack/usage-console` | Read-only usage console and its OpenMeter API server, deployed by the bundled OpenMeter subchart |
+| `ghcr.io/nebari-dev/llm-serving-pack/openmeter-setup` | The OpenMeter subchart's setup Jobs: the ClickHouse password Secret, and the bootstrap that creates a priced feature per model and the manual price overrides |
 
-A fifth image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving image. Its version is set in `values.yaml` under `defaults.serving.image` and is not built by this repository. See the [llm-d project](https://github.com/llm-d/llm-d) for its release history.
+A seventh image, `ghcr.io/llm-d/llm-d-cuda`, is the upstream llm-d GPU serving image. Its version is set in `values.yaml` under `defaults.serving.image` and is not built by this repository. See the [llm-d project](https://github.com/llm-d/llm-d) for its release history.
 
 ## Chart Versioning
 
@@ -115,7 +125,7 @@ The Helm chart lives at `charts/nebari-llm-serving/` and has two version fields 
 
 Both fields are conventionally bumped together (e.g. to `0.1.0-alpha.9`), but only `version` drives the release automation. The current version is `0.1.0-alpha.9`.
 
-Image tags are not derived from `appVersion`, and they are not hand-edited in the repository either. On `main`, every image tag in `values.yaml` (operator, key manager, frontend, model downloader) is pinned to `latest` on purpose: the real, immutable tag only gets written when a release is packaged, and that step never touches the repo tree. See [Releasing](#releasing) for where that pinning happens.
+Image tags are not derived from `appVersion`, and they are not hand-edited in the repository either. On `main`, the operator, key manager, frontend and model downloader tags in `values.yaml` are `latest`, and the two OpenMeter subchart tags (`openmeter.setup.image.tag`, `openmeter.console.image.tag`) are empty, on purpose: the real, immutable tag only gets written when a release is packaged, and that step never touches the repo tree. See [Releasing](#releasing) for where that pinning happens.
 
 ## Releasing
 
@@ -128,7 +138,7 @@ If a change requires more than the [routine upgrade steps](/upgrading/#routine-u
 The merge commit (the `Chart.yaml` bump) touches a path that both `build-images.yaml` and `release.yaml` watch, so it triggers both workflows in parallel:
 
 1. `build-images.yaml` builds images for the merge commit and pushes them to `ghcr.io` and `quay.io`, tagged `sha-<short>` (see [Build Images](#build-images-build-imagesyaml) above). This is what guarantees the sha the release pins in the next step actually has matching images.
-2. `release.yaml` runs. It reads the new `version` from `Chart.yaml`, pins that exact sha into the four image tags in the chart's `values.yaml` (operator, key manager, frontend, model downloader), packages the chart with `helm package`, and creates a GitHub Release tagged `nebari-llm-serving-<version>` with auto-generated notes and the packaged chart attached. It then opens a pull request that syncs the pinned chart source to `nebari-dev/helm-repository`; once that PR merges, the chart is published to `oci://quay.io/nebari/charts/nebari-llm-serving`.
+2. `release.yaml` runs. It reads the new `version` from `Chart.yaml`, pins that exact sha into the six image tags in the chart's `values.yaml` (operator, key manager, frontend, model downloader, and the OpenMeter subchart's setup and console), packages the chart with `helm package`, and creates a GitHub Release tagged `nebari-llm-serving-<version>` with auto-generated notes and the packaged chart attached. It then opens a pull request that syncs the pinned chart source to `nebari-dev/helm-repository`; once that PR merges, the chart is published to `oci://quay.io/nebari/charts/nebari-llm-serving`.
 3. A pre-release version (anything with a `-` in it, e.g. `0.2.0-alpha.1`) is marked as a pre-release on the GitHub Release automatically.
 
 There is no hard gate between the two workflows in v1: `release.yaml` does not wait for `build-images.yaml` to finish before pinning shas. In practice both jobs kick off from the same push and finish close together. If the image build for that commit fails or lags, the release still pins the sha, and that failure is visible immediately: the `build-images.yaml` run shows red, and any deploy of that version fails to pull the missing image. The fix is to re-cut the release (bump `version` again) once the underlying build issue is resolved, rather than to retroactively patch a published chart.
