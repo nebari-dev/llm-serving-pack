@@ -19,9 +19,10 @@ data:
         username: default
         database: openmeter
     sink:
-      minCommitCount: 1
-      namespaceRefetch: 1s
-      namespaceRefetchTimeout: 1s
+      minCommitCount: {{ .Values.openmeter.sinkWorker.minCommitCount }}
+      maxCommitWait: {{ .Values.openmeter.sinkWorker.maxCommitWait }}
+      namespaceRefetch: {{ .Values.openmeter.sinkWorker.namespaceRefetch }}
+      namespaceRefetchTimeout: {{ .Values.openmeter.sinkWorker.namespaceRefetchTimeout }}
       kafka:
         brokers: {{ include "om.name" (dict "root" . "component" "kafka") }}:9092
         brokerAddressFamily: v4

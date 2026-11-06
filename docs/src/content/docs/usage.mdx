@@ -164,6 +164,18 @@ ids. When Redis is full (`openmeter.redis.maxMemory`) it evicts the ids
 closest to expiring rather than stopping the sink. An event redelivered after
 its id is gone is counted again.
 
+The sink worker writes events to ClickHouse in batches, committing when
+`openmeter.openmeter.sinkWorker.minCommitCount` events are waiting (500) or
+`openmeter.openmeter.sinkWorker.maxCommitWait` has passed (2s), whichever
+comes first. On an idle install an event is stored about 2 seconds after
+OpenMeter receives it, and a burst of requests, or a sink catching up after
+downtime, is stored in large batches. Lowering `minCommitCount` to 1 saves a
+fraction of a second when idle, but commits every event on its own and caps
+the sink at about one event a second, so any burst delays everyone's usage by
+minutes to hours. A request refused by a filter you add to the gateway, such
+as a usage limit's 429, still produces usage events, so a client retrying
+against a limit counts toward that rate.
+
 With an OpenMeter you run yourself:
 
 ```yaml
