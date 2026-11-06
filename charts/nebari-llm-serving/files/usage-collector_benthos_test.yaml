@@ -5,6 +5,9 @@
 # Each input is an OTLP log record as the collector's otel_log input presents
 # it: the access-log fields of examples/usage-access-log.yaml as attributes.
 tests:
+  # CONTRACT(C3): the llm.request id is the request id, and llm.tokens ids are
+  # <request id>:<token type>. Other deployments join on them. See
+  # docs/src/content/docs/extending-the-gateway.md before changing either.
   - name: API-key request is billed to the key's owner and team; input excludes cached tokens
     target_processors: /pipeline/processors
     mocks:

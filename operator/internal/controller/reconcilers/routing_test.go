@@ -548,6 +548,9 @@ func TestBuildRoutingResources(t *testing.T) { //nolint:gocyclo // table-driven 
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
 				}
+				// CONTRACT(C1): other deployments select model routes by the
+				// managed-by label. See
+				// docs/src/content/docs/extending-the-gateway.md before changing it.
 				for _, route := range []*struct {
 					name string
 					r    interface{ GetLabels() map[string]string }
