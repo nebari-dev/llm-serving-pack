@@ -480,6 +480,34 @@ func TestBuildPassthroughResourcesRoutes(t *testing.T) {
 	}
 }
 
+// CONTRACT(C1): other deployments select model routes by this label to attach
+// their own policies. See docs/src/content/docs/extending-the-gateway.md
+// before changing it.
+func TestPassthroughRoutesCarryManagedByLabel(t *testing.T) {
+	res, err := BuildPassthroughResources(testPassthroughModel(), testPassthroughConfig(), nil, []string{APIKeySecretName(ptCRName)})
+	if err != nil {
+		t.Fatalf("BuildPassthroughResources returned error: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		route *unstructured.Unstructured
+	}{
+		{name: "external route", route: res.ExternalRoute},
+		{name: "internal route", route: res.InternalRoute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.route == nil {
+				t.Fatal("route not built")
+			}
+			if got := tt.route.GetLabels()["app.kubernetes.io/managed-by"]; got != "nebari-llm-operator" {
+				t.Errorf("managed-by label = %q, want %q", got, "nebari-llm-operator")
+			}
+		})
+	}
+}
+
 func TestBuildPassthroughRouteDetails(t *testing.T) {
 	pm := testPassthroughModel()
 	cfg := testPassthroughConfig()
