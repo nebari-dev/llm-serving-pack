@@ -1,3 +1,13 @@
+global:
+  # namespace - the pack's namespace, where the operator, the key-manager and
+  # the usage collector run, and the bundled OpenMeter unless
+  # openmeter.namespace is set. Empty: <release>-nebari-llm-serving-system, or
+  # <release>-system when the release name contains nebari-llm-serving.
+  # Under Argo CD, the Application's destination.namespace must match it.
+  # Upgrading from 0.1.4 or earlier with fullnameOverride or nameOverride
+  # set: set this to your current namespace first (see Upgrading).
+  namespace: ""
+
 # createNamespace controls whether the chart provisions the operator's own
 # namespace and labels it `nebari.dev/managed=true` (required by the
 # validating webhook). Set to false when something else owns the namespace
@@ -165,6 +175,90 @@ keyManager:
         path: /
         intervalSeconds: 30
         timeoutSeconds: 5
+
+# usage - usage metering with OpenMeter (https://github.com/openmeterio/openmeter).
+# Off by default. When enabled:
+#   - a usage collector (OpenMeter's collector running the pipeline in
+#     files/usage-collector.yaml) receives the gateway's access log over OTLP
+#     and sends one OpenMeter usage event per request and token type;
+#   - the key-manager attaches every API key to its creator's OpenMeter
+#     customer, so usage made with a key is attributed to the person.
+# Point usage.openmeter.url at your OpenMeter, or set openmeter.enabled. The
+# gateway also has to send its access log to the collector: see
+# examples/usage-access-log.yaml and the Usage metering docs.
+
+# OpenMeter, the usage store, and the read-only usage console (Stargate's
+# console on OpenMeter), bundled as the nebari-openmeter subchart. Off by
+# default. With it on, usage.openmeter.url can stay empty: the collector and
+# the key-manager use the bundled OpenMeter. It runs in the pack's namespace,
+# or openmeter.namespace when set; with usage.enabled the collector and the
+# key-manager (operator namespace) may call its API, and no other pod. Every
+# value under openmeter is the subchart's; see
+# charts/nebari-openmeter/values.yaml.
+openmeter:
+  enabled: false
+  # Set by the pack, not by you: tells the subchart to default to the pack's
+  # namespace.
+  inPack: true
+  # namespace - where the bundled OpenMeter runs. Empty: the pack's namespace
+  # (global.namespace). There, the key-manager can read OpenMeter's
+  # credentials until #215, and uninstalling deletes the namespace with the
+  # data, so keepDataOnUninstall keeps nothing while the chart creates it.
+  # Another namespace must exist first; a NetworkPolicy admits the
+  # collector and the key-manager across, and for the usage console's
+  # NebariApp, label it nebari.dev/managed=true.
+  namespace: ""
+  # The image of the subchart's setup Jobs (openmeter-setup/); the release
+  # workflow pins it.
+  setup:
+    image:
+      tag: ""
+  # The usage console's image (usage-console/); the release workflow pins it.
+  console:
+    image:
+      tag: ""
+
+usage:
+  enabled: false
+  openmeter:
+    # url - base URL of the OpenMeter API, e.g. http://openmeter-api.openmeter.svc.
+    # Leave empty with openmeter.enabled to use the bundled OpenMeter.
+    url: ""
+    # existingSecret - optional Secret holding a bearer token for the OpenMeter
+    # API (key `token`), for an OpenMeter behind an authenticating proxy.
+    # OpenMeter's open-source server has no authentication of its own.
+    existingSecret: ""
+  keyOwnerLookup:
+    # port - internal port where the key-manager answers "who owns this API
+    # key?" for the usage collector. Unauthenticated; a NetworkPolicy, always
+    # rendered with usage.enabled (usage.collector.networkPolicy.enabled does
+    # not turn it off), admits only the collector.
+    port: 8081
+  customerSync:
+    # enabled - keep one OpenMeter customer per API-key creator (keyed by the
+    # creator's OIDC subject) holding that subject and their keys' client IDs.
+    # Turn off if something else owns your OpenMeter customers (e.g. you bill
+    # organizations and map users to them yourself).
+    enabled: true
+    interval: 30s
+  collector:
+    image:
+      repository: ghcr.io/openmeterio/benthos-collector
+      # v1.0.0-beta.234, pinned by digest.
+      tag: "v1.0.0-beta.234@sha256:cdc35416af4ededfbdb531463a3135127274f595c4b4b44573e685e82aac4fc4"
+      pullPolicy: IfNotPresent
+    # port - the OTLP (gRPC) port the gateway's access-log sink sends to.
+    port: 4317
+    resources:
+      requests: {cpu: 20m, memory: 64Mi}
+      limits: {memory: 256Mi}
+    networkPolicy:
+      # enabled - the OTLP port has no authentication: whoever can reach it can
+      # write usage events. When true, only pods in the gateway namespaces
+      # (platform.gateway.*.namespace) may reach the collector. Has no effect
+      # on a cluster whose network plugin does not enforce NetworkPolicy. The
+      # key-owner lookup's policy is separate and always on.
+      enabled: true
 
 # frontend - the React SPA served by its own nginx image. nginx serves the
 # static assets, renders /config.json (Keycloak settings) from the values below,

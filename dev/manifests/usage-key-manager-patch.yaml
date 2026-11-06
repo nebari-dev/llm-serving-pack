@@ -1,0 +1,32 @@
+# Dev key-manager settings for `make usage-e2e`: strategic-merge patch for
+# deployment/llm-key-manager.
+#
+# - Real bearer-token validation against the in-cluster dev Keycloak instead of
+#   dev mode, so minted keys record their creator's OIDC subject and groups.
+# - The key-owner lookup on :8081 for the usage collector.
+# - OpenMeter customer sync; usage-e2e.sh sets LLM_OPENMETER_URL to the
+#   openmeter subchart, whose network policy admits the label below.
+spec:
+  template:
+    metadata:
+      labels:
+        llm.nebari.dev/openmeter-client: "true"
+    spec:
+      containers:
+        - name: key-manager
+          ports:
+            - containerPort: 8081
+              name: key-owners
+          env:
+            - name: LLM_DEV_MODE
+              $patch: delete
+            - name: LLM_KEYCLOAK_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080
+            - name: LLM_KEYCLOAK_REALM
+              value: nebari
+            - name: LLM_KEYCLOAK_ISSUER_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080
+            - name: LLM_INTERNAL_LISTEN_ADDR
+              value: ":8081"
+            - name: LLM_OPENMETER_SYNC_INTERVAL
+              value: 5s

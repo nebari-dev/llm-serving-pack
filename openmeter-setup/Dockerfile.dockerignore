@@ -1,0 +1,4 @@
+# The build context is the repository root; send only what the image uses.
+*
+!shared/
+!openmeter-setup/

@@ -1,0 +1,137 @@
+{{- if .Values.usage.enabled }}
+{{- $name := printf "%s-usage-collector" (include "nebari-llm-serving.fullname" .) }}
+{{- $ns := include "nebari-llm-serving.operatorNamespace" . }}
+# Usage collector: receives the gateway's access log over OTLP and sends
+# OpenMeter usage events. The pipeline is files/usage-collector.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+data:
+  usage-collector.yaml: |
+    {{- .Files.Get "files/usage-collector.yaml" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+        {{- include "nebari-llm-serving.selectorLabels" . | nindent 8 }}
+        # Admitted by the bundled OpenMeter's network policy.
+        llm.nebari.dev/openmeter-client: "true"
+      annotations:
+        # Roll the pod when the pipeline changes.
+        checksum/pipeline: {{ .Files.Get "files/usage-collector.yaml" | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: collector
+          image: {{ .Values.usage.collector.image.repository }}:{{ .Values.usage.collector.image.tag }}
+          imagePullPolicy: {{ .Values.usage.collector.image.pullPolicy }}
+          args: ["-c", "/etc/usage-collector/usage-collector.yaml"]
+          env:
+            - name: OTLP_LISTEN_ADDRESS
+              value: "0.0.0.0:{{ .Values.usage.collector.port }}"
+            # Only routes in this namespace are the pack's (files/usage-collector.yaml).
+            - name: PACK_NAMESPACE
+              value: {{ $ns | quote }}
+            - name: KEY_OWNER_URL
+              value: "http://{{ $name }}-key-owners.{{ $ns }}.svc:{{ .Values.usage.keyOwnerLookup.port }}"
+            - name: OPENMETER_URL
+              value: {{ include "nebari-llm-serving.openmeterURL" . | quote }}
+            {{- if .Values.usage.openmeter.existingSecret }}
+            - name: OPENMETER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.usage.openmeter.existingSecret }}
+                  key: token
+            {{- end }}
+          ports:
+            - name: otlp-grpc
+              containerPort: {{ .Values.usage.collector.port }}
+            - name: http
+              containerPort: 4195
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.usage.collector.resources | nindent 12 }}
+          volumeMounts:
+            - name: pipeline
+              mountPath: /etc/usage-collector
+              readOnly: true
+      volumes:
+        - name: pipeline
+          configMap:
+            name: {{ $name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: {{ $name }}
+  ports:
+    - name: otlp-grpc
+      port: {{ .Values.usage.collector.port }}
+      targetPort: otlp-grpc
+      # Envoy picks HTTP/2 for the upstream from this.
+      appProtocol: grpc
+{{- if .Values.usage.collector.networkPolicy.enabled }}
+---
+# The OTLP port takes usage events without authentication, so only the
+# gateway may reach the collector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "nebari-llm-serving.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ $name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range (list .Values.platform.gateway.external.namespace .Values.platform.gateway.internal.namespace | uniq) }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - port: otlp-grpc
+          protocol: TCP
+{{- end }}
+{{- end }}

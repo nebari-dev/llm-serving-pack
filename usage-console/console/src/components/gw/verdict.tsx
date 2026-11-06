@@ -1,0 +1,81 @@
+import { Ban, Check, Hourglass, Scissors } from 'lucide-react'
+import type { Verdict } from '@/data/catalog'
+import { cn } from '@/lib/utils'
+
+// A verdict is never conveyed by color alone: every verdict carries a
+// glyph and a text label. Truncated shares the degraded hue but has its own
+// glyph and label so it never reads as "blocked". So does
+// Throttled: the gateway's "try again later" (429).
+
+type Tone = 'allowed' | 'blocked' | 'degraded' | 'neutral'
+
+export const verdictMeta: Record<Verdict, { label: string; tone: Tone; Icon: typeof Check }> = {
+  allowed: { label: 'Allowed', tone: 'allowed', Icon: Check },
+  blocked: { label: 'Blocked', tone: 'blocked', Icon: Ban },
+  truncated: { label: 'Truncated', tone: 'degraded', Icon: Scissors },
+  throttled: { label: 'Throttled', tone: 'degraded', Icon: Hourglass },
+}
+
+export const toneText: Record<Tone, string> = {
+  allowed: 'text-v-allowed-fg',
+  blocked: 'text-v-blocked-fg',
+  degraded: 'text-v-degraded-fg',
+  neutral: 'text-muted-foreground',
+}
+
+const toneChip: Record<Tone, string> = {
+  allowed: 'bg-v-allowed-bg text-v-allowed-fg border-v-allowed-border',
+  blocked: 'bg-v-blocked-bg text-v-blocked-fg border-v-blocked-border',
+  degraded: 'bg-v-degraded-bg text-v-degraded-fg border-v-degraded-border',
+  neutral: 'bg-muted text-muted-foreground-strong border-border',
+}
+
+export const toneBar: Record<Tone, string> = {
+  allowed: 'bg-v-allowed-bar',
+  blocked: 'bg-v-blocked-bar',
+  degraded: 'bg-v-degraded-bar',
+  neutral: 'bg-border-strong',
+}
+
+export const toneFill: Record<Tone, string> = {
+  allowed: 'var(--v-allowed-bar)',
+  blocked: 'var(--v-blocked-bar)',
+  degraded: 'var(--v-degraded-bar)',
+  neutral: 'var(--border-strong)',
+}
+
+/** Chip with glyph + label. Use `compact` inside dense tables (glyph only, label for AT). */
+/**
+ * A request the gateway let through (its verdict) whose upstream then
+ * failed: shown apart from a success, which shares its verdict, and from the
+ * gateway's refusal (blocked, throttled), which is red already.
+ */
+export function failedAfterAllowed(r: { verdict: Verdict; status: number; inFlight?: boolean }): boolean {
+  return !r.inFlight && r.verdict !== 'blocked' && r.verdict !== 'throttled' && r.status >= 400
+}
+
+export function VerdictBadge({
+  verdict,
+  compact = false,
+  className,
+}: {
+  verdict: Verdict
+  compact?: boolean
+  className?: string
+}) {
+  const { label, tone, Icon } = verdictMeta[verdict]
+  return (
+    <span
+      className={cn(
+        'inline-flex h-5 shrink-0 items-center gap-1 rounded-full border text-xs font-medium',
+        compact ? 'w-5 justify-center' : 'px-2',
+        toneChip[tone],
+        className,
+      )}
+      title={compact ? label : undefined}
+    >
+      <Icon className="size-3" aria-hidden="true" />
+      {compact ? <span className="sr-only">{label}</span> : label}
+    </span>
+  )
+}

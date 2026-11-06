@@ -4,14 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
-	"log/slog"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 const (
@@ -20,19 +24,27 @@ const (
 	testKID    = "test-key-1"
 )
 
-// newTestValidator returns a JWTValidator preloaded with pub under testKID and
-// marked ready, so tests validate signed tokens without any network fetch.
-func newTestValidator(t *testing.T, pub *rsa.PublicKey) *JWTValidator {
+// newTestValidator returns a validator whose JWKS (a test server) holds pub
+// under testKID, once it is ready.
+func newTestValidator(t *testing.T, pub *rsa.PublicKey) *oidc.Validator {
 	t.Helper()
-	v := &JWTValidator{
-		logger:      slog.Default(),
-		keycloakURL: testIssuer,
-		issuerURL:   testIssuer,
-		realm:       testRealm,
-		publicKeys:  map[string]*rsa.PublicKey{testKID: pub},
-		baseCtx:     context.Background(),
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
+			"kty": "RSA", "kid": testKID, "use": "sig",
+			"n": base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+			"e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+		}}}); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	v := oidc.New(oidc.Config{KeysURL: srv.URL, Issuer: testIssuer + "/realms/" + testRealm})
+	t.Cleanup(v.Stop)
+	for deadline := time.Now().Add(5 * time.Second); !v.Ready(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("validator never ready")
+		}
 	}
-	v.ready.Store(true)
 	return v
 }
 
@@ -227,12 +239,43 @@ func TestAuthMiddleware(t *testing.T) {
 // with Retry-After, not a 401, so clients can distinguish "auth not online yet".
 func TestAuthMiddlewareNotReady(t *testing.T) {
 	priv := genKey(t)
-	v := newTestValidator(t, &priv.PublicKey)
-	v.ready.Store(false)
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "keycloak starting", http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	v := oidc.New(oidc.Config{KeysURL: down.URL, Issuer: testIssuer + "/realms/" + testRealm})
+	defer v.Stop()
 
 	handler := AuthMiddleware(AuthConfig{Validator: v})(handlerThatChecksUser(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
 	req.Header.Set("Authorization", "Bearer "+signToken(t, priv, jwt.MapClaims{"preferred_username": "alice"}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected Retry-After header on 503")
+	}
+}
+
+// keysUnavailableValidator fails every token the way the validator does when
+// a token's key isn't cached and the JWKS can't be fetched.
+type keysUnavailableValidator struct{}
+
+func (keysUnavailableValidator) ValidateToken(context.Context, string) (map[string]interface{}, error) {
+	return nil, fmt.Errorf("unknown key ID rotated-kid: %w", oidc.ErrKeysUnavailable)
+}
+
+// TestAuthMiddlewareKeysUnavailable checks that a token whose key can't be
+// fetched (Keycloak down mid key rotation) gets a 503 with Retry-After, not a
+// 401 that would send the client to sign in again.
+func TestAuthMiddlewareKeysUnavailable(t *testing.T) {
+	handler := AuthMiddleware(AuthConfig{Validator: keysUnavailableValidator{}})(handlerThatChecksUser(t))
+	req := httptest.NewRequest(http.MethodGet, "/api/keys", nil)
+	req.Header.Set("Authorization", "Bearer some.signed.token")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

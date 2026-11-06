@@ -18,17 +18,44 @@ import (
 
 // KeyInfo contains metadata about an API key (never the key value itself).
 type KeyInfo struct {
-	ClientID    string    `json:"clientId"`
-	Creator     string    `json:"creator"`
-	Description string    `json:"description"`
-	CreatedAt   time.Time `json:"createdAt"`
-	ModelName   string    `json:"modelName"`
-	Namespace   string    `json:"namespace"`
+	ClientID string `json:"clientId"`
+	Creator  string `json:"creator"`
+	// CreatorSubject is the creator's OIDC subject. Empty for keys minted
+	// before it was recorded, and when the key manager runs in dev mode.
+	CreatorSubject string `json:"creatorSubject,omitempty"`
+	// CreatorGroups are the creator's OIDC groups when they minted the key.
+	// Usage reports use them to total usage per team.
+	CreatorGroups []string  `json:"creatorGroups,omitempty"`
+	Description   string    `json:"description"`
+	CreatedAt     time.Time `json:"createdAt"`
+	ModelName     string    `json:"modelName"`
+	Namespace     string    `json:"namespace"`
+	// RevokedAt is set on what a revoked key leaves in the metadata
+	// ConfigMap: who minted it, kept so usage recorded with the key can
+	// still be attributed after the key is gone. Key listings skip these.
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+}
+
+// RevokedKeyRetention is how long a revoked key's owner stays in the
+// metadata ConfigMap. It covers usage records processed late (a collector
+// outage, a replay of the gateway's log) and the next OpenMeter customer
+// sync; older entries are dropped so the ConfigMap (at most 1 MiB) does not
+// fill up and stop new keys being minted.
+const RevokedKeyRetention = 90 * 24 * time.Hour
+
+// Creator is the user minting a key.
+type Creator struct {
+	// Username is the human-readable name key ownership is checked against.
+	Username string
+	// Subject is the user's OIDC subject ("sub" claim), their stable identity.
+	Subject string
+	// Groups are the user's OIDC groups.
+	Groups []string
 }
 
 // CreateKeyResult is returned when a new key is created.
 type CreateKeyResult struct {
-	ClientID string // e.g., "user-chuck-phi4-mini-<32-hex-sha256>-1" (user, model, pair hash, sequence)
+	ClientID string // e.g., "user-chuck-phi4-mini-<32-hex-sha256>-<16-hex-random>" (user, model, pair hash, random part)
 	APIKey   string // e.g., "sk-abc123..." - only returned once at creation time
 }
 
@@ -151,6 +178,15 @@ func configMapName(modelName string) string {
 	return modelName + "-api-key-metadata"
 }
 
+// randomHex returns n random bytes, hex-encoded.
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating random bytes: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // generateAPIKey generates a new API key with sk- prefix and 32 random base64url characters.
 func generateAPIKey() (string, error) {
 	// 24 random bytes => 32 base64url characters (no padding)
@@ -184,14 +220,14 @@ func (m *Manager) getConfigMap(ctx context.Context, modelName string) (*corev1.C
 
 // CreateKey generates a new API key for a model, writes it to the Secret,
 // and stores metadata in the ConfigMap. Returns the key (only time it's shown).
-func (m *Manager) CreateKey(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
-	if username == "" {
+func (m *Manager) CreateKey(ctx context.Context, modelName string, creator Creator, description string) (*CreateKeyResult, error) {
+	if creator.Username == "" {
 		return nil, fmt.Errorf("username is required")
 	}
 	const maxRetries = 3
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
-		result, err := m.createKeyOnce(ctx, modelName, username, description)
+		result, err := m.createKeyOnce(ctx, modelName, creator, description)
 		if err == nil {
 			return result, nil
 		}
@@ -203,7 +239,8 @@ func (m *Manager) CreateKey(ctx context.Context, modelName, username, descriptio
 	return nil, fmt.Errorf("creating key for model %s: too many conflicts", modelName)
 }
 
-func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, description string) (*CreateKeyResult, error) {
+func (m *Manager) createKeyOnce(ctx context.Context, modelName string, creator Creator, description string) (*CreateKeyResult, error) {
+	username := creator.Username
 	secret, err := m.getSecret(ctx, modelName)
 	if err != nil {
 		return nil, err
@@ -231,27 +268,27 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 	// preserves the raw username for ownership checks.
 	safeUsername := sanitizeUsernameForKey(username)
 	safeModel := sanitizeUsernameForKey(modelName)
+
+	// The last part is random, never a sequence number. Usage records and
+	// OpenMeter customers name a key by its client ID long after the key is
+	// revoked, so a client ID must never be issued twice: a reissued ID would
+	// bill the new key's usage to whoever held the old one, and a sequence
+	// counted from the live keys reissues a revoked key's number. 64 random
+	// bits make a repeat practically impossible; the loop still refuses one
+	// that names a live key, so a live credential is never overwritten.
 	userPrefix := fmt.Sprintf("user-%s-%s-%s-", safeUsername, safeModel, shortHash(username, modelName))
-	count := 0
-	for k := range secret.Data {
-		if strings.HasPrefix(k, userPrefix) {
-			count++
-		}
-	}
-	// Probe upward from count+1 until the clientID is unused. Revocation
-	// leaves gaps in the sequence, so a bare count can land on a still-live
-	// key (keys {1,2,3}, revoke #2, count=2 -> "-3") and would silently
-	// overwrite that credential in both the Secret and the ConfigMap.
-	sequence := count + 1
-	clientID := fmt.Sprintf("%s%d", userPrefix, sequence)
+	var clientID string
 	for {
+		suffix, err := randomHex(8)
+		if err != nil {
+			return nil, fmt.Errorf("generating client ID: %w", err)
+		}
+		clientID = userPrefix + suffix
 		_, inSecret := secret.Data[clientID]
 		_, inCM := cm.Data[clientID]
 		if !inSecret && !inCM {
 			break
 		}
-		sequence++
-		clientID = fmt.Sprintf("%s%d", userPrefix, sequence)
 	}
 
 	apiKey, err := generateAPIKey()
@@ -270,12 +307,14 @@ func (m *Manager) createKeyOnce(ctx context.Context, modelName, username, descri
 
 	// Write metadata to the ConfigMap.
 	info := KeyInfo{
-		ClientID:    clientID,
-		Creator:     username,
-		Description: description,
-		CreatedAt:   time.Now().UTC().Truncate(time.Second),
-		ModelName:   modelName,
-		Namespace:   m.namespace,
+		ClientID:       clientID,
+		Creator:        username,
+		CreatorSubject: creator.Subject,
+		CreatorGroups:  creator.Groups,
+		Description:    description,
+		CreatedAt:      time.Now().UTC().Truncate(time.Second),
+		ModelName:      modelName,
+		Namespace:      m.namespace,
 	}
 	infoJSON, err := json.Marshal(info)
 	if err != nil {
@@ -301,11 +340,38 @@ func (m *Manager) ListKeys(ctx context.Context, modelName string) ([]KeyInfo, er
 	if err != nil {
 		return nil, err
 	}
-	return parseConfigMapKeys(cm), nil
+	return liveKeys(parseConfigMapKeys(cm)), nil
 }
 
 // ListKeysForUser returns metadata for keys created by a specific user across all models.
 func (m *Manager) ListKeysForUser(ctx context.Context, username string) ([]KeyInfo, error) {
+	all, err := m.ListAllKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var result []KeyInfo
+	for _, info := range all {
+		if info.Creator == username {
+			result = append(result, info)
+		}
+	}
+	return result, nil
+}
+
+// ListAllKeys returns metadata for every key across all models.
+func (m *Manager) ListAllKeys(ctx context.Context) ([]KeyInfo, error) {
+	all, err := m.ListAllKeysIncludingRevoked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return liveKeys(all), nil
+}
+
+// ListAllKeysIncludingRevoked returns metadata for every key across all
+// models, and the owners of keys revoked within RevokedKeyRetention
+// (RevokedAt set). The usage pipeline uses it to attribute usage recorded
+// with a key that has since been revoked.
+func (m *Manager) ListAllKeysIncludingRevoked(ctx context.Context) ([]KeyInfo, error) {
 	// List all ConfigMaps in the namespace and filter by label/name to find API key metadata ConfigMaps.
 	allCMs := &corev1.ConfigMapList{}
 	if err := m.client.List(ctx, allCMs, client.InNamespace(m.namespace)); err != nil {
@@ -323,11 +389,7 @@ func (m *Manager) ListKeysForUser(ctx context.Context, username string) ([]KeyIn
 		if !strings.HasSuffix(cm.Name, "-api-key-metadata") {
 			continue
 		}
-		for _, info := range parseConfigMapKeys(cm) {
-			if info.Creator == username {
-				result = append(result, info)
-			}
-		}
+		result = append(result, parseConfigMapKeys(cm)...)
 	}
 	return result, nil
 }
@@ -363,12 +425,43 @@ func (m *Manager) revokeKeyOnce(ctx context.Context, modelName, clientID string)
 		return fmt.Errorf("key %q not found for model %s", clientID, modelName)
 	}
 
+	var keyInfo KeyInfo
+	if v, ok := cm.Data[clientID]; ok {
+		// A key without readable metadata is still revoked; its owner is
+		// then unknown, as it already was.
+		_ = json.Unmarshal([]byte(v), &keyInfo)
+	}
+
 	delete(secret.Data, clientID)
 	if err := m.client.Update(ctx, secret); err != nil {
 		return fmt.Errorf("updating Secret for model %s: %w", modelName, err)
 	}
 
-	delete(cm.Data, clientID)
+	// Keep who minted the key, so usage recorded with it can still be
+	// attributed, and drop what older revoked keys left behind.
+	now := time.Now().UTC().Truncate(time.Second)
+	for id, info := range parseConfigMapEntries(cm) {
+		if info.RevokedAt != nil && now.Sub(*info.RevokedAt) > RevokedKeyRetention {
+			delete(cm.Data, id)
+		}
+	}
+	tombstone, err := json.Marshal(KeyInfo{
+		ClientID:       clientID,
+		Creator:        keyInfo.Creator,
+		CreatorSubject: keyInfo.CreatorSubject,
+		CreatorGroups:  keyInfo.CreatorGroups,
+		CreatedAt:      keyInfo.CreatedAt,
+		ModelName:      keyInfo.ModelName,
+		Namespace:      keyInfo.Namespace,
+		RevokedAt:      &now,
+	})
+	if err != nil {
+		return fmt.Errorf("marshaling revoked key metadata: %w", err)
+	}
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data[clientID] = string(tombstone)
 	if err := m.client.Update(ctx, cm); err != nil {
 		return fmt.Errorf("updating ConfigMap for model %s: %w", modelName, err)
 	}
@@ -376,15 +469,37 @@ func (m *Manager) revokeKeyOnce(ctx context.Context, modelName, clientID string)
 	return nil
 }
 
-// parseConfigMapKeys parses all KeyInfo entries from a ConfigMap's data map.
+// parseConfigMapKeys parses all KeyInfo entries, revoked ones included, from
+// a ConfigMap's data map.
 func parseConfigMapKeys(cm *corev1.ConfigMap) []KeyInfo {
 	var result []KeyInfo
-	for _, v := range cm.Data {
+	for _, info := range parseConfigMapEntries(cm) {
+		result = append(result, info)
+	}
+	return result
+}
+
+// parseConfigMapEntries parses a ConfigMap's KeyInfo entries by data key,
+// skipping any that are not valid KeyInfo JSON.
+func parseConfigMapEntries(cm *corev1.ConfigMap) map[string]KeyInfo {
+	result := make(map[string]KeyInfo, len(cm.Data))
+	for k, v := range cm.Data {
 		var info KeyInfo
 		if err := json.Unmarshal([]byte(v), &info); err != nil {
 			continue
 		}
-		result = append(result, info)
+		result[k] = info
+	}
+	return result
+}
+
+// liveKeys returns the keys that have not been revoked.
+func liveKeys(keys []KeyInfo) []KeyInfo {
+	var result []KeyInfo
+	for _, k := range keys {
+		if k.RevokedAt == nil {
+			result = append(result, k)
+		}
 	}
 	return result
 }

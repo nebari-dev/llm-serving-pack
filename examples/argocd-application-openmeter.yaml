@@ -1,0 +1,115 @@
+# Example ArgoCD Application for the LLM serving pack with the bundled
+# OpenMeter (usage metering), keeping the usage and billing data when the
+# Application is deleted.
+#
+# Here Argo CD owns the pack's namespace, not the chart:
+#   - syncOptions CreateNamespace=true and managedNamespaceMetadata create the
+#     destination namespace with the nebari.dev/managed=true label;
+#   - the chart's createNamespace is false, so the chart renders no Namespace.
+# Argo CD doesn't track a namespace it creates this way, so deleting the
+# Application leaves it. The Postgres Cluster (helm.sh/resource-policy: keep,
+# argocd.argoproj.io/sync-options: Delete=false) and the Kafka, ClickHouse and
+# Redis volumes (whenDeleted: Retain) then stay in it, and an Application
+# created again with the same release name carries on from them.
+#
+# With the chart's createNamespace on (argocd-application.yaml), deleting the
+# Application deletes the namespace and the data with it, whatever
+# keepDataOnUninstall says.
+#
+# Switching an existing Application from createNamespace: true to false: the
+# Namespace the chart made carries Argo CD's tracking annotation. Tested with
+# Argo CD 3.5.6, the sync that adds CreateNamespace=true replaces that
+# annotation and keeps the namespace, and deleting the Application afterwards
+# keeps it too. On another Argo CD version, removing the annotation before
+# that sync makes sure nothing prunes the namespace:
+#   kubectl annotate namespace nebari-llm-serving-system argocd.argoproj.io/tracking-id-
+#
+# Replace all placeholder values (your-cluster, etc.) before applying.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nebari-llm-serving
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: nebari-llm-pack
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: nebari-apps
+
+  source:
+    # The bundled OpenMeter ships in the first chart release after 0.1.4;
+    # pin that version or later.
+    repoURL: quay.io/nebari/charts
+    chart: nebari-llm-serving
+    targetRevision: "<version>"
+    helm:
+      releaseName: nebari-llm-serving
+      values: |
+        global:
+          # The pack's namespace; must match destination.namespace.
+          namespace: nebari-llm-serving-system
+        # Argo CD creates and labels the namespace (syncPolicy below).
+        createNamespace: false
+
+        platform:
+          baseDomain: "your-cluster.example.com"
+          tls:
+            clusterIssuer: letsencrypt-issuer
+
+        auth:
+          oidc:
+            issuerURL: "https://keycloak.your-cluster.example.com/realms/nebari"
+            groupsClaim: groups
+
+        frontend:
+          keycloak:
+            url: "https://keycloak.your-cluster.example.com"
+            realm: nebari
+
+        keyManager:
+          nebariApp:
+            enabled: true
+            hostname: "llm-keys.your-cluster.example.com"
+
+        usage:
+          enabled: true
+
+        openmeter:
+          enabled: true
+          # Empty: OpenMeter runs in the pack's namespace.
+          namespace: ""
+          # Keep the usage and billing data when the Application is deleted.
+          keepDataOnUninstall: true
+          modelResources:
+            - {name: bedrock, provider: bedrock}
+          nebariapp:
+            enabled: true
+            hostname: "usage.your-cluster.example.com"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: nebari-llm-serving-system
+
+  syncPolicy:
+    # Argo CD creates the destination namespace and sets the label the
+    # NebariApp operator and the pack's validating webhook need.
+    managedNamespaceMetadata:
+      labels:
+        nebari.dev/managed: "true"
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

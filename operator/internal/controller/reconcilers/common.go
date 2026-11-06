@@ -73,6 +73,10 @@ func APIKeyMetadataConfigMapName(modelName string) string {
 // ModelRouteName returns the AIGatewayRoute name for one shared endpoint
 // ("external" or "internal") of either model kind. The endpoint-disable
 // cleanup deletes by these names; keep construction and deletion in sync.
+// The usage collector (charts/nebari-llm-serving/files/usage-collector.yaml)
+// also depends on them: it reads the caller from the API key on routes in
+// the pack's namespace ending in "-external", and from the verified token on
+// those ending in "-internal".
 func ModelRouteName(modelName, endpoint string) string {
 	return modelName + "-" + endpoint
 }

@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -65,6 +66,11 @@ func newFakeClientWithGateway(t *testing.T, extraObjs ...client.Object) client.W
 		schema.GroupVersionKind{Group: "", Version: "v1", Kind: "SecretList"},
 		&unstructured.UnstructuredList{},
 	)
+	scheme.AddKnownTypeWithName(clientTrafficPolicyGVK(), &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(
+		schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "ClientTrafficPolicyList"},
+		&unstructured.UnstructuredList{},
+	)
 
 	extGW := newGateway(t, "nebari-gateway", "envoy-gateway-system", []interface{}{
 		// Pre-existing unrelated listener - the operator must preserve it.
@@ -96,6 +102,12 @@ func newGateway(t *testing.T, name, namespace string, listeners []interface{}) *
 	_ = unstructured.SetNestedField(gw.Object, "envoy", "spec", "gatewayClassName")
 	_ = unstructured.SetNestedSlice(gw.Object, listeners, "spec", "listeners")
 	return gw
+}
+
+// newTestSingleton returns the shared-listener reconciler with an Event
+// recorder that keeps events in memory.
+func newTestSingleton(c client.Client, cfg *config.OperatorConfig) *ClusterTLSSingleton {
+	return &ClusterTLSSingleton{Client: c, Config: cfg, Recorder: record.NewFakeRecorder(100)}
 }
 
 func testOperatorConfig() *config.OperatorConfig {
@@ -243,7 +255,7 @@ func TestClusterTLSSingleton_Reconcile(t *testing.T) {
 				tt.mutateCfg(cfg)
 			}
 			c := newFakeClientWithGateway(t)
-			r := &ClusterTLSSingleton{Client: c, Config: cfg}
+			r := newTestSingleton(c, cfg)
 			if err := r.Reconcile(context.Background()); err != nil {
 				t.Fatalf("Reconcile returned error: %v", err)
 			}
@@ -255,7 +267,7 @@ func TestClusterTLSSingleton_Reconcile(t *testing.T) {
 func TestClusterTLSSingleton_Reconcile_Idempotent(t *testing.T) {
 	cfg := testOperatorConfig()
 	c := newFakeClientWithGateway(t)
-	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	r := newTestSingleton(c, cfg)
 
 	for i := 0; i < 3; i++ {
 		if err := r.Reconcile(context.Background()); err != nil {
@@ -292,7 +304,7 @@ func TestClusterTLSSingleton_Reconcile_UpdatesDriftedCertificate(t *testing.T) {
 	_ = unstructured.SetNestedStringSlice(driftedCert.Object, []string{"old.example.com"}, "spec", "dnsNames")
 
 	c := newFakeClientWithGateway(t, driftedCert)
-	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	r := newTestSingleton(c, cfg)
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -340,7 +352,7 @@ func TestClusterTLSSingleton_Reconcile_MissingGateway_IsNotAnError(t *testing.T)
 
 	extGW := newGateway(t, "nebari-gateway", "envoy-gateway-system", []interface{}{})
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(extGW).Build()
-	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	r := newTestSingleton(c, cfg)
 	// Should not error just because internal Gateway is missing.
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile should tolerate missing Gateway, got error: %v", err)
@@ -401,7 +413,7 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret(t *testing.T) {
 	_ = unstructured.SetNestedField(secret.Object, "kubernetes.io/tls", "type")
 
 	c := newFakeClientWithGateway(t, cert, secret)
-	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	r := newTestSingleton(c, cfg)
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
@@ -470,7 +482,7 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret_MissingSecretIsNotAnEr
 	cfg.TLSSecretName = userProvidedTLSSecret
 
 	c := newFakeClientWithGateway(t)
-	r := &ClusterTLSSingleton{Client: c, Config: cfg}
+	r := newTestSingleton(c, cfg)
 	// The secret does not exist yet; the listeners must still be attached
 	// (Envoy serves as soon as the user creates it) and Reconcile must not
 	// error - mirroring nebari-operator's UserProvidedSecretNotFound

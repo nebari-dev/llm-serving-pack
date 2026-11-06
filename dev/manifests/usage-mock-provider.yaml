@@ -1,0 +1,112 @@
+# In-cluster stand-in for an external OpenAI-compatible provider, used by
+# `make usage-e2e` to exercise usage metering through the PassthroughModel
+# path without a provider account.
+#
+# A PassthroughModel always connects to its provider over TLS and validates the
+# certificate against the gateway's system trust store, so the mock serves
+# HTTPS with a certificate from the local self-signed issuer, and
+# usage-e2e.sh adds that certificate to the gateway's trust store (see
+# usage-envoyproxy-dev.yaml).
+#
+# Prereq: the provider credential Secret `mock-provider-api-key` (created by
+# usage-e2e.sh with a random value; the mock does not check it).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: mock-provider-tls
+  namespace: llm-operator-system
+spec:
+  secretName: mock-provider-tls
+  # isCA makes the self-signed certificate usable as its own trust anchor.
+  isCA: true
+  commonName: mock-provider
+  dnsNames:
+    - mock-provider.llm-operator-system.svc.cluster.local
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-provider
+  namespace: llm-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-provider
+  template:
+    metadata:
+      labels:
+        app: mock-provider
+    spec:
+      containers:
+        - name: mock
+          image: mock-vllm:dev
+          imagePullPolicy: Never
+          env:
+            - name: PORT
+              value: "8443"
+            - name: TLS_CERT_FILE
+              value: /tls/tls.crt
+            - name: TLS_KEY_FILE
+              value: /tls/tls.key
+          ports:
+            - containerPort: 8443
+              name: https
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+            periodSeconds: 2
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: mock-provider-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-provider
+  namespace: llm-operator-system
+spec:
+  selector:
+    app: mock-provider
+  ports:
+    - port: 8443
+      targetPort: 8443
+      protocol: TCP
+---
+apiVersion: llm.nebari.dev/v1alpha1
+kind: PassthroughModel
+metadata:
+  name: mock-provider
+  namespace: llm-operator-system
+spec:
+  provider:
+    hostname: mock-provider.llm-operator-system.svc.cluster.local
+    port: 8443
+    credentialSecretName: mock-provider-api-key
+  models:
+    catchAll: false
+    declared:
+      - mock/small
+      - mock/large
+  access:
+    groups:
+      # The dev-mode key-manager identity (LLM_DEV_GROUPS).
+      - llm
+      # The dev Keycloak realm's user (`make deploy-keycloak`), for calling
+      # the internal endpoint with a token.
+      - llm-users

@@ -49,6 +49,7 @@ This creates a kind cluster named `llm-serving-test` and installs:
 - Envoy Gateway, wired with the AI Gateway `ext_proc` extension (`dev/eg-extension-values.yaml`)
 - The `LLMModel` and `PassthroughModel` CRDs
 - Test `GatewayClass` and `Gateway` resources
+- The CloudNativePG operator (`make deploy-cnpg`), for the bundled OpenMeter's Postgres
 
 Dependency versions are pinned at the top of `dev/Makefile`. They move as a
 set: Envoy AI Gateway v1.1 uses Envoy Gateway v1.8.1 and Gateway API

@@ -1,0 +1,7 @@
+# The build context is the repository root; send only what the image uses.
+*
+!shared/
+!usage-console/
+usage-console/console/node_modules
+usage-console/console/dist
+**/.DS_Store

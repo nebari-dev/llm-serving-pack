@@ -1,0 +1,11 @@
+# The dev key-manager's key-owner lookup (usage-e2e.sh), for the usage
+# collector. The chart creates the same Service when usage.enabled.
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-key-manager-owners
+  namespace: llm-operator-system
+spec:
+  selector: {app: llm-key-manager}
+  ports:
+    - {name: key-owners, port: 8081, targetPort: 8081}
