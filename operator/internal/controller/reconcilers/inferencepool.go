@@ -1,5 +1,5 @@
 // Resource specs based on GIE inferencepool chart v1.5.0 and the EPP deployment
-// template from llm-d-router-endpoint-picker v0.9.0.
+// in the llm-d-router v0.9.0 chart (config/charts/routerlib).
 // The InferencePool uses inference.networking.k8s.io/v1; the EPP config uses
 // llm-d.ai/v1alpha1, the non-deprecated API accepted by llm-d-router v0.9.0.
 package reconcilers
