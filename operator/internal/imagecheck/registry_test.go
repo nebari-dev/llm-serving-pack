@@ -58,6 +58,27 @@ func TestParseImageReference(t *testing.T) {
 			repository: "team/model",
 			reference:  "latest",
 		},
+		{
+			name:       "tag and digest",
+			image:      "ghcr.io/example/model:v1.2.3@sha256:1234",
+			registry:   "ghcr.io",
+			repository: "example/model",
+			reference:  "sha256:1234",
+		},
+		{
+			name:       "registry port with tag and digest",
+			image:      "localhost:5000/team/model:v1@sha256:1234",
+			registry:   "localhost:5000",
+			repository: "team/model",
+			reference:  "sha256:1234",
+		},
+		{
+			name:       "registry port with digest",
+			image:      "localhost:5000/model@sha256:1234",
+			registry:   "localhost:5000",
+			repository: "model",
+			reference:  "sha256:1234",
+		},
 	}
 
 	for _, tt := range tests {

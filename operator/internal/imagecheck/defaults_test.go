@@ -52,6 +52,55 @@ defaults:
 	}
 }
 
+func TestParseDefaultImagesSkipsReleasePinnedMappings(t *testing.T) {
+	t.Parallel()
+
+	values := []byte(`
+openmeter:
+  setup:
+    image:
+      tag: ""
+  console:
+    image:
+      tag: ""
+sidecar:
+  image:
+    tag: "v2"
+component:
+  image:
+    repository: ghcr.io/example/component
+    tag: ""
+operator:
+  image:
+    repository: ghcr.io/example/operator
+    tag: "latest"
+`)
+
+	got, err := ParseDefaultImages(values)
+	if err != nil {
+		t.Fatalf("ParseDefaultImages() unexpected error: %v", err)
+	}
+	want := []DefaultImage{
+		{Path: "component.image", SkipReason: "empty tag"},
+		{Path: "openmeter.console.image", SkipReason: "empty tag"},
+		{Path: "openmeter.setup.image", SkipReason: "empty tag"},
+		{Path: "operator.image", Reference: "ghcr.io/example/operator:latest"},
+		{Path: "sidecar.image", SkipReason: "no repository"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseDefaultImages() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseDefaultImagesRejectsOnlySkippedMappings(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseDefaultImages([]byte("component:\n  image:\n    tag: \"\"\n"))
+	if err == nil || !strings.Contains(err.Error(), "no image defaults") {
+		t.Fatalf("ParseDefaultImages() error = %v, want no image defaults", err)
+	}
+}
+
 func TestParseDefaultImagesRejectsIncompleteImageMapping(t *testing.T) {
 	t.Parallel()
 

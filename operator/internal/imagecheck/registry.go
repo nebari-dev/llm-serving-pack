@@ -112,6 +112,10 @@ func parseImageReference(image string) (imageReference, error) {
 	if at := strings.LastIndex(image, "@"); at > lastSlash {
 		name = image[:at]
 		manifestReference = image[at+1:]
+		// The digest selects the manifest; a tag before it is not part of the path.
+		if colon := strings.LastIndex(name, ":"); colon > lastSlash {
+			name = name[:colon]
+		}
 	} else if colon := strings.LastIndex(image, ":"); colon > lastSlash {
 		name = image[:colon]
 		manifestReference = image[colon+1:]

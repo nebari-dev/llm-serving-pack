@@ -56,8 +56,13 @@ func run() error {
 	}
 
 	checker := imagecheck.NewChecker(nil)
-	failures := 0
+	checked, failures := 0, 0
 	for _, image := range images {
+		if image.SkipReason != "" {
+			fmt.Printf("SKIP %s: %s\n", image.Path, image.SkipReason)
+			continue
+		}
+		checked++
 		ctx, cancel := context.WithTimeout(context.Background(), *requestTimeout)
 		err := checker.Check(ctx, image.Reference)
 		cancel()
@@ -69,7 +74,7 @@ func run() error {
 		fmt.Printf("OK   %s (%s)\n", image.Path, image.Reference)
 	}
 	if failures > 0 {
-		return fmt.Errorf("%d of %d default images failed availability checks", failures, len(images))
+		return fmt.Errorf("%d of %d default images failed availability checks", failures, checked)
 	}
 	return nil
 }
