@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -604,6 +605,28 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				}
 				if !foundEndpointsRule {
 					t.Error("expected rule for endpoints/services")
+				}
+			},
+		},
+		{
+			name:  "EPP Role: reads the llm-d.ai InferenceObjective and InferenceModelRewrite CRDs",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var resources []string
+				for _, rule := range result.EPPRole.Rules {
+					if slices.Contains(rule.APIGroups, "llm-d.ai") {
+						assertContainsVerbs(t, rule.Verbs, []string{"get", "list", "watch"})
+						resources = append(resources, rule.Resources...)
+					}
+				}
+				slices.Sort(resources)
+				want := []string{"inferencemodelrewrites", "inferenceobjectives"}
+				if !slices.Equal(resources, want) {
+					t.Errorf("expected llm-d.ai resources %v, got %v", want, resources)
 				}
 			},
 		},
