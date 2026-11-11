@@ -1,6 +1,7 @@
 package reconcilers
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,7 +44,7 @@ func defaultInferencePoolConfig() *config.OperatorConfig {
 		InternalGatewayName: "internal-gw",
 		OIDCIssuerURL:       "https://oidc.example.com",
 		DefaultServingImage: "ghcr.io/llm-d/llm-d-cuda:v0.7.0",
-		DefaultEPPImage:     "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0",
+		DefaultEPPImage:     "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0",
 	}
 }
 
@@ -206,7 +207,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if len(containers) != 1 {
 					t.Fatalf("expected 1 container, got %d", len(containers))
 				}
-				if containers[0].Image != "ghcr.io/llm-d/llm-d-inference-scheduler:v0.8.0" {
+				if containers[0].Image != "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0" {
 					t.Errorf("expected EPP image, got %q", containers[0].Image)
 				}
 				if containers[0].Name != testPoolEPPLabel {
@@ -219,7 +220,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 			model: defaultInferencePoolModel(),
 			cfg: func() *config.OperatorConfig {
 				cfg := defaultInferencePoolConfig()
-				cfg.DefaultEPPImage = "mirror.internal/llm-d/llm-d-inference-scheduler:v0.8.0-custom"
+				cfg.DefaultEPPImage = "mirror.internal/llm-d/custom-epp:v1"
 				return cfg
 			}(),
 			check: func(t *testing.T, result *InferencePoolResources, err error) {
@@ -230,7 +231,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if len(containers) != 1 {
 					t.Fatalf("expected 1 container, got %d", len(containers))
 				}
-				if containers[0].Image != "mirror.internal/llm-d/llm-d-inference-scheduler:v0.8.0-custom" {
+				if containers[0].Image != "mirror.internal/llm-d/custom-epp:v1" {
 					t.Errorf("expected EPP image from config, got %q", containers[0].Image)
 				}
 			},
@@ -394,6 +395,9 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				if parsed["kind"] != "EndpointPickerConfig" {
 					t.Errorf("expected parsed kind=EndpointPickerConfig, got %v", parsed["kind"])
 				}
+				if parsed["apiVersion"] != "llm-d.ai/v1alpha1" {
+					t.Errorf("expected parsed apiVersion=llm-d.ai/v1alpha1, got %v", parsed["apiVersion"])
+				}
 			},
 		},
 		{
@@ -401,7 +405,7 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 			model: func() *llmv1alpha1.LLMModel {
 				m := defaultInferencePoolModel()
 				m.Spec.Advanced.InferencePool.SchedulerConfig = &runtime.RawExtension{
-					Raw: []byte(`{"apiVersion":"inference.networking.x-k8s.io/v1alpha1","kind":"EndpointPickerConfig","plugins":[{"type":"prefix-cache-scorer"},{"type":"max-score-picker"}],"schedulingProfiles":[{"name":"default","plugins":[{"pluginRef":"max-score-picker"},{"pluginRef":"prefix-cache-scorer","weight":2}]}]}`),
+					Raw: []byte(`{"apiVersion":"llm-d.ai/v1alpha1","kind":"EndpointPickerConfig","plugins":[{"type":"prefix-cache-scorer"},{"type":"max-score-picker"}],"schedulingProfiles":[{"name":"default","plugins":[{"pluginRef":"max-score-picker"},{"pluginRef":"prefix-cache-scorer","weight":2}]}]}`),
 				}
 				return m
 			}(),
@@ -601,6 +605,28 @@ func TestBuildInferencePoolResources(t *testing.T) { //nolint:gocyclo // table-d
 				}
 				if !foundEndpointsRule {
 					t.Error("expected rule for endpoints/services")
+				}
+			},
+		},
+		{
+			name:  "EPP Role: reads the llm-d.ai InferenceObjective and InferenceModelRewrite CRDs",
+			model: defaultInferencePoolModel(),
+			cfg:   defaultInferencePoolConfig(),
+			check: func(t *testing.T, result *InferencePoolResources, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				var resources []string
+				for _, rule := range result.EPPRole.Rules {
+					if slices.Contains(rule.APIGroups, "llm-d.ai") {
+						assertContainsVerbs(t, rule.Verbs, []string{"get", "list", "watch"})
+						resources = append(resources, rule.Resources...)
+					}
+				}
+				slices.Sort(resources)
+				want := []string{"inferencemodelrewrites", "inferenceobjectives"}
+				if !slices.Equal(resources, want) {
+					t.Errorf("expected llm-d.ai resources %v, got %v", want, resources)
 				}
 			},
 		},
