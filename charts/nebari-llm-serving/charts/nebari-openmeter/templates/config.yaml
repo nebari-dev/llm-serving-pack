@@ -1,3 +1,12 @@
+{{- $sink := .Values.openmeter.sinkWorker -}}
+{{- $maxCommitWait := include "om.duration" (dict "key" "openmeter.sinkWorker.maxCommitWait" "value" $sink.maxCommitWait) -}}
+{{- $namespaceRefetch := include "om.duration" (dict "key" "openmeter.sinkWorker.namespaceRefetch" "value" $sink.namespaceRefetch) -}}
+{{- $namespaceRefetchTimeout := include "om.duration" (dict "key" "openmeter.sinkWorker.namespaceRefetchTimeout" "value" $sink.namespaceRefetchTimeout) -}}
+{{- $dedupeExpiration := include "om.duration" (dict "key" "openmeter.dedupeExpiration" "value" .Values.openmeter.dedupeExpiration) -}}
+{{- /* OpenMeter rejects this at startup and the sink worker crash-loops. */ -}}
+{{- if gt (include "om.durationSeconds" $sink.namespaceRefetchTimeout | float64) (include "om.durationSeconds" $sink.namespaceRefetch | float64) -}}
+{{- fail (printf "openmeter.sinkWorker.namespaceRefetchTimeout (%s) must be no longer than openmeter.sinkWorker.namespaceRefetch (%s)" $sink.namespaceRefetchTimeout $sink.namespaceRefetch) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,9 +28,10 @@ data:
         username: default
         database: openmeter
     sink:
-      minCommitCount: 1
-      namespaceRefetch: 1s
-      namespaceRefetchTimeout: 1s
+      minCommitCount: {{ $sink.minCommitCount }}
+      maxCommitWait: {{ $maxCommitWait }}
+      namespaceRefetch: {{ $namespaceRefetch }}
+      namespaceRefetchTimeout: {{ $namespaceRefetchTimeout }}
       kafka:
         brokers: {{ include "om.name" (dict "root" . "component" "kafka") }}:9092
         brokerAddressFamily: v4
@@ -33,7 +43,7 @@ data:
         config:
           address: {{ include "om.name" (dict "root" . "component" "redis") }}:6379
           database: 0
-          expiration: {{ .Values.openmeter.dedupeExpiration }}
+          expiration: {{ $dedupeExpiration }}
     postgres:
       autoMigrate: migration
     # The meters the LLM serving pack's usage collector feeds: one llm.request

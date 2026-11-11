@@ -18,6 +18,23 @@ openmeter:
     resources:
       requests: {cpu: 50m, memory: 96Mi}
       limits: {memory: 384Mi}
+    # The sink worker writes events to ClickHouse in batches: a batch is
+    # committed when minCommitCount events are waiting or maxCommitWait has
+    # passed, whichever comes first. These are OpenMeter's defaults, so an
+    # idle install stores an event up to maxCommitWait (2s) after it
+    # arrives. A minCommitCount of 1 commits every event on its own, which
+    # caps the sink at about one event a second: a burst of requests, or
+    # catching up after the sink was down, then delays everyone's usage by
+    # minutes to hours.
+    # Durations here and in dedupeExpiration need a unit ("2s", "500ms"):
+    # OpenMeter reads a bare number as nanoseconds, so the chart refuses one.
+    minCommitCount: 500
+    maxCommitWait: 2s
+    # How often the sink worker re-reads OpenMeter's namespaces and meters,
+    # and how long one read may take (no longer than namespaceRefetch; the
+    # chart refuses a longer one, which OpenMeter would reject at startup).
+    namespaceRefetch: 1s
+    namespaceRefetchTimeout: 1s
   # Usage events with an ID already stored are dropped for up to this long,
   # so a redelivered gateway access-log entry is usually counted once. Best
   # effort: the ids live in Redis, which can lose or evict them; see redis
