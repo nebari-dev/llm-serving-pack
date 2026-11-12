@@ -63,9 +63,6 @@ openmeter:
   console:
     image:
       tag: ""
-sidecar:
-  image:
-    tag: "v2"
 component:
   image:
     repository: ghcr.io/example/component
@@ -85,7 +82,6 @@ operator:
 		{Path: "openmeter.console.image", SkipReason: "empty tag"},
 		{Path: "openmeter.setup.image", SkipReason: "empty tag"},
 		{Path: "operator.image", Reference: "ghcr.io/example/operator:latest"},
-		{Path: "sidecar.image", SkipReason: "no repository"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseDefaultImages() = %#v, want %#v", got, want)
@@ -110,6 +106,62 @@ func TestParseDefaultImagesRejectsIncompleteImageMapping(t *testing.T) {
 `))
 	if err == nil || !strings.Contains(err.Error(), "component.image.tag") {
 		t.Fatalf("ParseDefaultImages() error = %v, want missing component.image.tag", err)
+	}
+}
+
+func TestParseDefaultImagesRejectsMappingWithoutRepository(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		values string
+		want   string
+	}{
+		{
+			name: "misspelled key",
+			values: `
+operator:
+  image: ghcr.io/example/operator:latest
+component:
+  image:
+    repositry: ghcr.io/example/component
+    tag: "v1"
+`,
+			want: "component.image.repository is required",
+		},
+		{
+			name: "missing key",
+			values: `
+operator:
+  image: ghcr.io/example/operator:latest
+component:
+  image:
+    tag: "v1"
+`,
+			want: "component.image.repository is required",
+		},
+		{
+			name: "empty value",
+			values: `
+operator:
+  image: ghcr.io/example/operator:latest
+component:
+  image:
+    repository: ""
+    tag: "v1"
+`,
+			want: "component.image.repository must be a non-empty string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseDefaultImages([]byte(tt.values))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ParseDefaultImages() error = %v, want %s", err, tt.want)
+			}
+		})
 	}
 }
 

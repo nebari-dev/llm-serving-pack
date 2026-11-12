@@ -35,7 +35,7 @@ type DefaultImage struct {
 
 // ParseDefaultImages finds every value named image. It supports both a full
 // scalar reference and a mapping with repository and tag fields. A mapping
-// with an empty tag or no repository is returned with a SkipReason.
+// with an empty tag is returned with a SkipReason.
 func ParseDefaultImages(valuesYAML []byte) ([]DefaultImage, error) {
 	var values any
 	if err := yaml.Unmarshal(valuesYAML, &values); err != nil {
@@ -103,8 +103,7 @@ func newDefaultImage(value any, path []string) (DefaultImage, error) {
 }
 
 // skipReason reports why a repository/tag mapping cannot be checked from
-// values.yaml alone. The release workflow pins empty tags, and a subchart's
-// own values supply a missing repository.
+// values.yaml alone. The release workflow pins empty tags.
 func skipReason(value any) string {
 	image, ok := value.(map[string]any)
 	if !ok {
@@ -112,9 +111,6 @@ func skipReason(value any) string {
 	}
 	if tag, ok := image["tag"]; ok && isBlank(tag) {
 		return "empty tag"
-	}
-	if isBlank(image["repository"]) {
-		return "no repository"
 	}
 	return ""
 }
