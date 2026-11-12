@@ -1,0 +1,47 @@
+# Illustrative native CPU KV-cache offload configuration.
+# Validate the model/runtime/hardware combination before deployment.
+# This reserves 24Gi host memory (8Gi baseline + 16Gi cache) and allows
+# up to 28Gi (12Gi baseline + 16Gi cache) per pod. Node overhead is additional.
+apiVersion: llm.nebari.dev/v1alpha1
+kind: LLMModel
+metadata:
+  name: cpu-kv-cache-example
+  namespace: nebari-llm-serving-system
+spec:
+  model:
+    name: Qwen/Qwen2.5-0.5B-Instruct
+    source: huggingface
+    storage:
+      type: pvc
+      size: 5Gi
+  resources:
+    gpu:
+      count: 1
+      type: nvidia
+    requests:
+      cpu: "2"
+      memory: 8Gi
+    limits:
+      cpu: "4"
+      memory: 12Gi
+  serving:
+    replicas: 1
+    tensorParallelism: 1
+    dataParallelism: 1
+    kvCacheOffload:
+      cpuMemoryGiB: 16
+    vllmArgs:
+      - --max-model-len
+      - "4096"
+      # Keep the GPU KV allocation below the CPU cache for this experiment.
+      - --kv-cache-memory-bytes
+      - "4294967296"
+      - --enable-prefix-caching
+  access:
+    groups:
+      - llm
+  endpoints:
+    external:
+      enabled: true
+    internal:
+      enabled: true
