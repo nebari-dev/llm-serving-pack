@@ -42,7 +42,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `auth.oidc.issuerURL` | `""` | OIDC issuer URL. When empty, read from a Secret via `secretKeyRef` (the default Nebari integration path). |
-| `auth.oidc.existingSecret` | `""` | Name of the Secret containing the `issuer-url` key. Defaults to `<release-fullname>-oidc-client` when empty. |
+| `auth.oidc.existingSecret` | `""` | Name of the Secret containing the `issuer-url` key. Defaults to `<release-fullname>-key-manager-oidc-client`, the Secret the nebari-operator creates for the key-manager's NebariApp. Set this or `auth.oidc.issuerURL` when `keyManager.nebariApp.enabled` is false. |
 | `auth.oidc.groupsClaim` | `groups` | JWT claim name used to extract group memberships. |
 | `auth.oidc.audience` | `""` | Expected audience value in JWT tokens. |
 
