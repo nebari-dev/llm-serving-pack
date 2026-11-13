@@ -71,7 +71,7 @@ Each of the six images (operator, model-downloader, key-manager, frontend - Reac
 
 Pull request builds always run with pushing disabled, so a PR proves the image builds without publishing anything under that PR's commit.
 
-Authentication uses the workflow's automatic `GITHUB_TOKEN` for GHCR (`packages: write`) and a `QUAY_TOKEN` secret plus a `QUAY_USERNAME` repository variable for Quay.
+Authentication uses the workflow's automatic `GITHUB_TOKEN` for GHCR (`packages: write`) and the `QUAY_TOKEN` and `QUAY_USERNAME` secrets for Quay.
 
 Nothing here produces a version-numbered tag. On `main`, the chart's `values.yaml` hardcodes `tag: "latest"` for the operator, key-manager, frontend, and model-downloader images, and leaves `openmeter.setup.image.tag` and `openmeter.console.image.tag` empty. The chart refuses to render with `openmeter.enabled` until those two are set. Both are deliberate, and covered in [Chart Versioning](#chart-versioning) and [Releasing](#releasing) below.
 
@@ -123,7 +123,7 @@ The Helm chart lives at `charts/nebari-llm-serving/` and has two version fields 
 - **`version`** - the chart packaging version (SemVer). Bumping this field and merging the change to `main` is what cuts a release; see [Releasing](#releasing) below.
 - **`appVersion`** - the application version string. The chart only uses it to set the `app.kubernetes.io/version` label on the resources it renders. It has no effect on which image gets deployed.
 
-Both fields are conventionally bumped together (e.g. to `0.1.0-alpha.9`), but only `version` drives the release automation. The current version is `0.1.0-alpha.9`.
+Both fields are conventionally bumped together (e.g. to `0.1.0-alpha.9`), but only `version` drives the release automation. `Chart.yaml` on `main` always holds the current version.
 
 Image tags are not derived from `appVersion`, and they are not hand-edited in the repository either. On `main`, the operator, key manager, frontend and model downloader tags in `values.yaml` are `latest`, and the two OpenMeter subchart tags (`openmeter.setup.image.tag`, `openmeter.console.image.tag`) are empty, on purpose: the real, immutable tag only gets written when a release is packaged, and that step never touches the repo tree. See [Releasing](#releasing) for where that pinning happens.
 
