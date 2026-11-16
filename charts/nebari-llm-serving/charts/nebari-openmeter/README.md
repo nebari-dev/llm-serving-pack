@@ -70,6 +70,19 @@ console and the bootstrap job can reach it.
 provider that prices each one's models (for example `bedrock`). `prices`
 sets per-token USD rates for models with no public price.
 
+## Stripe
+
+OpenMeter's Stripe app sends invoices and takes payments through your Stripe
+account. Installing it registers a Stripe webhook at
+`<openmeter.apps.baseURL>/api/v1/apps/<app id>/stripe/webhook`, so set
+`openmeter.apps.baseURL` to the public https origin Stripe will reach before
+you install it: the URL stays fixed for that install, and the default,
+`https://example.com`, reaches nothing. This chart doesn't expose OpenMeter's
+API; route only `POST` on that one path to the API Service from outside
+(OpenMeter's API has no authentication, and the webhook checks Stripe's
+signature), and admit the gateway's proxies to the API port in a
+`NetworkPolicy`.
+
 ## What the console shows
 
 Overview, Traffic (one receipt per request, live), Spend (by team, person,

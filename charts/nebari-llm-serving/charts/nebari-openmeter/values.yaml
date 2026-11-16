@@ -35,6 +35,17 @@ openmeter:
     # chart refuses a longer one, which OpenMeter would reject at startup).
     namespaceRefetch: 1s
     namespaceRefetchTimeout: 1s
+  # OpenMeter's apps (its Stripe app). baseURL is the public https origin,
+  # optionally with a path, that Stripe reaches OpenMeter's API at: installing
+  # the Stripe app registers a Stripe webhook at
+  # <baseURL>/api/v1/apps/<app id>/stripe/webhook, and the URL stays fixed
+  # for that install (another baseURL needs the app reinstalled). Set it
+  # before installing the app. Empty: OpenMeter's default,
+  # https://example.com, which no event reaches. This chart doesn't expose
+  # that path: route only POST on it to the API from outside, since the
+  # API has no authentication (the webhook checks Stripe's signature).
+  apps:
+    baseURL: ""
   # Usage events with an ID already stored are dropped for up to this long,
   # so a redelivered gateway access-log entry is usually counted once. Best
   # effort: the ids live in Redis, which can lose or evict them; see redis
