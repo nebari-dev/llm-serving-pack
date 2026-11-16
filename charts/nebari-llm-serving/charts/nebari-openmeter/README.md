@@ -104,6 +104,12 @@ sign-in unless `console.devMode` is set (dev clusters only), and
   of them (and with `redis.persistence.enabled: false` a restart forgets
   them all). When Redis reaches `redis.maxMemory` it evicts the ids closest
   to expiring. An event redelivered after its id is gone is counted again.
+- **Usage is stored in batches.** The sink worker commits events to
+  ClickHouse when `openmeter.sinkWorker.minCommitCount` (500) are waiting or
+  `openmeter.sinkWorker.maxCommitWait` (2s) has passed, so an event on an
+  idle install shows up to 2 seconds late. Lowering `minCommitCount` to 1
+  caps the sink at about one event a second. See the comment on these
+  settings in `values.yaml`.
 - **Times are as fine as OpenMeter's windows.** A key's "last used" is the
   start of the hour (or day) of its last request.
 - **No caps.** Neither OpenMeter nor the console stops spend. Caps belong in

@@ -46,6 +46,35 @@ app.kubernetes.io/instance: {{ .root.Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{/*
+A duration for OpenMeter's config, quoted. OpenMeter parses a string with
+time.ParseDuration but takes a bare number as nanoseconds, so a value with
+no unit (maxCommitWait: 2) would silently mean 2ns. Fails the render unless
+the value is a string such as "2s", "500ms" or "1h30m".
+Takes (dict "key" "<values path>" "value" <value>).
+*/}}
+{{- define "om.duration" -}}
+{{- if not (and (kindIs "string" .value) (regexMatch "^(([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|ms|s|m|h))+$" .value)) -}}
+{{- fail (printf "%s must be a duration with a unit, such as \"2s\" or \"500ms\"; got %v" .key .value) -}}
+{{- end -}}
+{{- .value | quote -}}
+{{- end -}}
+
+{{/*
+A duration string already checked by om.duration, in seconds, for comparing
+two durations.
+*/}}
+{{- define "om.durationSeconds" -}}
+{{- $unitSeconds := dict "ns" 1e-9 "us" 1e-6 "µs" 1e-6 "ms" 0.001 "s" 1.0 "m" 60.0 "h" 3600.0 -}}
+{{- $total := 0.0 -}}
+{{- range regexFindAll "([0-9]+\\.?[0-9]*|\\.[0-9]+)(ns|us|µs|ms|s|m|h)" . -1 -}}
+{{- $number := regexFind "^([0-9]+\\.?[0-9]*|\\.[0-9]+)" . -}}
+{{- $unit := trimPrefix $number . -}}
+{{- $total = addf $total (mulf (float64 $number) (get $unitSeconds $unit)) -}}
+{{- end -}}
+{{- $total -}}
+{{- end -}}
+
 {{/* The usage console's image (usage-console/). */}}
 {{- define "om.consoleImage" -}}
 {{- $i := .Values.console.image -}}
