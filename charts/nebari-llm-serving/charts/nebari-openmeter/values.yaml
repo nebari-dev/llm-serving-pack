@@ -35,9 +35,9 @@ openmeter:
     # chart refuses a longer one, which OpenMeter would reject at startup).
     namespaceRefetch: 1s
     namespaceRefetchTimeout: 1s
-  # OpenMeter's apps (its Stripe app). baseURL is the public https origin,
-  # optionally with a path, that Stripe reaches OpenMeter's API at: installing
-  # the Stripe app registers a Stripe webhook at
+  # OpenMeter's apps (its Stripe app). baseURL is the public https base URL
+  # (scheme, host, optional port and path) Stripe reaches OpenMeter's API
+  # at: installing the Stripe app registers a Stripe webhook at
   # <baseURL>/api/v1/apps/<app id>/stripe/webhook, and the URL stays fixed
   # for that install (another baseURL needs the app reinstalled). Set it
   # before installing the app. Empty: OpenMeter's default,

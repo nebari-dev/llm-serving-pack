@@ -75,7 +75,7 @@ sets per-token USD rates for models with no public price.
 OpenMeter's Stripe app sends invoices and takes payments through your Stripe
 account. Installing it registers a Stripe webhook at
 `<openmeter.apps.baseURL>/api/v1/apps/<app id>/stripe/webhook`, so set
-`openmeter.apps.baseURL` to the public https origin Stripe will reach before
+`openmeter.apps.baseURL` to the public https base URL Stripe will reach before
 you install it: the URL stays fixed for that install, and the default,
 `https://example.com`, reaches nothing. This chart doesn't expose OpenMeter's
 API; route only `POST` on that one path to the API Service from outside
