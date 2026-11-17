@@ -7,6 +7,14 @@
 {{- if gt (include "om.durationSeconds" $sink.namespaceRefetchTimeout | float64) (include "om.durationSeconds" $sink.namespaceRefetch | float64) -}}
 {{- fail (printf "openmeter.sinkWorker.namespaceRefetchTimeout (%s) must be no longer than openmeter.sinkWorker.namespaceRefetch (%s)" $sink.namespaceRefetchTimeout $sink.namespaceRefetch) -}}
 {{- end -}}
+{{- $appsBaseURL := (.Values.openmeter.apps | default dict).baseURL | default "" -}}
+{{- /* Stripe's webhook needs a public https URL; anything else registers an endpoint no event reaches. */ -}}
+{{- if not (kindIs "string" $appsBaseURL) -}}
+{{- fail (printf "openmeter.apps.baseURL must be a string, not %s" (kindOf $appsBaseURL)) -}}
+{{- end -}}
+{{- if and $appsBaseURL (not (regexMatch "^https://[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:[1-9][0-9]{0,4})?(/[A-Za-z0-9._~%+/-]*)?$" $appsBaseURL)) -}}
+{{- fail (printf "openmeter.apps.baseURL (%s) must be https://host[:port][/path], with no query, fragment or user" $appsBaseURL) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -46,6 +54,10 @@ data:
           expiration: {{ $dedupeExpiration }}
     postgres:
       autoMigrate: migration
+    {{- if $appsBaseURL }}
+    apps:
+      baseURL: {{ $appsBaseURL | quote }}
+    {{- end }}
     # The meters the LLM serving pack's usage collector feeds: one llm.request
     # event per gateway request, one llm.tokens event per token type.
     meters:
