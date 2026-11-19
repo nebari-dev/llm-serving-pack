@@ -5,7 +5,7 @@
 apiVersion: reconcilers.nebari.dev/v1
 kind: NebariApp
 metadata:
-  name: {{ include "nebari-llm-serving.fullname" . }}-key-manager
+  name: {{ include "nebari-llm-serving.keyManagerNebariAppName" . }}
   namespace: {{ include "nebari-llm-serving.operatorNamespace" . }}
   labels:
     {{- include "nebari-llm-serving.labels" . | nindent 4 }}

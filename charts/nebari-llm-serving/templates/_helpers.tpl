@@ -99,3 +99,12 @@ anything there (NOTES.txt says so).
 true
 {{- end -}}
 {{- end }}
+
+{{/*
+The key-manager's NebariApp name. The nebari-operator names the Secret it
+writes for the NebariApp's Keycloak client "<this>-oidc-client", and the
+operator Deployment reads issuer-url from that Secret by default.
+*/}}
+{{- define "nebari-llm-serving.keyManagerNebariAppName" -}}
+{{ include "nebari-llm-serving.fullname" . }}-key-manager
+{{- end }}
