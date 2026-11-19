@@ -42,18 +42,12 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
 
-// Condition types reported on PassthroughModel status.
+// Condition types reported only on PassthroughModel status. The gateway
+// conditions it shares with LLMModel are in conditions.go.
 const (
 	// CondUpstreamCredentialResolved reports whether the provider Secret has a non-empty API key.
 	// "Upstream" distinguishes it from inbound client API-key Secrets.
 	CondUpstreamCredentialResolved = "UpstreamCredentialResolved"
-	// CondBackendConfigured covers the provider plumbing: Backend,
-	// BackendTLSPolicy, AIServiceBackend, BackendSecurityPolicy.
-	CondBackendConfigured = "BackendConfigured"
-	// CondExternalEndpointReady covers the external route + apiKeyAuth policy.
-	CondExternalEndpointReady = "ExternalEndpointReady"
-	// CondInternalEndpointReady covers the internal route + JWT policy.
-	CondInternalEndpointReady = "InternalEndpointReady"
 )
 
 // PassthroughModelReconciler reconciles a PassthroughModel object.
@@ -301,36 +295,6 @@ func (r *PassthroughModelReconciler) createOrUpdateConfigMap(ctx context.Context
 	// Preserve existing data (key metadata written by the key-manager).
 	existing.Labels = cm.Labels
 	return r.Update(ctx, existing)
-}
-
-func conditionFor(condType string, err error, okMessage string) metav1.Condition {
-	if err != nil {
-		reason := reasonApplyFailed
-		if meta.IsNoMatchError(err) {
-			reason = reasonGatewayCRDUnavailable
-		}
-		return metav1.Condition{
-			Type:    condType,
-			Status:  metav1.ConditionFalse,
-			Reason:  reason,
-			Message: err.Error(),
-		}
-	}
-	return metav1.Condition{
-		Type:    condType,
-		Status:  metav1.ConditionTrue,
-		Reason:  "Applied",
-		Message: okMessage,
-	}
-}
-
-func disabledCondition(condType string) metav1.Condition {
-	return metav1.Condition{
-		Type:    condType,
-		Status:  metav1.ConditionFalse,
-		Reason:  "EndpointDisabled",
-		Message: "endpoint disabled in spec",
-	}
 }
 
 func (r *PassthroughModelReconciler) updateStatus(

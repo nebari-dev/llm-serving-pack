@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -462,6 +463,68 @@ var _ = Describe("LLMModel Controller", func() {
 				Name:      modelName + "-deny-direct",
 				Namespace: testNamespace,
 			}, np)).To(Succeed())
+		})
+	})
+
+	// The envtest API server has this operator's CRDs but not the AI Gateway's,
+	// Envoy Gateway's or the Gateway API Inference Extension's, so applying an
+	// AIGatewayRoute or InferencePool fails with no-kind-match: what a real
+	// cluster looks like when section 4 of the install runbook was skipped. The
+	// reconciler used to log those failures and report the model Ready anyway.
+	Describe("Missing gateway CRDs", func() {
+		const modelName = "test-missing-crds"
+
+		AfterEach(func() {
+			model := &llmv1alpha1.LLMModel{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: modelName, Namespace: testNamespace}, model); err == nil {
+				model.Finalizers = nil
+				_ = k8sClient.Update(ctx, model)
+				_ = k8sClient.Delete(ctx, model)
+			}
+		})
+
+		// reconcileServing creates the model, reconciles until the Deployment
+		// exists, marks it ready by hand, and reconciles once more. Nothing runs
+		// the Deployment controller in envtest, so without the manual status
+		// update determinePhase returns Starting and the reconcile stops before
+		// any gateway resource is applied.
+		reconcileServing := func() {
+			Expect(k8sClient.Create(ctx, newMinimalModel(modelName))).To(Succeed())
+			r := newReconciler()
+			Expect(reconcileUntilStable(r, ctx, reconcileRequest(modelName))).To(Succeed())
+
+			dep := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: modelName, Namespace: testNamespace}, dep)).To(Succeed())
+			dep.Status.Replicas = 1
+			dep.Status.ReadyReplicas = 1
+			Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
+
+			_, err := r.Reconcile(ctx, reconcileRequest(modelName))
+			Expect(err).NotTo(HaveOccurred(), "a missing CRD must not fail the whole reconcile")
+		}
+
+		It("reports Degraded with failing gateway conditions instead of Ready", func() {
+			reconcileServing()
+
+			fresh := &llmv1alpha1.LLMModel{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: modelName, Namespace: testNamespace}, fresh)).To(Succeed())
+			Expect(fresh.Status.Phase).To(Equal(llmv1alpha1.PhaseDegraded),
+				"a model whose routes could not be applied is not Ready")
+
+			for _, condType := range []string{CondExternalEndpointReady, CondInternalEndpointReady, CondInferencePoolReady} {
+				cond := meta.FindStatusCondition(fresh.Status.Conditions, condType)
+				Expect(cond).NotTo(BeNil(), "%s must be reported", condType)
+				Expect(cond.Status).To(Equal(metav1.ConditionFalse), condType)
+				Expect(cond.Reason).To(Equal(reasonGatewayCRDUnavailable), condType)
+				Expect(cond.Message).NotTo(BeEmpty(), "%s must say what failed", condType)
+				Expect(cond.ObservedGeneration).To(Equal(fresh.Generation), condType)
+			}
+
+			// SecurityPoliciesReady is written earlier in the reconcile, by its
+			// own status patch. Writing the gateway conditions must not drop it.
+			policyCond := meta.FindStatusCondition(fresh.Status.Conditions, condSecurityPoliciesReady)
+			Expect(policyCond).NotTo(BeNil(), "the gateway conditions must not overwrite SecurityPoliciesReady")
+			Expect(policyCond.Reason).To(Equal(reasonGatewayCRDUnavailable))
 		})
 	})
 
