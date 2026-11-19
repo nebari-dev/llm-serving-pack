@@ -26,7 +26,7 @@ An optional key manager gives users a web UI to generate API keys for external a
 
 - Admins deploy the pack once via ArgoCD, then declare models as `LLMModel` CRs
 - Per-model access control via OIDC groups, generic for any OIDC provider, tested against Keycloak
-- Two auth paths: API keys for external consumers, JWT bearer tokens for in-cluster users
+- Two auth paths: API keys, and Keycloak JWT bearer tokens for platform users
 - Model loading from HuggingFace (default) or OCI/modelcar images
 - Intelligent inference scheduling via llm-d's `InferencePool` and EPP
 - Token counting and rate limiting on both endpoints via Envoy AI Gateway
@@ -187,7 +187,7 @@ Each `LLMModel` gets two endpoints with different auth mechanisms. Access contro
 
 ### External endpoint
 
-For CI pipelines, external applications, anything outside the cluster.
+For CI pipelines, applications and notebooks: any caller that holds an API key.
 
 ```
 Client -> Authorization: Bearer sk-... -> Envoy AI Gateway -> apiKeyAuth SecurityPolicy -> InferencePool -> vLLM
@@ -233,10 +233,10 @@ were written, not that Envoy has finished applying them to traffic.
 
 ### Internal endpoint
 
-For JupyterLab, in-cluster chat UIs, notebooks.
+For callers that hold a Keycloak token for a user in the model's `access.groups`. Like the external endpoint, it has no network restriction of its own: anyone who can reach its Gateway can call it with a valid token, from inside or outside the cluster. Only the authentication differs.
 
 ```
-In-cluster app -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> JWT SecurityPolicy -> InferencePool -> vLLM
+Client -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> JWT SecurityPolicy -> InferencePool -> vLLM
 ```
 
 - Hostname: `llm-internal.<baseDomain>` (shared; per-model dispatch by `x-ai-eg-model` header)
@@ -247,7 +247,7 @@ In-cluster app -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> 
 
 **JWKS endpoint resolution note:** the operator currently constructs the JWKS URI as `<issuerURL>/protocol/openid-connect/certs`, the Keycloak convention. A non-Keycloak OIDC provider will not work out of the box even though the surrounding config fields are provider-agnostic. The long-term fix is to fetch the OIDC discovery document and read `jwks_uri`; until that lands, treat the internal SecurityPolicy JWKS path as Keycloak-only. Tracked in issue [#61](https://github.com/nebari-dev/llm-serving-pack/issues/61).
 
-**JWT availability:** in Nebari, JupyterHub injects tokens into user pods. For other in-cluster services, the application must handle OIDC login and forward the resulting token. If a service cannot obtain a JWT, use the external endpoint with an API key instead.
+**JWT availability:** the pack does not give user pods a token this endpoint accepts. JupyterHub's own API token is not a Keycloak JWT, a JupyterHub-to-Keycloak token exchange exists but is not wired up, and many pods carry no user identity at all. Serving models only inside the cluster, with keyless access for authorized pods, is tracked in [#255](https://github.com/nebari-dev/llm-serving-pack/issues/255). Until then, a caller without a Keycloak token uses the external endpoint with an API key.
 
 ### AIGatewayRoute and SecurityPolicy binding
 

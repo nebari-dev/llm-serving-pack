@@ -6,7 +6,7 @@ A [Nebari](https://github.com/nebari-dev/nebari-infrastructure-core) software pa
 
 You apply an `LLMModel` custom resource and the operator handles the rest: model download, vLLM serving pods, inference scheduling, routing, and auth.
 
-Each model gets per-model access control via OIDC groups (works with any OIDC provider, tested against Keycloak). Two auth endpoints are created per model: external access via API keys, and internal (in-cluster) access via JWT. Both paths go through Envoy AI Gateway for token counting and rate limiting.
+Each model gets per-model access control via OIDC groups (works with any OIDC provider, tested against Keycloak). Two auth endpoints are created per model: external access via API keys, and internal access via Keycloak JWT. The two differ in how callers authenticate; neither restricts where callers connect from. Both paths go through Envoy AI Gateway for token counting and rate limiting.
 
 An optional key manager lets users generate and revoke API keys for models they have access to: a React single-page app (served by its own nginx image) backed by an API-only Go service, with SPA-managed Keycloak login.
 
@@ -174,20 +174,7 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
   -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-Internal (JWT from JupyterLab or in-cluster service):
-```python
-import os
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="https://llm-internal.your-cluster.example.com/v1",
-    api_key=os.environ["JUPYTERHUB_API_TOKEN"],  # JWT from Nebari
-)
-response = client.chat.completions.create(
-    model="Qwen/Qwen3.5-35B-A3B-GPTQ-Int4",
-    messages=[{"role": "user", "content": "Hello"}],
-)
-```
+The internal endpoint, `llm-internal.<baseDomain>`, accepts a Keycloak access token for a user in the model's `access.groups`, sent as `Authorization: Bearer <token>`. Like the external endpoint, it is served through a Gateway and has no network restriction of its own, so it is not limited to callers inside the cluster. User pods, including JupyterLab, don't get a token it accepts yet ([#255](https://github.com/nebari-dev/llm-serving-pack/issues/255)); from a notebook or service, use an API key on the external endpoint.
 
 ## Helm values reference
 

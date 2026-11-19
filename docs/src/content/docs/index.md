@@ -11,7 +11,7 @@ external endpoints, and enforcing per-model access control.
 
 Standing up LLM inference for more than one team usually means hand-wiring a different stack for
 every model: GPU scheduling, an inference server, ingress and TLS, who is allowed to call it,
-API keys for external callers, in-cluster auth for workloads, and rate limiting so one user
+API keys for callers, token auth for platform users, and rate limiting so one user
 cannot starve the rest. Doing that by hand per model is slow, inconsistent, and easy to get
 wrong in ways that leak access.
 
@@ -47,8 +47,8 @@ Ready-to-apply manifests are in [`examples/models/`](https://github.com/nebari-d
 - **Declarative model serving** - one `LLMModel` CR per model; the operator reconciles the rest.
 - **Per-model access control** via OIDC groups - generic for any OIDC provider, tested against
   Keycloak.
-- **Two auth paths per model** - external consumers authenticate with API keys; in-cluster
-  workloads use JWT bearer tokens.
+- **Two auth paths per model** - callers authenticate with API keys, or platform users with
+  Keycloak JWT bearer tokens.
 - **Self-service API keys** - an optional web UI lets users mint and revoke keys for the models
   they are allowed to use.
 - **Flexible model loading** - pull from HuggingFace (default) or mount an OCI/modelcar image.
