@@ -14,7 +14,7 @@ COPY ./ ./
 RUN npm run build
 
 # ─── Stage 2: serve ──────────────────────────────────────────────────────────
-FROM nginx:alpine AS final
+FROM nginx:1.31.9-alpine AS final
 
 # jq powers the entrypoint's optional runtime branding overlay (non-k8s only).
 RUN apk add --no-cache jq
