@@ -79,6 +79,32 @@ the separate AI Gateway CRD chart. The pack does not install those controllers.
 
 Newest first. A release with no entry needs only the routine steps.
 
+### Upgrading from 0.1.4 or earlier: gateway and issuer defaults
+
+Two defaults now match what NIC creates:
+
+| Value | Old default | New default |
+|-------|-------------|-------------|
+| `platform.gateway.internal.name` | `nebari-internal-gateway` | `nebari-gateway` |
+| `platform.tls.clusterIssuer` | `letsencrypt-production` | `letsencrypt-issuer` |
+
+If you set both values, nothing changes. If you left one unset and your
+cluster relies on the old name, **set that one explicitly before
+upgrading**. Add only the value you left unset; the example shows both:
+
+```yaml
+platform:
+  gateway:
+    internal:
+      name: nebari-internal-gateway
+  tls:
+    clusterIssuer: letsencrypt-production
+```
+
+Without it, the operator moves the internal endpoint's route and listener
+to `nebari-gateway`, or points the shared Certificate at an issuer your
+cluster may not have, and it can no longer be renewed.
+
 ### Upgrading from 0.1.4 or earlier: the pack's namespace
 
 The pack's namespace no longer follows `fullnameOverride` or `nameOverride`.

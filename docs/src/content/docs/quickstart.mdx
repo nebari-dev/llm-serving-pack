@@ -16,7 +16,7 @@ For a full production-grade setup (air-gapped clusters, HuggingFace token secret
 - **Envoy Gateway** configured for AI Gateway integration - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. Commit [`examples/envoy-gateway-overlay.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-gateway-overlay.yaml) to your NIC config repo as `values/envoy-gateway/overlays/20-ai-gateway.yaml`. ([Installation &sect;6](/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for full wiring details)
 - **Envoy AI Gateway** v1.1.0 installed. **Note**: the `envoyAIGateway.install` chart flag is not yet implemented ([#44](https://github.com/nebari-dev/llm-serving-pack/issues/44)). Install manually via ArgoCD (see [`examples/envoy-ai-gateway.yaml`](https://github.com/nebari-dev/llm-serving-pack/blob/main/examples/envoy-ai-gateway.yaml)). ([Installation &sect;5](/installation/#5-install-the-envoy-ai-gateway-controller))
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) CRDs, v1.5.0 validated - `InferencePool` is the one the pack requires ([Installation &sect;4](/installation/#4-install-ai-gateway-and-inference-extension-crds))
-- A cert-manager `ClusterIssuer` for the shared TLS certificate (default name: `letsencrypt-production`; override with `platform.tls.clusterIssuer`) ([Installation &sect;2.4](/installation/#24-confirm-the-cluster-issuer-is-ready))
+- A cert-manager `ClusterIssuer` for the shared TLS certificate (default name: `letsencrypt-issuer`, the one NIC creates; override with `platform.tls.clusterIssuer`) ([Installation &sect;2.4](/installation/#24-confirm-the-cluster-issuer-is-ready))
 - DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` pointing at the shared Gateway load balancer ([Installation &sect;2.3](/installation/#23-confirm-dns-resolves-to-the-gateway-lb))
 - A StorageClass that can provision PVCs large enough for your models (EFS, EBS gp3, or equivalent) ([Installation &sect;1](/installation/#1-what-this-runbook-assumes); [sizing guidance](/shared-storage/))
 
@@ -48,8 +48,7 @@ spec:
           platform:
             baseDomain: "your-cluster.example.com"
             # Gateway names below must match the Envoy Gateways in your cluster.
-            # This example points both endpoints at one shared gateway; the chart
-            # default for the internal gateway is "nebari-internal-gateway".
+            # These are the chart defaults: both endpoints share NIC's gateway.
             gateway:
               external:
                 name: nebari-gateway
@@ -59,7 +58,7 @@ spec:
                 namespace: envoy-gateway-system
               manageSharedListeners: true
             tls:
-              clusterIssuer: letsencrypt-production
+              clusterIssuer: letsencrypt-issuer
 
           defaults:
             storage:

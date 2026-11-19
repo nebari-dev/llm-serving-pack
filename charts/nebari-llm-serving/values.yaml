@@ -22,8 +22,11 @@ platform:
     external:
       name: nebari-gateway
       namespace: envoy-gateway-system
+    # The defaults are the Gateway NIC creates. Both endpoints share it;
+    # the operator adds a separate listener for each hostname. Point
+    # internal at another Gateway to split the traffic.
     internal:
-      name: nebari-internal-gateway
+      name: nebari-gateway
       namespace: envoy-gateway-system
     # manageSharedListeners controls whether the operator patches HTTPS
     # listeners for llm.<baseDomain> and llm-internal.<baseDomain> onto
@@ -37,9 +40,12 @@ platform:
     # clusterIssuer - the cert-manager ClusterIssuer used to issue the
     # shared TLS certificate covering llm.<baseDomain> and
     # llm-internal.<baseDomain>. HTTP-01 is the assumed challenge type;
-    # wildcard SANs are not supported. Override when running against a
-    # staging issuer or a different production issuer.
-    clusterIssuer: letsencrypt-production
+    # wildcard SANs are not supported. The default is the ClusterIssuer
+    # NIC creates today; override it for a staging issuer or any other
+    # issuer. Once NIC publishes its issuer to packs (platform values,
+    # nebari-dev/nebari-infrastructure-core#781), the chart will read it
+    # from there.
+    clusterIssuer: letsencrypt-issuer
     # secretName - when set, bring-your-own-certificate mode: the operator
     # does NOT create a cert-manager Certificate (and deletes one it
     # previously managed). The shared Gateway listeners terminate TLS with

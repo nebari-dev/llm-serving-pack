@@ -68,9 +68,9 @@ In addition you need:
   HTTP-01 ACME challenges will run against `llm.<baseDomain>` and
   `llm-internal.<baseDomain>`, so both must resolve before you start.
 - **A Cluster Issuer** that cert-manager can use for HTTP-01. NIC
-  ships one; the validated install used `letsencrypt-issuer`
-  (the chart's default `letsencrypt-production` is a different name -
-  you will set `platform.tls.clusterIssuer` to match in section 8).
+  ships `letsencrypt-issuer`, which is the chart's default
+  `platform.tls.clusterIssuer`. If your cluster uses a different
+  issuer, set it in section 8.
 - **A cluster-config git repo** that ArgoCD's AppProject is configured
   to read from. New `Application` manifests in this runbook will be
   committed there, under a path of your own choosing (shown throughout
@@ -1071,8 +1071,7 @@ spec:
               namespace: envoy-gateway-system
             manageSharedListeners: true
           tls:
-            # NIC ships ClusterIssuer "letsencrypt-issuer", not the
-            # chart default "letsencrypt-production".
+            # NIC's ClusterIssuer, and the chart default.
             clusterIssuer: letsencrypt-issuer
         defaults:
           storage:

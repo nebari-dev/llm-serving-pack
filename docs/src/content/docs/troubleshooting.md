@@ -307,7 +307,7 @@ kubectl -n envoy-gateway-system logs \
   | grep CERTIFICATE_VERIFY_FAILED
 ```
 
-`<gateway>` is the Gateway the request came in through, named in the chart's `platform.gateway` values: by default `nebari-gateway` for `llm.<baseDomain>` and `nebari-internal-gateway` for `llm-internal.<baseDomain>`. Keep `--tail=-1`: with a label selector, `kubectl logs` otherwise prints only the last 10 lines of each pod.
+`<gateway>` is the Gateway the request came in through, named in the chart's `platform.gateway` values: by default `nebari-gateway` for both `llm.<baseDomain>` and `llm-internal.<baseDomain>`. Keep `--tail=-1`: with a label selector, `kubectl logs` otherwise prints only the last 10 lines of each pod.
 
 By default the gateway accepts only the public CA roots in the Envoy proxy image, so a certificate from a private or corporate CA needs `spec.provider.tls.caConfigMapName` (see [Self-hosted servers](/self-hosted/)). When that field is set, check the policy status:
 
