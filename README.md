@@ -22,7 +22,7 @@ Models can be loaded from HuggingFace (default) or mounted as OCI/modelcar image
 - **Envoy Gateway installed and configured for AI Gateway integration** - `extensionApis.enableBackend`, `extensionManager` pointing at the AI Gateway controller service, and `backendResources` allowing `inference.networking.k8s.io/InferencePool`. This is a **hard requirement**; without it, the routing layer 404s at runtime. Apply it by committing [`examples/envoy-gateway-overlay.yaml`](examples/envoy-gateway-overlay.yaml) to your NIC config repo as `values/envoy-gateway/overlays/20-ai-gateway.yaml`, which survives `nic deploy --regen-apps`. ([`examples/envoy-gateway.yaml`](examples/envoy-gateway.yaml) is the whole-Application form, for clusters NIC does not manage.) See the [Installation guide](https://packs.nebari.dev/llm-serving-pack/installation/#6-reconfigure-envoy-gateway-with-ai-gateway-extension-wiring) for details.
 - Envoy AI Gateway 1.1.0 installed. **Note**: the `envoyAIGateway.install` flag in this chart is not yet implemented - tracked in [#44](https://github.com/nebari-dev/llm-serving-pack/issues/44). Until that is done, install it manually as an ArgoCD app (see [examples/envoy-ai-gateway.yaml](examples/envoy-ai-gateway.yaml)).
 - [Gateway API Inference Extension](https://github.com/kubernetes-sigs/gateway-api-inference-extension) (GIE) CRDs installed - v1.5.0 validated. The pack needs `InferencePool`; the llm-d End-Point Picker crashloops without it.
-- A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-production`; override with `platform.tls.clusterIssuer` in the chart values.
+- A cert-manager `ClusterIssuer` the operator can use for the shared-hostname Certificate. Default expected name is `letsencrypt-issuer`, the one NIC creates; override with `platform.tls.clusterIssuer` in the chart values.
 - DNS for `llm.<baseDomain>` and `llm-internal.<baseDomain>` resolving to the shared Gateway's load balancer (a wildcard CNAME on the base domain is the simplest way). Required for HTTP-01 issuance on the shared Certificate.
 - A StorageClass for model storage (EFS, EBS gp3, or any CSI-backed storage that can provision PVCs large enough for your models).
 
@@ -68,7 +68,7 @@ spec:
               # Must name a cert-manager ClusterIssuer that already
               # exists on the cluster. HTTP-01 is the assumed challenge
               # type; no wildcards required.
-              clusterIssuer: letsencrypt-production
+              clusterIssuer: letsencrypt-issuer
 
           defaults:
             storage:
@@ -196,7 +196,7 @@ response = client.chat.completions.create(
 | `platform.baseDomain` | Base domain for the Nebari deployment (required) | `""` |
 | `platform.gateway.external.name` | Name of the external Gateway resource | `nebari-gateway` |
 | `platform.gateway.external.namespace` | Namespace of the external Gateway | `envoy-gateway-system` |
-| `platform.gateway.internal.name` | Name of the internal Gateway resource | `nebari-internal-gateway` |
+| `platform.gateway.internal.name` | Name of the internal Gateway resource | `nebari-gateway` |
 | `platform.gateway.internal.namespace` | Namespace of the internal Gateway | `envoy-gateway-system` |
 | `auth.oidc.issuerURL` | OIDC issuer URL (static value, or read from Secret if empty) | `""` |
 | `auth.oidc.groupsClaim` | JWT claim containing group memberships | `groups` |

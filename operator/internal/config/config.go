@@ -60,7 +60,7 @@ type OperatorConfig struct {
 	// the shared-TLS certificate covering llm.<baseDomain> and
 	// llm-internal.<baseDomain>. HTTP-01 is the assumed challenge type;
 	// wildcards are not supported by this pack.
-	ClusterIssuerName string // LLM_CLUSTER_ISSUER_NAME (default: "letsencrypt-production")
+	ClusterIssuerName string // LLM_CLUSTER_ISSUER_NAME (default: "letsencrypt-issuer")
 	// TLSSecretName, when non-empty, switches shared TLS to
 	// bring-your-own-certificate mode: the operator does NOT create a
 	// cert-manager Certificate (and deletes the one it previously
@@ -137,7 +137,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		DefaultStorageClassName: os.Getenv("LLM_DEFAULT_STORAGE_CLASS_NAME"),
 		APIKeysNamespace:        os.Getenv("LLM_API_KEYS_NAMESPACE"),
 		OperatorNamespace:       os.Getenv("POD_NAMESPACE"),
-		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-production"),
+		ClusterIssuerName:       getEnvOrDefault("LLM_CLUSTER_ISSUER_NAME", "letsencrypt-issuer"),
 		TLSSecretName:           os.Getenv("LLM_TLS_SECRET_NAME"),
 		ManageSharedListeners:   getEnvBool("LLM_MANAGE_SHARED_LISTENERS", true),
 		UsageMeteringEnabled:    getEnvBool("LLM_USAGE_METERING_ENABLED", false),

@@ -31,10 +31,10 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `platform.baseDomain` | `""` | **Required.** Base domain for the Nebari deployment (e.g. `your-cluster.example.com`). |
 | `platform.gateway.external.name` | `nebari-gateway` | Name of the external Envoy Gateway resource. |
 | `platform.gateway.external.namespace` | `envoy-gateway-system` | Namespace of the external Envoy Gateway. |
-| `platform.gateway.internal.name` | `nebari-internal-gateway` | Name of the internal Envoy Gateway resource. |
+| `platform.gateway.internal.name` | `nebari-gateway` | Name of the internal Envoy Gateway resource. The default shares NIC's Gateway with the external endpoint; the operator adds a separate listener for each hostname. |
 | `platform.gateway.internal.namespace` | `envoy-gateway-system` | Namespace of the internal Envoy Gateway. |
 | `platform.gateway.manageSharedListeners` | `true` | When `true`, the operator patches HTTPS listeners for `llm.<baseDomain>` and `llm-internal.<baseDomain>` onto the shared Gateways. Set to `false` if a cluster admin owns the listeners out-of-band. |
-| `platform.tls.clusterIssuer` | `letsencrypt-production` | The cert-manager `ClusterIssuer` used to issue the shared TLS certificate. Override when using a staging issuer. |
+| `platform.tls.clusterIssuer` | `letsencrypt-issuer` | The cert-manager `ClusterIssuer` used to issue the shared TLS certificate. The default is the issuer NIC creates; override it for a staging issuer or any other issuer. |
 | `platform.tls.secretName` | `""` | Bring-your-own-certificate mode. When set, no cert-manager Certificate is created; the operator expects a pre-provisioned `kubernetes.io/tls` Secret of this name in the operator namespace. Use for air-gapped or private-CA clusters where ACME issuance is not possible. cert-manager is not required when this is set. |
 
 ### Auth / OIDC
