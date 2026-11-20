@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
+	"github.com/nebari-dev/llm-serving-pack/shared/oidc"
 )
 
 // Identity says who is calling the console.

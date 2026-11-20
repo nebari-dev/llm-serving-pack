@@ -1,4 +1,4 @@
-# nebari-llm-serving-pack
+# llm-serving-pack
 #
 # Tasks for the Astro/Starlight documentation site (lives in docs/).
 # Run `make help` to list targets.

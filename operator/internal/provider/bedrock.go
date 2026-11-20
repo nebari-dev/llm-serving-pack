@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
 )
 
 func resolveBedrock(p llmv1alpha1.ProviderSpec) (*Resolved, error) {

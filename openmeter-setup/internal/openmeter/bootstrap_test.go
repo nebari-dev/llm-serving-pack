@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/openmeter-setup/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/openmeter-setup/internal/openmeter"
 )
 
 // Bootstrap gives each model resource a priced feature over the tokens

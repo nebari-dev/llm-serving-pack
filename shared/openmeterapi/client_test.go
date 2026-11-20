@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // A JSON request goes out with the token, and its JSON answer comes back.

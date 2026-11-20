@@ -14,8 +14,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/openmeter-setup/internal/kubesecret"
-	"github.com/nebari-dev/nebari-llm-serving-pack/openmeter-setup/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/openmeter-setup/internal/kubesecret"
+	"github.com/nebari-dev/llm-serving-pack/openmeter-setup/internal/openmeter"
 )
 
 func main() {

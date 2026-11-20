@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // BootstrapConfig is what the pack sets up in OpenMeter: a priced feature

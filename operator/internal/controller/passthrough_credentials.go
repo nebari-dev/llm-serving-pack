@@ -29,8 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/provider"
 )
 
 // This file handles the status-only upstream credential probe and its

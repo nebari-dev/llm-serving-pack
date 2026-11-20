@@ -1,4 +1,4 @@
-module github.com/nebari-dev/nebari-llm-serving-pack/operator
+module github.com/nebari-dev/llm-serving-pack/operator
 
 go 1.24.5
 

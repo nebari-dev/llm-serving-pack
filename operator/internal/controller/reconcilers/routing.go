@@ -3,8 +3,8 @@ package reconcilers
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
 )
 
 // RoutingResources holds the AIGatewayRoute resources for external and internal endpoints.

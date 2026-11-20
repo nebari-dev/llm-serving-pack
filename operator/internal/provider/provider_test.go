@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
 )
 
 func TestProviderResolve(t *testing.T) {

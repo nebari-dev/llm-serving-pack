@@ -17,7 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // fakeKeys is the key store; tests add and revoke keys as the key-manager

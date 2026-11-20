@@ -6,9 +6,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/provider"
 )
 
 // DefaultPassthroughRequestTimeout is applied to generated route rules when

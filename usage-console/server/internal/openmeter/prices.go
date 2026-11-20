@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // Price is one OpenMeter LLM price row: a manual override or a synced price.

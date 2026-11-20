@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/shared/oidc"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 func main() {

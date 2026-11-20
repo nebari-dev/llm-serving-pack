@@ -3,7 +3,7 @@ package openmeter
 import (
 	"net/http"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/buildinfo"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/buildinfo"
 )
 
 // session: the caller, a viewer (the console has nothing to write).

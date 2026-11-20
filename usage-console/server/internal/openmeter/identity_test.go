@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/shared/oidc"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 // tokens stands in for the OIDC verifier: the tokens it accepts, and the

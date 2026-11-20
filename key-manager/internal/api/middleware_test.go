@@ -15,7 +15,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
+	"github.com/nebari-dev/llm-serving-pack/shared/oidc"
 )
 
 const (

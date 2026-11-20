@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // Owner is the person who minted an API key.

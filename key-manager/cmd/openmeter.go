@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/identity"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/openmeter"
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/identity"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
 )
 
 // startCustomerSync keeps OpenMeter customers in step with API keys when

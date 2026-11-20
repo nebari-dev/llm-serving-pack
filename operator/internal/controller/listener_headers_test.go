@@ -22,7 +22,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/controller/reconcilers"
 )
 
 // headerPolicy returns the ClientTrafficPolicy the operator manages for a

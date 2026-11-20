@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/openmeter"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/openmeter"
 )
 
 func TestNewIdentityFailsClosed(t *testing.T) {

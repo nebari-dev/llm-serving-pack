@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
+	"github.com/nebari-dev/llm-serving-pack/shared/oidc"
 )
 
 // UserInfo holds the authenticated user's identity extracted from JWT claims.
