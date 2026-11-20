@@ -7,6 +7,8 @@
 # with helm.values, renders the local chart with those values and the source's
 # releaseName, and checks that the pack's namespace matches the Application's
 # destination.namespace and that a pinned chart version matches Chart.yaml.
+# A placeholder pin such as "<version>" (an example for a release not yet
+# cut) skips the version check; its values are still rendered.
 # A failed render means a reader who copies the example gets a failed sync.
 #
 # Needs helm and yq (mikefarah v4). Exits 0 on success; exits 1 and lists
@@ -18,6 +20,17 @@ CHART="$REPO_ROOT/charts/nebari-llm-serving"
 VERSION="$(yq '.version' "$CHART/Chart.yaml")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# The release workflow sets these image tags when it publishes the chart, and
+# some are empty in this checkout (the OpenMeter images use `required`), so an
+# example renders against the local chart as the published one would only with
+# them set. They come before the example's values, which still win.
+RELEASE_TAGS="$WORK/release-tags.yaml"
+echo '{}' > "$RELEASE_TAGS"
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    V="$VERSION" yq -i ".$path = strenv(V)" "$RELEASE_TAGS"
+done < <(yq '.jobs.*.with.tag-paths | select(. != null)' "$REPO_ROOT/.github/workflows/release.yaml")
 
 failed=0
 checked=0
@@ -48,14 +61,14 @@ while IFS= read -r -d '' file; do
         dest="$(yq eval-all "select(document_index == $doc) | .spec.destination.namespace // \"\"" "$file")"
         pin="$(yq eval-all "$q | select(.chart != null) | .targetRevision // \"\"" "$file")"
 
-        if [ -n "$pin" ] && [ "$pin" != "$VERSION" ]; then
+        if [[ -n "$pin" && "$pin" != "<"*">" && "$pin" != "$VERSION" ]]; then
             echo "FAIL $label: pins chart $pin but Chart.yaml is $VERSION" >&2
             failed=1
             continue
         fi
 
         if ! helm template "$release" "$CHART" --namespace "$dest" \
-                -f "$WORK/values.yaml" > "$WORK/out.yaml" 2> "$WORK/err.txt"; then
+                -f "$RELEASE_TAGS" -f "$WORK/values.yaml" > "$WORK/out.yaml" 2> "$WORK/err.txt"; then
             echo "FAIL $label: helm template failed:" >&2
             sed 's/^/    /' "$WORK/err.txt" >&2
             failed=1
