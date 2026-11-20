@@ -351,6 +351,17 @@ operator:
     # Floating on main; pinned to a build sha at release time (see cicd-and-releasing).
     tag: "latest"
     pullPolicy: Always
+  webhook:
+    # clusterIssuer - the cert-manager ClusterIssuer that signs the
+    # operator's admission webhook serving Certificate (DNS names
+    # <svc>.<ns>.svc and <svc>.<ns>.svc.cluster.local). NIC creates
+    # nebari-ca-issuer, its internal CA for in-cluster and webhook
+    # certificates, in releases that include nebari-infrastructure-core#787.
+    # On a cluster without it, set this to an existing ClusterIssuer, for
+    # example a self-signed one named selfsigned-issuer. Must not be empty.
+    # Keep in sync with the dig fallback in
+    # templates/operator-webhook-cert.yaml.
+    clusterIssuer: nebari-ca-issuer
 
 # modelDownloader - the init/job image the operator uses to fetch model
 # weights before a serving Deployment starts. Rendered into the operator's

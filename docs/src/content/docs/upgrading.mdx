@@ -84,6 +84,44 @@ A release that changes a behavior listed on
 its heading here, says what changed, and says what a deployment that relies on
 it must do.
 
+### Upgrading from 0.1.4 or earlier: the webhook certificate issuer
+
+The ClusterIssuer that signs the operator's admission webhook certificate
+is now the chart value `operator.webhook.clusterIssuer`, and its default
+changed from `selfsigned-issuer` to `nebari-ca-issuer`. NIC creates
+`nebari-ca-issuer` in releases that include
+[nebari-infrastructure-core#787](https://github.com/nebari-dev/nebari-infrastructure-core/pull/787).
+
+Check which issuers the cluster has:
+
+```bash
+kubectl get clusterissuer
+```
+
+If `nebari-ca-issuer` is listed with `READY=True`, no change is needed:
+cert-manager reissues the webhook certificate from it right away and
+updates the webhook's CA bundle. The operator picks up the new certificate
+only when the kubelet next syncs its Secret volume, about a minute later.
+In that window, creating or updating an `LLMModel` or `PassthroughModel`
+fails with `x509: certificate signed by unknown authority`; retry after
+a minute.
+
+Otherwise, **keep the old issuer before upgrading** by adding it to your
+values:
+
+```yaml
+operator:
+  webhook:
+    clusterIssuer: selfsigned-issuer
+```
+
+If you upgrade with neither, cert-manager leaves the existing certificate
+Secret untouched, the Certificate goes `Ready=False` with reason
+`IncorrectIssuer`, and its CertificateRequest stays `Pending`. Admission
+keeps working with the old certificate, so the upgrade looks healthy, but
+the certificate cannot be renewed and admission fails once it expires.
+Create the issuer or set the value to fix it.
+
 ### Upgrading from 0.1.4 or earlier: access groups compared as group paths
 
 `access.groups` is now compared with the token's groups claim as Keycloak
