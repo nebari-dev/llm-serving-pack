@@ -54,6 +54,10 @@ func gatewayTarget(name, section string) map[string]interface{} {
 // writes. Each shared listener gets a policy that removes those headers from
 // the caller's request before authentication runs, and makes Envoy generate
 // every request id (the usage events' id).
+//
+// CONTRACT(C2, C3): other deployments' filters trust these headers and this
+// request id. See docs/src/content/docs/extending-the-gateway.md before
+// changing either.
 func TestListenerHeaderPolicy_StripsCallerIdentityHeadersWhenMeteringIsOn(t *testing.T) {
 	cfg := testOperatorConfig()
 	cfg.UsageMeteringEnabled = true
@@ -269,6 +273,10 @@ func TestListenerHeaderPolicy_CarriesAPolicySelectingTheGatewayByLabel(t *testin
 // such policies. The operator removes its own, so the admin's applies, and
 // says loudly that caller-sent identity headers are not removed there: a
 // Warning Event on the Gateway, as well as the log.
+//
+// CONTRACT(C4): documented as "don't add a ClientTrafficPolicy to the pack's
+// listeners". See docs/src/content/docs/extending-the-gateway.md before
+// changing this behavior.
 func TestListenerHeaderPolicy_WarnsWhenAnotherPolicyTargetsTheListener(t *testing.T) {
 	cfg := testOperatorConfig()
 	cfg.UsageMeteringEnabled = true

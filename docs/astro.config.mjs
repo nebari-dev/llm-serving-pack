@@ -53,6 +53,7 @@ export default defineConfig({
           items: [
             { label: 'Configuration', slug: 'configuration' },
             { label: 'Architecture', slug: 'architecture' },
+            { label: 'Extending the Gateway', slug: 'extending-the-gateway' },
             { label: 'CI/CD and Releasing', slug: 'cicd-and-releasing' },
           ],
         },
