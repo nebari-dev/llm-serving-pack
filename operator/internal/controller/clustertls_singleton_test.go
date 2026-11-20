@@ -12,7 +12,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,8 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
@@ -503,5 +509,414 @@ func TestClusterTLSSingleton_Reconcile_UserProvidedSecret_MissingSecretIsNotAnEr
 	listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
 	if !hasListenerNamed(listeners, reconcilers.ExternalHTTPSListenerName) {
 		t.Error("llm-https listener should be attached even while the user secret is missing")
+	}
+}
+
+// TestClusterTLSSingleton_PatchListenerConflict covers a shared Gateway that
+// another writer updates between the operator's read and write. External and
+// internal Gateways are the same object, as on NIC, so one reconcile makes
+// two Updates to it: the first adds llm-https, the second llm-internal-https.
+func TestClusterTLSSingleton_PatchListenerConflict(t *testing.T) {
+	gatewayGR := schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}
+	tests := []struct {
+		name string
+		// failUpdate returns the error to inject for the n-th Gateway
+		// Update (1-based), or nil to let it through.
+		failUpdate      func(n int) error
+		wantErr         func(error) bool
+		wantBoth        bool
+		wantUpdateCalls int    // 0 means not checked
+		wantErrContains string // empty means not checked
+	}{
+		{
+			name: "one conflict on the internal patch",
+			failUpdate: func(n int) error {
+				if n == 2 {
+					return apierrors.NewConflict(gatewayGR, "nebari-gateway", nil)
+				}
+				return nil
+			},
+			wantBoth: true,
+		},
+		{
+			name: "one conflict on the external patch",
+			failUpdate: func(n int) error {
+				if n == 1 {
+					return apierrors.NewConflict(gatewayGR, "nebari-gateway", nil)
+				}
+				return nil
+			},
+			wantBoth: true,
+		},
+		{
+			name: "conflicts beyond the retry budget",
+			failUpdate: func(int) error {
+				return apierrors.NewConflict(gatewayGR, "nebari-gateway", nil)
+			},
+			wantErr:         apierrors.IsConflict,
+			wantUpdateCalls: retry.DefaultBackoff.Steps,
+			wantErrContains: "envoy-gateway-system/nebari-gateway",
+		},
+		{
+			name: "non-conflict error is not retried",
+			failUpdate: func(n int) error {
+				if n == 1 {
+					return apierrors.NewForbidden(gatewayGR, "nebari-gateway", nil)
+				}
+				return nil
+			},
+			wantErr:         apierrors.IsForbidden,
+			wantUpdateCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testOperatorConfig()
+			cfg.InternalGatewayName = cfg.ExternalGatewayName
+			cfg.InternalGatewayNS = cfg.ExternalGatewayNS
+
+			gatewayUpdates := 0
+			base := newFakeClientWithGateway(t)
+			c := interceptor.NewClient(base, interceptor.Funcs{
+				Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if obj.GetObjectKind().GroupVersionKind() != gatewayGVK() {
+						return cl.Update(ctx, obj, opts...)
+					}
+					gatewayUpdates++
+					injected := tt.failUpdate(gatewayUpdates)
+					if injected == nil {
+						return cl.Update(ctx, obj, opts...)
+					}
+					if apierrors.IsConflict(injected) {
+						// Act as the other writer: bump the stored Gateway so
+						// a retry that reuses the stale object would be
+						// rejected by the fake client too.
+						other := &unstructured.Unstructured{}
+						other.SetGroupVersionKind(gatewayGVK())
+						if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), other); err != nil {
+							t.Fatalf("other writer get: %v", err)
+						}
+						other.SetAnnotations(map[string]string{"other-writer": fmt.Sprint(gatewayUpdates)})
+						if err := cl.Update(ctx, other); err != nil {
+							t.Fatalf("other writer update: %v", err)
+						}
+					}
+					return injected
+				},
+			})
+			r := newTestSingleton(c, cfg)
+
+			err := r.Reconcile(context.Background())
+			if tt.wantErr == nil && err != nil {
+				t.Fatalf("Reconcile returned error: %v", err)
+			}
+			if tt.wantErr != nil && (err == nil || !tt.wantErr(err)) {
+				t.Fatalf("Reconcile error = %v, want a matching error", err)
+			}
+			if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+				t.Errorf("Reconcile error = %v, want it to contain %q", err, tt.wantErrContains)
+			}
+			if tt.wantUpdateCalls != 0 && gatewayUpdates != tt.wantUpdateCalls {
+				t.Errorf("Gateway Update calls = %d, want %d", gatewayUpdates, tt.wantUpdateCalls)
+			}
+			if tt.wantBoth {
+				gw := getUnstructured(t, base, gatewayGVK(), cfg.ExternalGatewayName, cfg.ExternalGatewayNS)
+				if gw == nil {
+					t.Fatal("expected shared Gateway")
+				}
+				listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+				for _, name := range []string{reconcilers.ExternalHTTPSListenerName, reconcilers.InternalHTTPSListenerName} {
+					if !hasListenerNamed(listeners, name) {
+						t.Errorf("expected listener %s on the shared Gateway", name)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestClusterTLSSingleton_RetryAfterFailure drives Start and checks that a
+// failed reconcile is retried after RetryInterval, doubling on each further
+// failure, while a successful one waits the full Interval.
+func TestClusterTLSSingleton_RetryAfterFailure(t *testing.T) {
+	const (
+		defaultRetry = 20 * time.Millisecond
+		waitTimeout  = 2 * time.Second
+	)
+	gatewayGR := schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}
+	certGVK := schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
+	certGR := schema.GroupResource{Group: "cert-manager.io", Resource: "certificates"}
+
+	tests := []struct {
+		name string
+		// failingUpdates is how many Gateway Updates return Forbidden, counted
+		// from the first. A Forbidden external patch ends the reconcile, so
+		// each failing Update is one failed reconcile.
+		failingUpdates int
+		// retryInterval overrides defaultRetry. The gap-growth row uses a
+		// longer one so scheduler noise on a loaded machine (seen at 10 to
+		// 13 ms) cannot erase the 1.5x margin between the first two gaps.
+		retryInterval time.Duration
+		wantBoth      bool
+		wantGapGrowth bool
+		// observe, when set, is how long to watch after the first reconcile
+		// before checking the update and reconcile counts.
+		observe        time.Duration
+		wantUpdates    int
+		wantReconciles int
+
+		// interval overrides the default Interval of one hour.
+		interval time.Duration
+		// failReconcile, when set, fails the n-th reconcile (1-based) by
+		// returning Forbidden from its Certificate Get. Unlike a failing
+		// Gateway Update, this also fails a reconcile that has nothing left
+		// to patch.
+		failReconcile func(n int) bool
+		// waitReconciles is how many reconciles to wait for before calling
+		// checkGaps with the gaps between consecutive reconciles.
+		waitReconciles int
+		checkGaps      func(t *testing.T, gaps []time.Duration)
+		// spinWindow, when set, is how long to let Start run from the
+		// beginning before checking it made at most maxReconciles passes.
+		spinWindow    time.Duration
+		maxReconciles int
+	}{
+		{
+			name:           "one failed reconcile is retried quickly",
+			failingUpdates: 1,
+			wantBoth:       true,
+		},
+		{
+			name:           "repeated failures back off",
+			failingUpdates: 3,
+			retryInterval:  100 * time.Millisecond,
+			wantBoth:       true,
+			wantGapGrowth:  true,
+		},
+		{
+			name:           "success waits the full interval",
+			failingUpdates: 0,
+			observe:        300 * time.Millisecond,
+			wantUpdates:    2,
+			wantReconciles: 1,
+		},
+		{
+			// Reconciles 1, 2 fail (waits 100, 200 ms), 3 succeeds (waits
+			// Interval), 4 fails. With the reset, the wait after 4 is 100 ms
+			// again; without it, it would be 400 ms.
+			name:          "a success resets the retry delay",
+			interval:      500 * time.Millisecond,
+			retryInterval: 100 * time.Millisecond,
+			failReconcile: func(n int) bool {
+				return n == 1 || n == 2 || n == 4
+			},
+			waitReconciles: 5,
+			checkGaps: func(t *testing.T, gaps []time.Duration) {
+				if limit := 150 * time.Millisecond; gaps[3] >= limit {
+					t.Errorf("retry after the failure that followed a success took %s, want under %s (retry delay not reset)", gaps[3], limit)
+				}
+			},
+		},
+		{
+			// Waits would be 100, 200, 400 ms uncapped; capped they are
+			// 100, 150, 150 ms.
+			name:           "the retry delay is capped at the interval",
+			interval:       150 * time.Millisecond,
+			retryInterval:  100 * time.Millisecond,
+			failReconcile:  func(int) bool { return true },
+			waitReconciles: 4,
+			checkGaps: func(t *testing.T, gaps []time.Duration) {
+				limit := 150*time.Millisecond + 75*time.Millisecond // interval plus a scheduling margin
+				for i, g := range gaps {
+					if g > limit {
+						t.Errorf("gap %d = %s, want at most %s (retry delay not capped at the interval)", i, g, limit)
+					}
+				}
+			},
+		},
+		{
+			name:          "a negative retry interval uses the default",
+			retryInterval: -1,
+			failReconcile: func(int) bool { return true },
+			spinWindow:    200 * time.Millisecond,
+			maxReconciles: 2,
+		},
+		{
+			name:          "a negative interval uses the default",
+			interval:      -1,
+			spinWindow:    200 * time.Millisecond,
+			maxReconciles: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testOperatorConfig()
+
+			var (
+				mu          sync.Mutex
+				updateTimes []time.Time // every Gateway Update, failed or not
+				certGets    int         // one per reconcile pass
+				certTimes   []time.Time // when each reconcile pass started
+			)
+			base := newFakeClientWithGateway(t)
+			c := interceptor.NewClient(base, interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if obj.GetObjectKind().GroupVersionKind() == certGVK {
+						mu.Lock()
+						certGets++
+						certTimes = append(certTimes, time.Now())
+						n := certGets
+						mu.Unlock()
+						if tt.failReconcile != nil && tt.failReconcile(n) {
+							return apierrors.NewForbidden(certGR, key.Name, nil)
+						}
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+				Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if obj.GetObjectKind().GroupVersionKind() != gatewayGVK() {
+						return cl.Update(ctx, obj, opts...)
+					}
+					mu.Lock()
+					updateTimes = append(updateTimes, time.Now())
+					n := len(updateTimes)
+					mu.Unlock()
+					if n <= tt.failingUpdates {
+						return apierrors.NewForbidden(gatewayGR, obj.GetName(), nil)
+					}
+					return cl.Update(ctx, obj, opts...)
+				},
+			})
+			r := newTestSingleton(c, cfg)
+			r.Interval = time.Hour
+			if tt.interval != 0 {
+				r.Interval = tt.interval
+			}
+			r.RetryInterval = defaultRetry
+			if tt.retryInterval != 0 {
+				r.RetryInterval = tt.retryInterval
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- r.Start(ctx) }()
+			defer func() {
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Errorf("Start returned error: %v", err)
+					}
+				case <-time.After(waitTimeout):
+					t.Error("Start did not return after ctx was cancelled")
+				}
+			}()
+
+			bothListeners := func() bool { return sharedListenersPresent(t, base, cfg) }
+
+			if tt.wantBoth {
+				if !waitFor(waitTimeout, bothListeners) {
+					t.Fatalf("both listeners not present within %s", waitTimeout)
+				}
+			}
+
+			if tt.wantGapGrowth {
+				mu.Lock()
+				times := append([]time.Time(nil), updateTimes...)
+				mu.Unlock()
+				if len(times) < tt.failingUpdates+1 {
+					t.Fatalf("saw %d Gateway updates, want at least %d", len(times), tt.failingUpdates+1)
+				}
+				// Gaps between the failing reconciles' updates.
+				first := times[1].Sub(times[0])
+				second := times[2].Sub(times[1])
+				if float64(second) < 1.5*float64(first) {
+					t.Errorf("second gap %s is less than 1.5x the first gap %s", second, first)
+				}
+			}
+
+			if tt.observe > 0 {
+				if !waitFor(waitTimeout, bothListeners) {
+					t.Fatalf("first reconcile did not finish within %s", waitTimeout)
+				}
+				time.Sleep(tt.observe)
+				mu.Lock()
+				gotUpdates, gotReconciles := len(updateTimes), certGets
+				mu.Unlock()
+				if gotUpdates != tt.wantUpdates {
+					t.Errorf("Gateway updates during %s = %d, want %d", tt.observe, gotUpdates, tt.wantUpdates)
+				}
+				if gotReconciles != tt.wantReconciles {
+					t.Errorf("reconciles during %s = %d, want %d", tt.observe, gotReconciles, tt.wantReconciles)
+				}
+			}
+
+			if tt.checkGaps != nil {
+				tt.checkGaps(t, waitForGaps(t, &mu, &certTimes, tt.waitReconciles))
+			}
+
+			if tt.spinWindow > 0 {
+				time.Sleep(tt.spinWindow)
+				mu.Lock()
+				got := certGets
+				mu.Unlock()
+				if got > tt.maxReconciles {
+					t.Errorf("reconciles during the first %s = %d, want at most %d", tt.spinWindow, got, tt.maxReconciles)
+				}
+			}
+		})
+	}
+}
+
+// sharedListenersPresent reports whether the external Gateway has llm-https
+// and the internal Gateway has llm-internal-https.
+func sharedListenersPresent(t *testing.T, c client.Client, cfg *config.OperatorConfig) bool {
+	t.Helper()
+	ext := getUnstructured(t, c, gatewayGVK(), cfg.ExternalGatewayName, cfg.ExternalGatewayNS)
+	in := getUnstructured(t, c, gatewayGVK(), cfg.InternalGatewayName, cfg.InternalGatewayNS)
+	if ext == nil || in == nil {
+		return false
+	}
+	extL, _, _ := unstructured.NestedSlice(ext.Object, "spec", "listeners")
+	inL, _, _ := unstructured.NestedSlice(in.Object, "spec", "listeners")
+	return hasListenerNamed(extL, reconcilers.ExternalHTTPSListenerName) &&
+		hasListenerNamed(inL, reconcilers.InternalHTTPSListenerName)
+}
+
+// waitForGaps waits up to 5 s until times (guarded by mu) holds at least n
+// entries, then returns the n-1 gaps between the first n.
+func waitForGaps(t *testing.T, mu *sync.Mutex, times *[]time.Time, n int) []time.Duration {
+	t.Helper()
+	enough := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(*times) >= n
+	}
+	if !waitFor(5*time.Second, enough) {
+		t.Fatalf("fewer than %d reconciles within 5s", n)
+	}
+	mu.Lock()
+	got := append([]time.Time(nil), (*times)[:n]...)
+	mu.Unlock()
+	gaps := make([]time.Duration, 0, n-1)
+	for i := 1; i < len(got); i++ {
+		gaps = append(gaps, got[i].Sub(got[i-1]))
+	}
+	return gaps
+}
+
+// waitFor polls cond until it returns true or timeout passes.
+func waitFor(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
