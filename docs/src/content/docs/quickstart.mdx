@@ -197,7 +197,7 @@ To revoke a key, delete it in the key manager UI, or call `DELETE /api/keys/{nam
 
 ### Internal access (Keycloak JWT)
 
-The internal endpoint, `llm-internal.<baseDomain>`, accepts a Keycloak access token for a user in the model's `access.groups`, sent as `Authorization: Bearer <token>`. Like the external endpoint, it is served through a Gateway and has no network restriction of its own, so it is not limited to callers inside the cluster. User pods, including JupyterLab, don't get a token it accepts yet ([#255](https://github.com/nebari-dev/llm-serving-pack/issues/255)); from a notebook or service, use an API key on the external endpoint.
+The internal endpoint, `llm-internal.<baseDomain>`, accepts a Keycloak access token for a user in the model's `access.groups` (any valid token when `access.public` is true), sent as `Authorization: Bearer <token>`. Like the external endpoint, it is served through a Gateway and has no network restriction of its own, so it is not limited to callers inside the cluster. User pods, including JupyterLab, don't get a token it accepts yet ([#255](https://github.com/nebari-dev/llm-serving-pack/issues/255)); from a notebook or service, use an API key on the external endpoint.
 
 ## Route to an external provider
 

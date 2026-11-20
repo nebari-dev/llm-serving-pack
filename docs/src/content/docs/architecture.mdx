@@ -233,7 +233,7 @@ were written, not that Envoy has finished applying them to traffic.
 
 ### Internal endpoint
 
-For callers that hold a Keycloak token for a user in the model's `access.groups`. Like the external endpoint, it has no network restriction of its own: anyone who can reach its Gateway can call it with a valid token, from inside or outside the cluster. Only the authentication differs.
+For callers that hold a Keycloak token for a user in the model's `access.groups` (any valid token when `access.public` is true). Like the external endpoint, it has no network restriction of its own: anyone who can reach its Gateway can call it with a valid token, from inside or outside the cluster. Only the authentication differs.
 
 ```
 Client -> Authorization: Bearer <JWT> -> Envoy AI Gateway (internal) -> JWT SecurityPolicy -> InferencePool -> vLLM

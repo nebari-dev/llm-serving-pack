@@ -174,7 +174,7 @@ curl https://llm.your-cluster.example.com/v1/chat/completions \
   -d '{"model": "Qwen/Qwen3.5-35B-A3B-GPTQ-Int4", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-The internal endpoint, `llm-internal.<baseDomain>`, accepts a Keycloak access token for a user in the model's `access.groups`, sent as `Authorization: Bearer <token>`. Like the external endpoint, it is served through a Gateway and has no network restriction of its own, so it is not limited to callers inside the cluster. User pods, including JupyterLab, don't get a token it accepts yet ([#255](https://github.com/nebari-dev/llm-serving-pack/issues/255)); from a notebook or service, use an API key on the external endpoint.
+The internal endpoint, `llm-internal.<baseDomain>`, accepts a Keycloak access token for a user in the model's `access.groups` (any valid token when `access.public` is true), sent as `Authorization: Bearer <token>`. Like the external endpoint, it is served through a Gateway and has no network restriction of its own, so it is not limited to callers inside the cluster. User pods, including JupyterLab, don't get a token it accepts yet ([#255](https://github.com/nebari-dev/llm-serving-pack/issues/255)); from a notebook or service, use an API key on the external endpoint.
 
 ## Helm values reference
 
