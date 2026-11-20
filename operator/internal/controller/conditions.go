@@ -57,6 +57,15 @@ const (
 const (
 	reasonApplied  = "Applied"
 	reasonDisabled = "EndpointDisabled"
+	// Route acceptance reasons. RoutePending and RouteStatusUnreadable are
+	// Unknown and do not count as failures; RouteNotAccepted is False and does.
+	reasonRoutePending           = "RoutePending"
+	reasonRouteNotAccepted       = "RouteNotAccepted"
+	reasonRouteStatusUnreadable  = "RouteStatusUnreadable"
+	routePendingRequeue          = 5 * time.Second
+	routeStatusUnreadableRequeue = 15 * time.Second
+	// RouteNotAccepted reuses applyFailedRequeue (1 min); it gets no constant.
+
 	// applyFailedRequeue is how long to wait before retrying a gateway apply
 	// that failed for a reason other than a missing CRD.
 	applyFailedRequeue = time.Minute
@@ -100,28 +109,55 @@ func disabledCondition(condType string) metav1.Condition {
 }
 
 // hasGatewayFailure reports whether any condition records a gateway apply
-// that failed or is waiting on a missing CRD.
+// that failed, is waiting on a missing CRD, or produced a route its Gateway
+// did not accept. It is separate from gatewayRequeue: a pending or unreadable
+// route asks for a retry but is not a failure.
 func hasGatewayFailure(conds []metav1.Condition) bool {
-	return gatewayRequeue(conds) > 0
-}
-
-// gatewayRequeue returns how soon to retry after the gateway applies recorded
-// in conds, or 0 when none failed. A missing CRD retries on the shorter CRD
-// interval, since installing the CRD is enough for the next pass to succeed.
-func gatewayRequeue(conds []metav1.Condition) time.Duration {
-	var requeue time.Duration
 	for _, c := range conds {
 		if c.Status != metav1.ConditionFalse {
 			continue
 		}
 		switch c.Reason {
-		case reasonGatewayCRDUnavailable:
-			return gatewayCRDRequeue
-		case reasonApplyFailed:
-			requeue = applyFailedRequeue
+		case reasonGatewayCRDUnavailable, reasonApplyFailed, reasonRouteNotAccepted:
+			return true
 		}
 	}
-	return requeue
+	return false
+}
+
+// gatewayRequeue returns how soon to retry after the gateway applies and
+// route checks recorded in conds, or 0 when none needs a retry. Each known
+// reason maps to its own interval whatever the condition's status, and the
+// shortest wins. A missing CRD (GatewayCRDUnavailable) uses the shorter CRD
+// interval, since installing the CRD is enough for the next pass to succeed.
+// It is separate from hasGatewayFailure: a retry does not imply a failure.
+func gatewayRequeue(conds []metav1.Condition) time.Duration {
+	ds := make([]time.Duration, 0, len(conds))
+	for _, c := range conds {
+		switch c.Reason {
+		case reasonRoutePending:
+			ds = append(ds, routePendingRequeue)
+		case reasonGatewayCRDUnavailable:
+			ds = append(ds, gatewayCRDRequeue)
+		case reasonRouteStatusUnreadable:
+			ds = append(ds, routeStatusUnreadableRequeue)
+		case reasonRouteNotAccepted, reasonApplyFailed:
+			ds = append(ds, applyFailedRequeue)
+		}
+	}
+	return shortestRequeue(ds...)
+}
+
+// shortestRequeue returns the shortest positive duration in ds, or 0 when
+// there is none. A 0 means "no retry needed" and never wins.
+func shortestRequeue(ds ...time.Duration) time.Duration {
+	var shortest time.Duration
+	for _, d := range ds {
+		if d > 0 && (shortest == 0 || d < shortest) {
+			shortest = d
+		}
+	}
+	return shortest
 }
 
 // phaseWithGatewayFailure downgrades a Ready model to Degraded when one of
