@@ -30,6 +30,10 @@ func main() {
 	// 1. Parse config from env vars.
 	apiKeysNamespace := getEnvOrDefault("LLM_API_KEYS_NAMESPACE", "llm-api-keys")
 	groupsClaim := getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups")
+	groupForm, err := oidc.ParseGroupForm(os.Getenv("LLM_OIDC_GROUPS_CLAIM_FORM"))
+	if err != nil {
+		log.Fatalf("invalid LLM_OIDC_GROUPS_CLAIM_FORM: %v", err)
+	}
 	auditIntervalStr := getEnvOrDefault("LLM_AUDIT_INTERVAL", "5m")
 	oidcUserinfoURL := os.Getenv("LLM_OIDC_USERINFO_URL") // optional
 	listenAddr := getEnvOrDefault("LLM_LISTEN_ADDR", ":8080")
@@ -75,7 +79,7 @@ func main() {
 	}
 
 	// 3. Create components.
-	watcher := models.NewWatcher(k8sClient)
+	watcher := models.NewWatcher(k8sClient, models.WithGroupForm(groupForm))
 	secretsMgr := secrets.NewManager(k8sClient, apiKeysNamespace)
 	handler := api.NewHandler(watcher, secretsMgr, logger)
 

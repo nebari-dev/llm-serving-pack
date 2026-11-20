@@ -188,7 +188,7 @@ func validatePassthroughAccess(pm *llmv1alpha1.PassthroughModel) error {
 				"a passthrough with neither cannot be accessed by any user",
 		)
 	}
-	return nil
+	return validateGroupNames(pm.Spec.Access.Groups)
 }
 
 // validateProvider rejects obviously broken provider configs the CRD schema

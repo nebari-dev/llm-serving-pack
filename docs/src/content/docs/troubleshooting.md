@@ -112,6 +112,8 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 
 If the `llm` group does not exist, create it (see the installation runbook section 7.2). If the group exists but the user is not a member, add them through the Keycloak admin console or API.
 
+Groups are compared as Keycloak paths by default (`auth.oidc.groupsClaimForm: path`), the form NIC's realm puts in tokens: `llm` and `/llm` in `access.groups` both match a token carrying `/llm`. A user in a nested group `/org/llm` does not match `llm`; list the nested group by its full path. If the groups claim is not a group path (for example `auth.oidc.groupsClaim: realm_access.roles`), set `auth.oidc.groupsClaimForm: name` so values are compared as written.
+
 Also verify the `groups` claim is included in tokens - the Keycloak client must have a group-membership protocol mapper configured. Check the key-manager pod logs for the claim it is actually receiving:
 
 ```bash

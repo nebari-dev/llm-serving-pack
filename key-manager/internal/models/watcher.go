@@ -7,6 +7,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 // ModelInfo is a simplified view of an LLMModel or PassthroughModel for
@@ -25,17 +26,32 @@ type ModelInfo struct {
 // Watcher watches LLMModel and PassthroughModel CRs and maintains an
 // in-memory cache.
 type Watcher struct {
-	client client.Client
-	mu     sync.RWMutex
-	models map[string]ModelInfo // key: "<kind>/namespace/name"
+	client    client.Client
+	groupForm oidc.GroupForm
+	mu        sync.RWMutex
+	models    map[string]ModelInfo // key: "<kind>/namespace/name"
+}
+
+// Option configures a Watcher.
+type Option func(*Watcher)
+
+// WithGroupForm sets how access groups are compared with the user's groups
+// claim. The default is oidc.GroupFormPath.
+func WithGroupForm(f oidc.GroupForm) Option {
+	return func(w *Watcher) { w.groupForm = f }
 }
 
 // NewWatcher creates a new Watcher using the given controller-runtime client.
-func NewWatcher(c client.Client) *Watcher {
-	return &Watcher{
-		client: c,
-		models: make(map[string]ModelInfo),
+func NewWatcher(c client.Client, opts ...Option) *Watcher {
+	w := &Watcher{
+		client:    c,
+		groupForm: oidc.GroupFormPath,
+		models:    make(map[string]ModelInfo),
 	}
+	for _, opt := range opts {
+		opt(w)
+	}
+	return w
 }
 
 // Sync refreshes the in-memory cache by listing all LLMModels and
@@ -127,13 +143,19 @@ func (w *Watcher) ListModels() []ModelInfo {
 // A model is accessible if:
 // - model.Public is true, OR
 // - any of the user's groups matches any of the model's groups.
+//
+// Both sides are normalized to the watcher's group form first, so in path
+// form "llm" and "/llm" name the same group. A group that normalizes to ""
+// matches nothing.
 func (w *Watcher) FilterModelsForUser(groups []string) []ModelInfo {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
 	userGroups := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
-		userGroups[g] = struct{}{}
+		if n := w.groupForm.Normalize(g); n != "" {
+			userGroups[n] = struct{}{}
+		}
 	}
 
 	var result []ModelInfo
@@ -143,7 +165,7 @@ func (w *Watcher) FilterModelsForUser(groups []string) []ModelInfo {
 			continue
 		}
 		for _, g := range m.Groups {
-			if _, ok := userGroups[g]; ok {
+			if _, ok := userGroups[w.groupForm.Normalize(g)]; ok {
 				result = append(result, m)
 				break
 			}

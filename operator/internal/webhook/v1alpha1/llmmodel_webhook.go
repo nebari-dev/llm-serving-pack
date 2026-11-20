@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -217,6 +218,20 @@ func validateAccess(llmmodel *llmv1alpha1.LLMModel) error {
 			"spec.access must declare either public=true or at least one group in groups; " +
 				"a model with neither cannot be accessed by any user",
 		)
+	}
+	return validateGroupNames(llmmodel.Spec.Access.Groups)
+}
+
+// validateGroupNames rejects a group that is blank or only slashes. The
+// operator normalizes access groups to Keycloak paths ("llm" -> "/llm") for
+// the gateway's claim rule, which would drop such an entry, and Envoy Gateway
+// refuses a claim rule with no values; a model whose only group is "/" would
+// otherwise get a SecurityPolicy the API server rejects.
+func validateGroupNames(groups []string) error {
+	for i, g := range groups {
+		if strings.Trim(strings.TrimSpace(g), "/") == "" {
+			return fmt.Errorf("spec.access.groups[%d] is %q: a group needs a name, such as \"llm\" or \"/llm\"", i, g)
+		}
 	}
 	return nil
 }

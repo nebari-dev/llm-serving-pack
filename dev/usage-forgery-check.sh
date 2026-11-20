@@ -262,7 +262,7 @@ check "3 valid token, no groups (HTTP $code)" "$(entry nebari-internal-gateway "
 
 rid="$RUN-4"; t="$(since)"; code="$(send llm-internal.local "$INT_PORT" "$ALICE_TOKEN" "$rid")"
 check "4 valid token, alice (HTTP $code)" "$(entry nebari-internal-gateway "$t" -internal "$code")" "$rid" \
-  response_code=200 client_id=ABSENT auth_user=alice auth_subject="$ALICE_SUB" auth_groups=include:team-a auth_groups=not-forged
+  response_code=200 client_id=ABSENT auth_user=alice auth_subject="$ALICE_SUB" auth_groups=include:/team-a auth_groups=not-forged
 
 rid="$RUN-5"; t="$(since)"; code="$(send llm.local "$EXT_PORT" "$ALICE_KEY" "$rid")"
 check "5 valid API key, alice (HTTP $code)" "$(entry nebari-gateway "$t" -external "$code")" "$rid" \

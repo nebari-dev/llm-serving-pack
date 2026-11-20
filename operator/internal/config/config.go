@@ -22,6 +22,12 @@ import (
 	"strings"
 )
 
+// Values of LLM_OIDC_GROUPS_CLAIM_FORM.
+const (
+	GroupsClaimFormPath = "path"
+	GroupsClaimFormName = "name"
+)
+
 // OperatorConfig holds all pack-level configuration parsed from environment variables.
 // It is loaded once at startup and passed to reconcilers.
 type OperatorConfig struct {
@@ -32,6 +38,11 @@ type OperatorConfig struct {
 	InternalGatewayNS   string // LLM_INTERNAL_GATEWAY_NAMESPACE (default: "envoy-gateway-system")
 	OIDCIssuerURL       string // LLM_OIDC_ISSUER_URL (required)
 	OIDCGroupsClaim     string // LLM_OIDC_GROUPS_CLAIM (default: "groups")
+	// OIDCGroupsClaimForm says how the groups claim writes its values:
+	// GroupsClaimFormPath for Keycloak group paths ("/llm", as NIC's realm
+	// emits them) or GroupsClaimFormName for values compared as written,
+	// such as a role claim.
+	OIDCGroupsClaimForm string // LLM_OIDC_GROUPS_CLAIM_FORM (default: "path")
 	OIDCAudience        string // LLM_OIDC_AUDIENCE (optional, empty string means no audience check)
 	DefaultServingImage string // LLM_DEFAULT_SERVING_IMAGE (default: "ghcr.io/llm-d/llm-d-cuda:v0.7.0")
 	// DefaultEPPImage is the llm-d-router Endpoint Picker image used for every
@@ -131,6 +142,7 @@ func LoadFromEnv() (*OperatorConfig, error) {
 		InternalGatewayNS:       getEnvOrDefault("LLM_INTERNAL_GATEWAY_NAMESPACE", "envoy-gateway-system"),
 		OIDCIssuerURL:           require("LLM_OIDC_ISSUER_URL"),
 		OIDCGroupsClaim:         getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM", "groups"),
+		OIDCGroupsClaimForm:     getEnvOrDefault("LLM_OIDC_GROUPS_CLAIM_FORM", GroupsClaimFormPath),
 		OIDCAudience:            os.Getenv("LLM_OIDC_AUDIENCE"),
 		DefaultServingImage:     getEnvOrDefault("LLM_DEFAULT_SERVING_IMAGE", "ghcr.io/llm-d/llm-d-cuda:v0.7.0"),
 		DefaultEPPImage:         getEnvOrDefault("LLM_DEFAULT_EPP_IMAGE", "ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0"),
@@ -145,6 +157,10 @@ func LoadFromEnv() (*OperatorConfig, error) {
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+
+	if f := cfg.OIDCGroupsClaimForm; f != GroupsClaimFormPath && f != GroupsClaimFormName {
+		return nil, fmt.Errorf("LLM_OIDC_GROUPS_CLAIM_FORM is %q: want %q or %q", f, GroupsClaimFormPath, GroupsClaimFormName)
 	}
 
 	return cfg, nil
