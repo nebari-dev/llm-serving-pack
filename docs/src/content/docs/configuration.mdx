@@ -364,7 +364,7 @@ The operator writes these fields to `status`; they are read-only.
 | `status.endpoints.external` | string | Actual external endpoint URL once provisioned. |
 | `status.endpoints.internal` | string | Actual internal endpoint URL once provisioned. |
 | `status.modelSize` | string | Actual model size after download. |
-| `status.conditions` | []Condition | Standard Kubernetes conditions (type, status, reason, message). |
+| `status.conditions` | []Condition | `SecurityPoliciesReady`, `InferencePoolReady`, `ExternalEndpointReady` and `InternalEndpointReady` (type, status, reason, message). A failed gateway apply turns `Ready` into `Degraded`; see [Architecture](/architecture/#dual-endpoint-auth). |
 
 ---
 
