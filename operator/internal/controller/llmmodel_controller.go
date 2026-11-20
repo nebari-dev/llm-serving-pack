@@ -224,6 +224,12 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// 12. Update status
 	phase = phaseWithGatewayFailure(phase, conditions)
+	// A missing SecurityPolicy CRD leaves the endpoints without authentication.
+	// SecurityPoliciesReady is patched in step 6, not carried in conditions, so
+	// downgrade for it here.
+	if authPending && phase == llmv1alpha1.PhaseReady {
+		phase = llmv1alpha1.PhaseDegraded
+	}
 	if err := r.updateStatus(ctx, log, model, phase, conditions); err != nil {
 		return ctrl.Result{}, err
 	}

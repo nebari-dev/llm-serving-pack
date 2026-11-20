@@ -172,6 +172,11 @@ func TestMissingSecurityPolicyCRDRetriesWithoutBlockingProvisioning(t *testing.T
 	if cond == nil || cond.Reason != "GatewayCRDUnavailable" || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("missing CRD not reported: %+v", cond)
 	}
+	// The workload is serving but has no endpoint authentication, so it must
+	// not claim Ready.
+	if model.Status.Phase != llmv1alpha1.PhaseDegraded {
+		t.Fatalf("phase with missing SecurityPolicy CRD = %q, want %q", model.Status.Phase, llmv1alpha1.PhaseDegraded)
+	}
 	c.missing = false
 	if _, err := r.Reconcile(ctx, req); err != nil {
 		t.Fatal(err)
@@ -181,5 +186,8 @@ func TestMissingSecurityPolicyCRDRetriesWithoutBlockingProvisioning(t *testing.T
 	}
 	if !meta.IsStatusConditionTrue(model.Status.Conditions, condSecurityPoliciesReady) {
 		t.Fatal("condition did not recover after CRD installation")
+	}
+	if model.Status.Phase != llmv1alpha1.PhaseReady {
+		t.Fatalf("phase after CRD installation = %q, want %q", model.Status.Phase, llmv1alpha1.PhaseReady)
 	}
 }
