@@ -114,7 +114,7 @@ func main() {
 	// 7. Start audit if userinfo URL is configured.
 	if oidcUserinfoURL != "" {
 		lookup := makeUserinfoLookup(oidcUserinfoURL)
-		auditor := audit.NewAuditor(watcher, secretsMgr, lookup, auditInterval, logger)
+		auditor := audit.NewAuditor(watcher, secretsMgr, lookup, groupForm, auditInterval, logger)
 		go auditor.Start(ctx)
 		logger.Info("audit loop started", "interval", auditInterval, "userinfo_url", oidcUserinfoURL)
 	} else {
