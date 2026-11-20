@@ -42,7 +42,12 @@ func defaultModel() *llmv1alpha1.LLMModel {
 			Resources: llmv1alpha1.ResourceSpec{
 				GPU: llmv1alpha1.GPUSpec{Count: 2, Type: "nvidia"},
 			},
-			Access: llmv1alpha1.AccessSpec{},
+			// Default to a non-public model with one group so the internal
+			// SecurityPolicy always has a valid authorization block; matches
+			// the invariant the webhook enforces at admission time.
+			Access: llmv1alpha1.AccessSpec{
+				Groups: []string{"data-scientists"},
+			},
 		},
 	}
 }
