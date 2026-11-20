@@ -3,7 +3,7 @@ package openmeterapi_test
 import (
 	"testing"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // OpenMeter looks prices up under these canonical IDs, so a price stored

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/model"
 )
 
 // streamWindow is how far back each poll of the live stream reads. A

@@ -36,10 +36,10 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/controller/reconcilers"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/provider"
 )
 
 // Condition types reported on PassthroughModel status.

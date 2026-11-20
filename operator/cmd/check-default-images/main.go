@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/imagecheck"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/imagecheck"
 )
 
 func main() {

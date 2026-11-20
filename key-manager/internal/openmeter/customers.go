@@ -20,8 +20,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // customer is a new OpenMeter v1 customer, as the sync creates it.

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/model"
 )
 
 // receiptFilter is Traffic's query: any of the values named for a

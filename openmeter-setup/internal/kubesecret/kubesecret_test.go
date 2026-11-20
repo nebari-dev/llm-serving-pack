@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/openmeter-setup/internal/kubesecret"
+	"github.com/nebari-dev/llm-serving-pack/openmeter-setup/internal/kubesecret"
 )
 
 // fakeAPI is the slice of the Kubernetes API that creating a Secret uses:

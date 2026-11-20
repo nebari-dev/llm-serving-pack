@@ -11,7 +11,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	llmv1alpha1 "github.com/nebari-dev/llm-serving-pack/operator/api/v1alpha1"
 )
 
 // Resolved is the validated input to the shared gateway builders.

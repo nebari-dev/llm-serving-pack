@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/shared/openmeterapi"
+	"github.com/nebari-dev/llm-serving-pack/shared/openmeterapi"
 )
 
 // Client calls OpenMeter's HTTP API.

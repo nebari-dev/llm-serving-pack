@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/usage-console/server/internal/model"
+	"github.com/nebari-dev/llm-serving-pack/usage-console/server/internal/model"
 )
 
 // A long-open Traffic stream remembers only the receipts of its latest read,

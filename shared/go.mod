@@ -1,4 +1,4 @@
-module github.com/nebari-dev/nebari-llm-serving-pack/shared
+module github.com/nebari-dev/llm-serving-pack/shared
 
 go 1.25.8
 

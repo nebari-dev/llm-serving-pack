@@ -5,7 +5,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/config"
+	"github.com/nebari-dev/llm-serving-pack/operator/internal/config"
 )
 
 // capturedTokenCosts returns the token counts a route asks the Envoy AI
