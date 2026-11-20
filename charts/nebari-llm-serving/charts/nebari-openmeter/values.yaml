@@ -7,9 +7,11 @@ namespace: ""
 inPack: false
 
 # OpenMeter: the API (ingests usage events, answers queries) and the sink
-# worker (moves events from Kafka into ClickHouse). Same image for both.
+# worker (moves events from Kafka into ClickHouse). Same image for both:
+# OpenMeter v1.0.0-beta.234 with app secrets encrypted at rest, built from
+# https://github.com/nebari-dev/openmeter/tree/encrypted-secrets.
 openmeter:
-  image: ghcr.io/openmeterio/openmeter:v1.0.0-beta.234@sha256:43a2a0b804fb4a241000983f3703ac531114f46b670a20b582b5c892193585d4
+  image: ghcr.io/nebari-dev/openmeter:sha-8aca522@sha256:885d6ed7c6f60d2659285f5ebd9a787c2a7ac6d144ff91ab738b4efe08c88b1c
   api:
     resources:
       requests: {cpu: 100m, memory: 128Mi}
@@ -46,6 +48,14 @@ openmeter:
   # API has no authentication (the webhook checks Stripe's signature).
   apps:
     baseURL: ""
+  # The key OpenMeter encrypts app secrets (the Stripe API key and webhook
+  # secret) with before storing them in Postgres: 32 random bytes as hex,
+  # under key secret-encryption-key. existingSecret names a Secret holding
+  # it; empty: a Secret a Job creates once with a random key and never
+  # changes. Back the key up with the database: without it, stored Stripe
+  # secrets can't be read and the Stripe app has to be set up again.
+  secretEncryption:
+    existingSecret: ""
   # Usage events with an ID already stored are dropped for up to this long,
   # so a redelivered gateway access-log entry is usually counted once. Best
   # effort: the ids live in Redis, which can lose or evict them; see redis

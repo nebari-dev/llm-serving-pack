@@ -100,6 +100,17 @@ two durations.
 {{- .Values.clickhouse.existingSecret | default (include "om.name" (dict "root" . "component" "clickhouse-password")) -}}
 {{- end -}}
 
+{{/* The Secret with the key app secrets are encrypted with (key secret-encryption-key). */}}
+{{- define "om.secretEncryptionSecret" -}}
+{{- .Values.openmeter.secretEncryption.existingSecret | default (include "om.name" (dict "root" . "component" "secret-encryption-key")) -}}
+{{- end -}}
+
+{{/* The env for OpenMeter processes that read or write app secrets (the API and openmeter-jobs). */}}
+{{- define "om.secretEncryptionEnv" -}}
+- name: SECRET_ENCRYPTIONKEY
+  valueFrom: {secretKeyRef: {name: {{ include "om.secretEncryptionSecret" . }}, key: secret-encryption-key}}
+{{- end -}}
+
 {{/* The env every OpenMeter process needs for its stores' passwords. */}}
 {{- define "om.storeEnv" -}}
 - name: POSTGRES_URL
