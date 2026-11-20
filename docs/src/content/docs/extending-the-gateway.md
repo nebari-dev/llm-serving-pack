@@ -98,9 +98,10 @@ them again when you upgrade either:
   edit your processor makes to the body, such as lowering `max_tokens`, does
   not reach the model in those cases.
 - **A request it refuses still produces an `llm.request` event**, with its
-  status in `response_code` and `usage_reported` set to `"false"`. Only 401s
-  and 403s the gateway answered itself are left out. Filter on
-  `response_code` if you count requests.
+  status in `response_code` and `usage_reported` set to `"false"`, unless it
+  refuses with 401 or 403: the collector treats those as the gateway's own
+  rejections and drops them. Refuse with 429 (or another code) if you want the
+  event, and filter on `response_code` if you count requests.
 - **With `failOpen: false`, its availability becomes the models'.** If it
   can't answer, every model request fails. Run it with several replicas and a
   PodDisruptionBudget.
