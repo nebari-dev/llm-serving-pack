@@ -12,6 +12,7 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/audit"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 // mockModelLister is a test double for ModelLister.
@@ -76,6 +77,7 @@ func TestAuditor_RunOnce(t *testing.T) {
 		keysByModel   map[string][]secrets.KeyInfo
 		userGroups    map[string][]string // username -> groups
 		lookupErr     map[string]error    // username -> error to return
+		groupForm     oidc.GroupForm      // "" means oidc.GroupFormPath
 		revokeErr     error
 		wantRevoked   []revokedKey
 		wantErrSubstr string
@@ -198,6 +200,77 @@ func TestAuditor_RunOnce(t *testing.T) {
 			userGroups:  map[string][]string{"dave": {"team-c"}}, // matches team-c only
 			wantRevoked: nil,
 		},
+		{
+			name: "path form: model group llm matches userinfo /llm, key not revoked",
+			modelList: []models.ModelInfo{
+				{Name: "private-model", Public: false, Groups: []string{"llm"}},
+			},
+			keysByModel: map[string][]secrets.KeyInfo{
+				"private-model": {
+					{ClientID: "user-alice-1", Creator: "alice", ModelName: "private-model"},
+				},
+			},
+			userGroups:  map[string][]string{"alice": {"/llm"}},
+			wantRevoked: nil,
+		},
+		{
+			name: "path form: model group /llm matches userinfo llm, key not revoked",
+			modelList: []models.ModelInfo{
+				{Name: "private-model", Public: false, Groups: []string{"/llm"}},
+			},
+			keysByModel: map[string][]secrets.KeyInfo{
+				"private-model": {
+					{ClientID: "user-alice-1", Creator: "alice", ModelName: "private-model"},
+				},
+			},
+			userGroups:  map[string][]string{"alice": {"llm"}},
+			wantRevoked: nil,
+		},
+		{
+			name: "path form: nested /org/llm does not match top-level llm, key revoked",
+			modelList: []models.ModelInfo{
+				{Name: "private-model", Public: false, Groups: []string{"llm"}},
+			},
+			keysByModel: map[string][]secrets.KeyInfo{
+				"private-model": {
+					{ClientID: "user-alice-1", Creator: "alice", ModelName: "private-model"},
+				},
+			},
+			userGroups: map[string][]string{"alice": {"/org/llm"}},
+			wantRevoked: []revokedKey{
+				{modelName: "private-model", clientID: "user-alice-1"},
+			},
+		},
+		{
+			name: "name form: llm does not match /llm, key revoked",
+			modelList: []models.ModelInfo{
+				{Name: "private-model", Public: false, Groups: []string{"llm"}},
+			},
+			keysByModel: map[string][]secrets.KeyInfo{
+				"private-model": {
+					{ClientID: "user-alice-1", Creator: "alice", ModelName: "private-model"},
+				},
+			},
+			userGroups: map[string][]string{"alice": {"/llm"}},
+			groupForm:  oidc.GroupFormName,
+			wantRevoked: []revokedKey{
+				{modelName: "private-model", clientID: "user-alice-1"},
+			},
+		},
+		{
+			name: "name form: exact match, key not revoked",
+			modelList: []models.ModelInfo{
+				{Name: "private-model", Public: false, Groups: []string{"llm-users"}},
+			},
+			keysByModel: map[string][]secrets.KeyInfo{
+				"private-model": {
+					{ClientID: "user-alice-1", Creator: "alice", ModelName: "private-model"},
+				},
+			},
+			userGroups:  map[string][]string{"alice": {"llm-users"}},
+			groupForm:   oidc.GroupFormName,
+			wantRevoked: nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -220,7 +293,11 @@ func TestAuditor_RunOnce(t *testing.T) {
 				return tc.userGroups[username], nil
 			}
 
-			a := audit.NewAuditor(lister, km, lookup, time.Minute, newTestLogger())
+			groupForm := tc.groupForm
+			if groupForm == "" {
+				groupForm = oidc.GroupFormPath
+			}
+			a := audit.NewAuditor(lister, km, lookup, groupForm, time.Minute, newTestLogger())
 			err := a.RunOnce(context.Background())
 
 			if tc.wantErrSubstr != "" {

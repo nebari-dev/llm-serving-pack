@@ -21,8 +21,10 @@
 #                   access-log entry is normally counted once.
 #
 # Subject (who is billed) is the person's OIDC subject. Every event also
-# carries the person's username, their team (the first group starting with
-# TEAM_GROUP_PREFIX, default "team-") and the API key's client ID (or "login"),
+# carries the person's username, their team (the first group whose name starts
+# with TEAM_GROUP_PREFIX, default "team-"; a Keycloak group path such as
+# "/team-a" or "/org/team-a" is named by its last segment, "team-a") and the
+# API key's client ID (or "login"),
 # so usage can be totalled per person, team, key and model. An x-auth-* header a
 # caller sends on the external endpoint is never read: on that endpoint only
 # the API key, set by the gateway, identifies the caller.
@@ -140,7 +142,7 @@ pipeline:
     - label: events
       mapping: |
         let prefix = "${TEAM_GROUP_PREFIX:team-}"
-        let team = this.groups.or([]).filter(g -> g.has_prefix($prefix)).sort().index(0).catch("none")
+        let team = this.groups.or([]).map_each(g -> g.string().split("/").filter(s -> s != "").index(-1).catch("")).filter(g -> g.has_prefix($prefix)).sort().index(0).catch("none")
         let subject = if this.subject.or("") != "" { this.subject } else { this.client_id }
         let common = {
           "model": this.model,

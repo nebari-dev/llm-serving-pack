@@ -84,6 +84,38 @@ A release that changes a behavior listed on
 its heading here, says what changed, and says what a deployment that relies on
 it must do.
 
+### Upgrading from 0.1.4 or earlier: access groups compared as group paths
+
+`access.groups` is now compared with the token's groups claim as Keycloak
+group paths (`auth.oidc.groupsClaimForm: path`, the default). The operator
+writes each group as a path in the gateway's claim rule, so a model with
+`access.groups: [ops]` only allows tokens whose claim carries `/ops`. The key
+manager compares the same way.
+
+NIC's realm already puts group paths in tokens, so a default NIC install needs
+nothing. An install whose tokens carry plain names (`ops`) does: after the
+upgrade the internal endpoint returns 403 for those users, while the key
+manager still lists the model for them.
+
+Check what the claim carries in a user's access token (replace `groups` if you
+set `auth.oidc.groupsClaim` to another claim):
+
+```bash
+echo "$TOKEN" | jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson | .groups'
+```
+
+If the values start with `/`, nothing changes. Otherwise, before upgrading:
+
+- **The claim is a role claim** (for example `auth.oidc.groupsClaim:
+  realm_access.roles`): set `auth.oidc.groupsClaimForm: name`. Values are
+  then compared exactly as written, as before.
+- **The claim comes from a group membership mapper with "Full group path"
+  off:** turn it on (`full.path: true`) in that mapper, so tokens carry
+  `/ops`. `access.groups` can stay as `ops` or `/ops`. A user in a nested
+  group such as `/org/ops` no longer matches `ops`; list the nested group by
+  its full path. The chart sets this on the key manager's own client from
+  `auth.oidc.groupsClaimForm`, so only mappers you manage need the change.
+
 ### Upgrading from 0.1.4 or earlier: gateway and issuer defaults
 
 Two defaults now match what NIC creates:

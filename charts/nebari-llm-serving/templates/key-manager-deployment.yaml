@@ -44,6 +44,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: LLM_OIDC_GROUPS_CLAIM
               value: {{ .Values.auth.oidc.groupsClaim | quote }}
+            - name: LLM_OIDC_GROUPS_CLAIM_FORM
+              value: {{ .Values.auth.oidc.groupsClaimForm | quote }}
             - name: LLM_LISTEN_ADDR
               value: ":8080"
             {{- if not .Values.keyManager.devMode.enabled }}

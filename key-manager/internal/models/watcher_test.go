@@ -10,6 +10,7 @@ import (
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	llmv1alpha1 "github.com/nebari-dev/nebari-llm-serving-pack/operator/api/v1alpha1"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 func boolPtr(b bool) *bool { return &b }
@@ -207,6 +208,46 @@ func TestWatcher_FilterModelsForUser(t *testing.T) {
 				if !gotNames[wantName] {
 					t.Errorf("expected model %q in result, got: %v", wantName, gotNames)
 				}
+			}
+		})
+	}
+}
+
+// TestWatcher_FilterModelsForUserGroupForm pins #232: NIC's Keycloak puts
+// full group paths in the groups claim ("/llm"), while access.groups may name
+// the group bare ("llm"). In path form both sides are compared as paths; in
+// name form (a role claim) values are compared exactly as written.
+func TestWatcher_FilterModelsForUserGroupForm(t *testing.T) {
+	tests := []struct {
+		name        string
+		form        oidc.GroupForm
+		modelGroups []string
+		userGroups  []string
+		wantVisible bool
+	}{
+		{name: "path: bare access group matches a full-path claim", form: oidc.GroupFormPath, modelGroups: []string{"llm"}, userGroups: []string{"/llm"}, wantVisible: true},
+		{name: "path: full-path access group matches a full-path claim", form: oidc.GroupFormPath, modelGroups: []string{"/llm"}, userGroups: []string{"/llm"}, wantVisible: true},
+		{name: "path: full-path access group matches a bare claim", form: oidc.GroupFormPath, modelGroups: []string{"/llm"}, userGroups: []string{"llm"}, wantVisible: true},
+		{name: "path: a nested group is not the top-level group", form: oidc.GroupFormPath, modelGroups: []string{"llm"}, userGroups: []string{"/other/llm"}, wantVisible: false},
+		{name: "path: a bare slash matches nothing", form: oidc.GroupFormPath, modelGroups: []string{"/"}, userGroups: []string{"/"}, wantVisible: false},
+		{name: "name: values are compared as written", form: oidc.GroupFormName, modelGroups: []string{"ops"}, userGroups: []string{"ops"}, wantVisible: true},
+		{name: "name: no slash is added", form: oidc.GroupFormName, modelGroups: []string{"llm"}, userGroups: []string{"/llm"}, wantVisible: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClient := fake.NewClientBuilder().WithScheme(buildScheme(t)).
+				WithObjects(makeLLMModel("private-model", "default", "org/private", boolPtr(false), tc.modelGroups)).
+				Build()
+
+			w := models.NewWatcher(fakeClient, models.WithGroupForm(tc.form))
+			if err := w.Sync(context.Background()); err != nil {
+				t.Fatalf("Sync error: %v", err)
+			}
+
+			got := len(w.FilterModelsForUser(tc.userGroups)) == 1
+			if got != tc.wantVisible {
+				t.Errorf("model groups %v, user groups %v: visible = %v, want %v", tc.modelGroups, tc.userGroups, got, tc.wantVisible)
 			}
 		})
 	}

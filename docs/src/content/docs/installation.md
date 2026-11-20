@@ -1289,7 +1289,10 @@ spec:
 
 `metadata.namespace` MUST be `nebari-llm-serving-system` (the pack
 operator only watches its own namespace; see #59). `access.groups`
-must list a Keycloak group that exists in the realm. `endpoints.
+must list a Keycloak group that exists in the realm. NIC's Keycloak
+puts group paths in tokens (`/llm`), and the pack compares groups as
+paths, so `llm` and `/llm` both name the top-level group; write a
+nested group as its full path, such as `/org/llm`. `endpoints.
 external.subdomain` becomes the public hostname:
 `<subdomain>.<baseDomain>` is what end users hit on the external
 route. Internal endpoints share a single `llm-internal.<baseDomain>`
