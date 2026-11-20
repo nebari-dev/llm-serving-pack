@@ -152,6 +152,14 @@ type PassthroughEndpoints struct {
 	// internal configures the internal (JWT) endpoint
 	// +optional
 	Internal EndpointToggle `json:"internal,omitempty"`
+	// requestTimeout is the per-request timeout on the generated gateway
+	// routes (Gateway API Duration, e.g. "120s", "10m"). It covers the whole
+	// response, streamed or not, including time queued upstream. Applies to
+	// both the external and internal endpoint.
+	// +optional
+	// +kubebuilder:default="120s"
+	// +kubebuilder:validation:Pattern=`^([0-9]{1,5}(h|m|s|ms)){1,4}$`
+	RequestTimeout string `json:"requestTimeout,omitempty"`
 }
 
 // EndpointToggle enables or disables one shared endpoint.

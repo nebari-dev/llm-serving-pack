@@ -17,10 +17,11 @@ group access control. The server's own API key stays with the platform.
   or rate limiting in front of the server, so busy periods behave however the
   framework does: llama.cpp, for example, works on a fixed number of parallel
   slots and queues the rest.
-- **A 120-second request timeout.** Passthrough routes use a fixed 120s timeout
-  for the whole response, streamed or not, including any time spent queued. Long
-  or slow generations are cut off; cap `max_tokens` accordingly (see
-  [#209](https://github.com/nebari-dev/llm-serving-pack/issues/209)).
+- **A 120-second request timeout by default.** Passthrough routes time out
+  after 120s for the whole response, streamed or not, including any time spent
+  queued. Long or slow generations are cut off; raise
+  `spec.endpoints.requestTimeout` (for example to `10m`) for a server that needs
+  longer.
 - **No health checks.** The cluster does not monitor the server, and a
   `PassthroughModel` reports `Ready` whether or not the server answers.
 :::

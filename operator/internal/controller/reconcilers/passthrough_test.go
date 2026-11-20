@@ -665,3 +665,43 @@ func TestBuildPassthroughExternalAuthorization(t *testing.T) {
 		t.Errorf("expected deny-all (no rules) for zero client IDs, got %v", authzNo["rules"])
 	}
 }
+
+func TestPassthroughRoutesRequestTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string
+		want    string
+	}{
+		{name: "unset falls back to the default", timeout: "", want: DefaultPassthroughRequestTimeout},
+		{name: "set applies to every rule", timeout: "10m", want: "10m"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := testPassthroughModel() // declared models plus catch-all: two rules per route
+			pm.Spec.Endpoints.RequestTimeout = tt.timeout
+			res, err := BuildPassthroughResources(pm, testPassthroughConfig(), nil, []string{APIKeySecretName(pm.Name)})
+			if err != nil {
+				t.Fatalf("BuildPassthroughResources returned error: %v", err)
+			}
+			for _, route := range []struct {
+				name string
+				obj  *unstructured.Unstructured
+			}{
+				{"external", res.ExternalRoute},
+				{"internal", res.InternalRoute},
+			} {
+				rules := routeRules(t, route.obj)
+				if len(rules) != 2 {
+					t.Fatalf("%s route: expected declared and catch-all rules, got %d", route.name, len(rules))
+				}
+				for i, r := range rules {
+					timeouts, _ := r.(map[string]interface{})["timeouts"].(map[string]interface{})
+					if got := timeouts["request"]; got != tt.want {
+						t.Errorf("%s route rule %d: timeouts.request = %v, want %q", route.name, i, got, tt.want)
+					}
+				}
+			}
+		})
+	}
+}
