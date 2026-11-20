@@ -11,7 +11,7 @@ inPack: false
 # OpenMeter v1.0.0-beta.234 with app secrets encrypted at rest, built from
 # https://github.com/nebari-dev/openmeter/tree/encrypted-secrets.
 openmeter:
-  image: ghcr.io/nebari-dev/openmeter/openmeter:sha-c366289@sha256:a3214ada860875455d0c9eec84846c10223ec84a8ac27e10aa8feee6ad681325
+  image: ghcr.io/nebari-dev/openmeter:sha-8aca522@sha256:885d6ed7c6f60d2659285f5ebd9a787c2a7ac6d144ff91ab738b4efe08c88b1c
   api:
     resources:
       requests: {cpu: 100m, memory: 128Mi}
