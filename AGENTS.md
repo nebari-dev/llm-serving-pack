@@ -97,5 +97,7 @@ missing from the new render.
 **Examples render against the chart in the same commit.** `make
 chart-check-examples` renders each Argo CD Application's chart values with the
 local chart. It checks that the pinned chart version matches `Chart.yaml` and
-that `destination.namespace` matches the pack's namespace. A release PR that
-bumps `Chart.yaml` bumps the examples' pins with it.
+that `destination.namespace` matches the pack's namespace. A placeholder pin
+such as `"<version>"`, for an example that needs a release not yet cut, skips
+the version check. A release PR that bumps `Chart.yaml` bumps the examples'
+pins with it.
