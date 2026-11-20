@@ -28,6 +28,7 @@ spec:
           command: ["openmeter", "--address", "0.0.0.0:8888", "--config", "/etc/openmeter/config.yaml"]
           env:
             {{- include "om.storeEnv" . | nindent 12 }}
+            {{- include "om.secretEncryptionEnv" . | nindent 12 }}
           ports:
             - containerPort: 8888
           readinessProbe:
@@ -146,6 +147,7 @@ spec:
       command: ["openmeter-jobs", "--config", "/etc/openmeter/config.yaml", "llm-cost", "sync"]
       env:
         {{- include "om.storeEnv" . | nindent 8 }}
+        {{- include "om.secretEncryptionEnv" . | nindent 8 }}
       securityContext:
         {{- include "om.securityContext" . | nindent 8 }}
       volumeMounts:
