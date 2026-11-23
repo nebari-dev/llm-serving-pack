@@ -40,7 +40,10 @@ spec:
     scopes:
       {{- toYaml .Values.keyManager.nebariApp.auth.scopes | nindent 6 }}
     # The groups mapper ensures access tokens carry group claims so the
-    # key-manager can filter models by group membership. claim.name is derived
+    # key-manager can filter models by group membership. full.path follows
+    # auth.oidc.groupsClaimForm: with "path" (the default) the claim carries
+    # Keycloak group paths ("/llm"), the form NIC's realm mapper uses; with
+    # "name" it carries bare group names ("llm"). claim.name is derived
     # from the same value the key-manager reads (auth.oidc.groupsClaim, wired to
     # LLM_OIDC_GROUPS_CLAIM) so overriding the claim name can't drift the mapper
     # and the reader out of sync.
@@ -50,7 +53,7 @@ spec:
           protocolMapper: oidc-group-membership-mapper
           config:
             claim.name: {{ .Values.auth.oidc.groupsClaim | quote }}
-            full.path: "false"
+            full.path: {{ eq .Values.auth.oidc.groupsClaimForm "path" | quote }}
             id.token.claim: "true"
             access.token.claim: "true"
             userinfo.token.claim: "true"

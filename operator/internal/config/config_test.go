@@ -299,3 +299,43 @@ func TestLoadFromEnv(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadFromEnv_GroupsClaimForm pins LLM_OIDC_GROUPS_CLAIM_FORM (#232):
+// path is the default, name is the alternative for role claims, and any
+// other value fails startup rather than silently picking one.
+func TestLoadFromEnv_GroupsClaimForm(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty defaults to path", value: "", want: GroupsClaimFormPath},
+		{name: "path", value: "path", want: GroupsClaimFormPath},
+		{name: "name", value: "name", want: GroupsClaimFormName},
+		{name: "unknown value is an error", value: "fullpath", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LLM_BASE_DOMAIN", "example.com")
+			t.Setenv("LLM_EXTERNAL_GATEWAY_NAME", "external-gw")
+			t.Setenv("LLM_INTERNAL_GATEWAY_NAME", "internal-gw")
+			t.Setenv("LLM_OIDC_ISSUER_URL", "https://auth.example.com")
+			t.Setenv("LLM_OIDC_GROUPS_CLAIM_FORM", tt.value)
+
+			got, err := LoadFromEnv()
+			if tt.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "LLM_OIDC_GROUPS_CLAIM_FORM") {
+					t.Fatalf("LoadFromEnv() error = %v, want one naming LLM_OIDC_GROUPS_CLAIM_FORM", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFromEnv() unexpected error: %v", err)
+			}
+			if got.OIDCGroupsClaimForm != tt.want {
+				t.Errorf("OIDCGroupsClaimForm = %q, want %q", got.OIDCGroupsClaimForm, tt.want)
+			}
+		})
+	}
+}

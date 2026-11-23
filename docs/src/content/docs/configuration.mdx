@@ -44,6 +44,7 @@ Pass these with `--set key=value` or in a `values.yaml` override file.
 | `auth.oidc.issuerURL` | `""` | OIDC issuer URL. When empty, read from a Secret via `secretKeyRef` (the default Nebari integration path). |
 | `auth.oidc.existingSecret` | `""` | Name of the Secret containing the `issuer-url` key. Defaults to `<release-fullname>-key-manager-oidc-client`, the Secret the nebari-operator creates for the key-manager's NebariApp. Set this or `auth.oidc.issuerURL` when `keyManager.nebariApp.enabled` is false. |
 | `auth.oidc.groupsClaim` | `groups` | JWT claim name used to extract group memberships. |
+| `auth.oidc.groupsClaimForm` | `path` | How the groups claim writes its values. `path`: Keycloak group paths, as NIC's realm emits them (`/llm`); `access.groups` may name a top-level group as `llm` or `/llm`, and a nested group must be written as its path (`/org/llm`). `name`: values are compared exactly as written, for a claim that is not a group path, such as `realm_access.roles`. |
 | `auth.oidc.audience` | `""` | Expected audience value in JWT tokens. |
 
 ### Envoy AI Gateway
@@ -363,7 +364,7 @@ The operator writes these fields to `status`; they are read-only.
 | `status.endpoints.external` | string | Actual external endpoint URL once provisioned. |
 | `status.endpoints.internal` | string | Actual internal endpoint URL once provisioned. |
 | `status.modelSize` | string | Actual model size after download. |
-| `status.conditions` | []Condition | Standard Kubernetes conditions (type, status, reason, message). |
+| `status.conditions` | []Condition | `SecurityPoliciesReady`, `InferencePoolReady`, `ExternalEndpointReady` and `InternalEndpointReady` (type, status, reason, message). A failed gateway apply turns `Ready` into `Degraded`; see [Architecture](/architecture/#dual-endpoint-auth). |
 
 ---
 

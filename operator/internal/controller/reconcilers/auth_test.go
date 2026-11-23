@@ -566,8 +566,8 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 					t.Errorf("expected valueType=StringArray, got %v", claim["valueType"])
 				}
 				values := claim["values"].([]interface{})
-				if len(values) != 2 || values[0] != "ml-team" || values[1] != "platform" {
-					t.Errorf("expected values=[ml-team platform], got %v", values)
+				if len(values) != 2 || values[0] != "/ml-team" || values[1] != "/platform" {
+					t.Errorf("expected values=[/ml-team /platform] (path form, #232), got %v", values)
 				}
 			},
 		},
@@ -737,6 +737,45 @@ func TestBuildAuthResources(t *testing.T) { //nolint:gocyclo // table-driven tes
 			}
 			result, err := BuildAuthResources(tt.model, tt.cfg, tt.clientIDs, creds)
 			tt.check(t, result, err)
+		})
+	}
+}
+
+// TestBuildGroupAuthorization_GroupsClaimForm pins #232: NIC's Keycloak puts
+// full group paths in the groups claim ("/llm"), and Envoy Gateway compares
+// claim values exactly, so in path form the allow-list must hold paths. In
+// name form (a role claim) the values stay as written.
+func TestBuildGroupAuthorization_GroupsClaimForm(t *testing.T) {
+	tests := []struct {
+		name   string
+		form   string
+		groups []string
+		want   []interface{}
+	}{
+		{name: "path: bare names become paths", form: config.GroupsClaimFormPath, groups: []string{"llm"}, want: []interface{}{"/llm"}},
+		{name: "path: paths are kept", form: config.GroupsClaimFormPath, groups: []string{"/org/team-a"}, want: []interface{}{"/org/team-a"}},
+		{name: "path: the two spellings of one group collapse, sorted", form: config.GroupsClaimFormPath, groups: []string{"platform", "llm", "/llm"}, want: []interface{}{"/llm", "/platform"}},
+		{name: "path: a group with no segments is dropped", form: config.GroupsClaimFormPath, groups: []string{"/", "llm"}, want: []interface{}{"/llm"}},
+		{name: "unset form means path", form: "", groups: []string{"llm"}, want: []interface{}{"/llm"}},
+		{name: "name: values are kept as written", form: config.GroupsClaimFormName, groups: []string{"ops", "/llm"}, want: []interface{}{"ops", "/llm"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authz := buildGroupAuthorization(tt.groups, "groups", tt.form)
+			rule := authz["rules"].([]interface{})[0].(map[string]interface{})
+			claim := rule["principal"].(map[string]interface{})["jwt"].(map[string]interface{})["claims"].([]interface{})[0].(map[string]interface{})
+			got := claim["values"].([]interface{})
+			if len(got) != len(tt.want) {
+				t.Fatalf("values = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("values = %v, want %v", got, tt.want)
+				}
+			}
+			if authz["defaultAction"] != authzActionDeny {
+				t.Errorf("defaultAction = %v, want %v", authz["defaultAction"], authzActionDeny)
+			}
 		})
 	}
 }

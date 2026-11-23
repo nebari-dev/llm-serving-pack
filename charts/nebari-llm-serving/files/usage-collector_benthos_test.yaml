@@ -53,6 +53,39 @@ tests:
         - json_contains: {id: "req-2:input", subject: sub-bob, data: {tokens: 3}}
         - json_contains: {id: "req-2:output", subject: sub-bob, data: {tokens: 2}}
 
+  - name: Keycloak group paths from the key's owner bill the team by its group name (#232)
+    target_processors: /pipeline/processors
+    mocks:
+      /pipeline/processors/1/branch/processors/0:
+        mapping: 'root = {"clientId": content().string(), "subject": "sub-alice", "username": "alice", "groups": ["/llm-users", "/team-a"]}'
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-paths-1", "start_time": "2026-01-15T10:00:00Z",
+            "route": "httproute/llm-system/bedrock-external/rule/0/match/0/llm_example_com",
+            "client_id": "user-alice-bedrock-0123-1", "model": "m",
+            "input_tokens": "3", "cached_input_tokens": "0", "cache_creation_input_tokens": "0",
+            "output_tokens": "2", "response_code": "200"}}}
+    output_batches:
+      - - json_contains: {id: req-paths-1, subject: sub-alice, data: {access_path: api_key, user: alice, team: team-a}}
+        - json_contains: {id: "req-paths-1:input", data: {team: team-a}}
+        - json_contains: {id: "req-paths-1:output", data: {team: team-a}}
+
+  - name: A nested group path in the verified token bills the team by its last segment (#232)
+    target_processors: /pipeline/processors
+    input_batch:
+      - content: |
+          {"record": {"attributes": {
+            "request_id": "req-paths-2", "start_time": "2026-01-15T10:00:01Z",
+            "route": "httproute/llm-system/bedrock-internal/rule/0/match/0/llm-internal_example_com",
+            "auth_user": "bob", "auth_subject": "sub-bob", "auth_groups": "WyIvbGxtIiwiL29yZy90ZWFtLWIiXQ==", "model": "m",
+            "input_tokens": "3", "cached_input_tokens": "0", "cache_creation_input_tokens": "0",
+            "output_tokens": "2", "response_code": "200"}}}
+    output_batches:
+      - - json_contains: {id: req-paths-2, subject: sub-bob, data: {access_path: jwt, user: bob, team: team-b}}
+        - json_contains: {id: "req-paths-2:input", data: {team: team-b}}
+        - json_contains: {id: "req-paths-2:output", data: {team: team-b}}
+
   - name: A key the key-manager does not know is billed to the key itself, never to a forged header
     target_processors: /pipeline/processors
     mocks:

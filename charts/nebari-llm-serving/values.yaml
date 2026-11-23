@@ -71,6 +71,14 @@ auth:
     # NebariApp is off.
     existingSecret: ""
     groupsClaim: groups
+    # groupsClaimForm - how the groups claim writes its values, and so how
+    # access.groups is compared with them. "path" (default): Keycloak group
+    # paths, as NIC's realm emits them ("/llm", "/org/team-a"); "llm" and
+    # "/llm" in access.groups both mean the top-level group llm, and a nested
+    # group must be written as its path. "name": values compared exactly as
+    # written, for a claim that is not a group path, such as
+    # realm_access.roles.
+    groupsClaimForm: path
     audience: ""
 
 envoyAIGateway:

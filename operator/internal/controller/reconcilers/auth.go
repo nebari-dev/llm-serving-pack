@@ -2,6 +2,7 @@ package reconcilers
 
 import (
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -299,7 +300,7 @@ func buildJWTSecurityPolicy(name, namespace string, labels map[string]interface{
 	// The webhooks reject CRs where Public is false and Groups is empty, so
 	// we never render an Allow rule with no values.
 	if !public {
-		spec["authorization"] = buildGroupAuthorization(groups, cfg.OIDCGroupsClaim)
+		spec["authorization"] = buildGroupAuthorization(groups, cfg.OIDCGroupsClaim, cfg.OIDCGroupsClaimForm)
 	}
 
 	return &unstructured.Unstructured{
@@ -324,9 +325,20 @@ func isPublic(model *llmv1alpha1.LLMModel) bool {
 // buildGroupAuthorization returns an Envoy Gateway Authorization config that
 // allows requests whose JWT groups claim contains one of the listed groups and
 // denies everything else by default.
-func buildGroupAuthorization(groups []string, groupsClaim string) map[string]interface{} {
-	values := make([]interface{}, 0, len(groups))
-	for _, g := range groups {
+//
+// Envoy Gateway compares claim values exactly. In path form (the default) the
+// groups are written as Keycloak paths, the form NIC's realm puts in the
+// groups claim, so "llm" and "/llm" both allow the claim value "/llm". In name
+// form they are used as written, for a claim such as realm_access.roles.
+func buildGroupAuthorization(groups []string, groupsClaim, groupsClaimForm string) map[string]interface{} {
+	var allowed []string
+	if groupsClaimForm == config.GroupsClaimFormName {
+		allowed = groups
+	} else {
+		allowed = groupPaths(groups)
+	}
+	values := make([]interface{}, 0, len(allowed))
+	for _, g := range allowed {
 		values = append(values, g)
 	}
 	return map[string]interface{}{
@@ -350,4 +362,34 @@ func buildGroupAuthorization(groups []string, groupsClaim string) map[string]int
 			},
 		},
 	}
+}
+
+// groupPaths converts access groups to the full-path form Keycloak puts in the
+// groups claim with full.path=true: a leading "/" is added and empty segments
+// dropped. Entries with no segments are dropped (the admission webhooks reject
+// them), and the result is deduplicated and sorted. The key manager applies
+// the same rule (shared/oidc GroupForm), as does the nebari-operator for
+// NebariApp groups.
+func groupPaths(groups []string) []string {
+	seen := make(map[string]struct{}, len(groups))
+	out := make([]string, 0, len(groups))
+	for _, g := range groups {
+		var segs []string
+		for _, s := range strings.Split(strings.TrimSpace(g), "/") {
+			if s != "" {
+				segs = append(segs, s)
+			}
+		}
+		if len(segs) == 0 {
+			continue
+		}
+		p := "/" + strings.Join(segs, "/")
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }

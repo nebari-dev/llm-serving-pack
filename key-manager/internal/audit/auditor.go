@@ -9,6 +9,7 @@ import (
 
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/models"
 	"github.com/nebari-dev/nebari-llm-serving-pack/key-manager/internal/secrets"
+	"github.com/nebari-dev/nebari-llm-serving-pack/shared/oidc"
 )
 
 // UserGroupsLookup returns the current OIDC groups for a username.
@@ -29,21 +30,25 @@ type KeyManager interface {
 // Auditor periodically checks API keys and revokes those whose creators
 // no longer have group access to the model.
 type Auditor struct {
-	models   ModelLister
-	keys     KeyManager
-	lookup   UserGroupsLookup
-	interval time.Duration
-	logger   *slog.Logger
+	models    ModelLister
+	keys      KeyManager
+	lookup    UserGroupsLookup
+	groupForm oidc.GroupForm
+	interval  time.Duration
+	logger    *slog.Logger
 }
 
-// NewAuditor creates a new Auditor.
-func NewAuditor(models ModelLister, keys KeyManager, lookup UserGroupsLookup, interval time.Duration, logger *slog.Logger) *Auditor {
+// NewAuditor creates a new Auditor. groupForm says how the user's groups are
+// written, and so how they are compared with each model's access groups; it
+// must match the form the key manager's Watcher uses.
+func NewAuditor(models ModelLister, keys KeyManager, lookup UserGroupsLookup, groupForm oidc.GroupForm, interval time.Duration, logger *slog.Logger) *Auditor {
 	return &Auditor{
-		models:   models,
-		keys:     keys,
-		lookup:   lookup,
-		interval: interval,
-		logger:   logger,
+		models:    models,
+		keys:      keys,
+		lookup:    lookup,
+		groupForm: groupForm,
+		interval:  interval,
+		logger:    logger,
 	}
 }
 
@@ -86,9 +91,13 @@ func (a *Auditor) RunOnce(ctx context.Context) error {
 			continue
 		}
 
+		// Both sides are normalized to the group form, so in path form a
+		// model's "llm" matches the "/llm" a Keycloak userinfo response carries.
 		modelGroupSet := make(map[string]struct{}, len(model.Groups))
 		for _, g := range model.Groups {
-			modelGroupSet[g] = struct{}{}
+			if n := a.groupForm.Normalize(g); n != "" {
+				modelGroupSet[n] = struct{}{}
+			}
 		}
 
 		for _, key := range keys {
@@ -104,7 +113,7 @@ func (a *Auditor) RunOnce(ctx context.Context) error {
 				continue
 			}
 
-			if hasOverlap(userGroups, modelGroupSet) {
+			if hasOverlap(userGroups, modelGroupSet, a.groupForm) {
 				// User still has access; nothing to do.
 				continue
 			}
@@ -135,10 +144,11 @@ func (a *Auditor) RunOnce(ctx context.Context) error {
 	return joinErrors(errs)
 }
 
-// hasOverlap returns true if any element in userGroups appears in modelGroupSet.
-func hasOverlap(userGroups []string, modelGroupSet map[string]struct{}) bool {
+// hasOverlap returns true if any element in userGroups, normalized to form,
+// appears in modelGroupSet.
+func hasOverlap(userGroups []string, modelGroupSet map[string]struct{}, form oidc.GroupForm) bool {
 	for _, g := range userGroups {
-		if _, ok := modelGroupSet[g]; ok {
+		if _, ok := modelGroupSet[form.Normalize(g)]; ok {
 			return true
 		}
 	}
