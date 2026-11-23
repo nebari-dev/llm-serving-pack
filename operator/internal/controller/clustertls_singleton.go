@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -34,6 +35,11 @@ import (
 // state it makes a handful of get requests and no writes), so a slow tick
 // is fine; this is the backstop in case we miss a Gateway update event.
 const defaultClusterTLSResyncInterval = 5 * time.Minute
+
+// defaultClusterTLSRetryInterval is the first retry delay after a failed
+// shared-TLS reconcile. Each further failure doubles it, up to the resync
+// interval, so a persistent error does not log every few seconds forever.
+const defaultClusterTLSRetryInterval = 10 * time.Second
 
 // ClusterTLSSingleton is a manager.Runnable that reconciles cluster-wide
 // resources backing shared-hostname routing:
@@ -61,27 +67,46 @@ type ClusterTLSSingleton struct {
 	// Recorder posts Events where the operator cannot protect a shared
 	// listener's usage headers, so the problem shows on the Gateway.
 	Recorder record.EventRecorder
-	Interval time.Duration // resync cadence; 0 means use the default
+	Interval time.Duration // resync cadence; 0 or less means use the default
+	// RetryInterval is the first retry after a failed reconcile; 0 or less
+	// means defaultClusterTLSRetryInterval.
+	RetryInterval time.Duration
 
 	mu sync.Mutex // serializes Reconcile with the ClientTrafficPolicy watch
 }
 
 // Start implements manager.Runnable. It runs one reconcile immediately and
-// then on every tick until ctx is cancelled.
+// then again after Interval. A failed reconcile is retried sooner: first
+// after RetryInterval, doubling on each further failure up to Interval, and
+// back to Interval after the next success. It returns when ctx is cancelled.
 func (r *ClusterTLSSingleton) Start(ctx context.Context) error {
 	log := logf.FromContext(ctx).WithName("clustertls-singleton")
 
+	// Zero or negative means the default: a non-positive delay would make
+	// the timer fire at once and the loop spin.
 	interval := r.Interval
-	if interval == 0 {
+	if interval <= 0 {
 		interval = defaultClusterTLSResyncInterval
 	}
+	firstRetry := r.RetryInterval
+	if firstRetry <= 0 {
+		firstRetry = defaultClusterTLSRetryInterval
+	}
+	retryDelay := min(firstRetry, interval)
 
-	// Kick off an immediate reconcile; don't block Start on its outcome.
-	if err := r.Reconcile(ctx); err != nil {
-		log.Error(err, "initial shared-TLS reconcile failed; will retry on tick")
+	// reconcile runs one pass and returns how long to wait before the next.
+	reconcile := func() time.Duration {
+		if err := r.Reconcile(ctx); err != nil {
+			delay := retryDelay
+			retryDelay = min(retryDelay*2, interval)
+			log.Error(err, fmt.Sprintf("shared-TLS reconcile failed; will retry in %s", delay))
+			return delay
+		}
+		retryDelay = min(firstRetry, interval)
+		return interval
 	}
 
-	t := time.NewTicker(interval)
+	t := time.NewTimer(reconcile())
 	defer t.Stop()
 
 	for {
@@ -89,9 +114,7 @@ func (r *ClusterTLSSingleton) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-t.C:
-			if err := r.Reconcile(ctx); err != nil {
-				log.Error(err, "shared-TLS reconcile failed; will retry on next tick")
-			}
+			t.Reset(reconcile())
 		}
 	}
 }
@@ -312,35 +335,52 @@ func (r *ClusterTLSSingleton) patchGatewayListener(
 	gatewayName, gatewayNamespace, listenerName, hostname string,
 ) error {
 	log := logf.FromContext(ctx).WithName("clustertls-singleton")
-
-	gw := &unstructured.Unstructured{}
-	gw.SetGroupVersionKind(gatewayGVK())
 	key := types.NamespacedName{Name: gatewayName, Namespace: gatewayNamespace}
-	if err := r.Client.Get(ctx, key, gw); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("shared Gateway not found; skipping listener patch until it appears", "gateway", key)
+
+	// The shared Gateway has other writers (NIC's Argo app, Envoy Gateway),
+	// so an Update can lose a race with one of them. Retry on conflict, and
+	// re-read on every attempt so the merge starts from their latest write.
+	// DefaultBackoff (4 tries with sleeps of 10, 50 and 250 ms plus up to 10%
+	// jitter, about 310 ms; there is no sleep after the last try) rather than
+	// DefaultRetry: a burst of writes from another Gateway writer can outlast
+	// a few milliseconds.
+	patched := false
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		gw := &unstructured.Unstructured{}
+		gw.SetGroupVersionKind(gatewayGVK())
+		if err := r.Client.Get(ctx, key, gw); err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Info("shared Gateway not found; skipping listener patch until it appears", "gateway", key)
+				return nil
+			}
+			return fmt.Errorf("getting Gateway %s: %w", key, err)
+		}
+
+		changed, err := reconcilers.MergeHTTPSListener(
+			gw,
+			listenerName,
+			hostname,
+			r.sharedSecretName(),
+			r.Config.OperatorNamespace,
+		)
+		if err != nil {
+			return fmt.Errorf("merging listener: %w", err)
+		}
+		if !changed {
 			return nil
 		}
-		return fmt.Errorf("getting Gateway %s: %w", key, err)
-	}
-
-	changed, err := reconcilers.MergeHTTPSListener(
-		gw,
-		listenerName,
-		hostname,
-		r.sharedSecretName(),
-		r.Config.OperatorNamespace,
-	)
-	if err != nil {
-		return fmt.Errorf("merging listener: %w", err)
-	}
-	if !changed {
+		if err := r.Client.Update(ctx, gw); err != nil {
+			return fmt.Errorf("updating Gateway %s: %w", key, err)
+		}
+		patched = true
 		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if err := r.Client.Update(ctx, gw); err != nil {
-		return fmt.Errorf("updating Gateway %s: %w", key, err)
+	if patched {
+		log.Info("patched Gateway listener", "gateway", key, "listener", listenerName, "hostname", hostname)
 	}
-	log.Info("patched Gateway listener", "gateway", key, "listener", listenerName, "hostname", hostname)
 	return nil
 }
 
