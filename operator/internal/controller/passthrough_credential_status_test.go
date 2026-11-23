@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -41,6 +42,7 @@ func (c *credentialStatusTestClient) Get(ctx context.Context, key client.ObjectK
 
 func newCredentialStatusTestReconciler(t *testing.T, pm *llmv1alpha1.PassthroughModel, objects ...client.Object) (*PassthroughModelReconciler, *credentialStatusTestClient) {
 	t.Helper()
+	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	pm.UID = "credential-status-test"
 	pm.Generation = 1
 	pm.Finalizers = []string{finalizerName}
@@ -50,10 +52,10 @@ func newCredentialStatusTestReconciler(t *testing.T, pm *llmv1alpha1.Passthrough
 	}
 	c := &credentialStatusTestClient{
 		Client: fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(pm).
-			WithObjects(append([]client.Object{pm}, objects...)...).Build(),
+			WithObjects(append(append([]client.Object{pm}, objects...), seedAcceptedPassthroughRoutes(t, pm, t0)...)...).Build(),
 		credentialKey: client.ObjectKey{Name: pm.Name + "-provider-credential", Namespace: pm.Namespace},
 	}
-	return &PassthroughModelReconciler{Client: c, Scheme: scheme, Config: testConfig()}, c
+	return &PassthroughModelReconciler{Client: c, Scheme: scheme, Config: testConfig(), Clock: clocktesting.NewFakePassiveClock(t0)}, c
 }
 
 func readCredentialStatusTestModel(t *testing.T, c client.Reader, key client.ObjectKey) *llmv1alpha1.PassthroughModel {

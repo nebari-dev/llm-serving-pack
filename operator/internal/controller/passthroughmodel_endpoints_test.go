@@ -119,7 +119,7 @@ func TestProviderCleanupUsesBoundedPolling(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(pm).WithObjects(pm, route, policy, httpRoute).Build()
+			c := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(pm).WithObjects(append([]client.Object{pm, route, policy, httpRoute}, seedAcceptedPassthroughRoutes(t, pm, time.Now())...)...).Build()
 			r := &PassthroughModelReconciler{Client: c, Scheme: s, Config: testConfig()}
 			assertWaiting := func() {
 				t.Helper()

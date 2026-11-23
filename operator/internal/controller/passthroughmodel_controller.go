@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -41,6 +42,9 @@ import (
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/controller/reconcilers"
 	"github.com/nebari-dev/nebari-llm-serving-pack/operator/internal/provider"
 )
+
+// providerCleanupRequeue is how often a disabled endpoint's cleanup is polled.
+const providerCleanupRequeue = 15 * time.Second
 
 // Condition types reported only on PassthroughModel status. The gateway
 // conditions it shares with LLMModel are in conditions.go.
@@ -61,6 +65,7 @@ type PassthroughModelReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Config *config.OperatorConfig
+	Clock  clock.PassiveClock // nil = real clock
 }
 
 // +kubebuilder:rbac:groups=llm.nebari.dev,resources=passthroughmodels,verbs=get;list;watch;create;update;patch;delete
@@ -137,6 +142,7 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// reconcile is requeued so the resources are retried once the CRDs exist
 	// (the same surface-and-requeue convention as the LLMModel reconciler).
 	cleanupPending := false
+	clk := realClockIfNil(r.Clock)
 	backendErr := r.applyAll(ctx, log, pm,
 		resources.Backend,
 		resources.BackendTLSPolicy,
@@ -148,7 +154,9 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	externalEnabled := resources.ExternalRoute != nil
 	if externalEnabled {
 		externalErr := r.applyAll(ctx, log, pm, resources.ExternalRoute, resources.ExternalSecurityPolicy)
-		conditions = append(conditions, conditionFor(CondExternalEndpointReady, externalErr, "external route and apiKeyAuth policy applied"))
+		conditions = append(conditions, endpointCondition(ctx, r.Client, clk, CondExternalEndpointReady,
+			meta.FindStatusCondition(pm.Status.Conditions, CondExternalEndpointReady), externalErr,
+			resources.ExternalRoute, "external route and apiKeyAuth policy applied"))
 	} else {
 		pending, err := r.removeEndpoint(ctx, pm, "external")
 		cleanupPending = cleanupPending || pending
@@ -162,7 +170,9 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	internalEnabled := resources.InternalRoute != nil
 	if internalEnabled {
 		internalErr := r.applyAll(ctx, log, pm, resources.InternalRoute, resources.InternalSecurityPolicy)
-		conditions = append(conditions, conditionFor(CondInternalEndpointReady, internalErr, "internal route and JWT policy applied"))
+		conditions = append(conditions, endpointCondition(ctx, r.Client, clk, CondInternalEndpointReady,
+			meta.FindStatusCondition(pm.Status.Conditions, CondInternalEndpointReady), internalErr,
+			resources.InternalRoute, "internal route and JWT policy applied"))
 	} else {
 		pending, err := r.removeEndpoint(ctx, pm, "internal")
 		cleanupPending = cleanupPending || pending
@@ -187,6 +197,9 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// endpoint is still not usable, so the phase reads Error.
 			phase = llmv1alpha1.PassthroughPhaseError
 			crdPending = true
+		case reasonRouteNotAccepted:
+			// The Gateway did not accept the route, so the endpoint serves nothing.
+			phase = llmv1alpha1.PassthroughPhaseError
 		}
 	}
 
@@ -194,20 +207,27 @@ func (r *PassthroughModelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
-	if crdPending {
-		return ctrl.Result{RequeueAfter: gatewayCRDRequeue}, nil
-	}
-	if phase == llmv1alpha1.PassthroughPhaseError {
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
-	}
-	if cleanupPending {
-		return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
-	}
-	if meta.IsStatusConditionPresentAndEqual(conditions, CondUpstreamCredentialResolved, metav1.ConditionUnknown) {
+	var requeue time.Duration
+	switch {
+	case crdPending:
+		requeue = gatewayCRDRequeue
+	case phase == llmv1alpha1.PassthroughPhaseError:
+		requeue = time.Minute
+	case cleanupPending:
+		requeue = providerCleanupRequeue
+	case meta.IsStatusConditionPresentAndEqual(conditions, CondUpstreamCredentialResolved, metav1.ConditionUnknown):
 		// Retry the informational probe without blocking resource provisioning.
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
+		requeue = time.Minute
 	}
-	return ctrl.Result{}, nil
+	// The chain checks the Error phase before cleanup, so a RouteNotAccepted
+	// endpoint would slow a disabled endpoint's cleanup poll without the
+	// cleanup term here (R2-F3). gatewayRequeue adds the route-acceptance
+	// intervals.
+	var cleanup time.Duration
+	if cleanupPending {
+		cleanup = providerCleanupRequeue
+	}
+	return ctrl.Result{RequeueAfter: shortestRequeue(requeue, gatewayRequeue(conditions), cleanup)}, nil
 }
 
 // reconcileDelete cleans up the auth resources (no owner references) and
