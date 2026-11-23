@@ -149,6 +149,7 @@ The `openmeter` values configure the `nebari-openmeter` subchart; every key unde
 | `operator.image.repository` | `ghcr.io/nebari-dev/llm-serving-pack/operator` | Operator container image repository. |
 | `operator.image.tag` | `""` | Image tag. Defaults to `.Chart.AppVersion` when empty. Override only when testing a specific build. |
 | `operator.image.pullPolicy` | `Always` | Image pull policy. |
+| `operator.webhook.clusterIssuer` | `nebari-ca-issuer` | The cert-manager `ClusterIssuer` that signs the operator's admission webhook serving certificate. NIC creates `nebari-ca-issuer` in releases that include [nebari-infrastructure-core#787](https://github.com/nebari-dev/nebari-infrastructure-core/pull/787). On a cluster without it, set this to an existing `ClusterIssuer`, for example a self-signed one named `selfsigned-issuer`. Must not be empty: the chart will not render. |
 
 ### Defaults (cluster-wide fallbacks for LLMModel resources)
 

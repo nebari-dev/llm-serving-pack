@@ -11,5 +11,8 @@ spec:
     - {{ include "nebari-llm-serving.fullname" . }}-webhook-service.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc
     - {{ include "nebari-llm-serving.fullname" . }}-webhook-service.{{ include "nebari-llm-serving.operatorNamespace" . }}.svc.cluster.local
   issuerRef:
-    name: selfsigned-issuer
+    {{- /* The dig fallback covers values reused from releases without
+    operator.webhook. Keep it in sync with operator.webhook.clusterIssuer in
+    values.yaml. */}}
+    name: {{ required "operator.webhook.clusterIssuer is required: name an existing cert-manager ClusterIssuer to sign the operator webhook certificate" (dig "webhook" "clusterIssuer" "nebari-ca-issuer" .Values.operator) | quote }}
     kind: ClusterIssuer

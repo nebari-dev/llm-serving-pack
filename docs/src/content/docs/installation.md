@@ -30,6 +30,7 @@ This runbook starts from a NIC-foundational Nebari cluster.
 > next `nic deploy --regen-apps` silently reverts.
 
 [nic499]: https://github.com/nebari-dev/nebari-infrastructure-core/pull/499
+[nic787]: https://github.com/nebari-dev/nebari-infrastructure-core/pull/787
 
 NIC ships, out of the box, the components below; if any are missing or
 in a different namespace on your cluster, adjust the commands
@@ -71,6 +72,24 @@ In addition you need:
   ships `letsencrypt-issuer`, which is the chart's default
   `platform.tls.clusterIssuer`. If your cluster uses a different
   issuer, set it in section 8.
+- **A ClusterIssuer for the operator's webhook certificate.** The
+  chart's `operator.webhook.clusterIssuer` defaults to
+  `nebari-ca-issuer`, NIC's internal CA for in-cluster and webhook
+  certificates. NIC creates it in releases that include
+  [nebari-infrastructure-core#787][nic787]. Without it, the operator
+  pod stays in `ContainerCreating` because its webhook certificate is
+  never issued. On a cluster without `nebari-ca-issuer`, set
+  `operator.webhook.clusterIssuer` in section 8 to an existing
+  ClusterIssuer, for example a self-signed one:
+
+  ```yaml
+  apiVersion: cert-manager.io/v1
+  kind: ClusterIssuer
+  metadata:
+    name: selfsigned-issuer
+  spec:
+    selfSigned: {}
+  ```
 - **A cluster-config git repo** that ArgoCD's AppProject is configured
   to read from. New `Application` manifests in this runbook will be
   committed there, under a path of your own choosing (shown throughout
@@ -150,7 +169,9 @@ kubectl get clusterissuer
 
 Expected: at least one ClusterIssuer with `READY=True`. Capture its
 exact name; you will set `platform.tls.clusterIssuer` to that value in
-section 8.
+section 8. Also check for `nebari-ca-issuer` with `READY=True`; if it
+is not listed, pick the ClusterIssuer you will set as
+`operator.webhook.clusterIssuer` in section 8 (see section 1).
 
 ### 2.5 Confirm the Gateway HTTPS:443 listener has a usable cert
 
@@ -1073,6 +1094,13 @@ spec:
           tls:
             # NIC's ClusterIssuer, and the chart default.
             clusterIssuer: letsencrypt-issuer
+        operator:
+          webhook:
+            # Signs the operator's webhook certificate. The default,
+            # nebari-ca-issuer, exists on NIC releases that include
+            # nebari-infrastructure-core#787. On other clusters, name
+            # an existing ClusterIssuer here (see section 1).
+            clusterIssuer: nebari-ca-issuer
         defaults:
           storage:
             # NIC's default StorageClass is longhorn; the vLLM model
@@ -1111,6 +1139,12 @@ internal) onto NIC's existing `nebari-gateway`, each pinned to a
 different hostname (`llm.<baseDomain>` and
 `llm-internal.<baseDomain>`) and a different SecurityPolicy
 (API-key-protected on external, JWT-protected on internal).
+
+The `operator.webhook.clusterIssuer` value names the ClusterIssuer
+that signs the operator's admission webhook certificate
+(`nebari-llm-serving-webhook-cert`). Leave it at `nebari-ca-issuer`
+when your cluster has that issuer; otherwise set it to the issuer you
+picked in section 2.4. An empty value stops the chart from rendering.
 
 If you want to split traffic across two physical Gateways instead
 (e.g. one with a public LB, one with an internal-only LB), point
