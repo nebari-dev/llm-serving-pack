@@ -11,7 +11,7 @@ gateway access log --> usage collector (LLM serving pack) --> OpenMeter (this pa
 The chart (`nebari-openmeter`) deploys:
 
 - **OpenMeter** v1.0.0-beta.234, built by
-  [nebari-dev/openmeter](https://github.com/nebari-dev/openmeter/tree/encrypted-secrets)
+  [nebari-dev/openmeter](https://github.com/nebari-dev/openmeter/tree/nebari/v1.0.0-beta.234)
   with app secrets encrypted at rest (see [Stripe](#stripe)): the API, which
   takes usage events and answers queries, and the sink worker, which moves
   events from Kafka into ClickHouse.

@@ -162,6 +162,16 @@ random bytes as hex (`openssl rand -hex 32`) under `secret-encryption-key`.
 Back it up with the database: without it, the stored Stripe secrets can't be
 read and the Stripe app has to be set up again.
 
+A Stripe app installed before encryption keeps its secrets in plaintext until
+it is installed again. Changing its API key encrypts only the API key, not the
+webhook secret. To list apps with a secret still in plaintext, run this in the
+OpenMeter database:
+
+```sql
+SELECT id FROM app_stripes
+WHERE api_key NOT LIKE 'enc:v1:%' OR webhook_secret NOT LIKE 'enc:v1:%';
+```
+
 The sink worker drops repeated events by the ids it keeps in Redis, for
 `openmeter.openmeter.dedupeExpiration` (32 days). That is best effort, within
 what Redis still remembers. Redis writes every id to an append-only file on
