@@ -60,14 +60,47 @@ func (c *httpRouteFaultClient) Get(ctx context.Context, key client.ObjectKey, ob
 	return c.Client.Get(ctx, key, obj, opts...)
 }
 
+// securityPolicyKind is the Kind policyWriteFaultClient matches.
+const securityPolicyKind = "SecurityPolicy"
+
+// policyWriteFaultClient fails Creates and Updates of the SecurityPolicy
+// named failName with err while err is set.
+type policyWriteFaultClient struct {
+	client.Client
+	failName string
+	err      error
+}
+
+func (c *policyWriteFaultClient) failing(obj client.Object) bool {
+	return c.err != nil && obj.GetName() == c.failName && obj.GetObjectKind().GroupVersionKind().Kind == securityPolicyKind
+}
+
+func (c *policyWriteFaultClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if c.failing(obj) {
+		return c.err
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func (c *policyWriteFaultClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if c.failing(obj) {
+		return c.err
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
 // passthroughAcceptanceEnv is the state one TestPassthroughRouteAcceptance
 // scenario runs against.
 type passthroughAcceptanceEnv struct {
-	t        *testing.T
-	c        *httpRouteFaultClient
-	clk      *clocktesting.FakePassiveClock
-	internal *unstructured.Unstructured // the internal AIGatewayRoute as built
-	external *unstructured.Unstructured // the external AIGatewayRoute as built, nil when disabled
+	t      *testing.T
+	c      *httpRouteFaultClient
+	policy *policyWriteFaultClient // wraps c; the reconciler's client
+	// externalPolicy is the external SecurityPolicy's name, empty when the
+	// external endpoint is disabled.
+	externalPolicy string
+	clk            *clocktesting.FakePassiveClock
+	internal       *unstructured.Unstructured // the internal AIGatewayRoute as built
+	external       *unstructured.Unstructured // the external AIGatewayRoute as built, nil when disabled
 }
 
 // setHTTPRoute creates or replaces the internal HTTPRoute with a plain Update
@@ -126,6 +159,9 @@ func TestPassthroughRouteAcceptance(t *testing.T) {
 		e.setHTTPRoute(httpRouteFor(e.internal, t0, 2, parentEntry(e.internal, metav1.ConditionTrue, "Accepted", "Route is accepted", 1)))
 	}
 	failReads := func(e *passthroughAcceptanceEnv) { e.c.err = forbidden }
+	failPolicyWrites := func(e *passthroughAcceptanceEnv) { e.policy.err = errors.New("policy write rejected") }
+	allowPolicyWrites := func(e *passthroughAcceptanceEnv) { e.policy.err = nil }
+	acceptedExternal := func(e *passthroughAcceptanceEnv) { e.setHTTPRoute(acceptedHTTPRouteFor(e.external, t0)) }
 
 	pending := func(requeue time.Duration) acceptanceStep {
 		return acceptanceStep{
@@ -249,6 +285,63 @@ func TestPassthroughRouteAcceptance(t *testing.T) {
 			},
 		},
 		{
+			// The external endpoint reads its own previous condition: with the
+			// internal one passed instead, or none, it would stay pending.
+			name:            "external not accepted while internal is",
+			externalEnabled: true,
+			steps: []acceptanceStep{
+				with(ready, func(s *acceptanceStep) {
+					s.mutate = accepted
+					s.wantPhase = llmv1alpha1.PassthroughPhaseReady
+					s.wantRequeue = 5 * time.Second
+					s.wantExternal = &metav1.Condition{Status: metav1.ConditionUnknown, Reason: reasonRoutePending}
+				}),
+				with(ready, func(s *acceptanceStep) {
+					s.advance = 3 * time.Minute
+					s.wantPhase = llmv1alpha1.PassthroughPhaseError
+					s.wantRequeue = time.Minute
+					s.wantExternal = &metav1.Condition{Status: metav1.ConditionFalse, Reason: reasonRouteNotAccepted}
+				}),
+				with(ready, func(s *acceptanceStep) {
+					s.mutate = acceptedExternal
+					s.wantExternal = &metav1.Condition{Status: metav1.ConditionTrue, Reason: reasonApplied}
+				}),
+			},
+		},
+		{
+			// A failed policy apply is reported even when the route is accepted.
+			name: "policy apply fails on an accepted route",
+			steps: []acceptanceStep{
+				{
+					mutate:     func(e *passthroughAcceptanceEnv) { accepted(e); failPolicyWrites(e) },
+					wantStatus: metav1.ConditionFalse, wantReason: reasonApplyFailed, wantContains: "policy write rejected",
+					wantPhase: llmv1alpha1.PassthroughPhaseError, wantRequeue: time.Minute,
+				},
+				with(ready, func(s *acceptanceStep) { s.mutate = allowPolicyWrites }),
+			},
+		},
+		{
+			name:            "external policy apply fails on an accepted route",
+			externalEnabled: true,
+			steps: []acceptanceStep{
+				with(ready, func(s *acceptanceStep) {
+					s.mutate = func(e *passthroughAcceptanceEnv) {
+						accepted(e)
+						acceptedExternal(e)
+						e.policy.failName = e.externalPolicy
+						failPolicyWrites(e)
+					}
+					s.wantPhase = llmv1alpha1.PassthroughPhaseError
+					s.wantRequeue = time.Minute
+					s.wantExternal = &metav1.Condition{Status: metav1.ConditionFalse, Reason: reasonApplyFailed}
+				}),
+				with(ready, func(s *acceptanceStep) {
+					s.mutate = allowPolicyWrites
+					s.wantExternal = &metav1.Condition{Status: metav1.ConditionTrue, Reason: reasonApplied}
+				}),
+			},
+		},
+		{
 			name: "stored LTT from fake clock (R2-F2)",
 			steps: []acceptanceStep{
 				with(pending(5*time.Second), func(s *acceptanceStep) { s.wantLTT = t0 }),
@@ -300,7 +393,11 @@ func TestPassthroughRouteAcceptance(t *testing.T) {
 				internal: resources.InternalRoute,
 				external: resources.ExternalRoute,
 			}
-			r := &PassthroughModelReconciler{Client: env.c, Scheme: scheme, Config: testConfig(), Clock: clk}
+			env.policy = &policyWriteFaultClient{Client: env.c, failName: resources.InternalSecurityPolicy.GetName()}
+			if resources.ExternalSecurityPolicy != nil {
+				env.externalPolicy = resources.ExternalSecurityPolicy.GetName()
+			}
+			r := &PassthroughModelReconciler{Client: env.policy, Scheme: scheme, Config: testConfig(), Clock: clk}
 			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pm)}
 
 			var prevMessage string
