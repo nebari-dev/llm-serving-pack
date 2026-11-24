@@ -365,7 +365,7 @@ The operator writes these fields to `status`; they are read-only.
 | `status.endpoints.external` | string | Actual external endpoint URL once provisioned. |
 | `status.endpoints.internal` | string | Actual internal endpoint URL once provisioned. |
 | `status.modelSize` | string | Actual model size after download. |
-| `status.conditions` | []Condition | `SecurityPoliciesReady`, `InferencePoolReady`, `ExternalEndpointReady` and `InternalEndpointReady` (type, status, reason, message). A failed gateway apply turns `Ready` into `Degraded`; see [Architecture](/architecture/#dual-endpoint-auth). |
+| `status.conditions` | []Condition | `SecurityPoliciesReady`, `InferencePoolReady`, `ExternalEndpointReady` and `InternalEndpointReady` (type, status, reason, message). A failed gateway apply or a `RouteNotAccepted` endpoint turns `Ready` into `Degraded`; see [Architecture](/architecture/#dual-endpoint-auth). |
 
 ---
 
@@ -415,7 +415,7 @@ Same semantics as `LLMModel`: set `public: true` or list `groups` (see [spec.acc
 | `status.providerHostname` | string | Resolved upstream address (e.g. the regional Bedrock runtime endpoint). Display clients such as the key-manager and the `kubectl get` Provider column read this; only the operator resolves provider backends. |
 | `status.conditions` | []Condition | `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`, and `UpstreamCredentialResolved` for Secret-backed credentials (type, status, reason, message). |
 
-An endpoint condition is `True` only once the Gateway has accepted the route; otherwise it reads `RoutePending`, `RouteNotAccepted` (phase `Error`) or `RouteStatusUnreadable`. See [Architecture](/architecture/) and [Troubleshooting](/troubleshooting/).
+An endpoint condition is `True` only once the Gateway has accepted the route; otherwise it reads `RoutePending`, `RouteNotAccepted` (phase `Error`, or `Degraded` on an LLMModel) or `RouteStatusUnreadable`. See [Architecture](/architecture/) and [Troubleshooting](/troubleshooting/).
 
 `UpstreamCredentialResolved` is informational and does not block `Ready`.
 `SecretNotFound` means the referenced Secret is absent; `APIKeyMissing` means its

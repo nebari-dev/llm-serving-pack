@@ -279,6 +279,33 @@ kubectl rollout restart deploy -n envoy-gateway-system envoy-gateway
 
 ---
 
+## Endpoint stuck in `RoutePending` or `RouteNotAccepted`
+
+An endpoint condition is `True` only once the Gateway accepted the route. `RoutePending` (`Unknown`, rechecked every 5 seconds, phase unchanged) is normal for a few seconds while Envoy Gateway catches up. After 2 minutes without acceptance the condition becomes `RouteNotAccepted` (`False`, retried every minute), and its message says what is missing, with Envoy Gateway's reason when it gave one. The phase becomes `Error` on a PassthroughModel and `Degraded` on an LLMModel that was `Ready`. While an LLMModel's `SecurityPoliciesReady` is pending, the recheck runs every 15 seconds. Read the condition, then the route's status, and list the Gateways:
+
+```bash
+kubectl -n nebari-llm-serving-system get llmmodel <name> \
+  -o jsonpath='{range .status.conditions[*]}{.type}={.status} {.reason}: {.message}{"\n"}{end}'
+# for a PassthroughModel use: get passthroughmodel <name>
+kubectl -n nebari-llm-serving-system get httproute <name>-<endpoint> -o jsonpath='{.status.parents}'
+kubectl get gateway -A
+```
+
+`<endpoint>` is `external` or `internal`. Match the `RouteNotAccepted` message:
+
+| Message starts with | Meaning | Check |
+|---|---|---|
+| `AI Gateway has not generated HTTPRoute <ns>/<name>` (then `; AI Gateway: <msg>` when the AIGatewayRoute reports one) | The AIGatewayRoute exists but no HTTPRoute was created from it. | The AI Gateway controller's logs and the AIGatewayRoute's status, which the appended message quotes. |
+| `Gateway <ns>/<name> listener <section> reported no status for the route` | The HTTPRoute exists but the Gateway wrote no status for it. | That the Gateway exists and Envoy Gateway is running. |
+| `Gateway <ns>/<name> listener <section> did not accept the route: <Reason>: <Message>` | The Gateway rejected the route, for example `NoMatchingParent`. | Fix what the reason names, such as the listener. |
+| `generated HTTPRoute <ns>/<name> does not reflect the applied route or was not re-evaluated by Gateway <ns>/<name> listener <section>` | The HTTPRoute is out of date with the AIGatewayRoute, or the Gateway has not re-evaluated it after a change. | The AI Gateway and Envoy Gateway controllers' logs. |
+
+An empty `status.parents` means no Gateway reported on the route, usually because the Gateway named in `platform.gateway` does not exist. `NoMatchingParent` means the Gateway exists but has no listener with the expected name. Fix the Gateway or the chart's `platform.gateway` values and the next retry clears the condition.
+
+`RouteStatusUnreadable` (`Unknown`, retried every 15 seconds, phase unchanged on both kinds) means the operator could not read the HTTPRoute. A persistent read error other than a missing CRD, for example RBAC forbidding `get httproutes`, keeps the endpoint at `Unknown/RouteStatusUnreadable` and the phase at `Ready`. If the endpoint was already `RouteNotAccepted`, it stays `False` with `; last status read failed: <err>` appended to the message. Check the operator's RBAC for `get` on `httproutes.gateway.networking.k8s.io`.
+
+---
+
 ## External provider (PassthroughModel) not working
 
 **Upstream 401 / auth errors from an OpenAI-compatible provider.** The gateway injects the key from `spec.provider.credentialSecretName`. Inspect the credential condition first:
@@ -347,26 +374,6 @@ kubectl get crd | grep aigateway
 ```
 
 Install the AI Gateway (see [Installation](/installation/)) and the next reconcile clears the condition.
-
-**PassthroughModel endpoint stuck in `RoutePending` or `RouteNotAccepted`.** An endpoint condition is `True` only once the Gateway accepted the route. `RoutePending` (`Unknown`, rechecked every 5 seconds, phase stays `Ready`) is normal for a few seconds while Envoy Gateway catches up. After 2 minutes without acceptance the condition becomes `RouteNotAccepted` (`False`, phase `Error`, retried every minute), and its message says what is missing, with Envoy Gateway's reason when it gave one. Read the route's status and list the Gateways:
-
-```bash
-kubectl -n nebari-llm-serving-system get httproute <name>-<endpoint> -o jsonpath='{.status.parents}'
-kubectl get gateway -A
-```
-
-`<endpoint>` is `external` or `internal`. Match the `RouteNotAccepted` message:
-
-| Message starts with | Meaning | Check |
-|---|---|---|
-| `AI Gateway has not generated HTTPRoute <ns>/<name>` (then `; AI Gateway: <msg>` when the AIGatewayRoute reports one) | The AIGatewayRoute exists but no HTTPRoute was created from it. | The AI Gateway controller's logs and the AIGatewayRoute's status, which the appended message quotes. |
-| `Gateway <ns>/<name> listener <section> reported no status for the route` | The HTTPRoute exists but the Gateway wrote no status for it. | That the Gateway exists and Envoy Gateway is running. |
-| `Gateway <ns>/<name> listener <section> did not accept the route: <Reason>: <Message>` | The Gateway rejected the route, for example `NoMatchingParent`. | Fix what the reason names, such as the listener. |
-| `generated HTTPRoute <ns>/<name> does not reflect the applied route or was not re-evaluated by Gateway <ns>/<name> listener <section>` | The HTTPRoute is out of date with the AIGatewayRoute, or the Gateway has not re-evaluated it after a change. | The AI Gateway and Envoy Gateway controllers' logs. |
-
-An empty `status.parents` means no Gateway reported on the route, usually because the Gateway named in `platform.gateway` does not exist. `NoMatchingParent` means the Gateway exists but has no listener with the expected name. Fix the Gateway or the chart's `platform.gateway` values and the next retry clears the condition.
-
-`RouteStatusUnreadable` (`Unknown`, retried every 15 seconds, phase unchanged) means the operator could not read the HTTPRoute. A persistent read error other than a missing CRD, for example RBAC forbidding `get httproutes`, keeps the endpoint at `Unknown/RouteStatusUnreadable` and the phase at `Ready`. If the endpoint was already `RouteNotAccepted`, it stays `False` with `; last status read failed: <err>` appended to the message. Check the operator's RBAC for `get` on `httproutes.gateway.networking.k8s.io`.
 
 **A model id you expected to hit the provider is served locally instead.** Per-LLMModel routes match Host and `x-ai-eg-model`, so they always win over a catch-all PassthroughModel. If a declared provider model id collides with a served model name, the served model wins. Rename or remove the conflicting LLMModel, or declare the provider model under a distinct id.
 
