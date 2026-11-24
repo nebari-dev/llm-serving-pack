@@ -69,9 +69,11 @@ rules:
     resources: ["events"]
     verbs: ["create", "patch"]
   {{- end }}
-  # Observe AI Gateway-owned routes before removing endpoint authentication.
-  # get alone suffices: unstructured reads bypass the manager's cache, so no
-  # informer needs list/watch (see PassthroughModelReconciler.removeEndpoint).
+  # Read the HTTPRoutes AI Gateway generates: both reconcilers report an
+  # endpoint ready only once the Gateway accepted its route (readRouteAcceptance),
+  # and PassthroughModelReconciler.removeEndpoint observes them before removing
+  # endpoint authentication. get alone suffices: unstructured reads bypass the
+  # manager's cache, so no informer needs list/watch.
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get"]

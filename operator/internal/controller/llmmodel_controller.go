@@ -73,6 +73,7 @@ type LLMModelReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;persistentvolumeclaims;secrets;configmaps;namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get
 
 // Reconcile implements the main reconciliation loop for LLMModel resources.
 func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) { //nolint:gocyclo // sequential reconciliation steps

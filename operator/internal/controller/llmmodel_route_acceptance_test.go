@@ -47,6 +47,7 @@ func seedAcceptedLLMModelRoutes(t *testing.T, model *llmv1alpha1.LLMModel, creat
 type llmModelAcceptanceEnv struct {
 	t      *testing.T
 	base   client.Client           // the client without HTTPRoute faults
+	policy *policyFailureClient    // base, for SecurityPolicy CRD faults
 	faults []*httpRouteFaultClient // one per endpoint HTTPRoute
 	routes []*unstructured.Unstructured
 	// external is the external AIGatewayRoute as built.
@@ -269,6 +270,21 @@ func TestLLMModelRouteAcceptance(t *testing.T) {
 			},
 		},
 		{
+			// While SecurityPoliciesReady is pending the reconciler returns a
+			// flat 15 s before it consults gatewayRequeue, so RoutePending is
+			// rechecked at 15 s, not 5 s, and the phase is Degraded.
+			name: "pending policies keep the 15 s recheck",
+			steps: []llmModelAcceptanceStep{
+				with(pending(15*time.Second), func(s *llmModelAcceptanceStep) {
+					s.mutate = func(e *llmModelAcceptanceEnv) { e.policy.missing = true }
+					s.wantPhase = llmv1alpha1.PhaseDegraded
+				}),
+				with(ready, func(s *llmModelAcceptanceStep) {
+					s.mutate = func(e *llmModelAcceptanceEnv) { e.policy.missing = false; accepted(e) }
+				}),
+			},
+		},
+		{
 			name: "parent-ref change on an accepted route (R2-F1)",
 			steps: []llmModelAcceptanceStep{
 				with(ready, func(s *llmModelAcceptanceStep) { s.mutate = accepted }),
@@ -289,7 +305,7 @@ func TestLLMModelRouteAcceptance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			env := &llmModelAcceptanceEnv{t: t, base: policyClient, external: routing.ExternalRoute}
+			env := &llmModelAcceptanceEnv{t: t, base: policyClient, policy: policyClient, external: routing.ExternalRoute}
 			var c client.Client = policyClient
 			for _, route := range []*unstructured.Unstructured{routing.ExternalRoute, routing.InternalRoute} {
 				route.SetNamespace(model.Namespace)
