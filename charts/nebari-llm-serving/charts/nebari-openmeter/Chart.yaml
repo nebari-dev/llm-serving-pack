@@ -7,6 +7,7 @@ appVersion: "v1.0.0-beta.234"
 home: https://openmeter.io/
 sources:
   - https://github.com/openmeterio/openmeter
+  - https://github.com/nebari-dev/openmeter
 keywords:
   - openmeter
   - llm

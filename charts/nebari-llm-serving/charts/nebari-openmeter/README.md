@@ -10,23 +10,27 @@ gateway access log --> usage collector (LLM serving pack) --> OpenMeter (this pa
 
 The chart (`nebari-openmeter`) deploys:
 
-- **OpenMeter** v1.0.0-beta.234: the API, which takes usage events and
-  answers queries, and the sink worker, which moves events from Kafka into
-  ClickHouse.
+- **OpenMeter** v1.0.0-beta.234, built by
+  [nebari-dev/openmeter](https://github.com/nebari-dev/openmeter/tree/nebari/v1.0.0-beta.234)
+  with app secrets encrypted at rest (see [Stripe](#stripe)): the API, which
+  takes usage events and answers queries, and the sink worker, which moves
+  events from Kafka into ClickHouse.
 - **Its stores**: Kafka, ClickHouse, Redis (for dropping repeated events,
   with an append-only file) and Postgres, on persistent volumes. All are
   pinned upstream images.
   Postgres's credentials come from CloudNativePG. ClickHouse's password is
-  `clickhouse.existingSecret`, or a Secret a Job creates once with a random
-  password and never changes, so it stays put when Argo CD re-renders the
-  chart. The Job is an ordinary resource, not a hook, so the chart can
+  `clickhouse.existingSecret`, and the key OpenMeter encrypts app secrets
+  with is `openmeter.secretEncryption.existingSecret`; for each one left
+  empty, a Job creates a Secret once with a random value and never changes
+  it, so it stays put when Argo CD re-renders the chart. The Job is an ordinary resource, not a hook, so the chart can
   install into a namespace created in the same release.
 - **The meters** the collector feeds (`llm_requests`, `llm_tokens`), a
   priced feature per model resource, manual prices for models no public price
   list has, and OpenMeter's public price sync after install and daily.
 - **Two setup Jobs** from the `openmeter-setup` image (`openmeter-setup/` in
   this repository): `bootstrap` creates the features and prices after each
-  install or upgrade, and `ensure-secret` makes the ClickHouse password once.
+  install or upgrade, and `ensure-secret` makes the ClickHouse password and the encryption key
+  once.
 - **The console**: Stargate's console (`usage-console/console`) on
   `openmeter-api` (`usage-console/server/cmd/openmeter-api`), which answers
   the console's read API from OpenMeter. It keeps no data of its own.
@@ -82,6 +86,42 @@ API; route only `POST` on that one path to the API Service from outside
 (OpenMeter's API has no authentication, and the webhook checks Stripe's
 signature), and admit the gateway's proxies to the API port in a
 `NetworkPolicy`.
+
+OpenMeter keeps the Stripe app's API key and webhook secret in Postgres,
+AES-256-GCM encrypted with the key in `openmeter.secretEncryption` (stock
+OpenMeter stores them in plaintext). Back that key up with the database: a
+restored database can't use its Stripe secrets without it, and the Stripe
+app has to be set up again. A Stripe app installed with an image that stored
+them in plaintext keeps working, but its secrets stay plaintext until the app
+is installed again.
+
+## The OpenMeter fork
+
+The chart runs a fork of OpenMeter because stock OpenMeter stores the Stripe
+app's API key and webhook secret in Postgres in plaintext. The patch lives in
+[nebari-dev/openmeter](https://github.com/nebari-dev/openmeter), on branch
+`nebari/v1.0.0-beta.234`, released as tag `v1.0.0-beta.234-nebari.1`. Its
+`.github/workflows/nebari-image.yaml` runs the tests on every push to a
+`nebari/**` branch, and on a `v*-nebari.*` tag also publishes a multi-arch
+(amd64 and arm64) image to `ghcr.io/nebari-dev/openmeter` and
+`quay.io/nebari/openmeter`.
+
+To move to a new OpenMeter release:
+
+1. Create `nebari/<upstream tag>` from the upstream tag, and cherry-pick the
+   fork's commits (those on the current `nebari/` branch after its upstream
+   tag) onto it.
+2. Push the branch, and check that the tests pass.
+3. Push tag `<upstream tag>-nebari.<n>` (`n` starting at 1) to publish the
+   image.
+4. Pin the new image by digest in `openmeter.image` in `values.yaml`, and
+   bump `appVersion` in `Chart.yaml`.
+5. Move the usage collector's `benthos-collector` image to the same OpenMeter
+   version: `usage.collector.image` in `charts/nebari-llm-serving/values.yaml`
+   and `USAGE_COLLECTOR_IMAGE` in `dev/Makefile`.
+
+Drop the fork, and go back to `ghcr.io/openmeterio/openmeter`, once upstream
+OpenMeter encrypts app secrets itself.
 
 ## What the console shows
 

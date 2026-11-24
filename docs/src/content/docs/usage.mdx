@@ -155,6 +155,26 @@ re-rendering the chart never changes it. ClickHouse and OpenMeter wait for
 the Secret before they start. To manage it yourself, set `openmeter.clickhouse.existingSecret`
 to a Secret with the password under `clickhouse-password`.
 
+The key OpenMeter encrypts the Stripe app's API key and webhook secret with
+before storing them in Postgres is made the same way. To manage it yourself,
+set `openmeter.openmeter.secretEncryption.existingSecret` to a Secret with 32
+random bytes as hex (`openssl rand -hex 32`) under `secret-encryption-key`.
+On an install that already has a Stripe app, copy the key from the generated
+`<release>-openmeter-secret-encryption-key` Secret instead of making a new
+one: a different key leaves the stored Stripe secrets unreadable.
+Back it up with the database: without it, the stored Stripe secrets can't be
+read and the Stripe app has to be set up again.
+
+A Stripe app installed before encryption keeps its secrets in plaintext until
+it is installed again. Changing its API key encrypts only the API key, not the
+webhook secret. To list apps with a secret still in plaintext, run this in the
+OpenMeter database:
+
+```sql
+SELECT id FROM app_stripes
+WHERE api_key NOT LIKE 'enc:v1:%' OR webhook_secret NOT LIKE 'enc:v1:%';
+```
+
 The sink worker drops repeated events by the ids it keeps in Redis, for
 `openmeter.openmeter.dedupeExpiration` (32 days). That is best effort, within
 what Redis still remembers. Redis writes every id to an append-only file on

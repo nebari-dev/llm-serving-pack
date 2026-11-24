@@ -2,9 +2,11 @@ package kubesecret_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -69,6 +71,24 @@ func TestEnsureCreatesARandomPasswordOnce(t *testing.T) {
 	}
 	if f.auth[0] != "Bearer sa-token" {
 		t.Fatalf("authorization %q", f.auth[0])
+	}
+}
+
+// The chart's OpenMeter refuses an encryption key that isn't 32 bytes once
+// hex-decoded, so the value must be exactly 64 lowercase hex characters.
+func TestEnsureWritesA32ByteHexKey(t *testing.T) {
+	f := &fakeAPI{secrets: map[string]map[string]string{}}
+	c := kubesecret.Client{URL: f.server(t).URL, HTTP: http.DefaultClient}
+	if _, err := c.Ensure(context.Background(), "om", "enc", "secret-encryption-key"); err != nil {
+		t.Fatal(err)
+	}
+	v := f.secrets["om/enc"]["secret-encryption-key"]
+	if len(v) != 64 || v != strings.ToLower(v) {
+		t.Fatalf("key %q: want 64 lowercase hex characters", v)
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil || len(b) != 32 {
+		t.Fatalf("key %q: decodes to %d bytes, err %v; want 32", v, len(b), err)
 	}
 }
 
