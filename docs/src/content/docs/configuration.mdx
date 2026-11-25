@@ -415,6 +415,8 @@ Same semantics as `LLMModel`: set `public: true` or list `groups` (see [spec.acc
 | `status.providerHostname` | string | Resolved upstream address (e.g. the regional Bedrock runtime endpoint). Display clients such as the key-manager and the `kubectl get` Provider column read this; only the operator resolves provider backends. |
 | `status.conditions` | []Condition | `BackendConfigured`, `ExternalEndpointReady`, `InternalEndpointReady`, and `UpstreamCredentialResolved` for Secret-backed credentials (type, status, reason, message). |
 
+An endpoint condition is `True` only once the Gateway has accepted the route; otherwise it reads `RoutePending`, `RouteNotAccepted` (phase `Error`) or `RouteStatusUnreadable`. See [Architecture](/architecture/) and [Troubleshooting](/troubleshooting/).
+
 `UpstreamCredentialResolved` is informational and does not block `Ready`.
 `SecretNotFound` means the referenced Secret is absent; `APIKeyMissing` means its
 `apiKey` entry is absent or empty. `Resolved` confirms a non-empty entry, not that
