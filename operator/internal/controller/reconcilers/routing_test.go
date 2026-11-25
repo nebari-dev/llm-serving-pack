@@ -134,6 +134,12 @@ func defaultRoutingModel() *llmv1alpha1.LLMModel {
 				Name:   "mistralai/Mistral-7B-v0.1",
 				Source: llmv1alpha1.ModelSourceHuggingFace,
 			},
+			// Default to a non-public model with one group so the internal
+			// SecurityPolicy always has a valid authorization block; matches
+			// the invariant the webhook enforces at admission time.
+			Access: llmv1alpha1.AccessSpec{
+				Groups: []string{"data-scientists"},
+			},
 		},
 	}
 }
