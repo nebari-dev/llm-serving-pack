@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -55,10 +56,11 @@ func newPolicyTestReconciler(t *testing.T) (*LLMModelReconciler, *policyFailureC
 	model.Finalizers = []string{finalizerName}
 	model.Generation = 1
 	model.Status.Phase = llmv1alpha1.PhaseStarting
+	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	c := &policyFailureClient{Client: fake.NewClientBuilder().WithScheme(s).
 		WithStatusSubresource(&llmv1alpha1.LLMModel{}, &appsv1.Deployment{}).
-		WithObjects(model).Build()}
-	return &LLMModelReconciler{Client: c, Scheme: s, Config: testConfig()}, c, model
+		WithObjects(append([]client.Object{model}, seedAcceptedLLMModelRoutes(t, model, t0)...)...).Build()}
+	return &LLMModelReconciler{Client: c, Scheme: s, Config: testConfig(), Clock: clocktesting.NewFakePassiveClock(t0)}, c, model
 }
 
 func TestSecurityPolicyUpdateFailureAndRecovery(t *testing.T) {

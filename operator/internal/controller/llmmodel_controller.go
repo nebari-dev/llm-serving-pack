@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -62,6 +63,7 @@ type LLMModelReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Config *config.OperatorConfig
+	Clock  clock.PassiveClock // nil = real clock
 }
 
 // +kubebuilder:rbac:groups=llm.nebari.dev,resources=llmmodels,verbs=get;list;watch;create;update;patch;delete
@@ -71,6 +73,7 @@ type LLMModelReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services;serviceaccounts;persistentvolumeclaims;secrets;configmaps;namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get
 
 // Reconcile implements the main reconciliation loop for LLMModel resources.
 func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) { //nolint:gocyclo // sequential reconciliation steps
@@ -211,12 +214,16 @@ func (r *LLMModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		externalErr, internalErr := r.reconcileRoutingResources(ctx, log, model, routingResources)
 		if routingResources.ExternalRoute != nil {
-			conditions = append(conditions, conditionFor(CondExternalEndpointReady, externalErr, "external AIGatewayRoute applied"))
+			conditions = append(conditions, endpointCondition(ctx, r.Client, realClockIfNil(r.Clock), CondExternalEndpointReady,
+				meta.FindStatusCondition(model.Status.Conditions, CondExternalEndpointReady), externalErr,
+				routingResources.ExternalRoute, "external AIGatewayRoute applied"))
 		} else {
 			conditions = append(conditions, disabledCondition(CondExternalEndpointReady))
 		}
 		if routingResources.InternalRoute != nil {
-			conditions = append(conditions, conditionFor(CondInternalEndpointReady, internalErr, "internal AIGatewayRoute applied"))
+			conditions = append(conditions, endpointCondition(ctx, r.Client, realClockIfNil(r.Clock), CondInternalEndpointReady,
+				meta.FindStatusCondition(model.Status.Conditions, CondInternalEndpointReady), internalErr,
+				routingResources.InternalRoute, "internal AIGatewayRoute applied"))
 		} else {
 			conditions = append(conditions, disabledCondition(CondInternalEndpointReady))
 		}
