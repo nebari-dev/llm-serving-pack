@@ -127,7 +127,8 @@ capabilities: {drop: [ALL]}
 {{/*
 A store's data volume: its claim when persistence is on, else emptyDir. The
 claim outlives the StatefulSet (helm uninstall) unless keepDataOnUninstall
-is false.
+is false. The claim template states apiVersion and kind: the API server adds
+them, and without them Argo CD reports the StatefulSet OutOfSync forever.
 */}}
 {{- define "om.dataClaim" -}}
 {{- if .store.persistence.enabled }}
@@ -135,7 +136,9 @@ persistentVolumeClaimRetentionPolicy:
   whenDeleted: {{ ternary "Retain" "Delete" .root.Values.keepDataOnUninstall }}
   whenScaled: Retain
 volumeClaimTemplates:
-  - metadata:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
       name: data
     spec:
       accessModes: [ReadWriteOnce]
