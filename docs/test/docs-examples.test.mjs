@@ -253,7 +253,7 @@ describe('AI Gateway webhook TLS is cert-manager backed', () => {
     expect(fromDocs).toEqual(CERT_MANAGER_VALUES);
   });
 
-  it('both pin the same chart version, and that version is v0.5.0', () => {
+  it('both pin the same chart version, and that version is v1.1.0', () => {
     // Deliberately strict. Bumping the AI Gateway chart is issue #175, and it
     // must be done together with scripts/check-render-determinism.sh and a
     // fresh render-determinism run, because a newer chart may reintroduce
@@ -263,7 +263,7 @@ describe('AI Gateway webhook TLS is cert-manager backed', () => {
     const a = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     const b = findApp(installApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     expect(a).toBe(b);
-    expect(a).toBe('v0.5.0');
+    expect(a).toBe('v1.1.0');
   });
 });
 
@@ -317,8 +317,21 @@ describe('AI Gateway webhook troubleshooting states the correct root cause', () 
     expect(text).toMatch(/app\.kubernetes\.io\/managed-by:\s*envoy-gateway/);
   });
 
+  it('every probe carries the gateway owner labels the mutator needs to inject', () => {
+    // AI Gateway v1.1.0 injects ai-gateway-extproc only into pods labelled with
+    // the owning Gateway, as real Envoy proxy pods are. Without these two
+    // labels the probe is admitted but never shows the sidecar.
+    const probes = page().split('generateName: aigw-webhook-probe-').slice(1)
+      .map((rest) => rest.split('spec:')[0]);
+    expect(probes.length).toBeGreaterThan(0);
+    for (const labels of probes) {
+      expect(labels).toMatch(/gateway\.envoyproxy\.io\/owning-gateway-name:\s*nebari-gateway/);
+      expect(labels).toMatch(/gateway\.envoyproxy\.io\/owning-gateway-namespace:\s*envoy-gateway-system/);
+    }
+  });
+
   it('carries the measured rotation window', () => {
-    expect(page()).toMatch(/27 seconds|27s/);
+    expect(page()).toMatch(/43 and 56 seconds/);
   });
 });
 
@@ -358,6 +371,19 @@ describe('AI Gateway webhook installation runbook states the correct root cause'
     const text = page();
     expect(text).toMatch(/--dry-run=server/);
     expect(text).toMatch(/app\.kubernetes\.io\/managed-by:\s*envoy-gateway/);
+  });
+
+  it('every probe carries the gateway owner labels the mutator needs to inject', () => {
+    // AI Gateway v1.1.0 injects ai-gateway-extproc only into pods labelled with
+    // the owning Gateway, as real Envoy proxy pods are. Without these two
+    // labels the probe is admitted but never shows the sidecar.
+    const probes = page().split('generateName: aigw-webhook-probe-').slice(1)
+      .map((rest) => rest.split('spec:')[0]);
+    expect(probes.length).toBeGreaterThan(0);
+    for (const labels of probes) {
+      expect(labels).toMatch(/gateway\.envoyproxy\.io\/owning-gateway-name:\s*nebari-gateway/);
+      expect(labels).toMatch(/gateway\.envoyproxy\.io\/owning-gateway-namespace:\s*envoy-gateway-system/);
+    }
   });
 
   it('documents the cainjector prerequisite', () => {

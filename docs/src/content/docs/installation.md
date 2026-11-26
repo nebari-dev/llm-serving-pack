@@ -803,8 +803,8 @@ kubectl get certificate -n envoy-ai-gateway-system self-signed-cert-for-mutating
 
 Expected: `READY=True`. On a fresh install the controller pod sits in
 `ContainerCreating` for a few seconds first, because the chart no longer
-pre-creates the Secret and cert-manager has to issue it. Measured:
-healthy within about 16 seconds.
+pre-creates the Secret and cert-manager has to issue it. Measured on AI Gateway v1.1.0:
+healthy within about 10 seconds.
 
 Confirm `cainjector` populated the CA bundle:
 
@@ -827,6 +827,8 @@ metadata:
   generateName: aigw-webhook-probe-
   labels:
     app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
 spec:
   containers:
     - name: probe
@@ -1561,6 +1563,8 @@ metadata:
   generateName: aigw-webhook-probe-
   labels:
     app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
 spec:
   containers:
     - name: probe
@@ -1949,7 +1953,8 @@ healthy for days.
      second. Unavoidable, because Secret `type` is immutable and
      cert-manager needs `kubernetes.io/tls` where the chart rendered
      `Opaque`. The controller does not restart.
-   - The `Certificate` reports `Ready` within about 8 seconds.
+   - The `Certificate` reports `Ready` within a few seconds
+     (3 seconds measured on AI Gateway v1.1.0).
    - If you started from a broken state, the probe keeps failing for
      about **80 seconds** after that. This is the pod picking up the new
      certificate plus the API server renegotiating. Do not intervene.

@@ -186,11 +186,11 @@ the divergence.
 failure.
 
 1. The pod keeps serving the *old* certificate until kubelet refreshes the mounted Secret and
-   `certwatcher` picks it up on its 10s poll, measured at 24s. Until then the old certificate
+   `certwatcher` picks it up on its 10s poll, measured at 24s on AI Gateway v0.5.0. Until then the old certificate
    still matches the old `caBundle` and everything works.
 2. Certificates are validated at TLS handshake, not per request, and the API server reuses its
    webhook connection. A diverged cluster can serve normally for as long as that connection
-   lives. Measured: over three minutes with zero errors.
+   lives. Measured on AI Gateway v0.5.0: over three minutes with zero errors.
 
 The failure then appears all at once, when something forces a fresh handshake: the controller pod
 restarting or being rescheduled, the API server restarting, or the connection idling out. This is
@@ -215,6 +215,8 @@ metadata:
   generateName: aigw-webhook-probe-
   labels:
     app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
 spec:
   containers:
     - name: probe
@@ -246,7 +248,7 @@ Expect on sync:
   Secret `type` is immutable, the chart renders it as `Opaque`, and cert-manager requires
   `kubernetes.io/tls`. The controller does not restart and there is no observable impact.
 - If you are migrating from an already-broken state, allow about **80 seconds** before the probe
-  passes, even though the `Certificate` reports `Ready` within about 8 seconds. The remainder is
+  passes, even though the `Certificate` reports `Ready` within a few seconds. The remainder is
   the pod picking up the new certificate and the API server making a fresh handshake. This is
   normal. Do not intervene.
 
@@ -255,7 +257,7 @@ object, and the replacement carries no ArgoCD tracking.
 
 **Known residual:** at certificate renewal, `cainjector` updates `caBundle` immediately while the
 pod keeps serving the previous certificate until its mount refreshes, so pod CREATEs fail for a
-short window. Measured at **27 seconds**, self-recovering with no intervention. cert-manager
+short window. Measured at **43 and 56 seconds** on AI Gateway v1.1.0, self-recovering with no intervention. cert-manager
 defaults give a 90 day lifetime with renewal at 60 days, so expect this roughly every two months.
 The exact duration is bounded by kubelet's mount refresh and will vary. Upstream:
 [cert-manager/cert-manager#6350](https://github.com/cert-manager/cert-manager/issues/6350).

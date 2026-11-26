@@ -9,7 +9,7 @@
 set -euo pipefail
 
 CHART="oci://docker.io/envoyproxy/ai-gateway-helm"
-CHART_VERSION="v0.5.0"
+CHART_VERSION="v1.1.0"
 NAMESPACE="envoy-ai-gateway-system"
 RELEASE="envoy-ai-gateway"
 CACHE_DIR="${CHART_CACHE_DIR:-.chart-cache}"
