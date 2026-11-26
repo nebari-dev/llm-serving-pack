@@ -27,8 +27,8 @@ identity setup. Do not patch generated Envoy deployments or inject custom
 signing proxies. With Argo CD, use the AI Gateway chart's cert-manager option
 for webhook certificates instead of Helm-generated self-signed certificates.
 
-The deployment targets Envoy Gateway 1.8.1 with AI Gateway 1.1 and Gateway API
-1.5.1. The operator emits AI Gateway `v1beta1` resources and uses `schema.prefix`
+The deployment targets Envoy Gateway %%pin:ENVOY_GATEWAY_VERSION%% with AI Gateway 1.1 and Gateway API
+%%pin:GATEWAY_API_VERSION%%. The operator emits AI Gateway `v1beta1` resources and uses `schema.prefix`
 for OpenAI-compatible paths. Existing `PassthroughModel.spec.provider.schemaVersion`
 settings retain their meaning; provider manifests do not need rewriting.
 See [Upgrading](/upgrading/) before changing an existing installation.

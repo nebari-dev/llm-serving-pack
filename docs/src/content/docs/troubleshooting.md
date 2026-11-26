@@ -257,7 +257,7 @@ object, and the replacement carries no ArgoCD tracking.
 
 **Known residual:** at certificate renewal, `cainjector` updates `caBundle` immediately while the
 pod keeps serving the previous certificate until its mount refreshes, so pod CREATEs fail for a
-short window. Measured at **43 and 56 seconds** on AI Gateway v1.1.0, self-recovering with no intervention. cert-manager
+short window. Measured at **43 and 56 seconds** on AI Gateway %%pin:AI_GATEWAY_VERSION%%, self-recovering with no intervention. cert-manager
 defaults give a 90 day lifetime with renewal at 60 days, so expect this roughly every two months.
 The exact duration is bounded by kubelet's mount refresh and will vary. Upstream:
 [cert-manager/cert-manager#6350](https://github.com/cert-manager/cert-manager/issues/6350).
@@ -443,7 +443,7 @@ openssl s_client -connect <hostname>:<port> -servername <hostname> </dev/null 2>
 
 The certificate must list `spec.provider.hostname` in its subject alternative names and chain to a CA in the ConfigMap.
 
-**A CA bundle update does not take effect, even though the policy is accepted.** `Accepted=True` and `ResolvedRefs=True` on the `BackendTLSPolicy` do not prove Envoy loaded the CA certificates. With Envoy Gateway 1.8.1, malformed PEM can pass those checks while Envoy rejects the TLS configuration with `Failed to load trusted CA certificates from <inline>`:
+**A CA bundle update does not take effect, even though the policy is accepted.** `Accepted=True` and `ResolvedRefs=True` on the `BackendTLSPolicy` do not prove Envoy loaded the CA certificates. With Envoy Gateway %%pin:ENVOY_GATEWAY_VERSION%%, malformed PEM can pass those checks while Envoy rejects the TLS configuration with `Failed to load trusted CA certificates from <inline>`:
 
 ```bash
 kubectl -n envoy-gateway-system logs \

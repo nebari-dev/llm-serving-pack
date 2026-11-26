@@ -227,8 +227,13 @@ const findApp = (parsed, name) =>
 
 const exampleApps = () => loadAllYaml(readExample('envoy-ai-gateway.yaml'));
 
+// The page carries %%pin:KEY%% tokens that remark-pins fills in at build time, so
+// resolve them from versions.env here to read the manifests as readers see them.
+const resolvePins = (text) =>
+  text.replace(/%%pin:([A-Za-z0-9_]+)%%/g, (_m, key) => pinFromVersionsEnv(key));
+
 const installApps = () =>
-  fencedYaml(readPage('installation.md')).flatMap((block) => {
+  fencedYaml(resolvePins(readPage('installation.md'))).flatMap((block) => {
     try {
       return loadAllYaml(block);
     } catch {

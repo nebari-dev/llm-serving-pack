@@ -1,10 +1,15 @@
 // docs/astro.config.mjs
 import { defineConfig } from 'astro/config';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import starlight from '@astrojs/starlight';
 import { nebari } from '@nebari/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import remarkBaseLinks, { prefixUrl } from './src/plugins/remark-base-links';
+import remarkPins, { parsePins } from './src/plugins/remark-pins';
+
+// Pin values for %%pin:KEY%% tokens in the docs, from the repo-root pin file.
+const pins = parsePins(readFileSync(new URL('../versions.env', import.meta.url), 'utf8'));
 
 export default defineConfig({
   // Base defaults to '/' for the local bake-off. Override via BASE env if deployed.
@@ -63,7 +68,10 @@ export default defineConfig({
   markdown: {
     // syntaxHighlight false on mermaid so the plugin sees raw graph source.
     syntaxHighlight: { type: 'shiki', excludeLangs: ['mermaid'] },
-    remarkPlugins: [[remarkBaseLinks, { base: process.env.BASE || '/' }]],
+    remarkPlugins: [
+      [remarkBaseLinks, { base: process.env.BASE || '/' }],
+      [remarkPins, { pins }],
+    ],
     rehypePlugins: [[rehypeMermaid, { strategy: 'inline-svg' }]],
   },
   vite: {

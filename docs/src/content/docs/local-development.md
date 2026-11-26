@@ -51,9 +51,11 @@ This creates a kind cluster named `llm-serving-test` and installs:
 - Test `GatewayClass` and `Gateway` resources
 - The CloudNativePG operator (`make deploy-cnpg`), for the bundled OpenMeter's Postgres
 
-Dependency versions are pinned at the top of `dev/Makefile`. They move as a
-set: Envoy AI Gateway v1.1 uses Envoy Gateway v1.8.1 and Gateway API
-v1.5.1 (see the [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/)).
+Dependency versions are pinned in `versions.env` at the repo root, which
+`dev/Makefile` reads. Override one for a single run with, for example,
+`make setup GIE_VERSION=%%pin:GIE_VERSION%%`. They move as a
+set: Envoy AI Gateway %%pin:AI_GATEWAY_VERSION%% uses Envoy Gateway %%pin:ENVOY_GATEWAY_VERSION%% and Gateway API
+%%pin:GATEWAY_API_VERSION%% (see the [compatibility matrix](https://aigateway.envoyproxy.io/docs/compatibility/)).
 
 The setup takes a few minutes. You can watch progress in the terminal output.
 
