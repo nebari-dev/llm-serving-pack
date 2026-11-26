@@ -8,8 +8,9 @@ inPack: false
 
 # OpenMeter: the API (ingests usage events, answers queries) and the sink
 # worker (moves events from Kafka into ClickHouse). Same image for both:
-# OpenMeter v1.0.0-beta.234 with app secrets encrypted at rest, built from
-# https://github.com/nebari-dev/openmeter/tree/nebari/v1.0.0-beta.234.
+# OpenMeter with app secrets encrypted at rest, built from
+# https://github.com/nebari-dev/openmeter (the nebari/<version> branch matching
+# the tag). The pinned value lives in versions.env (OPENMETER_IMAGE).
 openmeter:
   image: ghcr.io/nebari-dev/openmeter:v1.0.0-beta.234-nebari.1@sha256:be471cd4036270c1f6c6979974bfcc7d6b03a46809a20fe3c6c72b45d0c12b22
   api:

@@ -2,9 +2,9 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'examples/**', 'scripts/check-links.sh', 'scripts/check-render-determinism.sh', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'examples/**', 'versions.env', 'scripts/check-links.sh', 'scripts/check-render-determinism.sh', '.github/workflows/docs.yml']
   pull_request:
-    paths: ['docs/**', 'examples/**', 'scripts/check-links.sh', 'scripts/check-render-determinism.sh', '.github/workflows/docs.yml']
+    paths: ['docs/**', 'examples/**', 'versions.env', 'scripts/check-links.sh', 'scripts/check-render-determinism.sh', '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
   contents: read
