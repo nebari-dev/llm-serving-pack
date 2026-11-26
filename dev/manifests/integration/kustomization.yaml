@@ -1,0 +1,20 @@
+# The kind-dev real-auth profile: dev Keycloak, operator and key-manager with
+# the settings `make integration-up` needs. It leaves out what integration-up
+# applies on its own: the keycloak namespace and realm-import ConfigMap,
+# cert-manager-config.yaml and webhook.yaml. Everything is applied as an overlay
+# (never `kubectl set env`), so re-running deploy-* removes or reapplies it
+# cleanly. The base manifests are referenced unchanged from outside this
+# directory, so render with
+#   kubectl kustomize --load-restrictor=LoadRestrictionsNone dev/manifests/integration | kubectl apply -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../keycloak.yaml
+  - ../operator.yaml
+  - ../key-manager.yaml
+  # The key-owner lookup Service the usage collector calls.
+  - ../usage-key-owners-service.yaml
+patches:
+  - path: keycloak-patch.yaml
+  - path: key-manager-patch.yaml
+  - path: operator-patch.yaml

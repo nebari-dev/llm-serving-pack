@@ -1,0 +1,41 @@
+# Real bearer-token validation instead of dev mode, plus what usage metering
+# needs from the key-manager: the key-owner lookup on :8081 for the usage
+# collector, OpenMeter customer sync, and the label the bundled OpenMeter's
+# network policy admits.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-key-manager
+  namespace: llm-operator-system
+spec:
+  template:
+    metadata:
+      labels:
+        llm.nebari.dev/openmeter-client: "true"
+    spec:
+      containers:
+        - name: key-manager
+          ports:
+            - containerPort: 8081
+              name: key-owners
+          env:
+            # Set to "false", not deleted: `kubectl apply` removes only fields
+            # it applied before, so a delete would leave a value someone set
+            # with `kubectl set env` (dev/test-auth.sh does) in place.
+            - name: LLM_DEV_MODE
+              value: "false"
+            - name: LLM_KEYCLOAK_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080
+            - name: LLM_KEYCLOAK_REALM
+              value: nebari
+            - name: LLM_KEYCLOAK_ISSUER_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080
+            - name: LLM_INTERNAL_LISTEN_ADDR
+              value: ":8081"
+            # The openmeter subchart integration-up installs (release usage,
+            # namespace usage-openmeter). With WITH_OPENMETER=0 nothing answers
+            # here; the sync only logs the failure.
+            - name: LLM_OPENMETER_URL
+              value: http://usage-openmeter-api.usage-openmeter.svc
+            - name: LLM_OPENMETER_SYNC_INTERVAL
+              value: 5s

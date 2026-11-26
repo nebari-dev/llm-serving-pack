@@ -1,0 +1,14 @@
+# The published usage access-log EnvoyProxy, pointed at the collector the dev
+# cluster runs. The resource is outside this directory, so render with
+#   kubectl kustomize --load-restrictor=LoadRestrictionsNone dev/manifests/access-log | kubectl apply -f -
+# (`kubectl apply -k` has no such flag). The NodePort pin is not here: it lives
+# in gateway-nodeport.yaml, attached to nebari-gateway alone.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../examples/usage-access-log.yaml
+patches:
+  - path: collector-backendref-patch.yaml
+    target:
+      kind: EnvoyProxy
+      name: nebari-gateway-proxy

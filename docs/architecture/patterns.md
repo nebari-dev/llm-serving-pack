@@ -9,11 +9,11 @@ Unstructured reads go to the API server uncached, so reading a kind the operator
 **Confirmed:** 2026-11-20 (issue #233)
 
 ### Every dev tool pins `kubectl` to `--context kind-<CLUSTER_NAME>`
-Dev scripts and make targets pass `--context kind-<CLUSTER_NAME>` to `kubectl` and never use the current context, so a developer's other clusters are not touched. See `dev/Makefile:3-7`, `dev/test-auth.sh:31-33` and `dev/usage-e2e.sh:42-44`.
+Dev scripts and make targets pass `--context kind-<CLUSTER_NAME>` to `kubectl` and never use the current context, so a developer's other clusters are not touched. See `dev/Makefile:12-16`, `dev/test-auth.sh:31-33` and `dev/usage-e2e.sh:42-44`.
 **Confirmed:** 2026-11-25 (spec: docs/superpowers/specs/2026-11-24-ci-journey-tests-design.md)
 
 ### Dev make targets are the entry points for local cluster work
-Each target in `dev/Makefile` has a `##` help comment, and local cluster work starts from a target rather than a raw script. See `dev/Makefile:41-168`.
+Each target in `dev/Makefile` has a `##` help comment, and local cluster work starts from a target rather than a raw script. See `dev/Makefile:37-177`.
 **Confirmed:** 2026-11-25 (spec: docs/superpowers/specs/2026-11-24-ci-journey-tests-design.md)
 
 ### Repo tooling written in Go lives under `operator/cmd/<tool>/`

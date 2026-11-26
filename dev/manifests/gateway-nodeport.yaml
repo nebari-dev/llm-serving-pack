@@ -1,0 +1,26 @@
+# NodePort pin for nebari-gateway's Envoy Service (as NIC's local provider
+# does), referenced from that Gateway's spec.infrastructure.parametersRef.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: nebari-gateway-nodeport
+  namespace: envoy-gateway-system
+spec:
+  mergeType: StrategicMerge
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: NodePort
+        externalTrafficPolicy: Cluster
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              ports:
+                - name: http-80
+                  port: 80
+                  nodePort: 30080
+                - name: https-443
+                  port: 443
+                  nodePort: 30443

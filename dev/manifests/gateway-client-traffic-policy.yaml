@@ -1,0 +1,15 @@
+# Raises the request buffer limit on nebari-gateway so large request bodies
+# (long prompts) are not rejected at the 32KiB default. Targets the whole
+# Gateway (no sectionName).
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: nebari-gateway-client-traffic
+  namespace: envoy-gateway-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: nebari-gateway
+  connection:
+    bufferLimit: 50Mi

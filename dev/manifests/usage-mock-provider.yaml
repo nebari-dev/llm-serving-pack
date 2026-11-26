@@ -98,6 +98,8 @@ spec:
     hostname: mock-provider.llm-operator-system.svc.cluster.local
     port: 8443
     credentialSecretName: mock-provider-api-key
+    tls:
+      caConfigMapName: mock-provider-ca
   models:
     catchAll: false
     declared:

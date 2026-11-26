@@ -1,0 +1,13 @@
+# The dev GatewayClass's EnvoyProxy, applied by `make setup`. Deliberately
+# minimal: the access-log kustomization replaces this object later (the name
+# matches examples/usage-access-log.yaml). The NodePort pin lives in
+# gateway-nodeport.yaml and applies to nebari-gateway only, so the two dev
+# Gateways do not share NodePorts.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: nebari-gateway-proxy
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
