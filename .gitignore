@@ -8,3 +8,6 @@ frontend/.claude/*
 
 # Local dev secrets (OPENROUTER_API_KEY, etc.)
 .env
+
+# Helm chart cache used by scripts/check-render-determinism.sh
+.chart-cache/

@@ -75,6 +75,23 @@ spec:
     chart: ai-gateway-helm
     repoURL: docker.io/envoyproxy
     targetRevision: v1.1.0
+    helm:
+      releaseName: envoy-ai-gateway
+      # Webhook TLS via cert-manager, NOT the chart's default self-signed mode.
+      #
+      # The default mode generates a CA at Helm *render* time, guarded by a
+      # `lookup` that is always empty under ArgoCD, so every render mints a new
+      # CA while the controller writes `caBundle` only once at startup. The two
+      # drift apart and the API server rejects every Envoy proxy pod CREATE.
+      # See https://github.com/nebari-dev/llm-serving-pack/issues/84
+      #
+      # Requires cert-manager and cainjector, which Nebari Infrastructure Core
+      # installs by default.
+      values: |
+        controller:
+          mutatingWebhook:
+            certManager:
+              enable: true
 
   destination:
     server: https://kubernetes.default.svc

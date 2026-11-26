@@ -173,6 +173,23 @@ section 8. Also check for `nebari-ca-issuer` with `READY=True`; if it
 is not listed, pick the ClusterIssuer you will set as
 `operator.webhook.clusterIssuer` in section 8 (see section 1).
 
+Also confirm `cainjector` is running. The AI Gateway's mutating
+webhook depends on it to keep its `caBundle` in sync; without it,
+Envoy proxy pods cannot be admitted.
+
+```bash
+kubectl get deploy -n cert-manager cert-manager-cainjector
+```
+
+Expected: `1/1` ready. Nebari Infrastructure Core installs it by
+default. A standalone install must provide cert-manager and cainjector,
+and the `cert-manager.io` CRDs must be established, before the
+AI Gateway Application syncs. The pack's Applications are applied
+outside NIC's `apps/` directory, so their sync-wave numbers do not
+order them against NIC's; in practice cert-manager is installed long
+before any pack. If they do race, the AI Gateway sync fails with `no
+matches for kind "Certificate"` and ArgoCD retries until the CRDs exist.
+
 ### 2.5 Confirm the Gateway HTTPS:443 listener has a usable cert
 
 ```bash
@@ -744,6 +761,14 @@ spec:
     targetRevision: v1.1.0
     helm:
       releaseName: envoy-ai-gateway
+      # cert-manager-backed webhook TLS. Required: the chart's default mode
+      # regenerates its CA on every ArgoCD render and breaks pod admission.
+      # See issue #84 and section 12.2.
+      values: |
+        controller:
+          mutatingWebhook:
+            certManager:
+              enable: true
   destination:
     server: https://kubernetes.default.svc
     namespace: envoy-ai-gateway-system
@@ -766,17 +791,59 @@ kubectl get pods,svc -n envoy-ai-gateway-system
 kubectl get mutatingwebhookconfiguration | grep ai-gateway
 ```
 
-Expected:
+Expected: the controller pod `1/1 Running`, and
+`envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system` listed
+by the webhook query.
 
-```
-pod/ai-gateway-controller-XXXXXXXXXX-XXXXX  1/1  Running
-service/ai-gateway-controller  ClusterIP  ...  9443/TCP,1063/TCP,9090/TCP
-envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system  1
+Confirm cert-manager issued the webhook certificate:
+
+```bash
+kubectl get certificate -n envoy-ai-gateway-system self-signed-cert-for-mutating-webhook
 ```
 
-Port 1063 is the XDS extension server (envoy-gateway's
-`extensionManager.service.fqdn` will reference this). Port 9443 is the
-admission webhook. 9090 is metrics.
+Expected: `READY=True`. On a fresh install the controller pod sits in
+`ContainerCreating` for a few seconds first, because the chart no longer
+pre-creates the Secret and cert-manager has to issue it. Measured on AI Gateway v1.1.0:
+healthy within about 10 seconds.
+
+Confirm `cainjector` populated the CA bundle:
+
+```bash
+kubectl get mutatingwebhookconfiguration \
+  envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system \
+  -o jsonpath='{.webhooks[0].clientConfig.caBundle}' | head -c 20; echo
+```
+
+Expected: a non-empty base64 string.
+
+Now prove the trust chain end to end. This is the authoritative check,
+and the only one that exercises a real admission call:
+
+```bash
+kubectl create -n envoy-gateway-system --dry-run=server -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: aigw-webhook-probe-
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
+spec:
+  containers:
+    - name: probe
+      image: registry.k8s.io/pause:3.9
+EOF
+```
+
+Expected: the pod definition is returned with an `ai-gateway-extproc`
+container injected, and nothing is created. If it returns `x509:
+certificate signed by unknown authority`, see section 12.2.
+
+Do not substitute a comparison of the Secret's `ca.crt` against the
+webhook's `caBundle` for this probe. Those two can differ while the
+webhook is healthy, and can match while a fresh handshake would still
+fail. Only the probe tests what the API server actually does.
 
 ## 6. Reconfigure envoy-gateway with AI Gateway extension wiring
 
@@ -1484,6 +1551,32 @@ versions hit a race that leaves `nebari-gateway-cert` stuck on
 `failedIssuanceAttempts`; if that happens, deleting the Certificate
 lets ArgoCD's selfHeal recreate it cleanly.
 
+Confirm the AI Gateway webhook trust chain, which section 10.5
+depends on:
+
+```bash
+kubectl get certificate -n envoy-ai-gateway-system self-signed-cert-for-mutating-webhook
+kubectl create -n envoy-gateway-system --dry-run=server -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: aigw-webhook-probe-
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
+spec:
+  containers:
+    - name: probe
+      image: registry.k8s.io/pause:3.9
+EOF
+```
+
+Expected: `READY=True`, and the probe returns a pod with
+`ai-gateway-extproc` injected. A failure here means no Envoy proxy
+pod anywhere in the cluster can be replaced, even though existing
+proxies keep serving.
+
 ### 10.4 Gateway listener set
 
 ```bash
@@ -1821,38 +1914,70 @@ This version uses `KEYCLOAK_EXTERNAL_URL` for
 the browser hits) while keeping `tokenEndpoint` and `issuer` as
 in-cluster URLs (back-channel only).
 
-### 12.2 AI Gateway webhook certificate becomes untrusted after pod rescheduling
+### 12.2 AI Gateway webhook certificate becomes untrusted after a chart re-render
 
-**Symptom:** The envoy proxy deployment
-(`envoy-envoy-gateway-system-nebari-gateway-*`) is stuck at `0/1`
-with `FailedCreate`. ReplicaSet events show:
+**Status:** fixed by switching to cert-manager mode, the values in
+section 5.1. This section covers migrating an existing install and
+repairing one in an emergency.
 
-```
-failed calling webhook "ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local":
-x509: certificate signed by unknown authority
-```
+**Symptom:** Envoy proxy pods cannot be created, cluster-wide. The
+API server log shows `x509: certificate signed by unknown authority
+... "ai-gateway-controller-ca"`. Existing proxies keep serving,
+so the cluster looks healthy until a proxy needs replacing.
 
-External connectivity is completely down (NLB target groups have zero
-registered targets).
+**Root cause:** in the chart's default mode, the chart generates a CA at
+Helm render time behind a `lookup` that is always empty under ArgoCD,
+so every render mints a new CA, while the controller writes `caBundle`
+only once at startup. See [the troubleshooting page](/troubleshooting/)
+for the full mechanism, including why a diverged cluster can appear
+healthy for days.
 
-**Root cause:** The AI Gateway controller generates a self-signed CA
-at startup and patches the MutatingWebhookConfiguration with the CA
-bundle. When the controller pod is rescheduled (e.g. after a node
-replacement), the new pod may generate a new CA while the webhook
-config retains the old one.
+#### Migrating an existing install
 
-**Workaround:**
+1. Capture a baseline so you can tell what the migration changed:
 
-```bash
-kubectl rollout restart deploy -n envoy-ai-gateway-system ai-gateway-controller
-kubectl rollout status deploy -n envoy-ai-gateway-system ai-gateway-controller
-# The envoy proxy pod should recover within ~30 seconds
-kubectl get deploy -n envoy-gateway-system -w
-```
+   ```bash
+   BASE_DOMAIN="<your cluster domain>"
+   kubectl get certificate,secret -n envoy-ai-gateway-system
+   for h in "$BASE_DOMAIN" "argocd.$BASE_DOMAIN" "keycloak.$BASE_DOMAIN"; do
+     echo "$h -> $(curl -s -o /dev/null -w '%{http_code}' "https://$h/")"
+   done
+   ```
 
-**Note:** This needs further investigation to determine whether it
-is an upstream AI Gateway bug or a configuration issue. A tracking
-issue will be filed once the root cause is confirmed.
+2. Add the cert-manager values from section 5.1 to the
+   `envoy-ai-gateway` Application and sync.
+
+3. Wait. Expected behaviour, all measured:
+
+   - The Secret is deleted and recreated, absent for about 1
+     second. Unavoidable, because Secret `type` is immutable and
+     cert-manager needs `kubernetes.io/tls` where the chart rendered
+     `Opaque`. The controller does not restart.
+   - The `Certificate` reports `Ready` within a few seconds
+     (3 seconds measured on AI Gateway v1.1.0).
+   - If you started from a broken state, the probe keeps failing for
+     about **80 seconds** after that. This is the pod picking up the new
+     certificate plus the API server renegotiating. Do not intervene.
+
+4. Confirm with the probe from section 5.2, then re-run the baseline
+   commands from step 1 and check every hostname returns the same
+   status it did before.
+
+You do not need to strip ArgoCD tracking metadata from the old
+Secret. cert-manager recreates the object and the replacement carries
+no ArgoCD tracking.
+
+**Rollback:** remove the values block and sync. The chart re-renders
+a self-signed Secret and the controller re-patches `caBundle` on its
+next restart. Only the forward migration above was measured on a live
+cluster; this reverse direction was not, so treat rollback as a way
+to buy time, not a validated resting state.
+
+#### Emergency repair, self-signed installs only
+
+Not a fix; undone by the next render. See [the troubleshooting
+page](/troubleshooting/) for the `caBundle` patch and the controller
+restart, and prefer the patch.
 
 ## 13. Troubleshooting
 

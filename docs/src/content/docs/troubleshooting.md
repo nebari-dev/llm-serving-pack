@@ -161,46 +161,135 @@ NIC must ship with `cert-manager.maxConcurrentChallenges: 1` to prevent ACME sol
 
 ## AI Gateway webhook `caBundle` stale - envoy proxy pod fails to create
 
-**Symptom:** The envoy proxy deployment is stuck at `0/1`. ReplicaSet events show:
+**Symptom:** Envoy proxy pods cannot be created. ReplicaSet events and the API server log show:
 
 ```
 failed calling webhook "ai-gateway-controller.envoy-ai-gateway-system.svc.cluster.local":
-x509: certificate signed by unknown authority
+x509: certificate signed by unknown authority (possibly because of "crypto/rsa: verification
+error" while trying to verify candidate authority certificate "ai-gateway-controller-ca")
 ```
 
-External connectivity is down entirely.
+This affects **every** Envoy Gateway managed proxy in the cluster, not just LLM traffic. The
+webhook's `objectSelector` matches `app.kubernetes.io/managed-by: envoy-gateway`, so a stale
+`caBundle` blocks pod creation for the shared `nebari-gateway` that fronts the landing page,
+Keycloak and ArgoCD too.
 
-**Likely cause:** The AI Gateway controller generates a self-signed CA at startup and patches the `MutatingWebhookConfiguration` with the CA bundle. After the controller pod is rescheduled (node replacement, rolling update), the new pod generates a new CA while the webhook configuration still holds the old bundle. The mismatch causes every envoy proxy pod create to be rejected.
+**Root cause:** In the chart's default (non cert-manager) mode, the *chart* generates the CA and
+serving certificate at Helm render time, and the *controller* writes `caBundle` exactly once, at
+process start. The chart only reuses an existing certificate when a Helm `lookup` finds the
+Secret, and `lookup` is always empty under ArgoCD, which renders without cluster access. So every
+render mints a new CA while `caBundle` keeps the old one. Nothing reconciles the difference. The
+controller does not generate certificates at all, and no pod rescheduling is required to create
+the divergence.
 
-**Fix:**
+**Why it can look healthy when it is not:** two delays sit between the divergence and any visible
+failure.
 
-Restart the AI Gateway controller to force a fresh CA and webhook patch:
+1. The pod keeps serving the *old* certificate until kubelet refreshes the mounted Secret and
+   `certwatcher` picks it up on its 10s poll, measured at 24s on AI Gateway v0.5.0. Until then the old certificate
+   still matches the old `caBundle` and everything works.
+2. Certificates are validated at TLS handshake, not per request, and the API server reuses its
+   webhook connection. A diverged cluster can serve normally for as long as that connection
+   lives. Measured on AI Gateway v0.5.0: over three minutes with zero errors.
+
+The failure then appears all at once, when something forces a fresh handshake: the controller pod
+restarting or being rescheduled, the API server restarting, or the connection idling out. This is
+why the problem is often noticed after a node replacement or a cluster upgrade, and why it can lie
+dormant for days.
+
+**Do not diagnose this by comparing checksums.** The Secret's `ca.crt` and the webhook's
+`caBundle` can differ while the webhook is perfectly healthy, and can look fine immediately after
+a re-render because no handshake has happened yet. The reverse is also true and was measured on a
+live cluster: during certificate rotation, the Secret and the webhook can both already hold the
+new CA and therefore agree, while the pod is still serving its old certificate, so calls fail
+anyway. Agreement is not evidence of health. Use the probe below, which is the only check that
+exercises the real trust path.
+
+**Check the trust chain:**
+
+```bash
+kubectl create -n envoy-gateway-system --dry-run=server -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: aigw-webhook-probe-
+  labels:
+    app.kubernetes.io/managed-by: envoy-gateway
+    gateway.envoyproxy.io/owning-gateway-name: nebari-gateway
+    gateway.envoyproxy.io/owning-gateway-namespace: envoy-gateway-system
+spec:
+  containers:
+    - name: probe
+      image: registry.k8s.io/pause:3.9
+EOF
+```
+
+A healthy webhook returns the pod definition with an `ai-gateway-extproc` container injected. A
+broken one returns the x509 error above. Nothing is created either way.
+
+**Fix: migrate to cert-manager mode.** This is a supported branch of the same chart. cert-manager
+issues the certificate and `cainjector` keeps `caBundle` in sync continuously, so re-rendering
+becomes a no-op. Nebari Infrastructure Core installs cert-manager and cainjector by default. Add
+to the `envoy-ai-gateway` ArgoCD Application:
+
+```yaml
+  source:
+    helm:
+      values: |
+        controller:
+          mutatingWebhook:
+            certManager:
+              enable: true
+```
+
+Expect on sync:
+
+- The Secret is briefly deleted and recreated, measured at about 1 second. This is unavoidable:
+  Secret `type` is immutable, the chart renders it as `Opaque`, and cert-manager requires
+  `kubernetes.io/tls`. The controller does not restart and there is no observable impact.
+- If you are migrating from an already-broken state, allow about **80 seconds** before the probe
+  passes, even though the `Certificate` reports `Ready` within a few seconds. The remainder is
+  the pod picking up the new certificate and the API server making a fresh handshake. This is
+  normal. Do not intervene.
+
+There is no need to strip ArgoCD tracking metadata from the old Secret. cert-manager recreates the
+object, and the replacement carries no ArgoCD tracking.
+
+**Known residual:** at certificate renewal, `cainjector` updates `caBundle` immediately while the
+pod keeps serving the previous certificate until its mount refreshes, so pod CREATEs fail for a
+short window. Measured at **43 and 56 seconds** on AI Gateway v1.1.0, self-recovering with no intervention. cert-manager
+defaults give a 90 day lifetime with renewal at 60 days, so expect this roughly every two months.
+The exact duration is bounded by kubelet's mount refresh and will vary. Upstream:
+[cert-manager/cert-manager#6350](https://github.com/cert-manager/cert-manager/issues/6350).
+
+### Emergency stopgap for installs still in self-signed mode
+
+Neither of these is a fix. Both are undone by the next render. Use them to restore ingress, then
+migrate to cert-manager mode.
+
+Copy the live CA into the webhook configuration:
+
+```bash
+CA=$(kubectl get secret -n envoy-ai-gateway-system \
+  self-signed-cert-for-mutating-webhook -o jsonpath='{.data.ca\.crt}')
+kubectl patch mutatingwebhookconfiguration \
+  envoy-ai-gateway-gateway-pod-mutator.envoy-ai-gateway-system \
+  --type='json' \
+  -p="[{\"op\":\"replace\",\"path\":\"/webhooks/0/clientConfig/caBundle\",\"value\":\"$CA\"}]"
+```
+
+Or restart the controller, which re-runs its one-shot startup patch against whatever certificate
+is currently mounted:
 
 ```bash
 kubectl rollout restart deploy -n envoy-ai-gateway-system ai-gateway-controller
 kubectl rollout status deploy -n envoy-ai-gateway-system ai-gateway-controller
 ```
 
-The envoy proxy deployment should recover within about 30 seconds once the controller is back:
-
-```bash
-kubectl get deploy -n envoy-gateway-system -w
-```
-
-Verify the proxy pod now has the `ai-gateway-extproc` sidecar:
-
-```bash
-kubectl get pods -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=nebari-gateway \
-  -o jsonpath='{range .items[*]}{.metadata.name}: {range .spec.containers[*]}{.name},{end}{"\n"}{end}'
-```
-
-Expected output includes both `envoy` and `ai-gateway-extproc` for each proxy pod. If `ai-gateway-extproc` is still missing after the controller restart, delete the proxy pods to re-trigger webhook injection:
-
-```bash
-kubectl delete pod -n envoy-gateway-system \
-  -l gateway.envoyproxy.io/owning-gateway-name=nebari-gateway
-```
+Re-run the probe above to confirm recovery. Both forms restore service, and live-cluster
+validation showed the restart form working reliably across three consecutive restarts. Prefer the
+direct patch regardless: it is the narrower action, and it does not take the webhook offline while
+the controller pod is replaced.
 
 ---
 
