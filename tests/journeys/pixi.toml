@@ -9,6 +9,10 @@ python = "3.14.*"
 pytest = "*"
 python-kubernetes = "*"
 requests = "*"
+# gateway.chat needs HTTP/2, which requests cannot speak; h2 is httpx's
+# http2 extra (conda-forge packages carry no extras, so it is named here).
+httpx = "*"
+h2 = "*"
 pytest-playwright = "*"
 playwright-python = "*"
 cryptography = "*"

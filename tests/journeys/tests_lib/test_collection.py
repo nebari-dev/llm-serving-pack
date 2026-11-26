@@ -5,6 +5,7 @@ conftest.py, pytest.ini and journeys/conftest.py, plus its own features.toml
 and test modules.
 """
 
+import json
 import shutil
 import textwrap
 import xml.etree.ElementTree as ET
@@ -372,6 +373,183 @@ def test_session_fixture_error_keeps_properties(pytester, tmp_path):
     assert cases["journeys/test_models.py::test_scoped"]["props"]["feature"] == "F8"
     for node_id in ("journeys/test_models.py::test_model_ready", "journeys/test_models.py::test_scoped"):
         assert any("profile broken" in e for e in cases[node_id]["errors"]), cases[node_id]
+
+
+# Session fixtures and run-info.json.
+
+
+def test_run_info_written_when_target_fails(pytester, monkeypatch):
+    monkeypatch.delenv("NIC_VERSION", raising=False)
+    tree = dict(FULL_TREE)
+    tree["journeys/test_models.py"] = """
+        import pytest
+
+        @pytest.fixture(scope="session")
+        def target():
+            raise RuntimeError("profile broken")
+
+        @pytest.mark.feature("F2")
+        @pytest.mark.integration
+        @pytest.mark.journey
+        def test_model_ready(target):
+            pass
+    """
+    _suite(pytester, tree)
+    result = _run(pytester, "--target=kind-dev", "--kube-context=kind-journey-test", "--feature=F2")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED, result.stdout.str()
+    info = json.loads((pytester.path / "results" / "run-info.json").read_text())
+    assert info["target"] == "kind-dev"
+    assert info["kube_context"] == "kind-journey-test"
+    assert "profile broken" in info["error"]
+    assert info["nic_tag"] is None
+    assert info["helper"] is None  # no results/helpers.json in this tree
+    assert info["deviations"] == []
+
+
+# The target fixture with its collaborators replaced: open_target yields a
+# stand-in, preflight reports one problem, and session_lease either raises
+# LeaseHeld (LEASE_HELD) or is taken and released. Each call is appended to
+# events.txt in the run's directory.
+LEASE_ORDER_TEST = """
+    import contextlib
+    import os
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pytest
+
+    from journeys import conftest as suite
+    from llm_journeys.target import LeaseHeld
+
+    EVENTS = Path("events.txt")
+
+
+    def event(what):
+        with EVENTS.open("a") as events:
+            events.write(what + "\\n")
+
+
+    @contextlib.contextmanager
+    def open_target(*args, **kwargs):
+        yield SimpleNamespace(name="kind-dev", kube_context="kind-journey-test", nic_tag=None, deviations=(),
+                              cluster=SimpleNamespace(core=SimpleNamespace(api_client=None)))
+
+
+    @contextlib.contextmanager
+    def session_lease(target):
+        if os.environ.get("LEASE_HELD"):
+            event("lease held")
+            raise LeaseHeld("Lease llm-journeys/suite-run is held by other-run/1")
+        event("lease taken")
+        try:
+            yield SimpleNamespace(check=lambda: None)
+        finally:
+            event("lease released")
+
+
+    def preflight(target, **kwargs):
+        event("preflight")
+        return ["provisioning record is missing: run make -C dev integration-up (kind-dev)"]
+
+
+    suite.open_target = open_target
+    suite.session_lease = session_lease
+    suite.preflight = preflight
+    suite._component_versions = lambda apps: {}
+
+
+    @pytest.fixture(scope="session")
+    def cluster():
+        yield None
+
+
+    @pytest.mark.feature("F2")
+    @pytest.mark.integration
+    @pytest.mark.journey
+    def test_model_ready(target):
+        raise AssertionError("the test body ran")
+"""
+
+
+@pytest.mark.parametrize(
+    ("held", "events", "error"),
+    [
+        (True, ["lease held"], "target fixture: LeaseHeld: Lease llm-journeys/suite-run is held by other-run/1"),
+        (False, ["lease taken", "preflight", "lease released"],
+         "target fixture: RuntimeError: the kind-dev profile on kind-journey-test is incomplete:"),
+    ],
+    ids=["lease-held", "lease-free"],
+)
+def test_target_takes_the_lease_before_preflight(pytester, monkeypatch, held, events, error):
+    monkeypatch.setenv("LEASE_HELD", "1" if held else "")
+    tree = dict(FULL_TREE)
+    tree["journeys/test_models.py"] = LEASE_ORDER_TEST
+    _suite(pytester, tree)
+    result = _run(pytester, "--target=kind-dev", "--kube-context=kind-journey-test", "--feature=F2")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED, result.stdout.str()
+    result.stdout.no_fnmatch_line("*the test body ran*")
+    assert (pytester.path / "events.txt").read_text().splitlines() == events
+    info = json.loads((pytester.path / "results" / "run-info.json").read_text())
+    assert info["error"].startswith(error), info["error"]
+
+
+def test_run_info_records_a_nic_version_override(pytester, monkeypatch):
+    monkeypatch.setenv("NIC_VERSION", "v0.17.2")
+    _suite(pytester, FULL_TREE)
+    (pytester.path / "results").mkdir()
+    (pytester.path / "results" / "helpers.json").write_text('{"tag": "v0.17.2", "commit": "0123abc"}')
+    result = _run(pytester, "--target=kind-dev", "--kube-context=kind-journey-test", "--collect-only", "-q")
+    assert result.ret == 0, result.stdout.str()
+    info = json.loads((pytester.path / "results" / "run-info.json").read_text())
+    assert info["helper"] == {"tag": "v0.17.2", "commit": "0123abc"}
+    assert info["deviations"] == ["NIC_VERSION=v0.17.2 (override of the latest NIC release)"]
+    assert info["error"] is None
+
+
+@pytest.mark.parametrize(
+    "args",
+    [("--kube-context=kind-journey-test",), ("--target=kind-dev",)],
+    ids=["no-target", "no-kube-context"],
+)
+def test_cluster_requires_target_and_kube_context(pytester, args):
+    tree = dict(FULL_TREE)
+    tree["journeys/test_models.py"] = """
+        import pytest
+
+        @pytest.mark.feature("F2")
+        @pytest.mark.integration
+        @pytest.mark.journey
+        def test_model_ready(cluster):
+            raise AssertionError("the test body ran")
+    """
+    _suite(pytester, tree)
+    result = _run(pytester, *args, "--feature=F2")
+    assert result.ret == pytest.ExitCode.TESTS_FAILED, result.stdout.str()
+    result.stdout.fnmatch_lines(["*UsageError*--target and --kube-context are required*"])
+    result.stdout.no_fnmatch_line("*the test body ran*")
+
+
+def test_component_versions_never_fail_the_session():
+    """run-info.json component versions: an unreadable Deployment is null, never an error."""
+    from types import SimpleNamespace
+
+    import urllib3
+    from kubernetes import client
+
+    from journeys import conftest as suite
+
+    class Apps:
+        def read_namespaced_deployment(self, name, namespace):
+            if name == "cert-manager":
+                raise urllib3.exceptions.ProtocolError("connection reset")
+            if name == "envoy-gateway":
+                return SimpleNamespace(spec=client.V1DeploymentSpec(
+                    selector=client.V1LabelSelector(),
+                    template=client.V1PodTemplateSpec(spec=client.V1PodSpec(containers=[])),
+                ))
+            raise AssertionError(name)
+
+    assert suite._component_versions(Apps()) == {"envoy-gateway": None, "cert-manager": None}
 
 
 # Known failures (Q62, Q72).
