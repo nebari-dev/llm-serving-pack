@@ -1,0 +1,5 @@
+{
+  "kube_context": "kind-nebari-local",
+  "nic_tag": "v0.18.0",
+  "deviations": []
+}

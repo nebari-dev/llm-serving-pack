@@ -1,0 +1,8 @@
+{
+  "target": "nebari",
+  "kube_context": "kind-nebari-local",
+  "nic_tag": "v0.17.2",
+  "helper": {"tag": "v0.17.2", "commit": "0123abc"},
+  "components": {"envoy-gateway": "v1.6.0", "cert-manager": "v1.19.1"},
+  "deviations": ["NIC_VERSION=v0.17.2 (override of the latest NIC release)", "model-downloader at its chart default"]
+}

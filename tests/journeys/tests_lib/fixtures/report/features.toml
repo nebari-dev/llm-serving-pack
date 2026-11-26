@@ -1,0 +1,18 @@
+# A cut-down features.toml for the report tests.
+known_failures = []
+
+[F1]
+title = "Install converges"
+tiers = ["journey"]
+
+[F2]
+title = "An LLMModel reaches Ready"
+tiers = ["integration", "journey"]
+
+[F10]
+title = "Usage metering | the usage console"
+tiers = ["integration", "journey"]
+
+[F13]
+title = "Upgrade from the previous release"
+tiers = ["release"]

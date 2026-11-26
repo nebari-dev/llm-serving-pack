@@ -1,0 +1,31 @@
+[workspace]
+name = "llm-serving-journeys"
+description = "Journey and integration tests for the Nebari LLM serving pack"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[dependencies]
+python = "3.14.*"
+pytest = "*"
+python-kubernetes = "*"
+requests = "*"
+pytest-playwright = "*"
+playwright-python = "*"
+cryptography = "*"
+certifi = "*"
+# NIC's tests/user_journeys/pixi.toml has no pip, so `python -m pip` is
+# missing without it. install-helpers.sh needs it to install
+# nebari_journeys from the NIC git repository at the resolved tag, outside
+# this lock (Q46, Q89).
+pip = "*"
+
+[pypi-dependencies]
+llm_journeys = { path = ".", editable = true }
+
+[activation.env]
+# User site-packages (~/.local) would otherwise shadow the locked packages.
+PYTHONNOUSERSITE = "1"
+
+[tasks]
+install-browsers = "playwright install chromium"
+test-lib = "pytest tests_lib -v"
