@@ -211,6 +211,15 @@ uses, and adjust the collector's Service name and namespace to your release:
 
 <Code code={accessLogExample} lang="yaml" title="examples/usage-access-log.yaml" />
 
+:::caution
+On a cluster managed by Nebari Infrastructure Core, the `EnvoyProxy` is
+`nebari-proxy-config`. `nic deploy --regen-apps` rewrites that file and removes
+the access-log entry, so metering stops with no error. Re-add the entry after
+you run it. NIC has no override point for this yet
+([nebari-infrastructure-core#797](https://github.com/nebari-dev/nebari-infrastructure-core/issues/797)
+tracks one).
+:::
+
 With `usage.enabled`, the operator adds a ClientTrafficPolicy named
 `llm-https-client-headers` (and `llm-internal-https-client-headers`) on the
 pack's listeners. It removes any `x-llm-client-id`, `x-auth-user`,
@@ -219,14 +228,16 @@ authentication runs, and makes Envoy generate every request id.
 
 Envoy Gateway applies one ClientTrafficPolicy per listener: a policy on a
 listener replaces the Gateway-wide one there, with nothing merged. So if your
-Gateway has a Gateway-wide ClientTrafficPolicy (NIC ships one on
-`nebari-gateway` that sets `connection.bufferLimit: 50Mi`), the operator's
+Gateway has a Gateway-wide ClientTrafficPolicy, the operator's
 listener policy starts from a copy of its settings and adds the header
-settings; it follows changes to your policy within seconds. Keep that limit
-on the Gateway-wide policy: the pack's listener shares port 443 with your
-other HTTPS listeners, and Envoy uses one connection buffer limit per port,
-so every policy on the port has to agree on it (Envoy's 32KiB default
-rejects larger chat requests with 413). If a ClientTrafficPolicy of yours
+settings; it follows changes to your policy within seconds. NIC v0.18.0 ships
+no Gateway-wide ClientTrafficPolicy, so on NIC request bodies over Envoy's
+32KiB default buffer limit get a 413 unless you add a Gateway-wide policy that
+raises `connection.bufferLimit`
+([llm-serving-pack#278](https://github.com/nebari-dev/llm-serving-pack/issues/278)).
+If you add one, keep that limit on the Gateway-wide policy: the pack's listener
+shares port 443 with your other HTTPS listeners, and Envoy uses one connection
+buffer limit per port, so every policy on the port has to agree on it. If a ClientTrafficPolicy of yours
 targets one of the pack's listeners itself (`sectionName`), the two cannot
 both apply, so the operator removes its own and posts a Warning Event,
 reason `UsageHeadersNotProtected`, on the Gateway (`kubectl describe

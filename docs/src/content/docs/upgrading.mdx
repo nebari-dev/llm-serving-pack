@@ -71,8 +71,8 @@ Then re-run the checks in
 
 ## Supported gateway versions
 
-The supported deployment target is **Envoy AI Gateway 1.1.0, Envoy Gateway
-1.8.1, and Gateway API 1.5.1**. Use the released upstream Helm charts, including
+The supported deployment target is **Envoy AI Gateway %%pin:AI_GATEWAY_VERSION%%, Envoy Gateway
+%%pin:ENVOY_GATEWAY_VERSION%%, and Gateway API %%pin:GATEWAY_API_VERSION%%**. Use the released upstream Helm charts, including
 the separate AI Gateway CRD chart. The pack does not install those controllers.
 
 ## Release-specific steps
@@ -266,7 +266,7 @@ Use staged revisions, rather than changing every controller independently:
    Envoy Gateway release notes for policy changes. Keep CRDs during rollback;
    deleting them also deletes their resources.
 2. Install the compatible Gateway API and Envoy Gateway CRDs and upgrade Envoy
-   Gateway to 1.8.1 using the official chart. CRD updates must be explicit:
+   Gateway to %%pin:ENVOY_GATEWAY_VERSION%% using the official chart. CRD updates must be explicit:
    a Helm controller upgrade alone does not reliably update installed CRDs.
 3. Before crossing AI Gateway 0.6, migrate any external OpenAI backends from
    `schema.version` to `schema.prefix`. If the old operator still reconciles
@@ -317,7 +317,7 @@ The operator's `TestGatewayAdmission` uses a local Kubernetes API server with
 the released AI Gateway CRDs. It checks admission and stored fields, including
 path prefixes and hostname scoping. No cluster or cloud credentials are used.
 
-Render `ai-gateway-crds-helm` version `v1.1.0` into a temporary directory, set
+Render `ai-gateway-crds-helm` version `%%pin:AI_GATEWAY_VERSION%%` into a temporary directory, set
 `AI_GATEWAY_CRD_DIR` to that directory and `KUBEBUILDER_ASSETS` to the binaries
 installed by `make setup-envtest`, then run from `operator`:
 

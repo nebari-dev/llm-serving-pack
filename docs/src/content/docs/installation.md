@@ -629,7 +629,7 @@ spec:
   source:
     chart: ai-gateway-crds-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v1.1.0
+    targetRevision: %%pin:AI_GATEWAY_VERSION%%
     helm:
       releaseName: envoy-ai-gateway-crds
   destination:
@@ -682,7 +682,7 @@ spec:
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v1.5.0/manifests.yaml
+  - https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/%%pin:GIE_VERSION%%/manifests.yaml
 ```
 
 `git push` all three files, then apply the two Applications with
@@ -758,7 +758,7 @@ spec:
   source:
     chart: ai-gateway-helm
     repoURL: docker.io/envoyproxy
-    targetRevision: v1.1.0
+    targetRevision: %%pin:AI_GATEWAY_VERSION%%
     helm:
       releaseName: envoy-ai-gateway
       # cert-manager-backed webhook TLS. Required: the chart's default mode
@@ -803,7 +803,7 @@ kubectl get certificate -n envoy-ai-gateway-system self-signed-cert-for-mutating
 
 Expected: `READY=True`. On a fresh install the controller pod sits in
 `ContainerCreating` for a few seconds first, because the chart no longer
-pre-creates the Secret and cert-manager has to issue it. Measured on AI Gateway v1.1.0:
+pre-creates the Secret and cert-manager has to issue it. Measured on AI Gateway %%pin:AI_GATEWAY_VERSION%%:
 healthy within about 10 seconds.
 
 Confirm `cainjector` populated the CA bundle:
@@ -863,7 +863,7 @@ install does not include:
 
 These values come straight from the upstream
 `envoyproxy/ai-gateway` reference at
-[`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/v1.1.0/manifests/envoy-gateway-values.yaml).
+[`manifests/envoy-gateway-values.yaml`](https://github.com/envoyproxy/ai-gateway/blob/%%pin:AI_GATEWAY_VERSION%%/manifests/envoy-gateway-values.yaml).
 
 ### 6.1 Commit a values overlay
 
@@ -1954,7 +1954,7 @@ healthy for days.
      cert-manager needs `kubernetes.io/tls` where the chart rendered
      `Opaque`. The controller does not restart.
    - The `Certificate` reports `Ready` within a few seconds
-     (3 seconds measured on AI Gateway v1.1.0).
+     (3 seconds measured on AI Gateway %%pin:AI_GATEWAY_VERSION%%).
    - If you started from a broken state, the probe keeps failing for
      about **80 seconds** after that. This is the pod picking up the new
      certificate plus the API server renegotiating. Do not intervene.
