@@ -1,3 +1,4 @@
+# Generated from operator/cmd/render-pins/templates/envoy-ai-gateway.yaml.tmpl, do not edit.
 # Envoy AI Gateway ArgoCD Applications.
 #
 # The AI Gateway is shipped as TWO separate Helm charts:

@@ -114,11 +114,13 @@ To move to a new OpenMeter release:
 2. Push the branch, and check that the tests pass.
 3. Push tag `<upstream tag>-nebari.<n>` (`n` starting at 1) to publish the
    image.
-4. Pin the new image by digest in `openmeter.image` in `values.yaml`, and
+4. Pin the new image by digest as `OPENMETER_IMAGE` in `versions.env` (run
+   `render-pins`, below, to write `openmeter.image` in `values.yaml`), and
    bump `appVersion` in `Chart.yaml`.
 5. Move the usage collector's `benthos-collector` image to the same OpenMeter
-   version: `usage.collector.image` in `charts/nebari-llm-serving/values.yaml`
-   and `USAGE_COLLECTOR_IMAGE` in `dev/Makefile`.
+   version: set `USAGE_COLLECTOR_IMAGE` in `versions.env` and run
+   `go run ./cmd/render-pins --root ..` from `operator/`, which writes
+   `usage.collector.image` in `charts/nebari-llm-serving/values.yaml`.
 
 Drop the fork, and go back to `ghcr.io/openmeterio/openmeter`, once upstream
 OpenMeter encrypts app secrets itself.

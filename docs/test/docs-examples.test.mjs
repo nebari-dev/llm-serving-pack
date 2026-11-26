@@ -210,6 +210,13 @@ const CERT_MANAGER_VALUES = {
   controller: { mutatingWebhook: { certManager: { enable: true } } },
 };
 
+// Reads one pin from versions.env at the repository root; fails if it is absent.
+const pinFromVersionsEnv = (key) => {
+  const text = readFileSync(fileURLToPath(new URL('../../versions.env', import.meta.url)), 'utf8');
+  const value = text.match(new RegExp(`^${key}=(.+)$`, 'm'))?.[1];
+  if (!value) throw new Error(`${key} missing from versions.env`);
+  return value;
+};
 const loadAllYaml = (text) => yaml.loadAll(text).filter(Boolean);
 
 const fencedYaml = (md) =>
@@ -253,17 +260,16 @@ describe('AI Gateway webhook TLS is cert-manager backed', () => {
     expect(fromDocs).toEqual(CERT_MANAGER_VALUES);
   });
 
-  it('both pin the same chart version, and that version is v1.1.0', () => {
-    // Deliberately strict. Bumping the AI Gateway chart is issue #175, and it
-    // must be done together with scripts/check-render-determinism.sh and a
+  it('both pin the same chart version, and that version is AI_GATEWAY_VERSION from versions.env', () => {
+    // Bumping the AI Gateway chart is issue #175. Change AI_GATEWAY_VERSION in
+    // versions.env, re-run render-pins, update the installation guide, and do a
     // fresh render-determinism run, because a newer chart may reintroduce
-    // render-time certificate generation. Agreement alone is not enough: a
-    // lockstep bump of both files to the same new version would otherwise
-    // pass unnoticed.
+    // render-time certificate generation. The guide and the example must agree
+    // with each other and with the pin file.
     const a = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     const b = findApp(installApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     expect(a).toBe(b);
-    expect(a).toBe('v1.1.0');
+    expect(a).toBe(pinFromVersionsEnv('AI_GATEWAY_VERSION'));
   });
 });
 
@@ -274,8 +280,11 @@ describe('render-determinism script stays in sync with the example', () => {
       'utf8',
     );
 
-  it('pins the same chart version as the example', () => {
-    const inScript = script().match(/^CHART_VERSION="([^"]+)"/m)?.[1];
+  it('pins the same chart version as the example, read from versions.env', () => {
+    expect(script()).toMatch(
+      /^CHART_VERSION=\$\(grep -E '\^AI_GATEWAY_VERSION=' "\$ROOT\/versions\.env"/m,
+    );
+    const inScript = pinFromVersionsEnv('AI_GATEWAY_VERSION');
     const inExample = findApp(exampleApps(), 'envoy-ai-gateway').spec.source.targetRevision;
     expect(inScript).toBe(inExample);
   });

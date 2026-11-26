@@ -37,6 +37,10 @@ jobs:
         working-directory: operator
         run: go run ./cmd/check-default-images --values ../charts/nebari-llm-serving/values.yaml
 
+      - name: Check generated pins are fresh
+        working-directory: operator
+        run: go run ./cmd/render-pins --root .. --check
+
   test-operator:
     name: Test operator
     runs-on: ubuntu-latest
@@ -53,9 +57,14 @@ jobs:
 
       - name: Render released AI Gateway CRDs for admission checks
         run: |
+          ai_gateway_version=$(grep -E '^AI_GATEWAY_VERSION=' versions.env | cut -d= -f2)
+          if [ -z "$ai_gateway_version" ]; then
+            echo "AI_GATEWAY_VERSION missing from versions.env" >&2
+            exit 1
+          fi
           ai_gateway_crd_dir=$(mktemp -d)
           helm template aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm \
-            --version v1.1.0 > "$ai_gateway_crd_dir/ai-gateway.yaml"
+            --version "$ai_gateway_version" > "$ai_gateway_crd_dir/ai-gateway.yaml"
           echo "AI_GATEWAY_CRD_DIR=$ai_gateway_crd_dir" >> "$GITHUB_ENV"
 
       - name: Run tests

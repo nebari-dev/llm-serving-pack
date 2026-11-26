@@ -4,12 +4,19 @@
 # ArgoCD, Flux, and every other cluster-less renderer, because `lookup` returns
 # empty and the guarded branch is never taken.
 #
-# Keep CHART_VERSION and VALUES in sync with examples/envoy-ai-gateway.yaml.
-# The docs test suite enforces that; it is not left to reviewer diligence.
+# CHART_VERSION is AI_GATEWAY_VERSION from versions.env, the same pin the
+# example is rendered from. Keep VALUES in sync with
+# examples/envoy-ai-gateway.yaml; the docs test suite enforces that, it is not
+# left to reviewer diligence.
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CHART="oci://docker.io/envoyproxy/ai-gateway-helm"
-CHART_VERSION="v1.1.0"
+CHART_VERSION=$(grep -E '^AI_GATEWAY_VERSION=' "$ROOT/versions.env" | cut -d= -f2 || true)
+if [ -z "$CHART_VERSION" ]; then
+  echo "AI_GATEWAY_VERSION missing from $ROOT/versions.env" >&2
+  exit 1
+fi
 NAMESPACE="envoy-ai-gateway-system"
 RELEASE="envoy-ai-gateway"
 CACHE_DIR="${CHART_CACHE_DIR:-.chart-cache}"
