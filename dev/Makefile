@@ -9,6 +9,13 @@ GATEWAY_HOST_HTTPS_PORT ?= 48443
 # OpenMeter and the usage console (for benchmarking only; usage is not served).
 WITH_OPENMETER ?= 1
 
+# `make integration-test FEATURES=F4,F8` runs only those features; empty runs the whole integration tier.
+FEATURES ?=
+
+# The journey suite's pixi environment. User site-packages (~/.local) would
+# otherwise shadow the locked packages.
+JOURNEYS_PIXI := cd ../tests/journeys && PYTHONNOUSERSITE=1 pixi run --locked
+
 # Pin every kubectl to the local kind cluster's context. Without this, the dev
 # targets act on whatever your current kube-context happens to be - which could
 # be a remote/production cluster - and would deploy the auth-bypassing dev-mode
@@ -32,7 +39,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy integration-up spa-real-auth deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help render-pins
+.PHONY: setup teardown build-images load-images deploy integration-up spa-real-auth deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector integration-test profile-check logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help render-pins
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -97,6 +104,15 @@ deploy: deploy-operator deploy-key-manager ## Deploy operator and key-manager in
 
 integration-up: ## Bring the cluster to the kind-dev profile the journey suite runs on (real auth, mock provider, access log, OpenMeter) and write llm-journeys/provision. WITH_OPENMETER=0 skips OpenMeter
 	CLUSTER_NAME=$(CLUSTER_NAME) WITH_OPENMETER=$(WITH_OPENMETER) GATEWAY_HOST_HTTP_PORT=$(GATEWAY_HOST_HTTP_PORT) GATEWAY_HOST_HTTPS_PORT=$(GATEWAY_HOST_HTTPS_PORT) ./integration-up.sh
+
+profile-check: ## Exit 0 when the kind-dev profile the journey suite needs is complete (runs preflight only; changes nothing)
+	$(JOURNEYS_PIXI) python -m llm_journeys.preflight --target kind-dev --kube-context kind-$(CLUSTER_NAME) --gateway-https-port $(GATEWAY_HOST_HTTPS_PORT)
+
+integration-test: ## Run the journey suite's integration tier on kind-dev and report it by feature (FEATURES=F4,F8 narrows it); run make integration-up first, an incomplete profile fails the run
+	tag="$$(nic/resolve-nic-tag.sh)" && $(JOURNEYS_PIXI) ./install-helpers.sh "$$tag"
+	$(JOURNEYS_PIXI) pytest tests_lib
+	$(JOURNEYS_PIXI) ./run-suite.sh --tier integration --strict-known-failures $(if $(FEATURES),--feature $(FEATURES)) \
+		-- journeys --target=kind-dev --kube-context=kind-$(CLUSTER_NAME) --gateway-https-port=$(GATEWAY_HOST_HTTPS_PORT)
 
 spa-real-auth: ## Real-auth mode for the SPA browser login: dev Keycloak with the request-host issuer, key-manager out of dev mode trusting http://localhost:8180 (make deploy reverts)
 	CLUSTER_NAME=$(CLUSTER_NAME) ./spa-real-auth.sh

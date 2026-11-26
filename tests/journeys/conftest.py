@@ -45,3 +45,10 @@ def pytest_addoption(parser):
         default=None,
         help="Path of the F13 release state file written by the before stage and read by the after stage.",
     )
+    parser.addoption(
+        "--keep",
+        action="store_true",
+        default=False,
+        help="Leave each test's scratch models, users and API keys in place for debugging; "
+        "the next run's session sweep removes them.",
+    )
