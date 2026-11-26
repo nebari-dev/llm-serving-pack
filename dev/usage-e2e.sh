@@ -130,6 +130,11 @@ fi
 # The operator's webhook may not be serving the instant its rollout returns.
 retry 30 $KUBECTL apply -f manifests/usage-mock-provider.yaml >/dev/null
 $KUBECTL -n "$NS" wait certificate/mock-provider-tls --for=condition=Ready --timeout=120s >/dev/null
+# The PassthroughModel's spec.provider.tls.caConfigMapName. Public certificate
+# only (self-signed, so it is its own CA); the key stays in the Secret.
+$KUBECTL -n "$NS" get secret mock-provider-tls -o jsonpath='{.data.tls\.crt}' | base64 -d \
+  | $KUBECTL -n "$NS" create configmap mock-provider-ca --from-file=ca.crt=/dev/stdin \
+      --dry-run=client -o yaml | $KUBECTL apply -f - >/dev/null
 $KUBECTL -n "$NS" rollout restart deploy/mock-provider >/dev/null
 $KUBECTL -n "$NS" rollout status deploy/mock-provider --timeout=120s >/dev/null
 $KUBECTL -n "$NS" wait passthroughmodel/mock-provider --for=jsonpath='{.status.phase}'=Ready --timeout=180s >/dev/null

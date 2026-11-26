@@ -1,0 +1,12 @@
+# The key-manager for the SPA's real-auth browser flow (`make spa-real-auth`):
+# out of dev mode, accepting tokens whose issuer is the port-forwarded dev
+# Keycloak at http://localhost:8180, which is what frontend/public/config.json
+# points keycloak-js at. Applied as an overlay so `make deploy` removes it.
+# The base is outside this directory, so render with
+#   kubectl kustomize --load-restrictor=LoadRestrictionsNone dev/manifests/spa-real-auth | kubectl apply -f -
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../key-manager.yaml
+patches:
+  - path: key-manager-patch.yaml

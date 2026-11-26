@@ -1,0 +1,15 @@
+# Pin the issuer Keycloak puts in tokens to the in-cluster URL, whatever host
+# the caller used.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  template:
+    spec:
+      containers:
+        - name: keycloak
+          env:
+            - name: KC_HOSTNAME
+              value: http://keycloak.keycloak.svc.cluster.local:8080

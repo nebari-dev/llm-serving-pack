@@ -5,6 +5,34 @@ metadata:
   name: nebari-gateway-class
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: nebari-gateway-proxy
+    namespace: envoy-gateway-system
+---
+# Bootstrap certificate so the HTTPS listener below is valid before any model
+# exists (port 443 and its NodePort then exist from the start).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: dev-gateway-selfsigned
+  namespace: envoy-gateway-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dev-gateway-bootstrap-tls
+  namespace: envoy-gateway-system
+spec:
+  secretName: dev-gateway-bootstrap-tls
+  dnsNames:
+    - localhost
+  issuerRef:
+    name: dev-gateway-selfsigned
+    kind: Issuer
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -13,10 +41,25 @@ metadata:
   namespace: envoy-gateway-system
 spec:
   gatewayClassName: nebari-gateway-class
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: nebari-gateway-nodeport
   listeners:
     - name: http
       protocol: HTTP
       port: 80
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: dev-gateway-bootstrap-tls
       allowedRoutes:
         namespaces:
           from: All

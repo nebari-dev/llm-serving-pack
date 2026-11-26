@@ -1,0 +1,8 @@
+# Point the OTLP sink at the collector in the dev operator namespace.
+# JSON6902 because the sinks list has no merge key.
+- op: replace
+  path: /spec/telemetry/accessLog/settings/0/sinks/0/openTelemetry/backendRefs/0
+  value:
+    name: llm-operator-usage-collector
+    namespace: llm-operator-system
+    port: 4317

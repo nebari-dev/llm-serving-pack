@@ -51,6 +51,16 @@ This creates a kind cluster named `llm-serving-test` and installs:
 - Test `GatewayClass` and `Gateway` resources
 - The CloudNativePG operator (`make deploy-cnpg`), for the bundled OpenMeter's Postgres
 
+The cluster is created from `dev/kind-config.yaml`. The gateway's Envoy Service
+(`nebari-gateway`) is pinned to NodePorts 30080 and 30443, as Nebari's local
+provider does, and kind publishes them on `127.0.0.1` at host ports 48080 and
+48443. Change them with `make setup GATEWAY_HOST_HTTP_PORT=... GATEWAY_HOST_HTTPS_PORT=...`.
+kind fixes port mappings when it creates a cluster, so `make setup` leaves an
+existing cluster alone: an `llm-serving-test` cluster created by an older
+`make setup` has no mapping. It keeps working for `run-dev`, which reaches the
+key manager by port-forward, but recreate it once with `make teardown setup`
+before `make integration-up`.
+
 Dependency versions are pinned in `versions.env` at the repo root, which
 `dev/Makefile` reads. Override one for a single run with, for example,
 `make setup GIE_VERSION=%%pin:GIE_VERSION%%`. They move as a
@@ -244,7 +254,81 @@ never be enabled in a real deployment.
 > **Working on the UI itself?** See [UI Development](/ui-development/) for the
 > full hot-reload loop and the frontend quality gate.
 
-## 11. Tail logs
+## 11. The integration profile (`make integration-up`)
+
+The journey suite's integration tier runs on one fixed state of the dev
+cluster, the `kind-dev` profile:
+
+```bash
+make integration-up
+```
+
+It builds the operator, key manager, mock vLLM, usage console and
+`openmeter-setup` images from your working tree, loads them, and applies:
+
+- the operator and key manager out of dev mode, both trusting the dev Keycloak
+  at its in-cluster URL, with usage metering on and both endpoints on the one
+  shared Gateway `nebari-gateway`
+- the dev Keycloak with `KC_HOSTNAME` pinned to
+  `http://keycloak.keycloak.svc.cluster.local:8080`, so a token minted through a
+  port-forward carries the same issuer as one minted in the cluster; the demo
+  users alice and bob (`./demo-users.sh`)
+- the mock provider and its `PassthroughModel`, trusted through the CA
+  ConfigMap `mock-provider-ca` (`spec.provider.tls.caConfigMapName`)
+- the gateway access log from `examples/usage-access-log.yaml`, the usage
+  collector, and a Gateway-wide `ClientTrafficPolicy` on `nebari-gateway`
+- OpenMeter and the usage console (the openmeter subchart)
+
+Every change is a `kubectl apply` of the overlays under `dev/manifests/` (the
+gateway's EnvoyProxy is replaced whole), so it is safe to re-run: a second run
+restarts only the Deployments whose image changed. Right after loading the
+images, before deploying anything, it writes a provisioning record, the ConfigMap `provision` in the
+namespace `llm-journeys`, with each image's reference and the IDs the kind node
+holds for it. Failures while provisioning stop it with a non-zero exit; if the
+cluster then does not settle within the wait timeout (`WAIT_TIMEOUT`, 300s each)
+it prints what is not ready and still exits 0, so the suite can report it.
+
+The gateway answers on `127.0.0.1:48443` with the real hostnames. Its listener
+certificate is self-signed, so verify against its CA:
+
+```bash
+kubectl --context kind-llm-serving-test -n llm-operator-system get secret nebari-llm-shared-tls \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/llm-ca.crt
+curl --resolve llm.local:48443:127.0.0.1 --cacert /tmp/llm-ca.crt https://llm.local:48443/
+```
+
+`make integration-up WITH_OPENMETER=0` brings the profile up without OpenMeter
+and the usage console (and removes them if they are installed). It exists for
+benchmarking: usage metering is not served then.
+
+**Switching back to dev mode.** The profile replaces the dev-mode key manager
+that `run-dev` relies on. `make deploy` applies the base manifests again, which
+puts the operator and key manager back in dev mode (`LLM_DEV_MODE=true`).
+`make deploy-keycloak` removes the Keycloak issuer pin.
+
+## 12. Real-auth mode for the SPA login (`make spa-real-auth`)
+
+To try the SPA's keycloak-js login against the dev Keycloak instead of the
+dev-mode bypass:
+
+```bash
+make spa-real-auth
+make pf-keycloak        # http://localhost:8180 (in another terminal)
+make pf-key-manager     # http://localhost:8080 (in another terminal)
+cd ../frontend && npm run dev
+```
+
+`make spa-real-auth` redeploys the dev Keycloak from the shared manifest, whose
+token issuer follows the request host, and takes the key manager out of dev
+mode, trusting the issuer `http://localhost:8180` that
+`frontend/public/config.json` points keycloak-js at. Log in as `dev` /
+`password`. Only Keycloak and the key manager switch: run after
+`make integration-up`, the rest of that profile stays (the operator on the
+shared Gateway with usage metering, the access log, the ClientTrafficPolicy,
+the usage collector and the mock provider), and `make integration-up` switches
+the two back. `make deploy` returns the key manager to dev mode. `make test-auth KEEP_AUTH=1` still works for now.
+
+## 13. Tail logs
 
 You can tail logs from either component while working:
 
@@ -253,7 +337,7 @@ make logs-operator
 make logs-key-manager
 ```
 
-## 12. Run unit tests
+## 14. Run unit tests
 
 Run the operator and key manager tests directly without a cluster:
 
@@ -262,7 +346,7 @@ cd operator && make test
 cd key-manager && go test ./...
 ```
 
-## 13. Cleanup
+## 15. Cleanup
 
 When you are done, delete the kind cluster:
 

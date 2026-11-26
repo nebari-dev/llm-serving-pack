@@ -1,0 +1,17 @@
+# kind cluster for `make setup`. nebari-gateway's Envoy Service is pinned to
+# NodePorts 30080/30443 (dev/manifests/gateway-nodeport.yaml), as NIC's local
+# provider does; they are published on unprivileged loopback host ports.
+# Rendered with envsubst from GATEWAY_HOST_HTTP_PORT / GATEWAY_HOST_HTTPS_PORT.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: ${GATEWAY_HOST_HTTP_PORT}
+        listenAddress: 127.0.0.1
+        protocol: TCP
+      - containerPort: 30443
+        hostPort: ${GATEWAY_HOST_HTTPS_PORT}
+        listenAddress: 127.0.0.1
+        protocol: TCP

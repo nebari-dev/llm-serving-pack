@@ -1,0 +1,24 @@
+# Real bearer-token validation; JWKS fetched in-cluster, issuer the
+# port-forwarded Keycloak URL keycloak-js mints from.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-key-manager
+  namespace: llm-operator-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: key-manager
+          env:
+            # Set to "false", not deleted: `kubectl apply` removes only fields
+            # it applied before, so a delete would leave a value someone set
+            # with `kubectl set env` (dev/test-auth.sh does) in place.
+            - name: LLM_DEV_MODE
+              value: "false"
+            - name: LLM_KEYCLOAK_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080
+            - name: LLM_KEYCLOAK_REALM
+              value: nebari
+            - name: LLM_KEYCLOAK_ISSUER_URL
+              value: http://localhost:8180

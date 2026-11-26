@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-operator
+  namespace: llm-operator-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          env:
+            - name: LLM_OIDC_ISSUER_URL
+              value: http://keycloak.keycloak.svc.cluster.local:8080/realms/nebari
+            - name: LLM_USAGE_METERING_ENABLED
+              value: "true"
+            - name: LLM_INTERNAL_GATEWAY_NAME
+              value: nebari-gateway

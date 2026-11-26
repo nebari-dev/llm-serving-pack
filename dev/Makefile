@@ -1,5 +1,14 @@
 CLUSTER_NAME ?= llm-serving-test
 
+# Host ports (on 127.0.0.1) the gateway NodePorts 30080/30443 are published on.
+# kind fixes them at cluster creation. 48xxx avoids the dev scripts' port-forwards.
+GATEWAY_HOST_HTTP_PORT ?= 48080
+GATEWAY_HOST_HTTPS_PORT ?= 48443
+
+# `make integration-up WITH_OPENMETER=0` brings the kind-dev profile up without
+# OpenMeter and the usage console (for benchmarking only; usage is not served).
+WITH_OPENMETER ?= 1
+
 # Pin every kubectl to the local kind cluster's context. Without this, the dev
 # targets act on whatever your current kube-context happens to be - which could
 # be a remote/production cluster - and would deploy the auth-bypassing dev-mode
@@ -23,7 +32,7 @@ HELM_MAJOR := $(shell helm version --template '{{.Version}}' 2>/dev/null | sed -
 EG_CHART := oci://docker.io/envoyproxy/gateway-helm
 EG_SKIP_BUNDLED_CRDS := $(if $(filter-out 1 2 3,$(HELM_MAJOR)),--skip-crds --set crds.gatewayAPI.safeUpgradePolicy.enabled=false,)
 
-.PHONY: setup teardown build-images load-images deploy deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help render-pins
+.PHONY: setup teardown build-images load-images deploy integration-up spa-real-auth deploy-operator deploy-key-manager deploy-keycloak apply-test-model apply-passthrough-model create-openrouter-secret run-dev ui test-auth test-model-scope deploy-cnpg usage-e2e usage-tracer usage-forgery-check test-usage-collector logs-operator logs-key-manager logs-keycloak pf-key-manager pf-keycloak clean help render-pins
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nTargets:\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -37,7 +46,10 @@ run-dev: ## One-command UI dev environment: cluster + models + port-forward + ho
 setup: ## Create kind cluster and install dependencies
 	# Idempotent: skip creation if the cluster already exists so a setup that
 	# died midway can be re-run without `make teardown` first.
-	@kind get clusters | grep -qx $(CLUSTER_NAME) || kind create cluster --name $(CLUSTER_NAME)
+	@kind get clusters | grep -qx $(CLUSTER_NAME) || { \
+		command -v envsubst >/dev/null || { echo 'envsubst not found (install gettext)' >&2; exit 1; }; \
+		cfg=$$(GATEWAY_HOST_HTTP_PORT=$(GATEWAY_HOST_HTTP_PORT) GATEWAY_HOST_HTTPS_PORT=$(GATEWAY_HOST_HTTPS_PORT) envsubst < kind-config.yaml) && \
+		test -n "$$cfg" && printf '%s\n' "$$cfg" | kind create cluster --name $(CLUSTER_NAME) --config -; }
 	# cert-manager
 	$(KUBECTL) apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
 	$(KUBECTL) -n cert-manager rollout status deployment/cert-manager-webhook --timeout=120s
@@ -65,7 +77,8 @@ setup: ## Create kind cluster and install dependencies
 	# CRDs (served LLMModels and external-provider PassthroughModels)
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/passthroughmodel-crd.yaml
-	# Test Gateways
+	# Test Gateways: the EnvoyProxies first, as the GatewayClass and nebari-gateway reference them
+	$(KUBECTL) apply -f manifests/envoyproxy.yaml -f manifests/gateway-nodeport.yaml
 	$(KUBECTL) apply -f gateways.yaml
 	$(MAKE) deploy-cnpg
 
@@ -80,7 +93,13 @@ build-images: ## Build all Docker images
 load-images: ## Load images into kind
 	kind load docker-image llm-operator:dev llm-key-manager:dev mock-vllm:dev --name $(CLUSTER_NAME)
 
-deploy: deploy-operator deploy-key-manager ## Deploy everything
+deploy: deploy-operator deploy-key-manager ## Deploy operator and key-manager in dev mode (base manifests; leaves Keycloak and the gateway/usage pieces of integration-up as they are)
+
+integration-up: ## Bring the cluster to the kind-dev profile the journey suite runs on (real auth, mock provider, access log, OpenMeter) and write llm-journeys/provision. WITH_OPENMETER=0 skips OpenMeter
+	CLUSTER_NAME=$(CLUSTER_NAME) WITH_OPENMETER=$(WITH_OPENMETER) GATEWAY_HOST_HTTP_PORT=$(GATEWAY_HOST_HTTP_PORT) GATEWAY_HOST_HTTPS_PORT=$(GATEWAY_HOST_HTTPS_PORT) ./integration-up.sh
+
+spa-real-auth: ## Real-auth mode for the SPA browser login: dev Keycloak with the request-host issuer, key-manager out of dev mode trusting http://localhost:8180 (make deploy reverts)
+	CLUSTER_NAME=$(CLUSTER_NAME) ./spa-real-auth.sh
 
 deploy-operator: ## Deploy operator
 	$(KUBECTL) apply -f manifests/operator.yaml

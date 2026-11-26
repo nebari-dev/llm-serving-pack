@@ -1,0 +1,17 @@
+# Applied by integration-up.sh over the chart's usage collector (rendered with
+# `helm template -s templates/usage-collector.yaml`): the dev key-manager comes
+# from manifests, not the chart, so its key-owner lookup is the
+# llm-key-manager-owners Service (usage-key-owners-service.yaml).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-operator-usage-collector
+  namespace: llm-operator-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: collector
+          env:
+            - name: KEY_OWNER_URL
+              value: http://llm-key-manager-owners.llm-operator-system.svc:8081
