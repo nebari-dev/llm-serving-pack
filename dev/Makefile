@@ -5,6 +5,8 @@ CLUSTER_NAME ?= llm-serving-test
 # be a remote/production cluster - and would deploy the auth-bypassing dev-mode
 # key-manager there. kind names its context "kind-<cluster>".
 KUBECTL := kubectl --context kind-$(CLUSTER_NAME)
+# The same for helm, which otherwise installs into the current kube-context.
+HELM := helm --kube-context kind-$(CLUSTER_NAME)
 
 # Dependency versions. These move together: Envoy AI Gateway v1.1.x uses
 # Envoy Gateway v1.8.1 and Gateway API v1.5.1 (see
@@ -58,8 +60,8 @@ setup: ## Create kind cluster and install dependencies
 	# Envoy AI Gateway first: envoy-gateway's extensionManager below points at
 	# the ai-gateway-controller XDS service, so bring it up before reconfiguring
 	# envoy-gateway to avoid noisy connection-refused logs during translation.
-	helm upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system --create-namespace
-	helm upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system
+	$(HELM) upgrade -i aieg-crd oci://docker.io/envoyproxy/ai-gateway-crds-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system --create-namespace
+	$(HELM) upgrade -i aieg oci://docker.io/envoyproxy/ai-gateway-helm --version $(AI_GATEWAY_VERSION) -n envoy-ai-gateway-system
 	$(KUBECTL) -n envoy-ai-gateway-system wait --timeout=120s deployment/ai-gateway-controller --for=condition=Available
 	# Envoy Gateway, wired with the AI Gateway ext_proc extension (enableBackend,
 	# extensionManager, backendResources). Without this the per-model routing
@@ -70,7 +72,7 @@ setup: ## Create kind cluster and install dependencies
 		$(KUBECTL) apply --server-side -f $$tmp/gateway-helm/charts/crds/crds/generated/ && \
 		rm -rf $$tmp; \
 	fi
-	helm upgrade -i eg $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(EG_SKIP_BUNDLED_CRDS) -f eg-extension-values.yaml
+	$(HELM) upgrade -i eg $(EG_CHART) --version $(ENVOY_GATEWAY_VERSION) -n envoy-gateway-system --create-namespace $(EG_SKIP_BUNDLED_CRDS) -f eg-extension-values.yaml
 	$(KUBECTL) -n envoy-gateway-system rollout status deployment/envoy-gateway --timeout=120s
 	# CRDs (served LLMModels and external-provider PassthroughModels)
 	$(KUBECTL) apply -f ../charts/nebari-llm-serving/crds/llmmodel-crd.yaml
