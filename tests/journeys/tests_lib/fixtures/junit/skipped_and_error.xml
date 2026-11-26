@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="3" time="1.0" timestamp="2026-11-26T10:00:00" hostname="runner">
+<testcase classname="journeys.test_install" name="test_apps_healthy" time="0.5"><properties><property name="nodeid" value="journeys/test_install.py::test_apps_healthy"/><property name="feature" value="F1"/><property name="tiers" value="journey"/></properties><skipped type="pytest.skip" message="no gateway">no gateway</skipped></testcase>
+<testcase classname="journeys.test_models" name="test_llmmodel_ready" time="0.5"><properties><property name="nodeid" value="journeys/test_models.py::test_llmmodel_ready"/><property name="feature" value="F2"/><property name="tiers" value="integration,journey"/></properties><error message="failed on setup with &quot;RuntimeError: preflight: pack not installed&quot;">RuntimeError: preflight: pack not installed</error></testcase>
+<testcase classname="journeys.test_usage" name="test_usage_recorded" time="0.5"><properties><property name="nodeid" value="journeys/test_usage.py::test_usage_recorded"/><property name="feature" value="F10"/><property name="tiers" value="integration,journey"/></properties></testcase>
+</testsuite></testsuites>

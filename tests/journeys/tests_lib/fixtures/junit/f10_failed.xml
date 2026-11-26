@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.0" timestamp="2026-11-26T10:00:00" hostname="runner">
+<testcase classname="journeys.test_usage" name="test_usage_recorded" time="0.5"><properties><property name="nodeid" value="journeys/test_usage.py::test_usage_recorded"/><property name="feature" value="F10"/><property name="tiers" value="integration,journey"/></properties><failure message="AssertionError: assert 500 == 200">AssertionError: assert 500 == 200</failure></testcase>
+</testsuite></testsuites>

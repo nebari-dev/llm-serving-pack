@@ -1,0 +1,64 @@
+# Features the journey suite proves. The committed copy of the spec's
+# Features table. IDs are stable and are never reused.
+#
+# known_failures: one entry per test node ID (relative to tests/journeys/),
+# with a required issue, a since date, and optional targets (default: every
+# target the test runs on). A listed test still runs. When adding the first
+# entry, replace this empty list with [[known_failures]] tables.
+known_failures = []
+
+[F1]
+title = "Install converges (all pack Argo Applications Healthy and Synced)"
+tiers = ["journey"]
+
+[F2]
+title = "An LLMModel (mock vLLM) reaches Ready with both endpoint conditions True"
+tiers = ["integration", "journey"]
+
+[F3]
+title = "A user logs in through Keycloak in a browser and mints an API key in the UI"
+tiers = ["journey"]
+
+[F4]
+title = "Key REST API: mint, list, revoke; a revoked key gets 401; the key-manager rejects missing and invalid bearers with 401"
+tiers = ["integration", "journey"]
+
+[F5]
+title = "External endpoint with an API key returns 200"
+tiers = ["integration", "journey"]
+
+[F6]
+title = "Internal endpoint with a Keycloak token returns 200"
+tiers = ["integration", "journey"]
+
+[F7]
+title = "Per-model group access: a user outside the model's groups is denied"
+tiers = ["integration", "journey"]
+
+[F8]
+title = "Key scoping and `x-llm-client-id` spoofing are rejected"
+tiers = ["integration"]
+
+[F9]
+title = "PassthroughModel through the mock provider"
+tiers = ["integration", "journey"]
+
+[F10]
+title = "Usage metering and the usage console"
+tiers = ["integration", "journey"]
+
+[F11]
+title = "Endpoint conditions report a broken gateway and heal"
+tiers = ["integration"]
+
+[F12]
+title = "Network isolation"
+tiers = ["integration", "journey"]
+
+[F13]
+title = "Upgrade from the previous release"
+tiers = ["release"]
+
+[F14]
+title = "Usage records cannot be forged: forged identity and request-id headers are not recorded, and large request bodies (48KiB over HTTP/2, 1MiB over HTTP/1.1) still pass"
+tiers = ["integration", "journey"]
