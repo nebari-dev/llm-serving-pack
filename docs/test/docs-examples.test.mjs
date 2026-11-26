@@ -204,3 +204,19 @@ describe('manifest reconciliation (NIC source of truth)', () => {
     expect(page).not.toMatch(/targetRevision:\s*v0\.1\.0-alpha\.9\b/);
   });
 });
+
+describe('installation guide section 8.1 pack Application', () => {
+  // The chart refuses to render without frontend.keycloak.url while
+  // frontend.enabled is true (its default), in every released version.
+  const block = () => {
+    const page = readPage('installation.md');
+    const section = page.slice(page.indexOf('### 8.1'), page.indexOf('### 8.2'));
+    const fence = section.match(/```yaml\n([\s\S]*?)```/);
+    expect(fence).not.toBeNull();
+    return fence[1];
+  };
+
+  it('sets frontend.keycloak.url', () => {
+    expect(block()).toMatch(/\n\s+frontend:\n\s+keycloak:\n\s+url:\s*"https:\/\/keycloak\.<baseDomain>"/);
+  });
+});

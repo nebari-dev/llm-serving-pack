@@ -1116,6 +1116,11 @@ spec:
             enabled: true
             hostname: "llm-keys.<baseDomain>"
             gateway: public
+        # The Keycloak URL the key-manager UI signs users in at. Required:
+        # the chart does not render without it while the UI is enabled.
+        frontend:
+          keycloak:
+            url: "https://keycloak.<baseDomain>"
   destination:
     server: https://kubernetes.default.svc
     namespace: nebari-llm-serving-system
